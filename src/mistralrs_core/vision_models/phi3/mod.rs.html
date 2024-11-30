@@ -1310,7 +1310,24 @@
 <a href="#1309" id="1309">1309</a>
 <a href="#1310" id="1310">1310</a>
 <a href="#1311" id="1311">1311</a>
-<a href="#1312" id="1312">1312</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1312" id="1312">1312</a>
+<a href="#1313" id="1313">1313</a>
+<a href="#1314" id="1314">1314</a>
+<a href="#1315" id="1315">1315</a>
+<a href="#1316" id="1316">1316</a>
+<a href="#1317" id="1317">1317</a>
+<a href="#1318" id="1318">1318</a>
+<a href="#1319" id="1319">1319</a>
+<a href="#1320" id="1320">1320</a>
+<a href="#1321" id="1321">1321</a>
+<a href="#1322" id="1322">1322</a>
+<a href="#1323" id="1323">1323</a>
+<a href="#1324" id="1324">1324</a>
+<a href="#1325" id="1325">1325</a>
+<a href="#1326" id="1326">1326</a>
+<a href="#1327" id="1327">1327</a>
+<a href="#1328" id="1328">1328</a>
+<a href="#1329" id="1329">1329</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3_inputs_processor;
 
@@ -1577,9 +1594,8 @@
             .forward(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, seqlen_offsets, position_ids)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
-            <span class="prelude-val">Some</span>(paged_attn) =&gt; {
-                <span class="kw">let </span>((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
+            <span class="prelude-val">Some</span>(paged_attn) =&gt; <span class="kw">match </span>metadata {
+                <span class="prelude-val">Some</span>(((key_cache, value_cache), input_metadata)) =&gt; paged_attn.forward(
                     <span class="kw-2">&amp;</span>q,
                     <span class="kw-2">&amp;</span>k,
                     <span class="kw-2">&amp;</span>v,
@@ -1588,8 +1604,26 @@
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
                     <span class="prelude-val">None</span>,
-                )<span class="question-mark">?
-            </span>}
+                )<span class="question-mark">?</span>,
+                <span class="prelude-val">None </span>=&gt; {
+                    <span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata {
+                        block_tables: <span class="prelude-val">None</span>,
+                        context_lens: <span class="prelude-val">None</span>,
+                        max_context_len: <span class="prelude-val">None</span>,
+                        slot_mappings: Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], q.device())<span class="question-mark">?</span>,
+                    };
+                    paged_attn.forward(
+                        <span class="kw-2">&amp;</span>q,
+                        <span class="kw-2">&amp;</span>k,
+                        <span class="kw-2">&amp;</span>v,
+                        attention_mask,
+                        <span class="prelude-val">None</span>,
+                        <span class="prelude-val">None</span>,
+                        <span class="kw-2">&amp;mut </span>input_metadata,
+                        <span class="prelude-val">None</span>,
+                    )<span class="question-mark">?
+                </span>}
+            },
             <span class="prelude-val">None </span>=&gt; {
                 <span class="kw">let </span>(k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
                     kv_cache,

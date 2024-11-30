@@ -836,7 +836,10 @@
 <a href="#835" id="835">835</a>
 <a href="#836" id="836">836</a>
 <a href="#837" id="837">837</a>
-<a href="#838" id="838">838</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -958,10 +961,10 @@
 
     <span class="comment">// chunk_offset_toks is the number of tokens by which the tokens are offset,
     // chunk_offset_toks / prompt_batchsize = number of batches
-    </span><span class="kw">fn </span>make_prompt_chunk&lt;T: WithDType + Debug&gt;(
+    </span><span class="kw">pub fn </span>make_prompt_chunk&lt;T: WithDType + Debug&gt;(
         chunk_offset_toks: usize,
         toks: Vec&lt;Vec&lt;T&gt;&gt;,
-        input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Sequence],
+        seq_ids: <span class="kw-2">&amp;</span>[usize],
         device: <span class="kw-2">&amp;</span>Device,
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         return_raw_logits: bool,
@@ -983,7 +986,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>paged_attn_context_lens = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q = <span class="macro">vec!</span>[<span class="number">0</span>];
         <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k = <span class="macro">vec!</span>[<span class="number">0</span>];
-        <span class="kw">for </span>(seq, <span class="kw-2">mut </span>ctxt) <span class="kw">in </span>input_seqs.iter().zip(toks) {
+        <span class="kw">for </span>(seq_id, <span class="kw-2">mut </span>ctxt) <span class="kw">in </span>seq_ids.iter().zip(toks) {
             <span class="kw">let </span>prompt_len = ctxt.len();
             <span class="kw">let </span>offset = last_n_context_len.unwrap_or_default();
             seqlen_offsets.push(offset.<span class="number">1 </span>+ chunk_offset_toks);
@@ -1010,7 +1013,7 @@
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(<span class="number">0</span>).unwrap());
 
             <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_metadata) = <span class="kw-2">&amp;mut </span>paged_attn_metadata {
-                <span class="kw">let </span>table = paged_attn_metadata.block_engine.block_tables.get(seq.id());
+                <span class="kw">let </span>table = paged_attn_metadata.block_engine.block_tables.get(seq_id);
 
                 <span class="kw">if </span>table.is_none() {
                     <span class="comment">// Will be None during profiling.
@@ -1348,7 +1351,10 @@
                     make_prompt_chunk(
                         i * prompt_batchsize,
                         toks,
-                        <span class="kw-2">&amp;</span>seq_ns.iter().map(|i| <span class="kw-2">&amp;*</span>input_seqs[<span class="kw-2">*</span>i]).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                        <span class="kw-2">&amp;</span>seq_ns
+                            .iter()
+                            .map(|i| <span class="kw-2">*</span>input_seqs[<span class="kw-2">*</span>i].id())
+                            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                         device,
                         last_n_context_len,
                         return_raw_logits,
@@ -1372,7 +1378,7 @@
                 make_prompt_chunk(
                     <span class="number">0</span>,
                     toks,
-                    <span class="kw-2">&amp;</span>input_seqs.iter().map(|s| <span class="kw-2">&amp;**</span>s).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                    <span class="kw-2">&amp;</span>input_seqs.iter().map(|s| <span class="kw-2">*</span>s.id()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                     device,
                     last_n_context_len,
                     return_raw_logits,

@@ -723,7 +723,27 @@
 <a href="#722" id="722">722</a>
 <a href="#723" id="723">723</a>
 <a href="#724" id="724">724</a>
-<a href="#725" id="725">725</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
 </span><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -813,9 +833,8 @@
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>y = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
-            <span class="prelude-val">Some</span>(paged_attn) =&gt; {
-                <span class="kw">let </span>((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
+            <span class="prelude-val">Some</span>(paged_attn) =&gt; <span class="kw">match </span>metadata {
+                <span class="prelude-val">Some</span>(((key_cache, value_cache), input_metadata)) =&gt; paged_attn.forward(
                     <span class="kw-2">&amp;</span>q,
                     <span class="kw-2">&amp;</span>k,
                     <span class="kw-2">&amp;</span>v,
@@ -824,8 +843,26 @@
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
                     <span class="prelude-val">None</span>,
-                )<span class="question-mark">?
-            </span>}
+                )<span class="question-mark">?</span>,
+                <span class="prelude-val">None </span>=&gt; {
+                    <span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata {
+                        block_tables: <span class="prelude-val">None</span>,
+                        context_lens: <span class="prelude-val">None</span>,
+                        max_context_len: <span class="prelude-val">None</span>,
+                        slot_mappings: Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], q.device())<span class="question-mark">?</span>,
+                    };
+                    paged_attn.forward(
+                        <span class="kw-2">&amp;</span>q,
+                        <span class="kw-2">&amp;</span>k,
+                        <span class="kw-2">&amp;</span>v,
+                        attention_mask.clone().as_ref(),
+                        <span class="prelude-val">None</span>,
+                        <span class="prelude-val">None</span>,
+                        <span class="kw-2">&amp;mut </span>input_metadata,
+                        <span class="prelude-val">None</span>,
+                    )<span class="question-mark">?
+                </span>}
+            },
             <span class="prelude-val">None </span>=&gt; {
                 <span class="kw">let </span>(k, v) =
                     <span class="kw">crate</span>::pipeline::Cache::update_kv_cache(<span class="kw-2">&amp;mut </span>kv_cache[block_idx], k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
@@ -1312,6 +1349,9 @@
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">crate</span>::pipeline::EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.kv_cache
+    }
+    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::EitherCache {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.kv_cache
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
         <span class="kw-2">&amp;</span><span class="self">self</span>.device

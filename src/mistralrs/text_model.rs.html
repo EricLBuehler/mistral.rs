@@ -299,7 +299,25 @@
 <a href="#298" id="298">298</a>
 <a href="#299" id="299">299</a>
 <a href="#300" id="300">300</a>
-<a href="#301" id="301">301</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{num::NonZeroUsize, path::PathBuf};
 
 <span class="kw">use crate</span>::{best_device, Model};
@@ -312,6 +330,8 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) hf_revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapMetadata&gt;,
@@ -396,6 +416,8 @@
             prefix_cache_n: <span class="prelude-val">Some</span>(<span class="number">16</span>),
             with_logging: <span class="bool-val">false</span>,
             device_mapping: <span class="prelude-val">None</span>,
+            imatrix: <span class="prelude-val">None</span>,
+            calibration_file: <span class="prelude-val">None</span>,
         }
     }
 
@@ -463,6 +485,18 @@
     <span class="doccomment">/// Use ISQ of a certain type. If there is an overlap, the topology type is used over the ISQ type.
     </span><span class="kw">pub fn </span>with_isq(<span class="kw-2">mut </span><span class="self">self</span>, isq: IsqType) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.isq = <span class="prelude-val">Some</span>(isq);
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Utilise this imatrix file during ISQ. Incompatible with specifying a calibration file.
+    </span><span class="kw">pub fn </span>with_imatrix(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.imatrix = <span class="prelude-val">Some</span>(path);
+        <span class="self">self
+    </span>}
+
+    <span class="doccomment">/// Utilise this calibration file to collcet an imatrix. Incompatible with specifying a calibration file.
+    </span><span class="kw">pub fn </span>with_calibration_file(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.calibration_file = <span class="prelude-val">Some</span>(path);
         <span class="self">self
     </span>}
 
@@ -540,6 +574,8 @@
             organization: <span class="self">self</span>.organization,
             write_uqff: <span class="self">self</span>.write_uqff,
             from_uqff: <span class="self">self</span>.from_uqff,
+            imatrix: <span class="self">self</span>.imatrix,
+            calibration_file: <span class="self">self</span>.calibration_file,
         };
 
         <span class="kw">if </span><span class="self">self</span>.with_logging {

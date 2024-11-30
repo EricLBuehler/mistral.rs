@@ -886,7 +886,44 @@
 <a href="#885" id="885">885</a>
 <a href="#886" id="886">886</a>
 <a href="#887" id="887">887</a>
-<a href="#888" id="888">888</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#888" id="888">888</a>
+<a href="#889" id="889">889</a>
+<a href="#890" id="890">890</a>
+<a href="#891" id="891">891</a>
+<a href="#892" id="892">892</a>
+<a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
+<a href="#899" id="899">899</a>
+<a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a>
+<a href="#910" id="910">910</a>
+<a href="#911" id="911">911</a>
+<a href="#912" id="912">912</a>
+<a href="#913" id="913">913</a>
+<a href="#914" id="914">914</a>
+<a href="#915" id="915">915</a>
+<a href="#916" id="916">916</a>
+<a href="#917" id="917">917</a>
+<a href="#918" id="918">918</a>
+<a href="#919" id="919">919</a>
+<a href="#920" id="920">920</a>
+<a href="#921" id="921">921</a>
+<a href="#922" id="922">922</a>
+<a href="#923" id="923">923</a>
+<a href="#924" id="924">924</a>
+<a href="#925" id="925">925</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1209,9 +1246,8 @@
         };
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
-            <span class="prelude-val">Some</span>(paged_attn) =&gt; {
-                <span class="kw">let </span>((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
+            <span class="prelude-val">Some</span>(paged_attn) =&gt; <span class="kw">match </span>metadata {
+                <span class="prelude-val">Some</span>(((key_cache, value_cache), input_metadata)) =&gt; paged_attn.forward(
                     <span class="kw-2">&amp;</span>q,
                     <span class="kw-2">&amp;</span>k,
                     <span class="kw-2">&amp;</span>v,
@@ -1220,8 +1256,26 @@
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
                     <span class="self">self</span>.attn_logit_softcapping,
-                )<span class="question-mark">?
-            </span>}
+                )<span class="question-mark">?</span>,
+                <span class="prelude-val">None </span>=&gt; {
+                    <span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata {
+                        block_tables: <span class="prelude-val">None</span>,
+                        context_lens: <span class="prelude-val">None</span>,
+                        max_context_len: <span class="prelude-val">None</span>,
+                        slot_mappings: Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], q.device())<span class="question-mark">?</span>,
+                    };
+                    paged_attn.forward(
+                        <span class="kw-2">&amp;</span>q,
+                        <span class="kw-2">&amp;</span>k,
+                        <span class="kw-2">&amp;</span>v,
+                        attention_mask,
+                        <span class="prelude-val">None</span>,
+                        <span class="prelude-val">None</span>,
+                        <span class="kw-2">&amp;mut </span>input_metadata,
+                        <span class="self">self</span>.attn_logit_softcapping,
+                    )<span class="question-mark">?
+                </span>}
+            },
             <span class="prelude-val">None </span>=&gt; {
                 <span class="comment">// self.sliding_window is None if !self.use_sliding_window
                 </span><span class="kw">let </span>(k, v, mask) =
@@ -1597,6 +1651,23 @@
 
         uvb.to_safetensors()
     }
+
+    <span class="kw">fn </span>imatrix_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; candle_core::Result&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;&gt; {
+        <span class="comment">// NOTE: dependant on the exact implementation in get_layers!
+        </span><span class="kw">let </span><span class="kw-2">mut </span>names = Vec::new();
+        <span class="comment">// lm_head
+        </span>names.push(<span class="prelude-val">None</span>);
+        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.layers.len() {
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.attn_q.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.attn_k.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.attn_v.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.attn_output.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.ffn_gate.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.ffn_up.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.ffn_down.weight"</span>)));
+        }
+        <span class="prelude-val">Ok</span>(names)
+    }
 }
 
 <span class="kw">impl </span>NormalModel <span class="kw">for </span>Model {
@@ -1638,6 +1709,9 @@
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.cache
+    }
+    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>EitherCache {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
         <span class="kw-2">&amp;</span><span class="self">self</span>.device

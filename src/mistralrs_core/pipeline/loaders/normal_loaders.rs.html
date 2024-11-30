@@ -1512,7 +1512,8 @@
 <a href="#1511" id="1511">1511</a>
 <a href="#1512" id="1512">1512</a>
 <a href="#1513" id="1513">1513</a>
-<a href="#1514" id="1514">1514</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#1514" id="1514">1514</a>
+<a href="#1515" id="1515">1515</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
@@ -1580,6 +1581,7 @@
     <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device;
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache;
+    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>EitherCache;
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, <span class="kw">_</span>: Vec&lt;String&gt;) -&gt; candle_core::Result&lt;usize&gt; {
         <span class="comment">// NOTE: While X-LoRA shares a similar name, it is not equivalent. Its adapter set must remain the same.

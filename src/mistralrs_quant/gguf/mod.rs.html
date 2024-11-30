@@ -305,7 +305,12 @@
 <a href="#304" id="304">304</a>
 <a href="#305" id="305">305</a>
 <a href="#306" id="306">306</a>
-<a href="#307" id="307">307</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::{Cursor, Read},
     num::NonZeroUsize,
@@ -320,7 +325,7 @@
 <span class="kw">use </span>candle_nn::Module;
 
 <span class="kw">use crate</span>::{
-    generate_isq,
+    generate_isq, generate_isq_imatrix,
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
@@ -416,6 +421,7 @@
         dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         device: Device,
         n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
+        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(dtype) = dtype {
             <span class="kw">let </span>t = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.w {
@@ -423,7 +429,11 @@
                 QMatMul::TensorF16(t) | QMatMul::Tensor(t) =&gt; t.clone(),
             };
             <span class="kw">let </span>dtype = dtype.try_into()<span class="question-mark">?</span>;
-            <span class="kw">let </span>res = <span class="macro">generate_isq!</span>(t, device, dtype, n_quantized);
+            <span class="kw">let </span>res = <span class="kw">if let </span><span class="prelude-val">Some</span>(imatrix_weight) = imatrix_weight {
+                <span class="macro">generate_isq_imatrix!</span>(t, imatrix_weight, device, dtype, n_quantized)
+            } <span class="kw">else </span>{
+                <span class="macro">generate_isq!</span>(t, device, dtype, n_quantized)
+            };
             <span class="prelude-val">Ok</span>(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                 q_weight: res,
                 b: <span class="self">self</span>.b.clone(),

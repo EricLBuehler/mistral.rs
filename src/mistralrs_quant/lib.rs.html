@@ -301,7 +301,20 @@
 <a href="#300" id="300">300</a>
 <a href="#301" id="301">301</a>
 <a href="#302" id="302">302</a>
-<a href="#303" id="303">303</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
@@ -322,6 +335,7 @@
 <span class="kw">mod </span>gguf;
 <span class="kw">mod </span>gptq;
 <span class="kw">mod </span>hqq;
+<span class="kw">mod </span>imatrix;
 <span class="kw">mod </span>unquantized;
 <span class="kw">mod </span>utils;
 
@@ -331,6 +345,7 @@
 <span class="kw">use </span>gptq::gptq_linear;
 <span class="kw">pub use </span>gptq::GptqLayer;
 <span class="kw">pub use </span>hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
+<span class="kw">pub use </span>imatrix::ImatrixLayerStats;
 <span class="kw">pub use </span>unquantized::UnquantLinear;
 
 <span class="kw">use </span>candle_nn::{Linear, Module, VarBuilder};
@@ -523,6 +538,7 @@
         dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         device: Device,
         n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
+        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
 
     <span class="doccomment">/// If the quant is backed by a qmatmul.
@@ -533,6 +549,16 @@
     <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
         <span class="prelude-val">None
     </span>}
+
+    <span class="doccomment">/// Begin tracking stats into an ImatrixLayerStats
+    </span><span class="kw">fn </span>begin_track_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="macro">candle_core::bail!</span>(<span class="string">"`{}` does not support tracking stats."</span>, <span class="self">self</span>.name())
+    }
+
+    <span class="doccomment">/// End tracking stats into an ImatrixLayerStats. Returns the computed imatrix.
+    </span><span class="kw">fn </span>end_track_stats(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="macro">candle_core::bail!</span>(<span class="string">"`{}` does not support tracking stats."</span>, <span class="self">self</span>.name())
+    }
 }
 
 <span class="kw">impl </span>Module <span class="kw">for dyn </span>QuantMethod {

@@ -202,7 +202,16 @@
 <a href="#201" id="201">201</a>
 <a href="#202" id="202">202</a>
 <a href="#203" id="203">203</a>
-<a href="#204" id="204">204</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{num::NonZeroUsize, path::PathBuf};
 
 <span class="kw">use crate</span>::{best_device, Model};
@@ -215,6 +224,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) hf_revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapMetadata&gt;,
@@ -258,6 +268,7 @@
             max_num_seqs: <span class="number">32</span>,
             with_logging: <span class="bool-val">false</span>,
             device_mapping: <span class="prelude-val">None</span>,
+            imatrix: <span class="prelude-val">None</span>,
         }
     }
 
@@ -315,6 +326,12 @@
         <span class="self">self
     </span>}
 
+    <span class="doccomment">/// Utilise this imatrix file during ISQ
+    </span><span class="kw">pub fn </span>with_imatrix(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.imatrix = <span class="prelude-val">Some</span>(path);
+        <span class="self">self
+    </span>}
+
     <span class="doccomment">/// Set the maximum number of sequences which can be run at once.
     </span><span class="kw">pub fn </span>with_max_num_seqs(<span class="kw-2">mut </span><span class="self">self</span>, max_num_seqs: usize) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.max_num_seqs = max_num_seqs;
@@ -368,6 +385,7 @@
             write_uqff: <span class="self">self</span>.write_uqff,
             from_uqff: <span class="self">self</span>.from_uqff,
             max_edge: <span class="self">self</span>.max_edge,
+            imatrix: <span class="self">self</span>.imatrix,
         };
 
         <span class="kw">if </span><span class="self">self</span>.with_logging {

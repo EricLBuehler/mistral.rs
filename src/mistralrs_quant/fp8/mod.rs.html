@@ -282,7 +282,8 @@
 <a href="#281" id="281">281</a>
 <a href="#282" id="282">282</a>
 <a href="#283" id="283">283</a>
-<a href="#284" id="284">284</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
     num::NonZeroUsize,
@@ -435,6 +436,7 @@
         _dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         _device: Device,
         _n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
+        _imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
         <span class="macro">todo!</span>()
     }

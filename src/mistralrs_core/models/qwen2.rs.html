@@ -797,7 +797,44 @@
 <a href="#796" id="796">796</a>
 <a href="#797" id="797">797</a>
 <a href="#798" id="798">798</a>
-<a href="#799" id="799">799</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
+<a href="#831" id="831">831</a>
+<a href="#832" id="832">832</a>
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{RotaryEmbedding, VarBuilder};
@@ -1075,9 +1112,8 @@
         }
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
-            <span class="prelude-val">Some</span>(paged_attn) =&gt; {
-                <span class="kw">let </span>((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
+            <span class="prelude-val">Some</span>(paged_attn) =&gt; <span class="kw">match </span>metadata {
+                <span class="prelude-val">Some</span>(((key_cache, value_cache), input_metadata)) =&gt; paged_attn.forward(
                     <span class="kw-2">&amp;</span>q,
                     <span class="kw-2">&amp;</span>k,
                     <span class="kw-2">&amp;</span>v,
@@ -1086,8 +1122,26 @@
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
                     <span class="prelude-val">None</span>,
-                )<span class="question-mark">?
-            </span>}
+                )<span class="question-mark">?</span>,
+                <span class="prelude-val">None </span>=&gt; {
+                    <span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata {
+                        block_tables: <span class="prelude-val">None</span>,
+                        context_lens: <span class="prelude-val">None</span>,
+                        max_context_len: <span class="prelude-val">None</span>,
+                        slot_mappings: Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], q.device())<span class="question-mark">?</span>,
+                    };
+                    paged_attn.forward(
+                        <span class="kw-2">&amp;</span>q,
+                        <span class="kw-2">&amp;</span>k,
+                        <span class="kw-2">&amp;</span>v,
+                        attention_mask,
+                        <span class="prelude-val">None</span>,
+                        <span class="prelude-val">None</span>,
+                        <span class="kw-2">&amp;mut </span>input_metadata,
+                        <span class="prelude-val">None</span>,
+                    )<span class="question-mark">?
+                </span>}
+            },
             <span class="prelude-val">None </span>=&gt; {
                 <span class="kw">let </span>(k, v) = kv_cache.append(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
 
@@ -1419,6 +1473,23 @@
 
         uvb.to_safetensors()
     }
+
+    <span class="kw">fn </span>imatrix_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; candle_core::Result&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;&gt; {
+        <span class="comment">// NOTE: dependant on the exact implementation in get_layers!
+        </span><span class="kw">let </span><span class="kw-2">mut </span>names = Vec::new();
+        <span class="comment">// lm_head
+        </span>names.push(<span class="prelude-val">None</span>);
+        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.layers.len() {
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.attn_q.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.attn_k.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.attn_v.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.attn_output.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.ffn_gate.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.ffn_up.weight"</span>)));
+            names.push(<span class="prelude-val">Some</span>(<span class="macro">format!</span>(<span class="string">"blk.{i}.ffn_down.weight"</span>)));
+        }
+        <span class="prelude-val">Ok</span>(names)
+    }
 }
 
 <span class="kw">impl </span>NormalModel <span class="kw">for </span>Model {
@@ -1460,6 +1531,9 @@
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.cache
+    }
+    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>EitherCache {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache
     }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
         <span class="kw-2">&amp;</span><span class="self">self</span>.device

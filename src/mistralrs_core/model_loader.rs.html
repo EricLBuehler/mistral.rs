@@ -407,7 +407,17 @@
 <a href="#406" id="406">406</a>
 <a href="#407" id="407">407</a>
 <a href="#408" id="408">408</a>
-<a href="#409" id="409">409</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::{<span class="self">self</span>, File},
     num::NonZeroUsize,
 };
@@ -536,6 +546,8 @@
             organization,
             write_uqff,
             from_uqff,
+            imatrix,
+            calibration_file,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -544,6 +556,8 @@
                 organization: organization.unwrap_or_default(),
                 write_uqff,
                 from_uqff,
+                imatrix,
+                calibration_file,
             },
             args.chat_template,
             tokenizer_json,
@@ -570,6 +584,8 @@
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                imatrix: <span class="prelude-val">None</span>,
+                calibration_file: <span class="prelude-val">None</span>,
             },
             args.chat_template,
             tokenizer_json,
@@ -604,6 +620,8 @@
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                imatrix: <span class="prelude-val">None</span>,
+                calibration_file: <span class="prelude-val">None</span>,
             },
             args.chat_template,
             tokenizer_json,
@@ -791,6 +809,7 @@
             write_uqff,
             from_uqff,
             max_edge,
+            imatrix,
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -799,6 +818,7 @@
                 write_uqff,
                 from_uqff,
                 max_edge,
+                imatrix,
             },
             args.chat_template,
             tokenizer_json,

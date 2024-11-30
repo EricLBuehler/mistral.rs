@@ -103,7 +103,9 @@
 <a href="#102" id="102">102</a>
 <a href="#103" id="103">103</a>
 <a href="#104" id="104">104</a>
-<a href="#105" id="105">105</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 
 <span class="kw">use crate</span>::{best_device, Model, TextModelBuilder};
 
@@ -142,6 +144,8 @@
             organization: <span class="self">self</span>.text_model.organization,
             write_uqff: <span class="self">self</span>.text_model.write_uqff,
             from_uqff: <span class="self">self</span>.text_model.from_uqff,
+            imatrix: <span class="prelude-val">None</span>,
+            calibration_file: <span class="prelude-val">None</span>,
         };
 
         <span class="kw">if </span><span class="self">self</span>.text_model.with_logging {
