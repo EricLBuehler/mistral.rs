@@ -140,17 +140,6 @@ pub trait IsqModel {
         &dyn DeviceMapper,
     );
 
-    /// Corresponding to the specific order the model produces ISQ layers (None means
-    /// do not search for in the imatrix file). This is used to pair ISQ layers with the
-    /// corresponding imatrix weights.
-    ///
-    /// - This is only for loading from a llama.cpp imatrix file.
-    /// - Corresponds to `IsqOrganization::Default`
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        // TODO: make this required.
-        candle_core::bail!("This model does not support quantizing with an imatrix.");
-    }
-
     /// This is used for imatrix generation internally. Begin stats tracking.
     fn begin_track_stats(&mut self) -> Result<()> {
         // TODO: make this required.
@@ -173,6 +162,33 @@ pub trait IsqModel {
         &dyn DeviceMapper,
     ) {
         self.get_layers()
+    }
+
+    /// Corresponds to `IsqOrganization::MoeExpertsOnly`
+    /// This is used for imatrix generation internally. Begin stats tracking.
+    fn begin_track_stats_moe_experts_only(&mut self) -> Result<()> {
+        // TODO: make this required.
+        anyhow::bail!("This model does not support tracking stats.")
+    }
+
+    /// Corresponds to `IsqOrganization::MoeExpertsOnly`
+    /// End stats tracking and return the imatrix data
+    fn extract_imatrix_data_moe_experts_only(
+        &mut self,
+    ) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+        // TODO: make this required.
+        candle_core::bail!("This model does not support quantizing with an imatrix.");
+    }
+
+    /// Corresponding to the specific order the model produces ISQ layers (None means
+    /// do not search for in the imatrix file). This is used to pair ISQ layers with the
+    /// corresponding imatrix weights.
+    ///
+    /// - This is only for loading from a llama.cpp imatrix file.
+    /// - Corresponds to `IsqOrganization::Default`
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        // TODO: make this required.
+        candle_core::bail!("This model does not support quantizing with an imatrix.");
     }
 
     /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers`].
@@ -226,7 +242,12 @@ pub trait IsqModel {
                     );
                     Some(layer_to_weight)
                 }
-                Some(ImatrixDataSource::Generated) => Some(self.extract_imatrix_data()?),
+                Some(ImatrixDataSource::Generated) => match organization {
+                    IsqOrganization::Default => Some(self.extract_imatrix_data()?),
+                    IsqOrganization::MoeExpertsOnly => {
+                        Some(self.extract_imatrix_data_moe_experts_only()?)
+                    }
+                },
                 None => {
                     // Dummy, just for zip
                     None

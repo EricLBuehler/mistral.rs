@@ -415,7 +415,11 @@ impl Loader for NormalLoader {
                 .token_to_id(&bos_toks[0])
                 .expect("Somehow the bos token is not present.");
 
-            model.begin_track_stats()?;
+            match self.config.organization {
+                IsqOrganization::Default => model.begin_track_stats()?,
+                IsqOrganization::MoeExpertsOnly => model.begin_track_stats_moe_experts_only()?,
+            }
+
             const CHUNK_SIZE: usize = 1024;
             let n_chunks = tokens.len().div_ceil(CHUNK_SIZE);
             for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
