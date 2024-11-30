@@ -406,7 +406,10 @@ impl Loader for NormalLoader {
                 .map_err(anyhow::Error::msg)?
                 .get_ids()
                 .to_vec();
-            info!("Generating imatrix from calibration data of {} tokens.", tokens.len());
+            info!(
+                "Generating imatrix from calibration data of {} tokens.",
+                tokens.len()
+            );
             let bos_toks = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
             let bos_tok_id = tokenizer
                 .token_to_id(&bos_toks[0])
@@ -417,8 +420,12 @@ impl Loader for NormalLoader {
             let n_chunks = tokens.len().div_ceil(CHUNK_SIZE);
             for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
                 let chunk = [vec![bos_tok_id], chunk.to_vec()].concat();
-                info!("Processing chunk {}/{n_chunks} ({} tokens)", i+1, chunk.len());
-                
+                info!(
+                    "Processing chunk {}/{n_chunks} ({} tokens)",
+                    i + 1,
+                    chunk.len()
+                );
+
                 let inputs =
                     make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None)?;
                 let _ = model.forward(

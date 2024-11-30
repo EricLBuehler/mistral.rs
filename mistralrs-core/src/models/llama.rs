@@ -123,9 +123,8 @@ impl CausalSelfAttention {
         }
 
         let mut y = match &self.paged_attn {
-            Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
                     &k,
                     &v,
@@ -134,8 +133,26 @@ impl CausalSelfAttention {
                     Some(value_cache),
                     input_metadata,
                     None,
-                )?
-            }
+                )?,
+                None => {
+                    let mut input_metadata = PagedAttentionInputMetadata {
+                        block_tables: None,
+                        context_lens: None,
+                        max_context_len: None,
+                        slot_mappings: Tensor::new(&[0f32], q.device())?,
+                    };
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        attention_mask.clone().as_ref(),
+                        None,
+                        None,
+                        &mut input_metadata,
+                        None,
+                    )?
+                }
+            },
             None => {
                 let (k, v) = kv_cache.append(&k, &v)?;
 
@@ -689,9 +706,6 @@ impl IsqModel for Llama {
         let mut data = HashMap::new();
         for (i, layer) in layers {
             data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
-        }
-        for (_, data) in &data {
-            dbg!(&data.as_ref().unwrap()[0..32]);
         }
         Ok(data)
     }

@@ -185,9 +185,8 @@ impl Attention {
             .forward(&q, &k, seqlen_offsets, position_ids)?;
 
         let mut attn_output = match &self.paged_attn {
-            Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
                     &k,
                     &v,
@@ -196,8 +195,26 @@ impl Attention {
                     Some(value_cache),
                     input_metadata,
                     None,
-                )?
-            }
+                )?,
+                None => {
+                    let mut input_metadata = PagedAttentionInputMetadata {
+                        block_tables: None,
+                        context_lens: None,
+                        max_context_len: None,
+                        slot_mappings: Tensor::new(&[0f32], q.device())?,
+                    };
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        attention_mask,
+                        None,
+                        None,
+                        &mut input_metadata,
+                        None,
+                    )?
+                }
+            },
             _ => {
                 let (k, v, attn_mask) =
                     kv_cache.append_sliding_window(&k, &v, attention_mask, self.sliding_window)?;
@@ -611,6 +628,34 @@ impl IsqModel for Model {
         }
 
         uvb.to_safetensors()
+    }
+
+    fn begin_track_stats(&mut self) -> anyhow::Result<()> {
+        let layers = self
+            .get_layers()
+            .0
+            .into_iter()
+            .map(|(layer, _)| layer)
+            .collect::<Vec<_>>();
+        for layer in layers {
+            Arc::get_mut(layer).unwrap().begin_track_stats()?;
+        }
+        Ok(())
+    }
+
+    fn extract_imatrix_data(&mut self) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+        let layers = self
+            .get_layers()
+            .0
+            .into_iter()
+            .enumerate()
+            .map(|(i, (layer, _))| (i, layer))
+            .collect::<Vec<_>>();
+        let mut data = HashMap::new();
+        for (i, layer) in layers {
+            data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
+        }
+        Ok(data)
     }
 }
 
