@@ -34,6 +34,8 @@ This is commonly measured with perplexity. Please see the [perplexity](../mistra
 
 To improve the accuracy of a model with ISQ, use an imatrix file. These can be found online (for example, on Hugging Face), and should be passed with the `--imatrix` flag for `plain` models. This will increase the accuracy of the quantization significantly and brings the ISQ quantization up to par with the GGUF counterpart.
 
+Check out the [imatrix docs](IMATRIX.md).
+
 ## Python Example
 ```python
 runner = Runner(

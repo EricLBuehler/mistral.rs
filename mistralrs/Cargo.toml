@@ -146,3 +146,7 @@ required-features = []
 [[example]]
 name = "idefics3"
 required-features = []
+
+[[example]]
+name = "imatrix"
+required-features = []

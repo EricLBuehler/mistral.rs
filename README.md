@@ -58,11 +58,10 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
     ```
 
-- 🧮 Use an imatrix to improve ISQ accuracy
+- 🧮 Enhance ISQ by collecting an imatrix from calibration data
 
     ```
-    wget https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct.imatrix
-    ./mistralrs-server -i --isq Q2K plain -m meta-llama/Llama-3.2-3B-Instruct --imatrix Llama-3.2-3B-Instruct.imatrix
+    ./mistralrs-server -i --isq Q4K plain -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
     ```
 
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
