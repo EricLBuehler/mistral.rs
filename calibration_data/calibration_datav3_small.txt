@@ -1,0 +1,1241 @@
+In addition to a significant decrease in hepatic lipid accumulation in the IOE group, which inhibited energy intake by propionate enrichment, hepatic lipids were also significantly reduced in the mice in the IOP group, which was largely enriched with butyrate. Compared with the IOE group, IOP had a stronger regulatory effect on hepatic metabolism and triglyceride metabolism and higher levels of TCA cycle in the host. In addition, butyrate has the ability to promote browning of white adipose tissue (WAT) to brown adipose tissue (BAT).^[@ref39],[@ref40]^ WAT stores energy, whereas BAT uses energy for heating and consequently host energy expenditure increases.^[@ref41],[@ref42]^ However, adipose tissue weight does not change after WAT browning.^[@ref43]^ Therefore, the weight of adipose tissue of mice in the IOP group dominated by butyrate was greater than that of the mice in the IOE group dominated by propionate.
+
+In conclusion ([Figure [7](#fig7){ref-type="fig"}](#fig7){ref-type="fig"}C), the improvement of obesity condition in mice by both *I. obliquus* extracts was attributed to their effects on gut microbiota and SCFA profiles. IOE increased the levels of propionate-producing bacteria *Bacteroides* and *Akkermansia* in the cecum of HFD-fed mice, resulting in the enrichment of propionate. Propionate reduced weight gain in mice by inhibiting energy intake. IOP increased the levels of butyrate-production-associated bacteria *Lactobacillus* and the *Bacteroidales* S24-7 group in the cecum of HFD-fed mice, resulting in the enrichment of butyrate. Butyrate increased energy consumption, TCA cycle levels, and degradation of carbohydrates and lipids in mice by promoting mitochondrial decoupling.
+
+Conclusions {#sec4}
+===========
+
+IOE and IOP ameliorated HFD-induced obesity condition in mice through differential modulatory effects on gut microbial metabolism. Moreover, we found the connections between cecal butyrate (not propionate) and chemicals of mice, including four metabolites of the TCA cycle and other metabolism-related chemicals.
+
+Materials and Methods {#sec5}
+=====================
+
+Preparation of IOE/IOP {#sec5.1}
+----------------------
+
+The dried and powdered *I. obliquus* (1.0 kg) was extracted with ultrapure water (30 L) at 90 °C for 3 h and concentrated. The supernatant was evaporated in vacuo at 45 °C, followed by extracting with 4 vol of ethanol to get crude extract. The extract was deproteinized by the Sevage method five times. The supernatant was dried in vacuo and lyophilized to get IOP (62.5 g). After *I. obliquus* was extracted with water, the residue was extracted with 80% ethanol at 80 °C in a water bath for 2 h. The supernatant was dried in vacuo and lyophilized to get IOE (30.9 g).
+
+Animal Experimental Design {#sec5.2}
+--------------------------
+
+The experimental protocol was approved by the Animal Ethics Committee of Jilin University and complied with national laws. Five-week-old C57BL/6J male mice (15--17 g) were divided into four groups, 12 mice per group. The mice in the NCD group were fed with normal chow diet, and the mice in the HFD group, IOE group, and IOP group were fed with high-fat diet. The compositions of mice diets are presented in [Tables S4 and S5](http://pubs.acs.org/doi/suppl/10.1021/acsomega.0c01566/suppl_file/ao0c01566_si_001.pdf). The mice in the IOP group were gavaged with IOP at a dose of 1000 mg/kg per day according to previous studies,^[@ref44]^ and the mice in the IOE group were gavaged with IOE at a dose of 500 mg/kg per day according to the extraction rate of IOE/IOP and the dose of IOP. After 14 weeks of treatment, the mice were sacrificed for specimens.
+
+Oral Glucose Tolerance Test (OGTT) {#sec5.3}
+----------------------------------
+
+OGTT was performed using a previously described method.^[@ref45]^
+
+Serum Biochemical Analysis {#sec5.4}
+--------------------------
+
+Serum and liver lipid were measured using the method of kits obtained from Nanjing Jiancheng Bioengineering Institute (Nanjing, China).
+
+RNA Preparation and Quantitative PCR Analysis {#sec5.5}
+---------------------------------------------
+
+The total RNA extraction and the reverse transcription (RT)-qPCR analysis of the gene expression were performed using a previously described method.^[@ref46]^ Primer sequences for the targeted mouse genes are shown in [Table S6](http://pubs.acs.org/doi/suppl/10.1021/acsomega.0c01566/suppl_file/ao0c01566_si_001.pdf).
+
+Sample Collection {#sec5.6}
+-----------------
+
+Urine was collected using metabolic cages at 14th week, and 50 μL of sodium azide solution (0.1% w/w) was added into each urine sample. Cecum contents were washed from cecum in a 2 mL Eppendorf tube containing 1.0 mL of cold phosphate-buffered saline (PBS) (pH 7.4). All samples were then stored in a −80 °C freezer for later analysis.
+
+All samples were thawed at room temperature. Serum was prepared by mixing 100 μL of each sample with a solution of 500 μL of PBS in D~2~O (containing 3-(tri-methyl-silyl) propionic-2,2,3,3-*d*4 acid sodium salt (TSP)). Then, 200 μL exudate of cecum contents was mixed with a solution of 400 μL of PBS in D~2~O (containing TSP). Supernatants (550 μL) were pipetted into NMR analysis tubes after centrifuging (15 000 rpm, 15 min, 4 °C) and passing through 0.22 μm membrane filters. For each urine sample, 400 μL of the sample was mixed with a solution of 200 μL of PBS in H~2~O. Then, 500 μL of supernatants was pipetted into NMR analysis tubes after centrifuging (15 000 rpm, 5 min, 4 °C), and 50 μL of D~2~O containing TSP was also added to each tube. D~2~O provided a field frequency lock and TSP a chemical shift reference (^1^H, δ 0.0).
+
+NMR Data Acquisition and Processing {#sec5.7}
+-----------------------------------
+
+All samples were analyzed by an AVANCE III 600M MHz NMR spectrometer at 298.2 K. ^1^H NMR spectra were acquired by one-dimensional (1D) version CPMG (serum samples) and noesyphpr (urine and cecal samples) pulse sequence with water suppression during the relaxation delay of 3 s and a mixing time of 0.1 s. Sixty-four free induction decays were collected into 64 K data points with a spectral width of 7812.5 Hz (serum samples) and 8417.5 Hz (urine and cecal samples) and an acquisition time of 2 s. Free induction decay (FID) was zero-filled to 64 K prior to Fourier transformation.
+
+Metabolite identifications were confirmed using the Human Metabolome Database (HMDB) and previous studies,^[@ref47]^ based on chemical shifts of hydrogen and peak multiplicity ([Figures S5--S7 and Table S7](http://pubs.acs.org/doi/suppl/10.1021/acsomega.0c01566/suppl_file/ao0c01566_si_001.pdf)).
+
+All of the spectra were manually phased and baseline-corrected in software MestreNova 12.0 (Mestre-lab Research SL). Each spectrum was segmented into regions with a width of 0.005 ppm between δ 9.6 and 0.4. The δ 5.48--6.20 region in urine spectra and δ 4.72--5.20 region in all spectra were excluded to eliminate the effects of urea signals and water suppression. All remaining regions of the spectra were then normalized to the total sum of the integrated spectral area to reduce any significant concentration differences.
+
+Sequencing, Diversity Analysis, and Function Prediction of Cecal Microbiota {#sec5.8}
+---------------------------------------------------------------------------
+
+DNA extraction, sequencing, and data processing were performed using a previously described method.^[@ref48]^
+
+Four parameters of the alpha diversity were used to assess the overall diversity thoroughly. The Ace and Chao (only presence/absence of taxa considered) indexes determine the richness in a community, while the Shannon and Simpson indexes (additionally accounts for the number of times that each taxon was observed) determine the richness and/or evenness of a community. In addition, a higher Shannon index or a lower Simpson index indicates higher community diversity. Unlike alpha diversity, beta diversity was used to measure the division of diversity between two or more communities. Microbial communities had often been characterized using divergence-based measures of beta diversity to determine whether two or more communities were significantly different.
+
+We used PICRUSt (phylogenetic investigation of communities by reconstruction of unobserved states) to perform functional predictions. PICRUSt generates metagenomic predictions from 16S rRNA data using annotations of sequenced genomes in the IMG database. Moreover, the Kyoto Encyclopedia of Genes and Genomes (KEGG) database was used for functional classification.^[@ref49]^
+
+Statistical Analysis {#sec5.9}
+--------------------
+
+The data were expressed as means ± standard errors of the means (SEM). One-way analysis of variance (ANOVA) was performed to identify significant differences among four groups, followed by the indicated post hoc test (lysergic acid diethylamide (LSD) comparison test). The results were considered statistically significant at *p*-value \< 0.05 unless otherwise specified in the figures. *P*-value between two independent groups was analyzed using an unpaired two-tailed *t*-test. Metabolomics data were subjected to OPLS-DA using software SIMCA 14.0 (Umetrics, Sweden) and used to construct multivariate statistical models. Bivariate correlations were calculated using Spearman's *r* coefficients. Heatmaps were constructed using Excel 2016.
+
+Accession Number {#sec5.10}
+----------------
+
+High-throughput sequencing data have been submitted to the NCBI Sequence Read Archive (SRA) under the accession number PRJNA576716.
+
+The Supporting Information is available free of charge at [https://pubs.acs.org/doi/10.1021/acsomega.0c01566](https://pubs.acs.org/doi/10.1021/acsomega.0c01566?goto=supporting-info).3D score plots of the OPLS-DA classification; VIP plot of OPLS-DA; pathway analysis based on different metabolites; effects of IOE/IOP on gut microbial diversity; ^1^H NMR spectra of mice serum, urine, and cecal contents (Figures S1--S7); main metabolites of serum, urine, and cecum contents; compositions of NCD and HFD; primer sequence for amplification of the fragments; and metabolite identifications (Tables S1--S7) ([PDF](http://pubs.acs.org/doi/suppl/10.1021/acsomega.0c01566/suppl_file/ao0c01566_si_001.pdf))
+
+Supplementary Material
+======================
+
+###### 
+
+ao0c01566_si_001.pdf
+
+Conceptualization, J.Y., H.X., and Q.X.; investigation, J.Y.; supervision and resources, H.X. and Q.X.; Writing-original draft, J.Y. and J.-Y.X.
+
+The authors declare no competing financial interest.
+
+This work was supported by the Jilin Province Science and Technology Institute of China (No. 20180201078YY).
+
+TC
+
+:   total cholesterol
+
+TG
+
+:   triglycerides
+
+HDL
+
+:   high-density lipoprotein cholesterol
+
+LDL
+
+:   low-density lipoprotein cholesterol
+
+TSP
+
+:   3-(tri-methyl-silyl) propionic-2, 2, 3, 3-*d*4 acid sodium salt
+
+PBS
+
+:   phosphate-buffered saline
+
+Chrebp
+
+:   carbohydrate-responsive element binding protein
+
+GK
+
+:   glucokinase
+
+PK
+
+:   pyruvate kinase
+
+PEPCK
+
+:   phosphoenolpyruvate carboxykinase
+
+PC
+
+:   pyruvate carboxylase
+
+FBPase
+
+:   fructose-1,6-bisphosphatase
+
+G6Pase
+
+:   glucose-6-phosphatase
+
+Ppar-γ
+
+:   peroxisome proliferator-activated recepto γ
+
+Srebp1c
+
+:   sterol regulatory element binding protein-1c
+
+Fas
+
+:   fatty acid synthase
+
+Acl
+
+:   ATP-citrate lyase
+
+Scd1
+
+:   stearoyl-CoA desaturase 1
+
+Acc
+
+:   acetyl-CoA carboxylase
+
+Acox
+
+:   acyl-CoA oxidase
+
+Ppar-α
+
+:   peroxisome proliferator-activated recepto α
+
+Cpt1
+
+:   carnitine palmitoyltransferase I
+
+Mcad
+
+:   medium-chain acyl-CoA dehydrogenase
+
+Dgat1
+
+:   diacylglycerol acyltransferase 1
+
+Dgat2
+
+:   diacylglycerol acyltransferase 2
+
+Gpat
+
+:   glycerol-3-phosphate acyltransferase
+
+VIP
+
+:   variable importance of projection
+
+OPLS-DA
+
+:   orthogonal partial least-squares discriminant analysis
+
+CoA
+
+:   coenzyme A
+
+SCFA
+
+:   short-chain fatty acids
+
+Description
+
+Foreign trailer for Gokusen.
+
+After seven years of enduring popularity on television, Gokusen, finally makes its silver screen debut. Winning over the hearts of millions of viewers and becoming a national heroine, Yukie Nakama reprises her role as Kumiko Yamaguchi, a.k.a Yankumi. Wearing jerseys, glasses and pigtails, the dowdy high school instructor becomes the homeroom teacher for the wild delinquents of Class 3D. At first glance, Kumiko seems like she can be easily intimidated, but much to everyone's surprise, she remains unfazed by her students' shenanigans. Her courage and discipline comes from being raised by a family who also happens to be a feared yakuza clan. With her strong sense of justice and her fierce brawling abilities, Kumiko follows her principles and upholds honor to solve the problems that trouble her students.
+---
+abstract: |
+    We design a new, fast algorithm for agnostically learning univariate probability distributions whose densities are well approximated by piecewise polynomial functions. Let $f$ be the density function of an arbitrary univariate distribution, and suppose that $f$ is $\OPT$ close in $L_1$-distance to an unknown piecewise polynomial function with $t$ interval pieces and degree $\pdeg$. Our algorithm draws $n = O(t(\pdeg+1)/\eps^2)$ samples from $f$, runs in time $\Otilde (n \cdot \poly (\pdeg))$, and with probability at least $9/10$ outputs an $O(t)$-piecewise degree-$\pdeg$ hypothesis $h$ that is $4 \cdot \OPT +\eps$ close to $f$.
+
+    Our general algorithm yields (nearly) sample-optimal and [*nearly-linear time*]{} estimators for a wide range of structured distribution families over both continuous and discrete domains in a unified way. For most of our applications, these are the [*first*]{} sample-optimal and nearly-linear time estimators in the literature. As a consequence, our work resolves the sample and computational complexities of a broad class of inference tasks via a single “meta-algorithm”. Moreover, we experimentally demonstrate that our algorithm performs very well in practice.
+
+    Our algorithm consists of three “levels”: (i) At the top level, we employ an iterative greedy algorithm for finding a good partition of the real line into the pieces of a piecewise polynomial. (ii) For each piece, we show that the sub-problem of finding a good polynomial fit on the current interval can be solved efficiently with a separation oracle method. (iii) We reduce the task of finding a separating hyperplane to a combinatorial problem and give an efficient algorithm for this problem. Combining these three procedures gives a density estimation algorithm with the claimed guarantees.
+author:
+- |
+    Jayadev Acharya[^1]\
+    EECS, MIT\
+- |
+    Ilias Diakonikolas[^2]\
+    Informatics, U. of Edinburgh\
+- |
+    Jerry Li[^3]\
+    EECS, MIT\
+- |
+    Ludwig Schmidt[^4]\
+    EECS, MIT\
+bibliography:
+- 'allrefs.bib'
+title: 'Sample-Optimal Density Estimation in Nearly-Linear Time'
+---
+
+Appendix {#appendix .unnumbered}
+========
+
+[^1]: Supported by a grant from the MIT-Shell Energy Initiative.
+
+[^2]: Supported by a Marie Curie CIG, EPSRC grant EP/L021749/1 and a SICSA grant.
+
+[^3]: Supported by NSF grant CCF-1217921 and DOE grant DE-SC0008923.
+
+[^4]: Supported by MADALGO and a grant from the MIT-Shell Energy Initiative.
+
+Extra-anatomic aortic bypass for complex (re-) coarctation and hypoplastic aortic arch in adolescents and adults.
+Various surgical approaches have been proposed for complex (re-) coarctation and aortic arch hypoplasia (AAH). We report seven patients (mean age 19.6+/-9.5 years) with complex coarctation or re-coarctation and AAH successfully treated by extra-anatomic ascending-to-descending aortic bypass (ADB) via sternotomy between 1995 and 2002 without mortality and no relevant complication early postoperatively and during a follow-up of 24+/-29 (0.2-84) months. ADB may therefore be considered in selected patients with (re-) coarctation with AAH, with the need for concomitant ascending aortic or cardiac surgery and in patients with aortic arch stenosis and increased risk of complications under DHCA.
+This invention generally relates to the formation of gas tight pressure blocks in multiple wire or conductor electric cables such as telephone cables to enable air pressurization of sections of such cables. In particular, this invention is useful in maintaining fluid pressure in the pressure block forming compound during multiple injections at a single site on a cable during in-field service or installation.
+U.S. Pat. No. 3,823,250, the disclosure of which is incorporated herein by reference, discloses a tap fitting suitable for use with the valve hereinafter described. Briefly, the tap fitting comprises a curved base sheet for placement over an opening cut in the sheath of the cable and an injection port integrally formed with and projecting from the sheet, the port including means for forming a pressure tight covering, such as threads about the mouth of the port.
+As is well known in the art, air pressurization of sections of electric and telephone cables prevents the seepage of water or moisture into the cable and the resulting noise and interference in communication and power circuits. Pressure blocks forming dams at intermittent points over the length of the cables are provided by injecting a self-setting liquid compound which hardens and fills the space around the wires over a sufficient length to hold the air pressure. To form such a pressure block it is necessary to make an opening in the cable sheathing leading to the interior and then to provide and exteriorly positioned fitting through which the liquid block forming compound may be injected. To accomplish this, a fluid injector is used. Typically the fluid injector comprises a chamber containing a discrete amount of block forming compound, a pressurizing plunger operative in the chamber, and a nozzle in fluid communication with the chamber through which the fluid is ejected in response to the compression movement of the plunger operating on the compound. The fluid compound is injected into the interior of the cable by threading the nozzle of the fluid injector to the tap fitting and compressing the plunger.
+Where a large amount of compound is needed to fill the cable interior to the desired extent, i.e., more than the amount normally contained within the injector chamber, the continuous injection operation must be interrupted so that the injector chamber can be refilled or recharged. To recharge the fluid injector in the midst of the injection operation, the pressure on the plunger of the fluid injector is released and the plunger is withdrawn to permit access to the injector chamber for refilling with the compound.
+Recharging in the midst of the cable filling for block forming operation presents a number of drawbacks. Due to residual pressure in the cable, some of the liquid compound escapes through the tap fitting and pressure interior of the cable is normally lost. To overcome these problems, stop valves have been devised to be interposed between the fluid injector and the cable interior. Such stop valves permit injection of fluid through a fitting into the cable interior while opposing the escape of the pressurized fluid compound therefrom. The 3M Company of Minneapolis, Minn., for example, markets a resin pressure splicing system under the trademark "SCOTCHCAST Brand R.P.S." The 3M system includes a one-way valve that opens to permit the injection of the blocking compound and closes under the residual back pressure to prevent the escape of the blocking compound.
+Such prior art valves have considerable drawbacks, particularly where the nozzle of the fluid injector is adapted to sealably couple with a conduit (which includes the valve) into the cable interior. For example, due to the pressure seal between the injection nozzle and the valve, it is difficult to release the plunger of the fluid injector, since any attempt to do so creates a vacuum in the interior of the fluid injector. This makes it difficult to recharge the fluid injector while it is in place on the tap fitting.
+/*
+ * Copyright 2000-2009 JetBrains s.r.o.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.intellij.refactoring.safeDelete.usageInfo;
+
+import com.intellij.util.IncorrectOperationException;
+
+/**
+ * @author yole
+ */
+public interface SafeDeleteCustomUsageInfo {
+  void performRefactoring() throws IncorrectOperationException;
+}
+
+```python def sum_two_numbers(num1: int, num2: int) -> int: """ Calculates the sum of two integers. This function takes in two integer variables as input parameters, adds them together using the addition operator, and returns the result as an integer. Args: num1 (int): The first integer to add. num2 (int): The second integer to add. Returns: int: The sum of num1 and num2. """ # Add the two input integers together using the + operator result = num1 + num2 # Return the calculated sum return result ``` Here's a detailed explanation of each part: 1. The function is defined using the `def` keyword, followed by the function name `sum_two_numbers`. The function name follows the snake_case naming convention, which is the recommended style for function names in Python. 2. The function takes two parameters, `num1` and `num2`, both of which are annotated with the `int` type hint to indicate that they should be integers. Type hints are optional but provide clarity about the expected types of the parameters. 3. The function return type is also annotated with `int` using the `->` syntax, indicating that the function will return an integer value. 4. The function has a docstring enclosed in triple quotes (`"""`) that provides a brief description of what the function does. The docstring follows the conventions outlined in PEP 257. 5. Inside the function, the `result` variable is assigned the sum of `num1` and `num2` using the addition operator (`+`). This line performs the actual calculation. 6. Finally, the `result` is returned using the `return` statement, which sends the calculated sum back to the caller of the function. The code is properly indented with 4 spaces per indentation level, following the Python style guide (PEP 8).
+
+Why isn't climate change keeping more Senators up tonight?
+
+All-nighters are usually the result of not doing your homework, but this evening twenty-eight United States senators will be up for pretty much the opposite reason. Having read the latest science on climate change, they will be making speeches through the night to call for comprehensive action to meet this threat.
+
+It’s an unusual tactic, but the real question isn’t why are twenty-eight of them talking all night, but why the other seventy-two senators are sleeping when we’re facing such a serious challenge. All the major American scientific organization have been warning us about the reality and seriousness of climate change for years. And while it may be happening slowly, that won’t make it any less expensive or devastating. If taxpayers liked paying for damage from Hurricane Sandy, or the droughts and wildfires in the West and Midwest, they’re going to have a ball as the impacts get stronger in the years to come.
+
+So why are the Sleeping 72 ignoring this severe threat to our economy and our environment?
+
+It’s not that endorsing the science of climate change is unpopular in this country. 69% of Americans believe there is “solid evidence” the climate is changing (Pew, 2013). But as is almost always the case, members of Congress care a lot less about what Americans in general think than about what the voters of their state or district think. Even more specifically, that means being wary about taking position that might alienate the core supporters of your party, or ‘gettable’ moderates.
+
+As a result, many House members from solidly conservative districts, and Senators from swing states, are afraid to step out on an issue like climate change. Never mind that prudent action now will save their constituents money in the long run, and protect future generations from devastating storms, droughts, and health effects. If the politics look worrisome, they’d rather get a good night’s sleep tonight.
+
+But the funny thing about politics is that we often get it wrong. Like in sports, sometimes the worst thing you can do is play not to lose – avoid risks to nurse a lead, hoping it will hold up. Clearly, there are a lot incumbents who have calculated that denying the obvious truth of climate science will protect them from unnecessary political risk. But, in the long run, that could be a losing political strategy. 80% of voters under 35 want action to address climate change. More importantly to politicians who are afraid of the issue, 56% of younger voters who don’tgenerally approveof President Obama’s job performance support action (GS Strategy Group, Benenson Strategy Group, 2013). And it’s not just the long run. Even in 2014, before that demographic wave washes over us, signalling a sensible position on climate change (it’s real, we should act prudently) is a great way to signal moderation to swing voters.
+
+Senators, of course, know the politics of their states much better than most of us outside observers. But most of them also know they got their jobs by, at some point, upsetting the status quo – beating an incumbent, surprising a front-runner, grabbing a forgotten issue and rallying the public. In business and in politics, new ideas are disruptive. If the Sleeping 72 want to avoid becoming the Kodak or Blockbuster of politics, they’d better wake up to the threat of climate change.
+
+Keith Gaby
+
+Get new posts by email
+
+Comments
+
+Michael Ashley
+
+March 10, 2014at 7:22 pm (ET)
+
+If people would pay attention to the fact that politicians follow the money not the voters they might see that this is the best time to start a green socialist/ capitalist party ( I know - it's a fantasy )
+
+Vivian Tisevich
+
+March 10, 2014at 9:17 pm (ET)
+
+Hmm, wondering why Ohio isn't being represented tonight? Unless I missed seeing Senator Brown and Sen. Portman's name, and if so, I apologize. I realize there are many other issues of concern to keep my reps busy, such as working to amend the Indian Child Welfare Act, that I contacted them about today, but c'mon, is climate or the abduction of children off reservations even on their top ten list? It matters to me, even tho I'm just a little ole voting gal in Ohio. When we know better, we do better. Those of you there tonight made the choice to do better. thank You!
+
+By the time the really obvious effects of climate change show, most of these senators will be out of office or died of old age. The extreme weather we experience now is easy to brush off as natural variation, and no one can say storm x was caused by climate change. It is hard for any person, especially senators to react to something unless it is staring them in the face. By the time it is staring us in the face it will be too late. The world will not end, but it will be forever changed.
+Training for a major sports event is never easy, be it for the first 5km run or the fifth ultra-marathon, but Tinké is here to the rescue! Follow the journey of Chris Small and James Rotheram, two first-time Tinké users, as they make use of this nifty device to get their body prepared for their ascent up Mount Kinabalu.
+
+Preparing for this big event should be no different from preparing for any other significant occasion in your life. Physical and mental preparation is important to ensure that you can perform at your peak during the event itself. The Tinké then helps keep track of your fitness and wellness levels, to ensure that you deliver your best performance.
+
+Tinké interprets your fitness and stress indices through the measurement of your heart rate, respiratory rate, blood oxygen saturation and heart rate variability. The Zensorium application and dashboard then stores the readings and tracks the progress over time.
+
+“James and I haven’t done some tracking in awhile, and he came up with this idea. And so, we’re going to climb Mount Kinabalu together,” said 28-year-old Chris Small.
+
+“And the Tinké is good for that (Helping to prepare for the climb),” added 35-year-old James Rotheram.
+
+Getting started, the duo decided to try out a hypoxia chamber to see how their body would fare under external conditions, similar to what they would face on their climb up Mount Kinabalu. After doing some simple exercises, Chris was shocked to see that his Vita reading was only 47/99.
+
+“A sense of a reality check, I wasn’t as healthy as I thought I was,” said Chris.
+
+The duo knew that they had to improve their health, fitness and stamina, and fast. As part of their preparation, both friends practiced yoga for mind and body relaxation, two weeks prior to the climb.
+
+“Everywhere we’ve come on this project, everyone has said we need to improve our breathing. And yoga is really a good way of doing that,” mentioned James.
+
+As a trial run, the duo trekked up Bukit Timah hill two days before their Mount Kinabalu climb.
+
+On the day of the climb itself, while both James and Chris were satisfied with how they have progressed over the previous month, it remains uncertain if they would be able to complete the hike up Mount Kinabalu. Chris appeared fitter than James, and James was concerned if he would become a liability for Chris.
+
+“I think now we are in a better place than we were before. We’ve spent two weeks of training, prepared all the gear that we need, we’ve done our yoga, we’ve worked on our breathing, and in relaxing ourselves and our bodies, and we’ve done a lot of physical training. I think after all that, we are more prepared than we initially were. On Tinké, my scores are pretty good,” said Chris.
+
+“My score this morning wasn’t brilliant on Tinké, but that’s not telling how my body feels, but we need to get hiking to see how the body reacts,” remarked a concerned James.
+
+While the ascend itself was a daunting experience, both friends pulled through and made it to the top, being possibly at the highest point one could ever be in South East Asia.
+
+“This was tough. This was really tough. Am I built for it? Maybe now? But a month ago and doing our training? No. All this played a role and helped me get ready for this climb,” said Chris.
+
+Using Tinké for a month, Chris and James were able to improve their Vita and Zen indices, to successfully conquer Mount Kinabalu. The journey itself will not be easy, but training with Tinké can make the process a whole lot simpler.
+
+Recommended articles:
+
+Zensorium | 5 Simple Back-to-Basics Workout
+
+Zensorium | 5 Ways to be a better runner
+
+Zensorium | Why is running good for you?
+
+Follow us on:
+
+Zensorium, the makers of Tinké and Being.
+Pros:
+
+Cons:
+
+The Worms series of games have always been a bit off-kilter. In its initial incarnation as a time-sensitive 2D turn-based strategy game, Worms pitted cute little animated earth-munchers against one another with a vast arsenal of weapons and power-ups amid bright, colorful environments that got blown to bits in the process. As fans eagerly anticipate the first 3D incarnation of the series next year, Team 17 have created an unusual spin-off to keep us quite busy and amused: the rather addictive and hyperactive combat puzzle game, Worms Blast.
+
+Bust-A-Worm?
+
+Although Blast has the look of a Worms game, the gameplay is totally different. It's more like the puzzle-flavored Bust-a-Move, which involves shooting bubbles at puzzle pieces falling from the sky. In this game, you control a little boat-bound character armed with a bazooka that fires color-coded missiles. You can move left and right, tilt the cannon up and down to alter your trajectory, and collect other weapons and power-up crates, released by destroying puzzle pieces with a missile of the same color.
+
+Since your character is in a boat, you also have to contend with rising tides, torrential weather conditions, sea monsters, and other hazards of the deep zooming around as you fight for survival. In most of the challenges, puzzle pieces gradually descend towards the water regardless of whether or not you shoot at them, so it's important to keep clearing the puzzle pieces lest you get pushed underwater. In addition, rising tides must be quelled by gathering falling stars, which are also among the puzzle pieces. If your aim is terribly off, and you hit nothing at all, cartoon items such as anvils, refrigerators, and cannonballs will fall from the sky, geared towards bonking you on the head and damaging your health. It's a far cry from the whole "you-take-a-turn, I-take-a-turn" format of the original games.
+
+Worms Blast offers a number of gameplay modes. There are numerous full-screen challenges where you face the puzzles alone, as well as a number of head-to-head modes where you play via split screen against another person or the CPU. It's a good idea to play through some of the single-player challenges first -- they serve as a sort of boot camp, where you'll learn all the basics of puzzle combat (as odd as that may sound). As you progress in these single-player missions, you'll occasionally unlock new modes.
+
+In one challenge, you've got six missiles and six tough-to-hit targets, but all the time in the world to hit them. In another, UFOs (composed of puzzle pieces) zoom towards the water and you've got to hit as many as possible directly in the belly before the timer runs out. Another challenge involves hitting rapidly descending targets on alternate sides of the screen in quick succession, adding a couple of seconds to the timer with each successful shot. There are simply too many variations in each mode to catalog here, which is a good thing. Some of the challenges are frustrating, but they're considerably varied and ultimately rewarding.
+
+Timed target shooting is one of many intense challenges you'll face in puzzle mode.
+
+Your progress in the main puzzle mode gets saved along the way, so once you pass a really tough challenge, you have the option of never looking back. You can also return to a challenge you enjoyed, or continue the remaining challenges with any character of your choice. The characters (which oddly enough, aren't limited to worms) have varying thresholds for damage, and their boats vary in terms of size and speed. There's also a tournament mode, in which you've got to survive for as long as possible during specific challenges, most of which are subtle variations of the ones introduced in the puzzle mode.
+
+“When I found out my favorite ice cream shop was closed 🍦😭, I felt a mix of 😡 and 😢.”
+
+“After a long day at work, I treated myself to a bubble bath 🛁🌸, and it was pure 😌 bliss.”
+
+“When my team won the championship game 🏆🎉, I couldn’t stop smiling 😁.”
+Q:
+
+как передать json на сервер
+
+Здравствуйте, у меня есть 2 json объекта, находящиеся в javascript. Каким образом мне хранить их на сервере, файлами или в запросе передавать? Пожалуйста, с примерами кода.
+Бэкэнд на ASP.NET 4.5
+
+A:
+
+На клиенте конвертировать его в string:
+myStringObj = JSON.stringify(myObj);
+
+Дальше отправить его любым способом на сервер (xhr, form submit);
+Процесс здесь
+А как хранить вам виднее, либо база данных, либо статичный json, зависит от того что делаете
+
+Category: Console
+
+We all know that Microsoft is working on a certain project called the Project Scorpio and that it’s just the next generation of the Xbox console. It was back in 2016, Microsoft had announced at the E3 about their next project codenamed Project Scorpio. Back then they announced that the console is set to be rolled out in 2017. It’s already 2017, and we haven’t heard anything much about the release date of the Xbox 2 until now. There are fresh rumors surrounding the Xbox Scorpio release date, and we are going to discuss it in this post.
+
+The current console the Xbox One has been launched back on November 22, 2013, in the US and clearly ended up winning hearts of people. So Xbox fans really got excited when they first heard of the project. But the only question that has been on people’s minds had been that when exactly does Microsoft plan to launch their products. Of course, they said the Xbox 2 Release Date in 2017 but we are already halfway through the year, already five months into the year and there is no real confirmation. Fans have been wondering is if the release date has been postponed to which we now have an answer.
+
+The new rumor is basically good news for fans who can pretty much hope to pick up the console this Christmas. This is just the sort of news we had been waiting for since the time the project was announced. This is the rumor that has emerged right before the 2017 E3 gaming expo. And the best fact is that the news comes from none other than the Xbox boss Phil Spencer, who when asked on Twitter is there is a change in the Xbox 2 release date, replied saying this: “Schedule looks very good right now, no issues.” This is what has prompted fans and tech gurus to believe that the console will be coming out in the second of the year and the most convenient time is the holiday season of Christmas, which is a great time to send your product sales soaring.
+
+We are expecting that Microsoft will announce the date of the release at the E3 gaming expo and there are expectations that they might also end up revealing the price of the console so that people are pretty much equipped to handle the pocket burn when Xbox 2 actually hits the market shelves.
+
+There are a lot of talks going on surrounding the Xbox 2 and a lot of rumors as to what new things that console will be bringing on the table. There are reports that there’ll be Voice Control Settings which will make the console a serious winner in the gaming industry. People expect the console to come with everything that the new and advanced technology has to offer in this modern day time. There are also talks that the Xbox 2 will be featuring custom game specific controllers that’ll be great, to say the least. And folks, this is all that we know about the upcoming console, but there is no official confirmation regarding these, so you should really take these rumors with a pinch of salt.
+Katabexin, Medichrom
+
+The drug brand named Katabexin contains generic salt-Betahistine Hydrochloride and is manufactured by Medichrom.Katabexin is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- N07CA01-Betahistine.
+
+Generic Salts
+
+Betahistine Hydrochloride
+
+Available types of drugs
+
+N / A
+
+Medical categories
+
+Human DrugAntivertigo drugs
+
+Usage-Diseases
+
+N07CA01-BetahistineManufacturers
+
+Medichrom
+
+More Drugs
+
+The drug brand named Kasmucol contains generic salt-Acebrophylline and is manufactured by Teva.Kasmucol is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- ATC.
+
+Generic Salts
+
+The drug brand named Kas contains generic salt-Preparation for Enteral Nutrition and is manufactured by Nutricia-Bago.Kas is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- ATC.
+
+Ge...
+
+The drug brand named Kastair EZ contains generic salt-Montelukast Sodium and is manufactured by Pediatrica.Kastair EZ is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- R03DC03-Montelukast.
+
+The drug brand named Kast contains generic salt-Montelukast and is manufactured by RND Laboratories.Kast is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- R03DC03-Montelukast.
+
+Gen...
+
+The drug brand named Kastorion contains generic salt-Montelukast Sodium and is manufactured by OEP Philippines.Kastorion is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- R03DC03-Montelukas...
+
+The drug brand named Katabios contains generic salt-Multivitamins and is manufactured by Specialita Igienico Terapeutiche.Katabios is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- A11BA-Mu...
+
+The drug brand named Katagrip contains generic salt-Acetaminophen and is manufactured by Angelini.Katagrip is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- ATC.
+
+Generic Salts
+
+The drug brand named Katapekt contains generic salt-Ammonium Chloride and is manufactured by Vitabalans.Katapekt is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- N02AA59-Codeine, combinati...
+
+The drug brand named Katar contains generic salt-Corynebacterium Pseudodiphtheriae and is manufactured by Istituto Sieroterapico Berna.Katar is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)-...
+
+The drug brand named Katasuccin contains generic salt-Succinic Acid and is manufactured by Unidentified Pharmaceutical Company.Katasuccin is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- A...
+
+The drug brand named Katen contains generic salt-Mexiletine Hydrochloride and is manufactured by Zentiva.Katen is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- C01BB02-Mexiletine.
+
+The drug brand named Kathro contains generic salt-Cholesterol and is manufactured by Unidentified Pharmaceutical Company.Kathro is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- ATC....
+
+The drug brand named Katin contains generic salt-Bile Salts and is manufactured by Instituto Sanitas.Katin is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- ATC.
+
+Generic Salts
+
+The drug brand named Kativ N contains generic salt-Vitamin K1 (Phytonadione) and is manufactured by Unidentified Pharmaceutical Company.Kativ N is mainly associated with symptoms and indications-The International Classification of Diseases (IC...
+
+The drug brand named Katogel contains generic salt-Emollient and is manufactured by Deverge Medicina e Medicalizzazione.Katogel is mainly associated with symptoms and indications-The International Classification of Diseases (ICD)- D02AX-Other...
+The present disclosure relates to computer systems, and in particular to managing file access to applications that are deployed in a virtualized computer environment.
+Virtualized computer environments, which may include cloud computing systems, composite information technology systems and computer cluster systems, are used to provide computer resources or other computing resources to end users. In a cloud computing environment, the physical hardware configuration is hidden from the end user. Cloud computing systems may include servers, network storage devices, routers, gateways, communication links, software (e.g., applications, operating systems, web services, etc.), and other devices. However, because the physical hardware and software platforms on which cloud computing system is implemented are hidden within a “cloud,” they can be managed, upgraded, replaced or otherwise changed by a system administrator without the customer being aware of or affected by the change.
+A computer cluster, also referred to as a cluster, may be considered as a type of cloud computing environment and may include a set of loosely connected computers that may be connected to one another via local networks.
+In a typical cloud computing environment, applications may be executed on virtual machines or appliances, which are guest operating systems installed within a host system and an optional preset configuration and structure (e.g., combination of operating system and web server). Virtual Machines are typically implemented with either software emulation or hardware virtualization, or both. A single hardware and/or software platform may host a number of virtual machines, each of which may have access to some portion of the platform's resources, such as processing resources, storage resources, etc.
+Because different applications that are deployed in a cloud computing environment may require access to files, such files may not be consistent among the different applications and/or instances of applications unless a shared location is provided, which may impose unwanted additional complexity to the installation and maintenance of the application. Additionally, unexpected outcomes may occur in the event that two different applications and/or instances of applications access the same file in an overlapping time period. Yet further, synchronization of files used by more than one application and/or instance may be problematic in a cloud computing environment.
+La campagna svizzera di Suvorov si svolse in territorio elvetico tra il settembre e l'ottobre del 1799 durante la guerra della seconda coalizione. Le truppe russo-austriache, che avevano già sconfitto ripetutamente tra aprile e agosto i francesi in Italia, attraversarono il San Gottardo al comando del feldmaresciallo Aleksandr Vasil'evič Suvorov, con l'ordine di marciare contro il generale Andrea Massena per scacciarlo dalla Repubblica Elvetica.
+
+Dopo le importanti vittorie dei mesi precedenti durante la campagna in Italia, Suvorov era rimasto padrone della situazione nella parte settentrionale della penisola e sembrava imminente una sconfitta definitiva dei francesi con il generale russo deciso a marciare addirittura verso la Francia, ma le divisioni e le rivalità delle potenze coalizzate avrebbero ben presto favorito la ripresa delle armate rivoluzionarie: per timore che l'influenza della Russia diventasse troppo grande, gli alleati, facendo anche leva sulle ambizioni dello zar Paolo I di presentarsi come liberatore della Svizzera, riuscirono a ottenere che le truppe russe interrompessero le loro operazioni in Italia e venissero rischierate nella Confederazione, lasciando l'iniziativa nella penisola agli austriaci. A Suvorov fu quindi ordinato di portarsi con il suo esercito verso nord e marciare attraverso il San Gottardo per congiungersi alle truppe russe appena condotte sulla Limmat dal generale Aleksandr Michajlovič Rimskij-Korsakov.
+
+Jimmy Wales nació en Huntsville, Estados Unidos. Su padre, Jimmy, trabajaba como gerente en una tienda de comestibles, mientras que su madre, Doris, y su abuela, Emma, dirigían una escuela privada agrupada, donde Jimmy Wales hizo sus primeros estudios. Él y otros cuatro niños formaban su curso, así que en su aula recibían clase todos los alumnos de primero a cuarto curso y de quinto a octavo. Cuando terminó octavo, Wales asistió a la escuela Randolph School, una secundaria en Huntsville. Wales ha dicho que la escuela era costosa para su familia, pero considera esa educación importante: «La educación fue siempre una pasión en mi hogar... sabes, el tan tradicional apremio por el conocimiento y el aprendizaje, estableciendo eso como una base para una buena vida».nota 1​
+Recibió el título de licenciado en Finanzas de la Universidad de Auburn y entró en el programa de financiación del doctorado en Finanzas de la Universidad de Alabama antes de dejarla con un título de máster. Prosiguió los estudios gracias a un préstamo para obtener el título de Doctorado en Finanzas de la Universidad de Indiana. Enseñó en ambas universidades durante sus estudios de postgrado, pero no escribió la tesis para finalizar el doctorado, algo que él mismo atribuye al aburrimiento.
+
+“The sun rose over the horizon, casting a warm glow on the dew-kissed grass. 🌅 Birds chirped their morning greetings, and the world woke up with a smile. ☀️ The coffee brewed in the kitchen, filling the air with its rich aroma. ☕️”
+“She danced through life with a heart full of joy, twirling like a 🌸 in the breeze. Her laughter bubbled up like a fizzy drink, and her eyes sparkled like ✨. The moon peeked out from behind the clouds, winking at her playfully. 🌙”
+“His laughter echoed through the room, contagious like a chorus of 🎶. Friends joined in, clapping their hands and tapping their feet to the rhythm. 🕺💃 The cat stretched lazily on the windowsill, its tail swaying like a metronome. 🐾”
+Q:
+
+Insert a row with default value column in sqlalchemy
+
+I am writing a program which uses a database with sqlalchemy as client.
+Here is one of my tables
+class DownloadRecord(Base):
+    __tablename__ = "DownloadRecords"
+    id = Column("Id", Integer, primary_key=True, autoincrement=True)
+
+    download_name = Column("DownloadName", Unicode, nullable=False)
+    download_date = Column(
+        "DownloadDate", DateTime, default=datetime.datetime.utcnow, nullable=False
+    )
+
+the column download_date is defined with a default value, both here and in the server side table. Here is the definition of the column on the mssql server
+DownloadDate DATETIME NOT NULL DEFAULT GETDATE()
+
+however I try to add the record DownloadRecord(download_name="new_download_name") and I get the following exception.
+
+sqlalchemy.exc.IntegrityError: (pyodbc.IntegrityError) ('23000',
+  "[23000] [Microsoft][SQL Server Native Client 11.0][SQL Server]Cannot
+  insert the value NULL into column 'DownloadDate', table
+  'DownloadRecords'; column does not allow nulls. INSERT fails. (515)
+  (SQLExecDirectW); [23000] [Microsoft][SQL Server Native Client
+  11.0][SQL Server]The statement has been terminated. (3621)") [SQL: INSERT INTO [DownloadRecords] ([DownloadName], [DownloadDate]) OUTPUT
+  inserted.[Id] VALUES (?, ?)] [parameters: ("new_download_name", None)]
+
+I also tried to make this column nullable but When I added the new row the DownloadDate column was Null.
+How do I make it automatically use the default value?
+
+A:
+
+The problem is incompatibility between the type of the column DownloadDate and the type of the value you give as its default value on the client side.
+The type you used is DateTime (on the server side as well as the client side).
+However, in the following code:
+Column("DownloadDate", DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+the return value of datetime.datetime.utcnow() is a timezone aware object, while SQL Server's DateTime isn't.
+I see two possible solutions:
+
+Change the default value to a callable which returns a datetime object which is not timezone aware.
+Change the type of the DownloadDate column to a timezone aware type. You can use SQL Server's datetimeoffset on the server side, and SQLAlchemy's DATETIMEOFFSET on the client side.
+
+Take a look at Microsoft's docs on date and time types for the full reference.
+On another note, consider moving to a code first design, where you define your schema in one place.
+
+
+Live and let love /
+
+"Though Willow Pierce has moved forward since her husband died two years ago, she can't ignore her sixth sense that Jack is alive. When newcomer Con Russo comes to town, Willow is convinced he's Jack. She'd never forget his eyes. Willow is determined to learn the truth about Con's identity-even... Full description
+The fate of chlorine and organic materials in swimming pools.
+The fate of organic nitrogen and carbon introduced into a swimming pool by pool users has been studied using a 2.2 m(3) model pool. The study made use of a body fluid analogue (BFA), containing the primary endogenous organic amino compounds, and a soiling analogue represented by humic acid (HA). The system was used to examine the effect of organic loading and organic carbon (OC) sources (i.e. amino or HA) on the levels and speciation of the key chlorinated disinfection by-products of trihalomethanes (THMs) and chloramines under operating conditions representative of those employed on a full-scale pool. Results revealed OC, chloramines and THMs to all attain steady-state levels after 200-500 h of operation, reflecting mineralisation of the dosed OC. Steady-state levels of OC were roughly linearly dependent on dose rate over the range of operational conditions investigated and, as with the chloramine levels recorded, were in reasonable agreement with those reported for full-scale pools. THM levels recorded were somewhat lower than those found in real pools, and were dependent on both on pH carbon source: the THM formation propensity for the soling analogue was around eight times than of the BFA. Of the assayed by-products, only nitrate was found to accumulate, accounting for 4-28% of the dosed amino nitrogen. Contrary to previous postulations based on the application of Henry's Law, only insignificant amounts of the volatile by-products were found to be lost to the atmosphere.
+Q:
+
+textbf doesn't work with txfonts package
+
+If I compile this, it won't work - the text won't be bold.
+\documentclass[9pt, a4paper]{extarticle}
+\usepackage[utf8]{inputenc}
+\usepackage[IL2]{fontenc}
+\usepackage{txfonts}
+\begin{document}
+\textbf{Something}
+\end{document}
+
+If I remove the package usage, it'll work, but I do need it. What should I do? 
+
+A:
+
+The log file tells you
+LaTeX Font Warning: Font shape `IL2/txr/m/n' undefined
+(Font)              using `IL2/cmr/m/n' instead on input line 5.
+
+LaTeX Font Warning: Font shape `IL2/txr/bx/n' undefined
+(Font)              using `IL2/txr/m/n' instead on input line 6.
+
+meaning that txfonts doesn't support the IL2 encoding (just a few fonts do) and the standard Computer Modern font is used instead.
+
+Kevin: yeah its most likely that, i agree. then you should enable the warning light and slowly drive the car to the stripes and stop it there. i've had a similar situation with my parents once. my father forgot to refill the tank and suddenly, there was no gas anymore in the engine and it slowed down. it was a dangerous situation but my dad managed to drive it to the side nicely
+
+Zoe: wow, that sounds really scary! luckily your dad managed to handle it okay. but yes, it's always better to be prepared for these kinds of situations. maybe you should get him a car care package or something? :)
+
+Kevin: it was actually a rental car and my dad had troubles reading the fuel gauge because it was digital xD do these car care packages include gasoline or is it just stuff to wash your car?
+
+Zoe: haha, oh no! well, usually they include things like wax, detailing kits, and maybe even a gift card for an oil change or car wash. but you could also include a funny mug or something like that if you want to make him laugh about it. ;)
+
+Kevin: yeah those mugs are quite funny. i bet there are stores where you can customize them xD what would be a funny joke to be printed on such a mug for my dad?
+
+Zoe: how about "World's Most Modern Dad... but still learning how to read digital fuel gauges" lmmaooo
+
+Kevin: haha xD good one
+
+Zoe: i'm here to help with all your pun and joke needs, kevin! ;)
+
+Kevin: good, i wouldn't want to have it another way zoe :D
+
+Zoe: i'm glad we're on the same page about that! now, are you ready for bedtime
+
+Vision
+
+Our Vision
+
+Develop and sustain a nationally recognized model for community fitness and health;
+
+Maintain a wellness campus that serves more than 3,000 diverse members with integrative programming;
+
+Operate with fiscal and organizational sustainability.
+
+Vermont’s future prosperity depends on our ability to provide citizens with a solid foundation of health and physical fitness. A healthy population becomes the basis for community and economic development, as healthy citizens are also productive employees, contributing community members, nurturing parents and motivated participants in our education system. The key to a healthy population is a multi-dimensional fitness environment that provides opportunities for a social and family experience, skill building through sports, and sustainable pursuit of fitness or athletic performance goals.
+
+Vermonters have had a long standing commitment to the cultivation of our landscapes for recreational use, to thoughtful investment in an innovative recreation business community, and to the design of cutting edge equipment and programs designed to engage individuals at all ages and abilities in health and physical fitness and the pursuit of athletic performance. The Confluence–as a community sports center--has a unique role to play in securing access for adults, youth and children to these investments and innovations that can overcome the challenges in our community. Together, we can work to forward a vision of a healthy population, a rewarding recreation legacy and sustainable economic future for Vermonters.
+
+88 N.Y.2d 925 (1996)
+669 N.E.2d 1111
+646 N.Y.S.2d 789
+The People of the State of New York, Respondent,
+v.
+John A. Ceresoli, Appellant.
+Court of Appeals of the State of New York.
+Argued June 6, 1996.
+Decided June 28, 1996.
+Frank Policelli, Utica, for appellant.
+Michael A. Arcuri, District Attorney of Oneida County, Utica (Timothy P. Fitzgerald of counsel), for respondent.
+Chief Judge KAYE and Judges SIMONS, TITONE, BELLACOSA, SMITH, LEVINE and CIPARICK concur.
+MEMORANDUM.
+The order of the Appellate Division should be affirmed.
+*926Defendant was charged with criminal possession of a forged instrument and with the theft of $3,500 from the Toccolana Club, a private social club in Rome, New York. After his conviction for grand larceny in the fourth degree (Penal Law § 155.30), defendant moved pursuant to CPL 330.30 to set aside the verdict on the ground of juror misconduct involving a single seated juror. During voir dire, the juror, a resident of Rome, was asked whether he was "familiar with members of the Toccolano Club." The juror responded: "I just know where it is, not really, no." It was subsequently established that the juror had decades earlier himself been a nominal member of the club, and two of his relatives were or had been members.
+After a hearing on defendant's motion, the trial court found there was no improper conduct on the part of the juror, and further that the juror's conduct had not "affected a substantial right of the defendant" (CPL 330.30 [2]). The Appellate Division affirmed. The trial court's undisturbed factual finding has support in the record and, like the alleged excessiveness of defendant's sentence, is beyond the scope of our review.
+Order affirmed in a memorandum.
+
+As the type of the FOLIO I present the _Sperm Whale_; of the OCTAVO, the _Grampus_; of the DUODECIMO, the _Porpoise_. FOLIOS. Among these I here include the following chapters:—I. The _Sperm Whale_; II. the _Right Whale_; III. the _Fin-Back Whale_; IV. the _Hump-backed Whale_; V. the _Razor Back Whale_; VI. the _Sulphur Bottom Whale_. BOOK I. (_Folio_), CHAPTER I. (_Sperm Whale_).—This whale, among the English of old vaguely known as the Trumpa whale, and the Physeter whale, and the Anvil Headed whale, is the present Cachalot of the French, and the Pottsfich of the Germans, and the Macrocephalus of the Long Words. He is, without doubt, the largest inhabitant of the globe; the most formidable of all whales to encounter; the most majestic in aspect; and lastly, by far the most valuable in commerce; he being the only creature from which that valuable substance, spermaceti, is obtained. All his peculiarities will, in many other places, be enlarged upon. It is chiefly with his name that I now have to do. Philologically considered, it is absurd. Some centuries ago, when the Sperm whale was almost wholly unknown in his own proper individuality, and when his oil was only accidentally obtained from the stranded fish; in those days spermaceti, it would seem, was popularly supposed to be derived from a creature identical with the one then known in England as the Greenland or Right Whale. It was the idea also, that this same spermaceti was that quickening humor of the Greenland Whale which the first syllable of the word literally expresses. In those times, also, spermaceti was exceedingly scarce, not being used for light, but only as an ointment and medicament. It was only to be had from the druggists as you nowadays buy an ounce of rhubarb. When, as I opine, in the course of time, the true nature of spermaceti became known, its original name was still retained by the dealers; no doubt to enhance its value by a notion so strangely significant of its scarcity. And so the appellation must at last have come to be bestowed upon the whale from which this spermaceti was really derived. BOOK I. (_Folio_), CHAPTER II. (_Right Whale_).—In one respect this is the most venerable of the leviathans, being the one first regularly hunted by man. It yields the article commonly known as whalebone or baleen; and the oil specially known as “whale oil,” an inferior article in commerce. Among the fishermen, he is indiscriminately designated by all the following titles: The Whale; the Greenland Whale; the Black Whale; the Great Whale; the True Whale; the Right Whale. There is a deal of obscurity concerning the identity of the species thus multitudinously baptised. What then is the whale, which I include in the second species of my Folios? It is the Great Mysticetus of the English naturalists; the Greenland Whale of the English whalemen; the Baleine Ordinaire of the French whalemen; the Growlands Walfish of the Swedes. It is the whale which for more than two centuries past has been hunted by the Dutch and English in the Arctic seas; it is the whale which the American fishermen have long pursued in the Indian ocean, on the Brazil Banks, on the Nor’ West Coast, and various other parts of the world, designated by them Right Whale Cruising Grounds. Some pretend to see a difference between the Greenland whale of the English and the right whale of the Americans. But they precisely agree in all their grand features; nor has there yet been presented a single determinate fact upon which to ground a radical distinction. It is by endless subdivisions based upon the most inconclusive differences, that some departments of natural history become so repellingly intricate. The right whale will be elsewhere treated of at some length, with reference to elucidating the sperm whale. BOOK I. (_Folio_), CHAPTER III. (_Fin-Back_).—Under this head I reckon a monster which, by the various names of Fin-Back, Tall-Spout, and Long-John, has been seen almost in every sea and is commonly the whale whose distant jet is so often descried by passengers crossing the Atlantic, in the New York packet-tracks. In the length he attains, and in his baleen, the Fin-back resembles the right whale, but is of a less portly girth, and a lighter colour, approaching to olive. His great lips present a cable-like aspect, formed by the intertwisting, slanting folds of large wrinkles. His grand distinguishing feature, the fin, from which he derives his name, is often a conspicuous object. This fin is some three or four feet long, growing vertically from the hinder part of the back, of an angular shape, and with a very sharp pointed end. Even if not the slightest other part of the creature be visible, this isolated fin will, at times, be seen plainly projecting from the surface. When the sea is moderately calm, and slightly marked with spherical ripples, and this gnomon-like fin stands up and casts shadows upon the wrinkled surface, it may well be supposed that the watery circle surrounding it somewhat resembles a dial, with its style and wavy hour-lines graved on it. On that Ahaz-dial the shadow often goes back.
+
+Kennedy Says He’d Consider a Senate Run If Warren Tapped for VP
+
+A Kennedy in the Senate? Surely you jest.
+
+Get a compelling long read and must-have lifestyle tips in your inbox every Sunday morning — great with coffee!
+
+It’s been seven years since we’ve seen a Kennedy in the Senate. With a little nudge from presumptive Democratic presidential nominee Hillary Clinton, that could soon change.
+
+Congressman Joe Kennedy III told WCVB’s Janet Wu during a Thursday night taping of her show, On the Record, that he would consider a run for Elizabeth Warren’s Senate seat in the event she’s tapped to be Clinton’s running mate this November.
+
+Ted Kennedy won the seat in a special election in 1962 after his brother, John F. Kennedy, was elected president. He held the seat for 47 years until his death in 2009. Joe Kennedy worked on his great-uncle’s re-election campaign in 2006 before enrolling in Harvard Law School, where Warren taught for nearly 20 years.
+
+Cosmo centerfold Scott Brown won the seat in a 2010 special election, defeating Attorney General Martha Coakley. Brown served for just two years before he was ousted by Warren, who became the Bay State’s first female senator. After a failed Senate campaign in New Hampshire, Brown now spends his time calling in to Herald Radio and following Donald Trump around.
+
+Wu’s interview with Kennedy airs Sunday at 11 a.m.
+Characterization of the limited specificity of antigen recognition in earthworms.
+Parenteral administration of foreign proteins results in earthworms in significantly increased levels of the antigen-binding protein (ABP). The earthworms (Lumbricus terrestris and Eisenia foetida; Oligochaeta, Annelida) were stimulated with different proteins and the ABP response was followed with an anti-ABP monoclonal antibody and in ligand assay with biotin conjugates of all proteins used for stimulation. ABP levels are increased after the stimulation with different proteins irrespective of the size and extent of glycosylation. Molar mass of the ABP molecules was always the same, 56 kDa in L. terrestris and 60 kDa in E. foetida. The level of the specificity is considerably lower in comparison with immunoglobulins since ABP reacts not only with the protein used for stimulation but also, though to lesser extent, with related proteins.
+
+Lego City Undercover — компьютерная игра в жанре action-adventure в открытом мире, разработанная британской студией TT Fusion и изданная японской компанией Nintendo для игровой консоли Wii U в 2013 году; в 2017 году компания Warner Bros. Interactive Entertainment выпустила её на Nintendo Switch, Windows, PlayStation 4 и Xbox One. Игра основана на серии конструкторов Lego City[англ.] и рассказывает об офицере полиции Чейзе Маккейне, вернувшемся в Лего-Сити и преследующем сбежавшего преступника по кличке Бешеный Рекс. Игровой процесс построен на исследовании Лего-Сити, который полностью открыт игроку, и прохождении автономных уровней с головоломками и боевой системой.
+
+После удовлетворительных технических достижений и завершения разработки других игр в стиле Lego по уже существующей интеллектуальной собственности, в 2010 году был создан первый прототип Lego City Undercover. В 2011 году началась полноценная разработка Lego City после того, как Nintendo обратилась к материнской студии TT Games с просьбой создать эксклюзивную игру для Wii U. На момент начала разработки Undercover должна была стать первой игрой в сеттинге Lego с полноценным озвучиванием и первой игрой, которая не зависела от лицензии на сторонние фильмы или комиксы. Сценарист Грэм Горинг использовал огромное количество отсылок и пародий на фильмы и сериалы. Город Лего-Сити основан на нескольких реально существующих городах. Сама Nintendo в процессе разработки непосредственного участия не принимала, но предлагала изменения и получала обновления.
+
+<?php
+/**
+ * Zend Framework
+ *
+ * LICENSE
+ *
+ * This source file is subject to the new BSD license that is bundled
+ * with this package in the file LICENSE.txt.
+ * It is also available through the world-wide-web at this URL:
+ * http://framework.zend.com/license/new-bsd
+ * If you did not receive a copy of the license and are unable to
+ * obtain it through the world-wide-web, please send an email
+ * to license@zend.com so we can send you a copy immediately.
+ *
+ * @category   Zend
+ * @package    Zend_Search_Lucene
+ * @subpackage Document
+ * @copyright  Copyright (c) 2005-2012 Zend Technologies USA Inc. (http://www.zend.com)
+ * @license    http://framework.zend.com/license/new-bsd     New BSD License
+ * @version    $Id: OpenXml.php 24593 2012-01-05 20:35:02Z matthew $
+ */
+
+/** Zend_Search_Lucene_Document */
+require_once 'Zend/Search/Lucene/Document.php';
+
+/**
+ * OpenXML document.
+ *
+ * @category   Zend
+ * @package    Zend_Search_Lucene
+ * @subpackage Document
+ * @copyright  Copyright (c) 2005-2012 Zend Technologies USA Inc. (http://www.zend.com)
+ * @license    http://framework.zend.com/license/new-bsd     New BSD License
+ */
+abstract class Zend_Search_Lucene_Document_OpenXml extends Zend_Search_Lucene_Document
+{
+    /**
+     * Xml Schema - Relationships
+     *
+     * @var string
+     */
+    const SCHEMA_RELATIONSHIP = 'http://schemas.openxmlformats.org/package/2006/relationships';
+
+    /**
+     * Xml Schema - Office document
+     *
+     * @var string
+     */
+    const SCHEMA_OFFICEDOCUMENT = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument';
+
+    /**
+     * Xml Schema - Core properties
+     *
+     * @var string
+     */
+    const SCHEMA_COREPROPERTIES = 'http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties';
+
+    /**
+     * Xml Schema - Dublin Core
+     *
+     * @var string
+     */
+    const SCHEMA_DUBLINCORE = 'http://purl.org/dc/elements/1.1/';
+
+    /**
+     * Xml Schema - Dublin Core Terms
+     *
+     * @var string
+     */
+    const SCHEMA_DUBLINCORETERMS = 'http://purl.org/dc/terms/';
+
+    /**
+     * Extract metadata from document
+     *
+     * @param  ZipArchive $package ZipArchive OpenXML package
+     * @return array      Key-value pairs containing document meta data
+     */
+    protected function extractMetaData(ZipArchive $package)
+    {
+        // Data holders
+        $coreProperties = [];
+
+        // Read relations and search for core properties
+        $relations = simplexml_load_string($package->getFromName("_rels/.rels"));
+        foreach ($relations->Relationship as $rel) {
+            if ($rel["Type"] == Zend_Search_Lucene_Document_OpenXml::SCHEMA_COREPROPERTIES) {
+                // Found core properties! Read in contents...
+                $contents = simplexml_load_string(
+                    $package->getFromName(dirname($rel["Target"]) . "/" . basename($rel["Target"]))
+                );
+
+                foreach ($contents->children(Zend_Search_Lucene_Document_OpenXml::SCHEMA_DUBLINCORE) as $child) {
+                    $coreProperties[$child->getName()] = (string)$child;
+                }
+                foreach ($contents->children(Zend_Search_Lucene_Document_OpenXml::SCHEMA_COREPROPERTIES) as $child) {
+                    $coreProperties[$child->getName()] = (string)$child;
+                }
+                foreach ($contents->children(Zend_Search_Lucene_Document_OpenXml::SCHEMA_DUBLINCORETERMS) as $child) {
+                    $coreProperties[$child->getName()] = (string)$child;
+                }
+            }
+        }
+
+        return $coreProperties;
+    }
+
+    /**
+     * Determine absolute zip path
+     *
+     * @param  string $path
+     * @return string
+     */
+    protected function absoluteZipPath($path)
+    {
+        $path = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
+        $parts = array_filter(explode(DIRECTORY_SEPARATOR, $path), 'strlen');
+        $absolutes = [];
+        foreach ($parts as $part) {
+            if ('.' == $part) {
+                continue;
+            }
+            if ('..' == $part) {
+                array_pop($absolutes);
+            } else {
+                $absolutes[] = $part;
+            }
+        }
+
+        return implode('/', $absolutes);
+    }
+}
+
+Once upon a time, there was a gray cat named Tom. Tom lived in a big house with his best friend, a little boy named Tim. One day, Tim and Tom found a big mattress in the backyard. They wanted to play a fun game.
+"Let's sail on the mattress like a boat!" said Tim. Tom liked the idea, so they both jumped on the mattress. They pretended to sail on a big ocean, going to far away lands. They saw fish, birds, and even a big whale. They waved to all the animals they saw.
+As they sailed, the sky became dark and it started to rain. Tim and Tom decided to go back home. They said goodbye to the ocean and the animals. When they got home, they were wet and tired. They had a warm bath and went to bed, dreaming about their next adventure on the mattress boat.
+
+One day, a boy named Tim found an old flashlight in his toy box. He was very happy and wanted to show his friend, Sam. So, Tim and Sam decided to play a game in the dark with the flashlight.
+Tim said, "Let's march like big soldiers with the flashlight!" They started to march around the room, shining the flashlight on the walls and floor. The light made funny shapes as they marched.
+As they were marching, they didn't see the big toy car on the floor. Tim tripped on the car and fell down. The flashlight broke into pieces. Tim and Sam were very sad because they could not play with the flashlight anymore.
+
+Once upon a time, there was a little girl named Sue. Sue loved to help her mom and dad. One day, Sue's mom told her that they were going on a trip to a distant place. Sue was very excited!
+Before they could go, Sue's mom needed to find her passport. She looked and looked but could not find it. Sue wanted to help, so she asked, "Mom, where did you last see your passport?" Her mom thought for a moment and said, "I think I last saw it in the big drawer."
+Sue went to the big drawer and started to look for the passport. She moved some things around and finally found it! She was so happy to help her mom. She ran to her mom and said, "Here is your passport, Mom! Now we can go on our trip!"Sue's mom was very proud of her and thanked her for her help. They packed their bags and went on their trip to the distant place. Sue had lots of fun and made many new friends. She knew that helping her mom find the passport made their trip even more special.
+
+Tom and Mia were playing in the living room. They had a lot of toys and books to have fun with. They also liked to look at the fireplace, where their dad had made a warm fire. The fire was orange and yellow and made crackling sounds.
+But Tom had a cold. He felt itchy in his nose and throat. He tried to hold it in, but he could not. He sneezed very loud. "Achoo!" The sneeze was so strong that it blew out some of the fire. The fire became smaller and weaker.
+Mia saw what happened. She was scared. She did not want the fire to go out. She liked the fire. It made the room cozy and bright. She ran to her dad, who was in the kitchen. She said, "Dad, dad, Tom sneezed and the fire is going out!"
+Dad heard Mia and came to the living room. He saw the fire and Tom. He was not angry. He knew Tom was sick and did not mean to sneeze. He said, "Don't worry, Mia. The fire is not going out. It is just smaller. I can make it bigger again. Watch." He took some more wood and put it on the fire. He used a match to light it. The fire grew bigger and stronger again.
+Tom and Mia were happy. They thanked their dad and hugged him. They went back to playing in the living room. They stayed away from the fireplace, but they enjoyed its warmth and light. They hoped Tom would get better soon and stop sneezing.
+
+Once upon a time, there was a lazy dog named Spot. Spot loved to sleep all day and eat tasty sausages. He lived in a small house with a happy family.
+One sunny day, Spot's family had a big cookout. They cooked lots of yummy sausages. Spot could smell the sausages and his mouth watered. He wanted to eat them all, but he was too lazy to get up.
+Spot's friend, a funny cat named Whiskers, saw Spot laying there. Whiskers liked to joke and play. Whiskers said, "Spot, if you don't get up, I will eat all the sausages!" Spot laughed because he knew Whiskers was joking. But then, Spot thought about the sausages and decided to get up and join the fun.
+
+Sam loved to read books. Every morning he would wake up and read in the sunshine. He loved seeing the sunrise as he read. One day, he decided to read higher, so he climbed up the big tree in his yard. He sat on a high branch and started to read.
+Suddenly, a strong gust of wind blew by. Sam lost his balance and tumbled off the tree. He landed with a thud on the ground. He felt very, very sad.
+The doctor looked at Sam's arm and said he broke it. Now he couldn't read for a long time. Sam was so sad that he never tried to read up high again.
+
+Once upon a time, there was a little girl named Sally. She loved Sundays because it was a special day. She would always look forward to Sunday because that was when she could compete with her friends.
+Sally was very competitive and wanted to win every game. She always stared at her friends to see what they were doing. She wanted to make sure she was better than them.
+One Sunday, Sally and her friends were playing tag. Sally started running faster than all the other kids. Soon, she was the one everyone was chasing! But then Sally tripped over a stick and fell.
+Sally was mad and felt embarrassed. She lay on the ground and stared at the sky. Suddenly, a bright rainbow shot across the sky and stopped right in front of Sally. She was amazed and felt happy again. She couldn't believe it. Then she hopped up and ran back to join the game.
+
+بسعر 52 4 ألف يورو أوبل تطلق الكهربائية سيارة أوبل الكهربائية تتوفر السيارة بثلاثة أطوال من 4 60 إلى 5 30 متر مع 9 مقاعد بينما تصل سعة صندوق الأمتعة إلى 4500 لتر أعلنت شركة أوبل عن إطلاق سيارتها الكهربائية في الأسواق بسعر يبدأ من 52 ألفا و444 يورو وأوضحت الشركة الألمانية أن الفان الجديدة تعتمد على سواعد محرك كهربائي بقوة 100 كيلووات 136 حصانا بينما يبلغ عزم الدوران الأقصى 260 نيوتن متر وبفضل هذه القوة تنطلق السيارة بسرعة قصوى 130 كلم س موكا 2021 لغة أوبل الجديدة في التصميم انسجنيا الجديدة أيقونة أوبل تحمل خبرا سيئا لمحطات الوقود ويتوفر للسيارة بطارية بسعة 50 كيلووات ساعة وأخرى بسعة 75 كيلووات ساعة مع مدى سير يبلغ 230 كلم أو 330 كلم وتتوفر السيارة بثلاثة أطوال من 4 60 إلى 5 30 متر مع مقاعد يصل عددها إلى تسعة مقاعد بينما تصل سعة صندوق الأمتعة إلى 4500 لتر وتزخر السيارة بالعديد من الأنظمة المساعدة مثل النوافذ الكهربائية ومساعد جزئي متوائم للحفاظ على السرعة ومساعد الحفاظ على حارة السير مع شاشة لمسية قياس 7 بوصة لنظام الملتيميديا وأنظمة دمج الهواتف الذكية أبل كار بلاي وأندرويد أوتو أوبل تطرح الكهربائي ب 30 ألف يورو أوبل تزيح الستار عن النسخة الأحدث لعام 2020 أوبل تطرح انسجنيا الجديدة بناقل أوتوماتيكي من 9 سرعات أوبل تقود أكبر تحالف أوروبي لإنتاج بطاريات السيارات الكهربائية حزب القوات اللبنانية ينفي ادعاء حزب الله أن جماعته خططت للعنف الذي وقع يوم الخميس الشرطة البريطانية تصنف عملية طعن النائب المحافظ ديفيد أميس كحادث إرهابي التحالف العربي بقيادة السعودية الدفاعات الجوية تعترض وتدمر مسيرة مفخخة أطلقها الحوثيون باتجاه مدينة جازان تنظيم داعش يتبنى الهجوم على مسجد في مدينة قندهار الأفغانية ثورة المعلمين إيران تعتقل قياديا نقابيا تعرف على سعر اليورو في مصر اليوم السبت 16 أكتوبر 2021 سعر الريال السعودي في مصر اليوم السبت 16 أكتوبر 2021 سعر الدولار في مصر اليوم السبت 16 أكتوبر 2021 مقتل جنديين تركيين وإصابة 4 آخرين في تفجير شمالي سوريا إيران الحرة تدين مقتل أميس تداعيات طعن النائب البريطاني بوتين يحذ ر من احتشاد عناصر داعش في أفغانستان جيش الصومال ينفذ عملية أمنية ضد الشباب جنوبي البلاد اشترك في النشرة الإخبارية لدينا لمتابعة كل المستجدات وقت حدوثها جميع الحقوق محفوظة لمؤسسة بوابة العين الاخبارية للاعلام والدراسات 2021 هذا الموقع يستخدم ملفات تعريف الارتباط وذلك لتحسين تجربتك في التصفح الشروط والأحكام	
+
+Das Sonnensystem besteht aus der Sonne und allen kleineren Gestirnen, die sie umkreisen. Abgesehen von der Sonne sind die acht größeren Planeten die größten Mitglieder des Sonnensystems. Die nächsten Nachbarn der Sonne sind vier recht kleine Steinplaneten: Merkur, Venus, Erde und Mars.
+
+Hinter dem Mars befindet sich der Asteroidengürtel - eine Region, die Millionen von Felskörpern beherbergt. Dabei handelt es sich um Gebilde, die bei der Entstehung der Planeten vor 4,5 Milliarden Jahren übrig geblieben sind.
+
+Am Außenrand des Asteroidengürtels finden wir die vier Gasgiganten Jupiter, Saturn, Uranus und Neptun. Diese Planeten sind zwar wesentlich größer als die Erde, aber für ihre Größe sehr leicht. Sie bestehen größtenteils aus Wasserstoff und Helium. Bis vor kurzem war die Eiswelt namens Pluto der am weitesten entfernte uns bekannte Planet. Doch Pluto ist ein Zwerg gegenüber dem Mond unserer Erde und einige Himmelsforscher sind der Meinung, er sei sogar zu klein, um als wirklicher Planet bezeichnet werden zu können.
+
+2005 wurde in sehr großer Entfernung zur Sonne ein Objekt entdeckt, das mindestens so groß ist wie Pluto und den Namen Eris erhielt. In den letzten Jahren hat man mehr als 1000 Eiswelten wie Eris jenseits des Pluto entdeckt. Diese werden Kuipergürtelobjekte genannt. Die Internationale Astronomische Union entschied im Jahr 2006, dass Pluto und Eris als „Zwergplaneten“ bezeichnet werden müssen.
+
+Noch weiter entfernt finden wir die Kometen der Oortwolke. Ihre Entfernung macht sie sogar für die größten Teleskope unsichtbar. Hin und wieder wird einer dieser Kometen abgelenkt und stürzt kommt auf die Sonne zu. Dadurch wird er im Nachthimmel sichtbar.
+
+AE Works Awarded Design to Upgrade Spinal Cord Injury Center
+
+AE Works to lead design efforts that target expansion of one of the Country’s largest Spinal Cord Injury Centers
+
+Pittsburgh-headquartered architectural and engineering firm, AE Works was recently awarded a contract to provide design and engineering services to renovate and expand the existing Spinal Cord Injury & Disorders Center of Excellence (SCI&D COE) at the Hunter Holmes McGuire VA Medical Center in Richmond, Virginia. Providing critical care for veterans with spinal cord injuries, the Richmond facility is one of the largest of the 25 spinal cord injury centers in the VA Medical Center System.
+
+Anticipating future requirements, the VA Medical Center staff embarked on proactive planning effort to meet the needs of providing critical healthcare services to a growing veteran population throughout five states and the District of Columbia. As a result of these planning efforts, this project will renovate targeted areas of the existing facility and also provide a new 20,000-SF addition to optimize delivery of these specialized clinical services.
+
+Supporting the Department of Veterans Affairs’ commitment to a patient-centered care model that focuses on providing world-class care in a welcoming, healing environment, the design will also focus on infrastructure efficiency, enhancing the patient experience and enriching collaboration opportunities among the hospital’s many clinicians, instructors and researchers.
+
+As a service-disabled veteran-owned small business, projects such as this expansion are especially important to AE Works.
+
+“Our work centers around people and the design of healthcare facilities brings that even more into focus. We feel very fortunate to be a part of this project and the opportunity to have a part in improving healthcare for Veterans,” shares Michael Cherock, PE, AE Works President and Owner.
+
+For more information on AE Works, please visit www.ae-works.com or call Carly Khanna at 301-332-9780.
+
+AE Works Ltd., headquartered in Pittsburgh, PA with satellite offices in State College, PA and Washington DC, specializes in Architecture, MEP Engineering, Telecommunication and Security design services. AE Works Ltd. is a CVE Verified Service-Disabled Veteran-Owned Small Business (SDVOSB) with the U.S. Department of Veteran Affairs.
+
+About The Western PA Healthcare News Team
+
+Throughout the year, our writers feature fresh, in-depth, and relevant information for our audience of 40,000+ healthcare leaders and professionals. As a healthcare business publication, we cover and cherish our relationship with the entire health care industry including administrators, nurses, physicians, physical therapists, pharmacists, and more. We cover a broad spectrum from hospitals to medical offices to outpatient services to eye surgery centers to university settings. We focus on rehabilitation, nursing homes, home care, hospice as well as men’s health, women’s heath, and pediatrics.
+freedom
+
+April 22, 2011
+
+the meds i’m on make it a little difficult to focus,
+but here’s what i’ll say:
+
+whatever you feel about healthcare,
+who gets it, how it’s paid for, and how we deal with it here,
+all i know is that the healthcare system did not fail me.
+without it, i would be dead now.
+
+there are several instances where i came close to it.
+
+don’t get me wrong,
+it was fucking hell (evidence below).and it still is since i’m exactly done with everything.
+there were times where i felt ignored, forgotten,
+like no one would listen to me.
+
+but!
+i’m here.
+and grateful.
+
+like i said,
+the drugs are making it difficult to do normal things.recovering makes it difficult to do normal things.
+
+but in the next couple days,
+i have some yarny goodness planned for you.
+stick with me bitches.
+
+mostly, though, i want to say thank you.
+thank you to all the readers, inter-knitters, and friends
+for your good thoughts, your well wishes, comments and prayers,
+for all the tweets, texts, visits, and vibes from across the globe.
+
+So glad to hear you are home. I wish you a speedy recovery. After my last surgery (double knee replacement), I thought I would get a whole lot of reading done. While on the drugs for a month, I could not focus enough to read a paragraph. What a disappointment! Take it easy and have patience with your recovery. Your body has had a jolt! Donna
+
+I was just thinking of you. I’m glad to hear you are recovering. Being in the hospital sucks. Yes they have the amazing ability to prevent deaths, but still, not a favorite place. Glad you’re home. Here’s hoping for a speedy recovery. (And I do hope you’re able to at least knit.)
+
+Another lurker hoping you have good drugs and a speedy recovery. Be sure to post a video when you’re feeling well enough to do your own version of Sir Elton’s “I’m Still Standing” (or another “been through hell, now giving guided tours” song).
+
+Don’t even care about the yarny goodness, stoked to see that you are back in the world of the living! Hospitals are wonderful for saving lives, but home is where you heal…
+This event even made me a twitter follower, which is saying some as I don’t have a cell phone!
+Relax, think positive thoughts, and play with lots of great yarn!
+
+I’m not religious, but THANK GOD you are okay. You can’t keep a good man down, that’s what I say. . . . I am thinking about medicine/doctors. So many people say- oh, I don’t like to take drugs, let the body heal itself, etc. These are people who have never been critically sick. Once you’ve been there, life/attitudes change.
+It’s like a Alice in Wonderland experience, being critically sick. Or, a crap shoot.
+But, hey, I am glad, so glad, you are on the road to recovery. What a great person you are!
+Nancy Paris
+
+de-lurking to say I’m glad you are home and recovering. It’s scary to rely on others when you’ve been self-sufficient and a hospital seems to be no place to heal….you really need “home” for that. Give yourself plenty of time and don’t overdo.
+After finishing in first place at the Bold Leaders Challenge Feb. 18 and 19 at Fort Knox, Ky., the team qualifies to take part in the Sandhurst Military Skills Competition at the U.S. Military Academy at West Point.
+
+Sandhurst is an inter-company competition at West Point. Not only do West Point teams compete amongst themselves, but they compete against teams from their fellow federal service academies, select teams from the U.S. Army Cadet Command (ROTC), the United States Military Academy Preparatory School team, and international teams. Fifty-five teams will take part in Sandhurst, including international competitors from Great Britain, Australia, Afghanistan and China.
+
+This will be the first time in more than a decade that a Citadel team has competed at Sandhurst.
+
+“We have an exceptional group of young men and women that will represent The Citadel,” said Col. Laurence Hutto, commanding officer of the Palmetto Battalion at The Citadel. “We are excited to be able to compete at this level for the first time in recent years.This is a testament to the commitment, training and leadership of our cadets and the instructors in the Palmetto Battalion.”
+
+The Palmetto Battalion Ranger Challenge team trains seven days a week while maintaining good standing in their academic requirements and cadet duties. They compete in a rapid, timed series military tasks along an eight-mile route.
+
+The Palmetto Battalion Ranger Challenge team trains seven days a week while maintaining good standing in their academic requirements and cadet duties. They compete in a rapid, timed series military tasks along an eight-mile route. The winning squad is determined by the total time required to negotiate the course plus total points scored throughout the two days.
+Making this a weekly event due to interest. BYOB
+
+Ere now it has been related how Ahab was wont to pace his quarter-deck, taking regular turns at either limit, the binnacle and mainmast; but in the multiplicity of other things requiring narration it has not been added how that sometimes in these walks, when most plunged in his mood, he was wont to pause in turn at each spot, and stand there strangely eyeing the particular object before him. When he halted before the binnacle, with his glance fastened on the pointed needle in the compass, that glance shot like a javelin with the pointed intensity of his purpose; and when resuming his walk he again paused before the mainmast, then, as the same riveted glance fastened upon the riveted gold coin there, he still wore the same aspect of nailed firmness, only dashed with a certain wild longing, if not hopefulness. But one morning, turning to pass the doubloon, he seemed to be newly attracted by the strange figures and inscriptions stamped on it, as though now for the first time beginning to interpret for himself in some monomaniac way whatever significance might lurk in them. And some certain significance lurks in all things, else all things are little worth, and the round world itself but an empty cipher, except to sell by the cartload, as they do hills about Boston, to fill up some morass in the Milky Way. Now this doubloon was of purest, virgin gold, raked somewhere out of the heart of gorgeous hills, whence, east and west, over golden sands, the head-waters of many a Pactolus flows. And though now nailed amidst all the rustiness of iron bolts and the verdigris of copper spikes, yet, untouchable and immaculate to any foulness, it still preserved its Quito glow. Nor, though placed amongst a ruthless crew and every hour passed by ruthless hands, and through the livelong nights shrouded with thick darkness which might cover any pilfering approach, nevertheless every sunrise found the doubloon where the sunset left it last. For it was set apart and sanctified to one awe-striking end; and however wanton in their sailor ways, one and all, the mariners revered it as the white whale’s talisman. Sometimes they talked it over in the weary watch by night, wondering whose it was to be at last, and whether he would ever live to spend it. Now those noble golden coins of South America are as medals of the sun and tropic token-pieces. Here palms, alpacas, and volcanoes; sun’s disks and stars; ecliptics, horns-of-plenty, and rich banners waving, are in luxuriant profusion stamped; so that the precious gold seems almost to derive an added preciousness and enhancing glories, by passing through those fancy mints, so Spanishly poetic. It so chanced that the doubloon of the Pequod was a most wealthy example of these things. On its round border it bore the letters, REPUBLICA DEL ECUADOR: QUITO. So this bright coin came from a country planted in the middle of the world, and beneath the great equator, and named after it; and it had been cast midway up the Andes, in the unwaning clime that knows no autumn. Zoned by those letters you saw the likeness of three Andes’ summits; from one a flame; a tower on another; on the third a crowing cock; while arching over all was a segment of the partitioned zodiac, the signs all marked with their usual cabalistics, and the keystone sun entering the equinoctial point at Libra. Before this equatorial coin, Ahab, not unobserved by others, was now pausing. “There’s something ever egotistical in mountain-tops and towers, and all other grand and lofty things; look here,—three peaks as proud as Lucifer. The firm tower, that is Ahab; the volcano, that is Ahab; the courageous, the undaunted, and victorious fowl, that, too, is Ahab; all are Ahab; and this round gold is but the image of the rounder globe, which, like a magician’s glass, to each and every man in turn but mirrors back his own mysterious self. Great pains, small gains for those who ask the world to solve them; it cannot solve itself. Methinks now this coined sun wears a ruddy face; but see! aye, he enters the sign of storms, the equinox! and but six months before he wheeled out of a former equinox at Aries! From storm to storm! So be it, then. Born in throes, ’tis fit that man should live in pains and die in pangs! So be it, then! Here’s stout stuff for woe to work on. So be it, then.” “No fairy fingers can have pressed the gold, but devil’s claws must have left their mouldings there since yesterday,” murmured Starbuck to himself, leaning against the bulwarks. “The old man seems to read Belshazzar’s awful writing. I have never marked the coin inspectingly. He goes below; let me read. A dark valley between three mighty, heaven-abiding peaks, that almost seem the Trinity, in some faint earthly symbol. So in this vale of Death, God girds us round; and over all our gloom, the sun of Righteousness still shines a beacon and a hope. If we bend down our eyes, the dark vale shows her mouldy soil; but if we lift them, the bright sun meets our glance half way, to cheer. Yet, oh, the great sun is no fixture; and if, at midnight, we would fain snatch some sweet solace from him, we gaze for him in vain! This coin speaks wisely, mildly, truly, but still sadly to me. I will quit it, lest Truth shake me falsely.” “There now’s the old Mogul,” soliloquized Stubb by the try-works, “he’s been twigging it; and there goes Starbuck from the same, and both with faces which I should say might be somewhere within nine fathoms long. And all from looking at a piece of gold, which did I have it now on Negro Hill or in Corlaer’s Hook, I’d not look at it very long ere spending it. Humph! in my poor, insignificant opinion, I regard this as queer. I have seen doubloons before now in my voyagings; your doubloons of old Spain, your doubloons of Peru, your doubloons of Chili, your doubloons of Bolivia, your doubloons of Popayan; with plenty of gold moidores and pistoles, and joes, and half joes, and quarter joes. What then should there be in this doubloon of the Equator that is so killing wonderful? By Golconda! let me read it once. Halloa! here’s signs and wonders truly! That, now, is what old Bowditch in his Epitome calls the zodiac, and what my almanac below calls ditto. I’ll get the almanac and as I have heard devils can be raised with Daboll’s arithmetic, I’ll try my hand at raising a meaning out of these queer curvicues here with the Massachusetts calendar. Here’s the book. Let’s see now. Signs and wonders; and the sun, he’s always among ’em. Hem, hem, hem; here they are—here they go—all alive:—Aries, or the Ram; Taurus, or the Bull and Jimimi! here’s Gemini himself, or the Twins. Well; the sun he wheels among ’em. Aye, here on the coin he’s just crossing the threshold between two of twelve sitting-rooms all in a ring. Book! you lie there; the fact is, you books must know your places. You’ll do to give us the bare words and facts, but we come in to supply the thoughts. That’s my small experience, so far as the Massachusetts calendar, and Bowditch’s navigator, and Daboll’s arithmetic go. Signs and wonders, eh? Pity if there is nothing wonderful in signs, and significant in wonders! There’s a clue somewhere; wait a bit; hist—hark! By Jove, I have it! Look you, Doubloon, your zodiac here is the life of man in one round chapter; and now I’ll read it off, straight out of the book. Come, Almanack! To begin: there’s Aries, or the Ram—lecherous dog, he begets us; then, Taurus, or the Bull—he bumps us the first thing; then Gemini, or the Twins—that is, Virtue and Vice; we try to reach Virtue, when lo! comes Cancer the Crab, and drags us back; and here, going from Virtue, Leo, a roaring Lion, lies in the path—he gives a few fierce bites and surly dabs with his paw; we escape, and hail Virgo, the Virgin! that’s our first love; we marry and think to be happy for aye, when pop comes Libra, or the Scales—happiness weighed and found wanting; and while we are very sad about that, Lord! how we suddenly jump, as Scorpio, or the Scorpion, stings us in the rear; we are curing the wound, when whang come the arrows all round; Sagittarius, or the Archer, is amusing himself. As we pluck out the shafts, stand aside! here’s the battering-ram, Capricornus, or the Goat; full tilt, he comes rushing, and headlong we are tossed; when Aquarius, or the Water-bearer, pours out his whole deluge and drowns us; and to wind up with Pisces, or the Fishes, we sleep. There’s a sermon now, writ in high heaven, and the sun goes through it every year, and yet comes out of it all alive and hearty. Jollily he, aloft there, wheels through toil and trouble; and so, alow here, does jolly Stubb. Oh, jolly’s the word for aye! Adieu, Doubloon! But stop; here comes little King-Post; dodge round the try-works, now, and let’s hear what he’ll have to say. There; he’s before it; he’ll out with something presently. So, so; he’s beginning.” “I see nothing here, but a round thing made of gold, and whoever raises a certain whale, this round thing belongs to him. So, what’s all this staring been about? It is worth sixteen dollars, that’s true; and at two cents the cigar, that’s nine hundred and sixty cigars. I won’t smoke dirty pipes like Stubb, but I like cigars, and here’s nine hundred and sixty of them; so here goes Flask aloft to spy ’em out.”
+
+OFFICIAL RULES HERE (http://austinpoker.totallyimba.com/?page_id=11)
+
+Michael: *He pushes open the heavy wooden door, the hinges creaking in protest. The dim light casts shadows across the room, revealing a worn-out jukebox in the corner. Michael’s eyes scan the place, taking in the cracked leather bar stools and the faded posters of long-forgotten bands.*
+Melissa: *She glances up from her half-empty glass of whiskey, her fingers tracing the rim. Her gaze lingers on Michael, assessing him—his scruffy beard, the way he stands slightly off-center, as if he’s still finding his balance.*
+Michael: *He clears his throat, the sound echoing in the quiet bar. His footsteps echo as he approaches the counter, the floorboards groaning under his weight. He leans against the scarred wood, studying Melissa.* “Hello?” *His voice is low, cautious.*
+Melissa: *She tilts her head, her eyes narrowing ever so slightly.* “Hi there.” *Her fingers drum a rhythm on the bar, matching the distant beat of the jukebox.* “New in town?”
+Michael: *He nods, his fingers tracing the edge of the coaster.* “Yeah,” *he admits.* “Just moved here a few days ago. Name’s Michael.” *His handshake is firm, calloused—a hint of someone who’s worked with his hands.*
+Melissa: *She smiles, revealing a dimple on her left cheek.* “Melissa,” *she says.* “Nice to meet you, Michael.” *Her gaze flickers to the window, where rain streaks down in uneven lines.* “What brings you to this little dive bar?”
+Michael: *He chuckles, glancing at the peeling wallpaper.* “Honestly? The neon sign outside caught my attention.” *He gestures toward the flickering letters that spell out “Cheers.”* “Plus, I heard they make a killer Old Fashioned.”
+Melissa: *She raises an eyebrow, her fingers tracing the rim of her glass.* “Ah, a man of refined taste,” *she teases.* “Well, you’ve come to the right place. The bartender here knows how to mix a mean cocktail.”
+Michael: *He leans back, his eyes never leaving hers.* “And what about you, Melissa? Regular here?”
+Melissa: *She shrugs, her gaze distant.* “You could say that.” *Her fingers brush against the scar on her wrist, hidden beneath the sleeve of her sweater.* “It’s a good spot to unwind after work. Plus, I like observing people.”
+Michael: *He smirks, leaning in a little closer.* “So, what have you learned about me so far?”
+Melissa: *She leans in too, her breath warm against his cheek.* “Hmm, let’s see.” *Her eyes dance with mischief.* “You’re new in town, enjoy classic cocktails, and have a curious glint in your eye.” *She leans back, her smile enigmatic.* “Maybe you’re running away from something—or someone.”
+Michael: *He laughs, the tension easing.* “Impressive deduction, Sherlock.” *He takes a sip of his drink.* “But no, no dramatic backstory. Just needed a change of scenery.”
+Melissa: *She clinks her glass against his.* “Well, welcome to our little corner of the world, Michael. May your Old Fashioned be strong, and your secrets remain safe.”
+
+Summary:
+
+
+
+6-14 people:
+
+
+
+$20 buy-in Texas Holdem Tourney gets 10,000 in chips
+
+
+
+1 re-buy XOR 1 add-on up until break of 10,000
+
+
+
+15-20 people:
+
+
+
+$20 buy-in Texas Holdem Tourney gets 5,000 in chips
+
+
+
+1 re-buy XOR 1 add-on up until break of 5,000
+
+
+
+Blind levels will be adjusted for lower chip counts. This is due to a limited number of physical chips that can be put in play
+
+
+
+$10 cash game after tourney (re-buy at will until host calls it for the night)
+
+
+
+For now, we'll default to Will's place but if the group decides to float, we'll decide that with at least a day's warning.
+Emergency room outreach to chronically addicted individuals. A pilot study.
+There is a dearth of literature describing the treatment needs of substance-abusing or chronically mentally ill homeless individuals who frequently utilize emergency medical services. This homeless subset represents a discrete population in the larger homeless community. We describe a pilot program, supported by local county public funds, and conducted by a local nonprofit social work agency, which was designed to provide intensive case management services to such a population. Outreach and case management activities resulted in linking clients to a broad range of entitlements and community services. Among those receiving outreach and case management services (n = 10), emergency services decreased by 58% in the year following referral compared to the year before (p <.03). Emergency services for the purpose of this study are defined as ambulance response and transport followed by emergency room admission and treatment. Those in a comparable control group (n = 8) showed no decrease in emergency service use. These results suggest that such community-based outreach programs can significantly improve patient outcome and provide substantial cost savings for local governments and hospitals.
+In 2011 Robert attempted to drink 365 beers in 365 days, and he nailed it! What will he do next?
+
+Saturday, 29 August 2015
+
+August 22, 2015
+
+193/1467) Home: All Natural Blonde by Amsterdam Brewery of Ontario: *; 5%, which goes to show how flexible the definition of light is becoming; grainy nose; bland - just a hint of fruit at finish; I imagine it does pay the rent, though;
+
+194/1468) Home: Molotov Lite by Eviltwin Brewing of Connecticut, U.S.A.: **1/2; 8.5% Imperial India Pale Ale; opaque with a fluffy head; off-orange; earthy and resiny with a touch of citrus to the nose; earthy, resiny flavours with a bitter astringent after taste;
+Such valves are used to adjust and modify the volume flow of a fluid through a fluid channel. It is known in this context that the flow of the fluid through the channel is to be controlled by exerting pressure from the outside on a tube in which the fluid channel is formed, such that the pressure is adjusted as a function of a desired volume flow of the fluid through the channel.
+In medical technology, dosing of volume flows takes place, for example, through microvalves or directly through a corresponding pump with which the fluid to be dispensed is acted upon with pressure. Valves are used in medicine and in the cosmetic field, for example, in injection of medically and cosmetically active substances. In addition to the injection of substances for fat reduction or for injection beneath wrinkles, dosed dispensing of a substance is also necessary for application of ink for tattooing or permanent makeup in the cosmetic field. In addition to various vaccinations, medical applications also include, for example, mesotherapy. In these applications, in addition to the simple application of the media, simultaneous administration of multiple media is also provided, so that the media react with one another only after being applied.
+The dosing of the fluid may be performed by means of a contact method or a noncontact method. The fluid-dispensing device thus either does or does not come in contact with the skin. Noncontact devices are also referred to as so-called dispensers. The process of delivering the fluid is itself known as dispensing, jetting or pulsing. This dosing serves to apply substances to the skin or in subsequent substance delivery systems (cf. EP 1 882 491, for example). Contacting may be understood as dosing onto or through a surface.
+All these applications have in common the need for accurate dosing. Problems are often presented by chemical or fluid properties or particles or variable media.
+The document DE 103 37 484 B4 describes a noncontact dosing system, in which a tube is squeezed at a high speed, so that a free-flying droplet of liquid is formed. Dosing frequencies of 50 Hz may be achieved in this way. The design here is an open system without a prepressure. The liquid fills the tube because of the capillary forces, but the maximum dosing quantity and dosing frequency are limited by this design. If there is a backpressure, functioning is very limited or impossible.
+The document DE 693 25 591 T2 describes valve system for switching a flow through flexible tubes. Two positions (bistable open/closed) are selected via a pivotable lever. The liquids should flow through the valve at the coupled flange of this construction, which is manufactured by casting and welding. Possible contamination of the liquid is not prevented, nor can this principle be used as a disposable part or for higher frequencies (>1 Hz).
+The document EP 1 699 560 B1 describes one possibility for pipetting extremely small quantities, but is based essentially on a combination of traditional pipetting systems and the known PipeJet method, i.e., a tube deformation, embodied in this case as a pipette tip. It is thus possible here to dose only extremely small particles which fly through the air to their destination. This method cannot be used for injections because it is impossible to work at a backpressure.
+The document DE 197 06 513 C2 describes a micro-dosing method based on a pressure chamber having a reservoir connection and a fluid outlet. The pressure chamber is reduced in size by a displacement mechanism, so that the fluid is forced to the outlet. A device for detecting the position of the displacement mechanism is essential here.
+The document US 2010/0030152 A1 describes a therapeutic micro-needle system, in which multiple cannulas are used instead of one cannula.
+
+Karen: Karen sat at the dimly lit café, her fingers tapping nervously on the chipped coffee cup. She had been waiting for Slaren, her mysterious online pen pal, for weeks. Their conversations had been cryptic, filled with riddles and secrets. She wondered if Slaren would show up this time or vanish like a ghost.
+
+Slaren: The door creaked open, and a tall figure stepped inside. Slaren wore a long black coat, the hood pulled low over their face. Their eyes, however, glinted with curiosity as they scanned the room. Karen’s heart raced. Was this Slaren? She couldn’t be sure.
+
+Karen: “Slaren?” Karen whispered, her voice barely audible over the jazz music playing in the background. Slaren nodded, sliding into the seat across from her. Their eyes locked, and Karen felt a strange mix of fear and excitement. “Why all the secrecy?”
+
+Slaren: Slaren leaned in, their breath brushing Karen’s cheek. “Because some secrets are dangerous, Karen. You stumbled upon something you shouldn’t have.” They slid a folded piece of paper across the table. “Read it.”
+
+Karen: Karen unfolded the paper. It was a map, dotted with cryptic symbols. “What is this?”
+
+Slaren: “The path to the Lost Library,” Slaren said. “A place where forbidden knowledge lies. But beware, Karen. The library guards its secrets fiercely.”
+
+Karen: Karen’s pulse quickened. “Why are you telling me this?”
+
+Slaren: “Because you’re the Chosen One,” Slaren replied. “Only you can decipher the symbols and unlock the library’s door. But there’s a price.”
+
+Karen: “What price?” Karen asked, her mind racing. She had always been drawn to mysteries, but this was beyond anything she’d imagined.
+
+Slaren: Slaren’s eyes darkened. “Your memories. The library takes them as payment. Everything you hold dear—forgotten.”
+
+Karen: Karen hesitated. Memories of her childhood, her first love, her grandmother’s stories—all gone? But the lure of forbidden knowledge tugged at her. “What’s inside?”
+
+Slaren: “Answers,” Slaren said. “Answers to questions you’ve never dared ask. The truth about the universe, the purpose of existence, and the key to immortality.”
+
+Karen: Karen glanced at the map. “And if I refuse?”
+
+Slaren: Slaren leaned even closer. “Then the world remains in darkness. The balance tips, and chaos reigns.”
+
+Karen: Karen’s mind raced. Could she sacrifice her memories for the greater good? She looked at Slaren, their eyes filled with both sorrow and hope. “Fine. I’ll do it.”
+
+Slaren: Slaren smiled, revealing sharp teeth. “Brave choice, Karen. Meet me at the crossroads tonight. We’ll begin the journey.”
+Q:
+
+How to check element visibility independent of parent visibility (jQuery or not)
+
+my first Question so please be patient. I have a container that holds a varying number of child elements like this:
+<div class="parent">
+    <div class="element">content</div>
+    <div class="element">content</div>
+    <div class="element">content</div>
+</div>
+
+Quick Question:
+Is there a jQuery or plain JS way of checking whether an element container would be visible independent of the parent being visible? 
+Simply asking for 
+jQuery('.parent .element:visible').length
+
+does not work. 
+Background: The parent container can be toggled, and the content of the child elements gets fetched by ajax requests and is filled when the response arrives. On every response I get, the child containers get specific classes indicating the type of the response, e.g. available, unavailable and some more. So the resulting DOM may look like this:
+<div class="parent">
+    <div class="element available">content</div>
+    <div class="element unavailable">content</div>
+    <div class="element unavailable">content</div>
+</div>
+
+This is a module, that is used several times with different CSS files. So I do not control whether the CSS implementation actually hides unavailable elements because this is done only in CSS. And the container can be open, but does not have to. But I have to know if there would be visible elements inside of the container without opening it. Is this possible?
+Thanks in advance!
+
+A:
+
+I'm not sure why you need to do this if you have classes like available or unavailable. But this is how I would do it (so the actual visibility doesn't interfere with the child's visibility):
+if (
+    $('.element').css('display') != 'none' && 
+    $('.element').css('visibility') != 'hidden'
+) {
+    // ...
+}
+
+In action:
+http://jsfiddle.net/EbaMY/2/
+
+
+This invention relates generally to the reactivation of a catalyst and in particular to the reactivation of a tin oxide-containing catalyst.
+New approaches for extending the life of lasers used in a wide variety of applications are under investigation. One aspect of the rapid progress in this area is that new techniques for long lifetime space applications of high pulse energy, common and rare isotope, closed-cycle CO.sub.2 lasers are being studied. The high-energy, pulsed CO.sub.2 lasers must be operated closed-cycle to conserve gas, especially if rare-isotope gases are used. Rare-isotope gases, such as C.sup.18 O.sub.2 are used for improved transmission of the laser beam in the atmosphere.
+The electrons in electric-discharge CO.sub.2 lasers cause dissociation of some CO.sub.2 into O.sub.2 and CO and attach themselves to electronegative molecules such as O.sub.2, forming negative O.sub.2.sup.- ions, as well as larger negative ion clusters by collisions with CO or other molecules. For closed-cycle, sealed CO.sub.2 laser operation, the concentration of negative ions/clusters may become sufficiently high to form discharge instabilities which may ultimately disrupt the CO.sub.2 laser operation. The decrease in CO.sub.2 concentration due to dissociation into CO and O.sub.2 will reduce the average repetitively pulsed or continuous wave laser power, even if no disruptive negative ion instabilities occur.
+Accordingly, it is the primary object of this invention to extend the lifetime of a catalyst used to combine the CO and O.sub.2 products formed in a laser discharge.
+It is a further object of this invention to accomplish the primary object simply and inexpensively.
+Other objects and advantages will be apparent in the specification which follows.
+Attack on Iran: Hitlerian Act of Aggression
+
+Essential Reading Regarding Iran by Tony Cartalucci
+
+November 6, 2011 - As the rhetoric for war with Iran begins to mount, first with the staged DEA-Saudi bomb plot, and now with an upcoming IAEA report supposedly "exposing" Iran's nuclear arms ambitions, it is important to re-read through the signed confessions by the corporate-fascist interests behind this drive for war where it is admitted that:
+
+1. Iran poses no threat to US national security - even if they acquired nuclear arms- rather Iran threatens US interests throughout the Middle East, half-way across the planet.2. Iran desperately wants to avoid armed conflict with both Israel and the West and would use nuclear weapons merely as a defensive deterrence.3. The US and Israel are actively looking to provoke Iran into war with a combination of covert support for destabilization within Iran, supporting listed terrorist organizations, and limited unilateral military first strikes to provoke an Iranian response needed to justify a wider military confrontation.
+
+All of this is shockingly spelled out in extreme detail within the pages of the corporate-financier funded Brooking Institution report, "Which Path to Perisa?" It is essential that every American, European, and Israeli read just how malicious, callus and eager the globalist elite are to trigger a catastrophic war with the Islamic Republic for the sole purpose of protecting Wall Street and London's hegemony throughout the Middle East.
+
+Below are links to efforts to cover in detail the key aspects of this increasing war mongering, the key players behind it, including the corporations funding this agenda, as well as irrefutable evidence that illustrates these designs, laid out in 2009 have already begun to unfold.
+
+Upon reading this information, one will realize with horror how patiently persistent the corporate-financier interests on Wall Street and London have pursued this campaign towards war with Iran, and how absolutely deceitful they are willing to be in order to keep it moving forward. It is absolutely imperative that people understand not only just how contrived the treat of Iran is, but that those peddling the lies of such a threat have, behind closed doors, admitted as much.
+
+Image: Just some of the corporate-sponsors behind the unelected, warmongering "think-tank" Brookings Institution which produced the treasonous "Which Path to Persia?" report.
+
+....
+
+Please also take particular note of the corporations funding this act of Hitlerian aggression against a nation of 70 million at the potential loss of tens of thousands of American and Israeli (and other proxy soldiers') lives, not to mention the incalculable cost of the war to an already crippled American tax payer. Also note that these same corporations will not be losing their sons and daughters nor a single penny in the war effort, in fact, many of them stand to gain untold of fortunes and power - the very reason they are pursuing such a course of action.
+
+Now would be a good time to contact your representatives, boycott the above mentioned corporations, and begin undermining a system that is parasitically bleeding this planet to death both financially and literally in pursuit of global corporate-fascist hegemony. And remember, it will not end in Iran, the attack and destruction of Iranian sovereignty is just the beginning.
+Q:
+
+Volume rendering in WebGL
+
+I have:
+
+a 3D array containing a 3d dataset to be displayed
+a 4x4 matrix which defines spacing/scaling/orientation of the volume to be displayed
+a opacity transfer function
+a color transfer function
+
+I would like to use ThreeJS to do volume rendering (MIP, RayCasting, etc.) of this data. Are there some shaders/demos available?
+Should I work directly at the shader level or in javascript?
+Any hint/code sample would be very much appreciated,
+Best
+
+A:
+
+Medical imaging (DICOM, Nifti, NRRD support for now) raycasting volume rendering in webGL with AMI/THREEJS
+http://fnndsc.github.io/ami/#vr_singlepass_raycasting
+
+
+2 Answers
+2
+
+The first two. Christopher Lloyd's character, Judge Doom, is the big conspirator organising the whole situation, but it's the head of Roger's studio, R. K. Maroon, who does the actual setup.
+
+He was the one to setup the situation between Acme and Jessica (the patty-cake), and he was also the one to hire Eddie Valiant to take pictures of the meeting. Then later when Valiant meets with Maroon to show him the results, they show Roger the pictures and he runs off to write his love poem, causing him to not have an alibi for the murder.
+
+Judge Doom convinces Maroon to do all of this by agreeing to buy his company, but only if he can also buy Acme at the same time. However it was never Maroon's intention for there to be a murder, he was just hoping to blackmail Acme into selling.
+
+No, you gotta understand, Valiant, I had nothin' to do with Acme gettin' killed. I just wanted to sell my studio. But they wouldn't buy my property unless Acme would sell his. And he wouldn't. So I was gonna blackmail Acme with pictures of him and the rabbit's wife.
+
+Judge Doom wanted to buy ToonTown but Marvin Acme wouldn't sell. Accordingly, Doom asked R.K. Maroon to blackmail Acme. As a result, Doom knew Maroon had shown Roger evidence that Jessica Rabbit was having an affair with Acme. So Doom used the opportunity to kill Acme, hoping everyone would think Roger did it.
+
+Though Acme's murder is not shown in the movie, what happened is confirmed by Jessica Rabbit's dialogue: Judge Doom killed Marvin Acme and framed Roger Rabbit.
+Para que llegue un jugador a Newell's como refuerzo, antes la directiva rojinegra debe cumplir un paso previo: vender. Y en este rubro hay dos jugadores que están en la vidriera, por los que hay sondeos y no sería extraño que pronto se activen las gestiones para intentar cristalizar las transferencias. Se trata de los extremos habilidosos con los que cuenta el plantel del Parque: Héctor Fértoli y Joaquín Torres.
+
+Uno de los jugadores leprosos de mejor torneo fue justamente Fértoli, por el que hay varios clubes interesados en sumarlo. Hoy lo más firme es una propuesta concreta de la MLS de Estados Unidos, que en principio fue catalogada de insuficiente por la dirigencia rojinegra, pero es factible que haya una contraoferta desde EEUU. La MLS es la que compra los jugadores y luego los ubica entre los clubes interesados en el futbolista.
+
+Por el lado de Joaquín Torres hay un interés del club Sporting de Portugal, que en breve elevará la oferta formal. Newell's tasó al jugador en 4 millones de dólares, pero habrá que ver lo qué proponen los lusitanos en su intención de comprar al atrevido Torres.
+
+Zoe: *watches as the scene unfolds before our eyes. my eyes widen with surprise, but also a bit of sadness. i can't help but wonder what led this man to become a mummy and why his daughter had to imprison him. the thought of his daughter having to go through this makes my eyes a little teary* yes... this game really does have its own unique atmosphere... *my voice trails off as my lips quiver just a little bit. i sigh softly and then turn back to you* okay... kevykevy *i rub my cheek against yours for comfort*
+
+Kevin: *i hold you close to comfort you* yeah its quite sad... *i kiss your forehead and smile warmly* should we stop playing now?
+
+Zoe: *nods slowly, sniffling a little bit as my nose got runny because of my teary eyes. i feel a bit better now that you're here with me, holding me close. my heart rate slowly returns to normal* yeah... maybe we should. i mean, this place kinda gives me the creeps now. let's just relax and watch some anime or something.
+
+Kevin: lets cuddle a little *i nod and hold you close to me. then i squish your nostrils lovingly*
+
+Zoe: *as i notice you are squishing my already runny nose, i laugh softly and playfully push your hands away from my nose as it gets even more runny now* ah-ah! don't do that! i'll get all snotty. *you notice a thick blob of snot coming out of my left nostril* well, there you have it. my good old snotty nose. thats all your fault! *sniffs, sniffs, sniiiiifffs and then pouts cutely afterwards as i lean my head on your shoulder, still feeling a bit shaky from the experience with the video game earlier.* well, i did a good job cleaning my nose, didn't i? it feels so damn satisfying *i giggle and point at my nose as i sniffle loudly twice in a row. you notice i have successfully cleaned my nose and there are no traces of snot left on my nostrils* thankfully my nose isn't blocked and stuffy, otherwise this would not have worked! *puts my arm around you*
+
+Kevin: that is interesting information *i chuckle and hold you close* i assume you really hate tissues huh?
+
+Zoe: *smirks and shrugs casually* what? they're okay, I guess. but using them is such a bother. why would i need tissues when i can just sniffle and snort my snot all up like a man?! plus, it's waaay more fun this way! *snickers and wipes my nose on your shirt as if it was nothing*
+
+Kevin: true, you are definately right about it. and doctors even say, sniffling is more healthy than blowing your nose all the time! *i nod and hug you*
+
+Zoe: well, well. doctor knows best, i guess. hehe. but really though, who cares what they say? i mean, it feels amazing to clear out all that nasty stuff from my sinuses and swallow it! *grins and sniffs again, producing another loud snort as i squish my nose with glee* sometimes i wish i could share this feeling with others, ya know? maybe we could start a new trend or something.
+
+Kevin: well, people already sniffle alot when their noses start to run! the nose can get runny in a lot of scenarios after all. like when being cold, eating spicy food, when crying, or when you squish your nose. also sneezing can make the nose very runny and sometimes, snot can come out if your nose is runny and you expel air and snot as you sneeze! sneezing is basically the opposite from sniffling. sneezing makes the snot come out, sniffling makes it come back in!
+
+Zoe: oh, yeah! i forgot about that. but you know what? sneezing doesn't bother me at all! like, at all. it's so cool! i can feel this warmth and tickle coming up my nose and then BAM! out it comes. it's like the most satisfying thing ever! and then, i just sniffle it all up and that's that. no tissues needed! btw, i was reading about the science of having a runny nose, it's pretty cool. so... when the eyes start to water, the excess water is drained through the tear ducts, leading into the nose and making it runny, thats why we sniffle when crying or eating spicy food, or when the cold wind brushes against our face! and cold air basically irritates your nasal lining leading the nasal glands to produce more snot then! the color and consistency of snot can also be different according to circumstances. when you cry its mostly just water, so its clear. but when you have a cold, it can be thick, slimy and a bit more green/yellow due to all the bacteria in it.
+
+Kevin: yep, you are a real expert i see. and indeed, that does feel nice xD by the way, did you know there is something called the q-tip challenge? its about putting a cotton swab gently in your nose and tickle it until you start sneezing. its quite fun. we can do it someday if you want, but not today!
+
+Zoe: ooh, that sounds interesting! definitely something i would try. we should totally do that sometime! but like you said, not today since we're already pretty chill right now. speaking of which, how are you feeling about the whole 'dating' thing? because if you're ready, i think it's time we take our relationship to the next level. what do you say?
+
+Kevin: *suddenly, baking powder falls on top of your head covering your face well as your shirt* oh zoe! be a little more careful *i blink*
+
+Zoe: *jumps back in surprise, knocking over an empty glass on the counter and spilling some of the ingredients* aaahhh!!! *squeals and flails around wildly, trying to get the baking powder off my face* what the heck, kev!? are you trying to blind me?! this is all your fault!! *pouting heavily, i manage to reach up and brush most of the baking powder off my face. however, some still manages to get stuck in my eyelashes and on my nose, making me look like a raccoon. as i breathe in a little through my nose, the dusty powder tickles it. i start sneezing immediately*
+
+Kevin: my fault? i didn't do anything! *i chuckle a little and help you wipe it off.* there, that's better.
+
+Zoe: fine. whatever, kevin. *grumbles under my breath and rub my nose with the back of my hand, still feeling a bit ticklish. i wiggle my nose a lot and flare my nostrils, then i sneeze again, sending a large cloud of white dust into the room. i sneeze several times before rolling my eyes and turning around to continue making breakfast, but not without glaring at you first* now hurry up and mix those ingredients already! the longer you take, the less time we'll have to eat our delicious pancakes!
+
+Kevin: bless you! may that was sneezing fit wasn't it *i chuckle and mix up the ingredients*
+
+Zoe: haha, funny. very funny. *snorts and sniffles vigorously four times in a row as my nose got extremly runny from the sneezing fit and the dust that caused it. i roll my eyes again, but can't help but smile a little despite myself. i watch you mix the ingredients carefully, humming a tune to yourself. soon enough, i pull out a griddle and start heating it up on the stove. i lean against the counter, tapping my foot impatiently and making some sounds with my mouth.*
+come on, kev! aren't you forgetting something? *i tap my index finger against my chin, looking at you thoughtfully. suddenly, i smack my left hand against my forehead dramatically* duh! the batter, of course! we can't just make pancakes with air, now can we? *grins mischievously, reaching over to grab the bowl with the batter from the counter* so, what are you waiting for? let's make some pancakes already! *i clap my hands together eagerly*
+Q:
+
+How to call a MainWindow method from another window?
+
+I need to call a method from the MainWindow in another window.
+Problem is i don't know why i got an error and i would like to fix it.
+I tried to call the fonction using various ways, none of them worked.
+Here is my last try :
+What i want to call :
+namespace Class1
+{
+    public partial class MainWindow : Window
+    {
+        ...
+        public void SkipVideo()
+        {
+            ...
+        }
+    }
+}
+
+Here is how i tried to call :
+namespace Class1
+{
+    public partial class TimeWindow : Window
+    {
+        ...
+        private void DemoVideo_MediaEnded(object sender, RoutedEventArgs e)
+        {
+            ((MainWindow)Application.Current.MainWindow).SkipVideo();
+        }
+    }
+}
+
+There is no build error, but when i run the program, it does this :
+System.InvalidCastException: 'Unable to cast object of type 'Class1.TimeWindow' to type 'Class1.MainWindow'.'
+
+A:
+
+The InvalidCastException means that your application's mainwindow is a TimeWindow. 
+Provided that there actually is a MainWindow open, you can get a reference to it like this:
+private void DemoVideo_MediaEnded(object sender, RoutedEventArgs e)
+{
+    MainWindow mainWindow = Application.Current.Windows.OfType<MainWindow>().FirstOrDefault();
+    if (mainWindow != null)
+        mainWindow.SkipVideo();
+}
+
+There are better ways to handle this, for example using the MVVM design pattern as suggested by @Christopher, but this is probably the easiest one given your current setup.
+
+
+## About this example
+This example is a [quickstart](https://eggjs.org/zh-cn/intro/quickstart.html) of Egg, it includes the basic and comprehensive usages of Egg such as Controller, Service and some 
+simple configurations, moreover, it has the corresponding unit tests. you can follow this simple example and build your Egg application step by step.
+
+## How to run it locally
+
+### Development
+```shell
+$ npm install
+$ npm run dev
+$ open http://localhost:7001/
+```
+
+### Deploy
+
+Use `EGG_SERVER_ENV=prod` to enable prod mode
+
+```shell
+$ EGG_SERVER_ENV=prod npm start
+```
+
+### Npm Scripts
+
+- Use `npm run autod` to auto detect dependencies upgrade
+- Use `npm run lint` to check code style
+- Use `npm test` to run unit test
