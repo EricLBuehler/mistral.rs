@@ -3,8 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use llguidance_parser::{
     api::{ParserLimits, RegexNode, TopLevelGrammar},
-    lark::{lark_to_llguidance, parse_lark},
-    JsonCompileOptions, TokenParser,
+    lark_to_llguidance, JsonCompileOptions, TokenParser,
 };
 use tokenizers::Tokenizer;
 use toktrie::{InferenceCapabilities, TokEnv};
@@ -24,9 +23,9 @@ pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<Top
         Constraint::Regex(regex) => {
             TopLevelGrammar::from_regex(RegexNode::Regex(regex.to_string()))
         }
-        Constraint::Lark(lark) => lark_to_llguidance(parse_lark(lark)?)?,
+        Constraint::Lark(lark) => lark_to_llguidance(lark)?,
         Constraint::JsonSchema(value) => {
-            JsonCompileOptions::default().json_to_llg_no_validate(value)?
+            JsonCompileOptions::default().json_to_llg_no_validate(value.clone())?
         }
         Constraint::Llguidance(value) => serde_json::from_value(value.clone())?,
         Constraint::None => return Ok(None),
