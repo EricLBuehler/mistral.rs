@@ -1,4 +1,4 @@
-use super::cache_manager::{DefaultCacheManager, FullCacheManager, NormalCacheManager};
+use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,

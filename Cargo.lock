@@ -2000,9 +2000,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78b3ae25bc7c8c38cec158d1f2757ee79e9b3740fbc7ccf0e59e4b08d793fa89"
 
 [[package]]
-name = "llguidance_parser"
+name = "llguidance"
 version = "0.4.1"
-source = "git+https://github.com/microsoft/llguidance?rev=a88db09e37142d055c155716a3592fa31d3ef377#a88db09e37142d055c155716a3592fa31d3ef377"
+source = "git+https://github.com/microsoft/llguidance?rev=cfef3df97372a7b84d74976ff41cc9cb78bca6cc#cfef3df97372a7b84d74976ff41cc9cb78bca6cc"
 dependencies = [
  "anyhow",
  "cbindgen",
@@ -2297,7 +2297,7 @@ dependencies = [
  "indicatif",
  "intel-mkl-src",
  "itertools 0.13.0",
- "llguidance_parser",
+ "llguidance",
  "lrtable",
  "minijinja",
  "minijinja-contrib",
@@ -2323,7 +2323,7 @@ dependencies = [
  "strum",
  "sysinfo",
  "thiserror",
- "tokenizers 0.20.3",
+ "tokenizers",
  "tokio",
  "tokio-rayon",
  "toktrie",
@@ -4131,39 +4131,6 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokenizers"
-version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e500fad1dd3af3d626327e6a3fe5050e664a6eaa4708b8ca92f1794aaf73e6fd"
-dependencies = [
- "aho-corasick",
- "derive_builder",
- "esaxx-rs",
- "getrandom",
- "hf-hub",
- "indicatif",
- "itertools 0.12.1",
- "lazy_static",
- "log",
- "macro_rules_attribute",
- "monostate",
- "onig",
- "paste",
- "rand",
- "rayon",
- "rayon-cond",
- "regex",
- "regex-syntax 0.8.5",
- "serde",
- "serde_json",
- "spm_precompiled",
- "thiserror",
- "unicode-normalization-alignments",
- "unicode-segmentation",
- "unicode_categories",
-]
-
-[[package]]
-name = "tokenizers"
 version = "0.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b67c92f6d705e2a1d106fb0b28c696f9074901a9c656ee5d9f5de204c39bf7"
@@ -4172,6 +4139,7 @@ dependencies = [
  "derive_builder",
  "esaxx-rs",
  "getrandom",
+ "hf-hub",
  "indicatif",
  "itertools 0.12.1",
  "lazy_static",
@@ -4270,7 +4238,7 @@ dependencies = [
 [[package]]
 name = "toktrie"
 version = "0.1.0"
-source = "git+https://github.com/microsoft/toktrie?rev=cbdd3d717e2d1671a326d68f74d5054a5a79c0c9#cbdd3d717e2d1671a326d68f74d5054a5a79c0c9"
+source = "git+https://github.com/microsoft/llguidance?rev=cfef3df97372a7b84d74976ff41cc9cb78bca6cc#cfef3df97372a7b84d74976ff41cc9cb78bca6cc"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4283,14 +4251,14 @@ dependencies = [
 [[package]]
 name = "toktrie_hf_tokenizers"
 version = "0.1.0"
-source = "git+https://github.com/microsoft/toktrie?rev=cbdd3d717e2d1671a326d68f74d5054a5a79c0c9#cbdd3d717e2d1671a326d68f74d5054a5a79c0c9"
+source = "git+https://github.com/microsoft/llguidance?rev=cfef3df97372a7b84d74976ff41cc9cb78bca6cc#cfef3df97372a7b84d74976ff41cc9cb78bca6cc"
 dependencies = [
  "anyhow",
  "log",
  "rustc-hash",
  "serde",
  "serde_json",
- "tokenizers 0.19.1",
+ "tokenizers",
  "toktrie",
 ]
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use llguidance_parser::{
+use llguidance::{
     api::{ParserLimits, RegexNode, TopLevelGrammar},
     lark_to_llguidance, JsonCompileOptions, TokenParser,
 };
@@ -36,16 +36,16 @@ pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<Top
 pub fn constraint_from_llg_grammar(
     tok_env: TokEnv,
     grm: TopLevelGrammar,
-) -> Result<llguidance_parser::Constraint> {
+) -> Result<llguidance::Constraint> {
     let parser = TokenParser::from_llguidance_json(
         tok_env,
         grm,
-        llguidance_parser::Logger::new(0, 1),
+        llguidance::Logger::new(0, 1),
         InferenceCapabilities {
             ..Default::default()
         },
         ParserLimits::default(),
         vec![],
     )?;
-    Ok(llguidance_parser::Constraint::new(parser))
+    Ok(llguidance::Constraint::new(parser))
 }

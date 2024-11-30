@@ -1,8 +1,6 @@
-use super::cache_manager::DefaultCacheManager;
-use super::isq::UqffFullSer;
-use super::llg::build_tok_env;
 use super::cache_manager::{FullCacheManager, NormalCacheManager};
-use super::isq::{ImatrixDataSource, UqffFullSer};
+use super::isq::ImatrixDataSource;
+use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
@@ -13,11 +11,9 @@ use super::{
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
 };
-use super::{Idefics2Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType};
-use crate::aici::bintokens::build_tok_trie;
-use crate::aici::toktree::TokTrie;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::llg::build_tok_env;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
@@ -367,7 +363,7 @@ impl Loader for VisionLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let tok_env = build_tok_env(tokenizer.clone()).into();
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),

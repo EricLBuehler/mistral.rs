@@ -79,9 +79,9 @@ safetensors = "0.4.5"
 serde_plain = "1.0.2"
 as-any = "0.3.1"
 float8.workspace = true
-llguidance_parser = { git = "https://github.com/microsoft/llguidance", rev = "a88db09e37142d055c155716a3592fa31d3ef377", default-features = false, features = ["lark"] }
-toktrie = { git = "https://github.com/microsoft/toktrie", rev = "cbdd3d717e2d1671a326d68f74d5054a5a79c0c9" }
-toktrie_hf_tokenizers = { git = "https://github.com/microsoft/toktrie", rev = "cbdd3d717e2d1671a326d68f74d5054a5a79c0c9" }
+llguidance = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc", default-features = false, features = ["lark"] }
+toktrie = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc" }
+toktrie_hf_tokenizers = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc" }
 
 
 [features]

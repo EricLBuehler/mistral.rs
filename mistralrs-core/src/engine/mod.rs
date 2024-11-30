@@ -826,11 +826,6 @@ impl Engine {
                 .cache_config
                 .clone()
                 .map(|conf| conf.block_size);
-            let trie = get_mut_arcmutex!(self.pipeline)
-                .get_metadata()
-                .tok_trie
-                .as_ref()
-                .map(|x| (**x).clone());
 
             let cache = get_mut_arcmutex!(self.pipeline).cache().clone();
             let seq_preallocated_cache = if let EitherCache::Normal(_cache) = cache {

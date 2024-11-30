@@ -528,7 +528,7 @@ impl Loader for NormalLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let tok_env = build_tok_env(tokenizer.clone()).into();
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
