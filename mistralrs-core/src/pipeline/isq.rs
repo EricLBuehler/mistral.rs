@@ -125,6 +125,11 @@ pub struct UqffFullSer<'a> {
     pub preprocessor_filename: &'a Option<PathBuf>,
 }
 
+pub enum ImatrixDataSource<'a> {
+    File(&'a PathBuf),
+    Generated,
+}
+
 pub trait IsqModel {
     /// Corresponds to `IsqOrganization::Default`
     #[allow(clippy::type_complexity)]
@@ -142,6 +147,19 @@ pub trait IsqModel {
     /// - This is only for loading from a llama.cpp imatrix file.
     /// - Corresponds to `IsqOrganization::Default`
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        // TODO: make this required.
+        candle_core::bail!("This model does not support quantizing with an imatrix.");
+    }
+
+    /// This is used for imatrix generation internally. Begin stats tracking.
+    fn begin_track_stats(&mut self) -> Result<()> {
+        // TODO: make this required.
+        anyhow::bail!("This model does not support tracking stats.")
+    }
+
+    /// End stats tracking and return the imatrix data
+    fn extract_imatrix_data(&mut self) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+        // TODO: make this required.
         candle_core::bail!("This model does not support quantizing with an imatrix.");
     }
 
@@ -176,39 +194,43 @@ pub trait IsqModel {
         device: Device,
         topology: Option<&Topology>,
         silent: bool,
-        imatrix: Option<&PathBuf>,
+        imatrix_source: Option<ImatrixDataSource<'_>>,
         organization: IsqOrganization,
         write_artifacts: Option<&PathBuf>,
         full_ser: UqffFullSer<'_>,
     ) -> candle_core::Result<()> {
         {
-            let imatrix_to_weight = if let Some(imatrix) = imatrix {
-                let mut imatrix_data = quantized::imatrix_file::load_imatrix(imatrix.clone())?;
-                let imatrix_mapping = self
-                    .imatrix_names()?
-                    .into_iter()
-                    .enumerate()
-                    .collect::<HashMap<_, _>>();
+            let imatrix_to_weight = match imatrix_source {
+                Some(ImatrixDataSource::File(imatrix)) => {
+                    let mut imatrix_data = quantized::imatrix_file::load_imatrix(imatrix.clone())?;
+                    let imatrix_mapping = self
+                        .imatrix_names()?
+                        .into_iter()
+                        .enumerate()
+                        .collect::<HashMap<_, _>>();
 
-                let layer_to_weight = imatrix_mapping
-                    .into_iter()
-                    .map(|(i, name)| {
-                        if let Some(name) = name {
-                            (i, Some(imatrix_data.remove(&name).unwrap()))
-                        } else {
-                            (i, None)
-                        }
-                    })
-                    .collect::<HashMap<_, _>>();
-                info!(
-                    "Quantizing with imatrix file `{}`, {} imatrix weights",
-                    imatrix.display(),
-                    layer_to_weight.len()
-                );
-                Some(layer_to_weight)
-            } else {
-                // Dummy, just for zip
-                None
+                    let layer_to_weight = imatrix_mapping
+                        .into_iter()
+                        .map(|(i, name)| {
+                            if let Some(name) = name {
+                                (i, Some(imatrix_data.remove(&name).unwrap()))
+                            } else {
+                                (i, None)
+                            }
+                        })
+                        .collect::<HashMap<_, _>>();
+                    info!(
+                        "Quantizing with imatrix file `{}`, {} imatrix weights",
+                        imatrix.display(),
+                        layer_to_weight.len()
+                    );
+                    Some(layer_to_weight)
+                }
+                Some(ImatrixDataSource::Generated) => Some(self.extract_imatrix_data()?),
+                None => {
+                    // Dummy, just for zip
+                    None
+                }
             };
 
             let (mut tensors, mapper) = match organization {

@@ -240,7 +240,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     }
 
     /// End tracking stats into an ImatrixLayerStats. Returns the computed imatrix.
-    fn end_track_stats(&mut self) -> Result<Tensor> {
+    fn end_track_stats(&self) -> Result<Tensor> {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
     }
 }

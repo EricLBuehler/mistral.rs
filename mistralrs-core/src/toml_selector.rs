@@ -50,7 +50,12 @@ pub enum TomlModelSelected {
         from_uqff: Option<PathBuf>,
 
         /// .imatrix file to enhance GGUF quantizations with.
+        /// Incompatible with `--imatrix/-i`
         imatrix: Option<PathBuf>,
+
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
+        /// Incompatible with `--imatrix/-i`
+        calibration_file: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -386,6 +391,7 @@ fn loader_from_selected(
             write_uqff,
             from_uqff,
             imatrix,
+            calibration_file,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -395,6 +401,7 @@ fn loader_from_selected(
                 write_uqff,
                 from_uqff,
                 imatrix,
+                calibration_file,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -420,6 +427,7 @@ fn loader_from_selected(
                 write_uqff,
                 from_uqff,
                 imatrix: None,
+                calibration_file: None,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -453,6 +461,7 @@ fn loader_from_selected(
                 write_uqff,
                 from_uqff,
                 imatrix: None,
+                calibration_file: None,
             },
             args.chat_template,
             args.tokenizer_json,

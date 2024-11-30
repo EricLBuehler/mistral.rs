@@ -78,11 +78,21 @@ macro_rules! generate_isq_imatrix {
                 $crate::utils::isq::QuantizationBehaviour::Skip => {
                     let shape = $tensor.shape();
                     tracing::warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
-                    Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(&$tensor, &$imatrix, GgmlDType::F32, &$device)?)
+                    // This case is necessrary because we may be generating the imatrix internally.
+                    if $device.is_cpu() {
+                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(&$tensor, &$imatrix, GgmlDType::F32, &$device)?)
+                    } else {
+                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix(&$tensor, &$imatrix, GgmlDType::F32)?)
+                    }
                 },
                 $crate::utils::isq::QuantizationBehaviour::Quantize(dtype) => {
                     $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(&$tensor, &$imatrix, dtype, &$device)?)
+                    // This case is necessrary because we may be generating the imatrix internally.
+                    if $device.is_cpu() {
+                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(&$tensor, &$imatrix, dtype, &$device)?)
+                    } else {
+                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix(&$tensor, &$imatrix, dtype)?)
+                    }
                 }
             }
         }

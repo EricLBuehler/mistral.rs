@@ -68,8 +68,14 @@ pub enum ModelSelected {
         from_uqff: Option<PathBuf>,
 
         /// .imatrix file to enhance GGUF quantizations with.
+        /// Incompatible with `--calibration-file/-c`
         #[arg(short, long)]
         imatrix: Option<PathBuf>,
+
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
+        /// Incompatible with `--imatrix/-i`
+        #[arg(short, long)]
+        calibration_file: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture

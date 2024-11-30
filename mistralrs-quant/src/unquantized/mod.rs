@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     io::Cursor,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Mutex},
+    sync::{atomic::AtomicUsize, Arc},
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -22,7 +22,7 @@ use crate::{
 pub struct UnquantLinear {
     w: Tensor,
     b: Option<Tensor>,
-    stats: Option<Arc<Mutex<ImatrixLayerStats>>>,
+    stats: Option<ImatrixLayerStats>,
 }
 
 impl QuantMethod for UnquantLinear {
@@ -55,7 +55,6 @@ impl QuantMethod for UnquantLinear {
         };
 
         if let Some(stats) = &self.stats {
-            let mut stats = stats.lock().unwrap();
             stats.process(a)?;
         }
 
@@ -256,22 +255,18 @@ impl QuantMethod for UnquantLinear {
     }
 
     fn begin_track_stats(&mut self) -> Result<()> {
-        self.stats = Some(Arc::new(Mutex::new(ImatrixLayerStats::new(
-            &self.w,
-            self.w.device(),
-        )?)));
+        self.stats = Some(ImatrixLayerStats::new(&self.w, self.w.device())?);
         Ok(())
     }
 
-    fn end_track_stats(&mut self) -> Result<Tensor> {
-        let imatrix = if let Some(stats) = &self.stats {
-            let stats = stats.lock().unwrap();
-            stats.compute_imatrix()?
+    fn end_track_stats(&self) -> Result<Tensor> {
+        if let Some(stats) = &self.stats {
+            let imatrix = stats.compute_imatrix()?;
+            stats.clear()?;
+            Ok(imatrix)
         } else {
             candle_core::bail!("`{}` does not support tracking stats.", self.name())
-        };
-        self.stats = None;
-        Ok(imatrix)
+        }
     }
 }
 

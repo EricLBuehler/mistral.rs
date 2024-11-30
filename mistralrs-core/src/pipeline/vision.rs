@@ -1,5 +1,5 @@
 use super::cache_manager::{FullCacheManager, NormalCacheManager};
-use super::isq::UqffFullSer;
+use super::isq::{ImatrixDataSource, UqffFullSer};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
@@ -322,7 +322,7 @@ impl Loader for VisionLoader {
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
-                self.config.imatrix.as_ref(),
+                self.config.imatrix.as_ref().map(ImatrixDataSource::File),
                 IsqOrganization::Default,
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
@@ -435,7 +435,7 @@ impl IsqPipelineMixin for VisionPipeline {
                 device,
                 self.topology.as_ref(),
                 self.silent,
-                self.imatrix.as_ref(),
+                self.imatrix.as_ref().map(ImatrixDataSource::File),
                 IsqOrganization::Default,
                 None,
                 UqffFullSer {

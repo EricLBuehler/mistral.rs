@@ -649,6 +649,7 @@ impl IsqModel for Llama {
     }
 
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        // NOTE: dependant on the exact implementation in get_layers!
         let mut names = Vec::new();
         // lm_head
         names.push(None);
@@ -662,6 +663,37 @@ impl IsqModel for Llama {
             names.push(Some(format!("blk.{i}.ffn_down.weight")));
         }
         Ok(names)
+    }
+
+    fn begin_track_stats(&mut self) -> anyhow::Result<()> {
+        let layers = self
+            .get_layers()
+            .0
+            .into_iter()
+            .map(|(layer, _)| layer)
+            .collect::<Vec<_>>();
+        for layer in layers {
+            Arc::get_mut(layer).unwrap().begin_track_stats()?;
+        }
+        Ok(())
+    }
+
+    fn extract_imatrix_data(&mut self) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+        let layers = self
+            .get_layers()
+            .0
+            .into_iter()
+            .enumerate()
+            .map(|(i, (layer, _))| (i, layer))
+            .collect::<Vec<_>>();
+        let mut data = HashMap::new();
+        for (i, layer) in layers {
+            data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
+        }
+        for (_, data) in &data {
+            dbg!(&data.as_ref().unwrap()[0..32]);
+        }
+        Ok(data)
     }
 }
 

@@ -128,6 +128,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             write_uqff,
             from_uqff,
             imatrix,
+            calibration_file,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -137,6 +138,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 write_uqff,
                 from_uqff,
                 imatrix,
+                calibration_file,
             },
             args.chat_template,
             tokenizer_json,
@@ -164,6 +166,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 write_uqff,
                 from_uqff,
                 imatrix: None,
+                calibration_file: None,
             },
             args.chat_template,
             tokenizer_json,
@@ -199,6 +202,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 write_uqff,
                 from_uqff,
                 imatrix: None,
+                calibration_file: None,
             },
             args.chat_template,
             tokenizer_json,

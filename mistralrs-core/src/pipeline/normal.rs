@@ -1,4 +1,5 @@
 use super::cache_manager::{FullCacheManager, NormalCacheManager};
+use super::isq::ImatrixDataSource;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
@@ -22,6 +23,7 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::get_chat_template;
 use crate::pipeline::isq::UqffFullSer;
 use crate::pipeline::sampling::sample_and_add_toks;
+use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
@@ -109,6 +111,7 @@ pub struct NormalSpecificConfig {
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
     pub imatrix: Option<PathBuf>,
+    pub calibration_file: Option<PathBuf>,
 }
 
 impl NormalLoaderBuilder {
@@ -311,7 +314,15 @@ impl Loader for NormalLoader {
                 .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
         }
 
-        let load_device = if !loading_isq {
+        if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
+            anyhow::bail!(
+                "`imatrix` and `calibration_file` were both specified, this is not allowed."
+            );
+        }
+
+        // Load onto the regular device if not using isq or if the calibration file is specified
+        let load_device = if !loading_isq || self.config.calibration_file.is_some() {
+            loading_isq = false;
             device.clone()
         } else {
             Device::Cpu
@@ -387,15 +398,59 @@ impl Loader for NormalLoader {
             None,
         );
 
+        if let Some(calibration_file) = &self.config.calibration_file {
+            let calibration_data = std::fs::read_to_string(calibration_file)?;
+            // Tokenize, don't add bos yet
+            let tokens = tokenizer
+                .encode(calibration_data, false)
+                .map_err(anyhow::Error::msg)?
+                .get_ids()
+                .to_vec();
+            info!("Generating imatrix from calibration data of {} tokens.", tokens.len());
+            let bos_toks = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
+            let bos_tok_id = tokenizer
+                .token_to_id(&bos_toks[0])
+                .expect("Somehow the bos token is not present.");
+
+            model.begin_track_stats()?;
+            const CHUNK_SIZE: usize = 1024;
+            let n_chunks = tokens.len().div_ceil(CHUNK_SIZE);
+            for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
+                let chunk = [vec![bos_tok_id], chunk.to_vec()].concat();
+                info!("Processing chunk {}/{n_chunks} ({} tokens)", i+1, chunk.len());
+                
+                let inputs =
+                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None)?;
+                let _ = model.forward(
+                    &inputs.input,
+                    &inputs.positions,
+                    inputs.positions_kernel,
+                    inputs.context_lens,
+                    inputs.position_ids,
+                    None,
+                    &inputs.flash_meta,
+                )?;
+            }
+        }
+
         if (in_situ_quant.is_some() || self.config.topology.is_some())
             && self.config.from_uqff.is_none()
         {
+            let imatrix_source = match (
+                self.config.imatrix.as_ref(),
+                self.config.calibration_file.is_some(),
+            ) {
+                (None, false) => None,
+                (Some(file), false) => Some(ImatrixDataSource::File(file)),
+                (None, true) => Some(ImatrixDataSource::Generated),
+                (Some(_), true) => unreachable!(),
+            };
             model.quantize(
                 in_situ_quant,
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
-                self.config.imatrix.as_ref(),
+                imatrix_source,
                 self.config.organization,
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
@@ -514,7 +569,7 @@ impl IsqPipelineMixin for NormalPipeline {
                 device,
                 self.topology.as_ref(),
                 self.silent,
-                self.imatrix.as_ref(),
+                self.imatrix.as_ref().map(ImatrixDataSource::File),
                 self.organization,
                 None,
                 UqffFullSer {

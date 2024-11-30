@@ -107,6 +107,7 @@ pub enum Which {
         from_uqff = None,
         dtype = ModelDType::Auto,
         imatrix = None,
+        calibration_file = None,
     ))]
     Plain {
         model_id: String,
@@ -118,6 +119,7 @@ pub enum Which {
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,
         imatrix: Option<PathBuf>,
+        calibration_file: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (

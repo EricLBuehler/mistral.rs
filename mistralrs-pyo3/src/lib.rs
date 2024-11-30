@@ -93,6 +93,7 @@ fn parse_which(
             from_uqff,
             dtype: _,
             imatrix,
+            calibration_file,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -102,6 +103,7 @@ fn parse_which(
                 write_uqff,
                 from_uqff,
                 imatrix,
+                calibration_file,
             },
             chat_template,
             tokenizer_json,
@@ -129,6 +131,7 @@ fn parse_which(
                 write_uqff,
                 from_uqff,
                 imatrix: None,
+                calibration_file: None,
             },
             chat_template,
             tokenizer_json,
@@ -164,6 +167,7 @@ fn parse_which(
                 write_uqff,
                 from_uqff,
                 imatrix: None,
+                calibration_file: None,
             },
             chat_template,
             tokenizer_json,
