@@ -1003,8 +1003,8 @@
         /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
         </span>max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
 
-        <span class="doccomment">/// .imatrix file to enhance GGUF quantizations with.
-        </span>imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+        <span class="doccomment">/// Generate and utilize an imatrix to enhance GGUF quantizations.
+        </span>calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     },
 }
 
@@ -1348,7 +1348,7 @@
             write_uqff,
             from_uqff,
             max_edge,
-            imatrix,
+            calibration_file,
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -1357,7 +1357,7 @@
                 write_uqff,
                 from_uqff,
                 max_edge,
-                imatrix,
+                calibration_file,
             },
             args.chat_template,
             args.tokenizer_json,

@@ -1282,7 +1282,14 @@
 <a href="#1281" id="1281">1281</a>
 <a href="#1282" id="1282">1282</a>
 <a href="#1283" id="1283">1283</a>
-<a href="#1284" id="1284">1284</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1284" id="1284">1284</a>
+<a href="#1285" id="1285">1285</a>
+<a href="#1286" id="1286">1286</a>
+<a href="#1287" id="1287">1287</a>
+<a href="#1288" id="1288">1288</a>
+<a href="#1289" id="1289">1289</a>
+<a href="#1290" id="1290">1290</a>
+<a href="#1291" id="1291">1291</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>idefics2_input_processor;
 
@@ -2553,6 +2560,9 @@
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="self">self</span>.text_model.cache()
     }
+    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>EitherCache {
+        <span class="self">self</span>.text_model.cache_mut()
+    }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
         <span class="self">self</span>.text_model.device()
     }
@@ -2564,6 +2574,10 @@
     </span>}
     <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
         <span class="self">self</span>.text_model.config()
+    }
+    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>Any&gt; {
+        <span class="kw">let </span>args: <span class="prelude-ty">Option</span>&lt;Tensor&gt; = <span class="prelude-val">None</span>;
+        Box::new(args)
     }
 }
 </code></pre></div></section></main></body></html>

@@ -369,12 +369,22 @@
 <a href="#368" id="368">368</a>
 <a href="#369" id="369">369</a>
 <a href="#370" id="370">370</a>
-<a href="#371" id="371">371</a></pre></div><pre class="rust"><code><span class="attr">#![allow(
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a></pre></div><pre class="rust"><code><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::too_many_arguments
 )]
-</span><span class="kw">use </span><span class="kw">super</span>::llava_llm::{LLaVALLM, Llama, Mistral};
+</span><span class="kw">use </span>std::any::Any;
+
+<span class="kw">use </span><span class="kw">super</span>::llava_llm::{LLaVALLM, Llama, Mistral};
 <span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeBaseModelMixin;
 <span class="kw">use </span><span class="kw">crate</span>::amoe::MlpLayer;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
@@ -697,6 +707,9 @@
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="kw">crate</span>::pipeline::EitherCache {
         <span class="self">self</span>.llm.cache()
     }
+    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::EitherCache {
+        <span class="self">self</span>.llm.cache_mut()
+    }
 
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.config.text_config.max_length
@@ -708,6 +721,9 @@
 
     <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
         <span class="self">self</span>.llm.config()
+    }
+    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>Any&gt; {
+        Box::new(())
     }
 }
 

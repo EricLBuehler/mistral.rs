@@ -804,9 +804,9 @@
         </span><span class="attr">#[arg(short = <span class="string">'e'</span>, long)]
         </span>max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
 
-        <span class="doccomment">/// .imatrix file to enhance GGUF quantizations with.
+        <span class="doccomment">/// Generate and utilize an imatrix to enhance GGUF quantizations.
         </span><span class="attr">#[arg(short, long)]
-        </span>imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+        </span>calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     },
 
     <span class="doccomment">/// Select a diffusion plain model, without quantization or adapters

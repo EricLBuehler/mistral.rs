@@ -501,7 +501,24 @@
 <a href="#500" id="500">500</a>
 <a href="#501" id="501">501</a>
 <a href="#502" id="502">502</a>
-<a href="#503" id="503">503</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, sync::Arc};
 
@@ -975,6 +992,9 @@
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.text.cache
     }
+    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>EitherCache {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.text.cache
+    }
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
         <span class="kw-2">&amp;</span><span class="self">self</span>.text.device
     }
@@ -986,6 +1006,20 @@
     </span>}
     <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
         <span class="kw-2">&amp;</span><span class="self">self</span>.text.cfg
+    }
+    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>Any&gt; {
+        <span class="macro">assert_eq!</span>(input_ids.dims()[<span class="number">0</span>], <span class="number">1</span>);
+        Box::new(Qwen2VLVisionSpecificArgs {
+            input_ids_full: input_ids.clone(),
+            image_grid_thw: <span class="prelude-val">None</span>,
+            video_grid_thw: <span class="prelude-val">None</span>,
+            seqlens: <span class="macro">vec!</span>[input_ids.dims()[<span class="number">1</span>]],
+            continuous_img_pad: <span class="macro">vec!</span>[],
+            continuous_vid_pad: <span class="macro">vec!</span>[],
+            input_ids_searching: <span class="macro">vec!</span>[<span class="macro">vec!</span>[]; input_ids.dims()[<span class="number">0</span>]],
+            image_nums: <span class="macro">vec!</span>[<span class="number">0</span>; input_ids.dims()[<span class="number">0</span>]],
+            video_nums: <span class="macro">vec!</span>[<span class="number">0</span>; input_ids.dims()[<span class="number">0</span>]],
+        })
     }
 }
 

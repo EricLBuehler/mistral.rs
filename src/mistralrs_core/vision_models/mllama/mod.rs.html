@@ -260,14 +260,55 @@
 <a href="#259" id="259">259</a>
 <a href="#260" id="260">260</a>
 <a href="#261" id="261">261</a>
-<a href="#262" id="262">262</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
 <span class="kw">mod </span>inputs_processor;
 <span class="kw">mod </span>text;
 <span class="kw">mod </span>vision;
 
-<span class="kw">use </span>std::{any::Any, sync::Arc};
+<span class="kw">use </span>std::{any::Any, collections::HashMap, sync::Arc};
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>config::{MLlamaConfig, MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig};
 <span class="kw">use </span>config::{MLlamaVisionConfig, VisionActivation};
@@ -436,7 +477,8 @@
     }
 }
 
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>MLlamaSpecificArgs {
+<span class="attr">#[derive(Default)]
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>MLlamaSpecificArgs {
     <span class="kw">pub </span>aspect_ratio_ids: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     <span class="kw">pub </span>aspect_ratio_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
     <span class="kw">pub </span>cross_attn_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
@@ -445,6 +487,9 @@
 <span class="kw">impl </span>VisionModel <span class="kw">for </span>MLlamaModel {
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="kw-2">&amp;</span><span class="self">self</span>.language_model.cache
+    }
+    <span class="kw">fn </span>cache_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>EitherCache {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.language_model.cache
     }
     <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
         <span class="kw-2">&amp;</span><span class="self">self</span>.language_model.cfg
@@ -488,6 +533,9 @@
             context_lens,
         )
     }
+    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>Any&gt; {
+        Box::new(MLlamaSpecificArgs::default())
+    }
 }
 
 <span class="kw">impl </span>IsqModel <span class="kw">for </span>MLlamaModel {
@@ -518,6 +566,40 @@
             .extend(<span class="self">self</span>.vision_model.residual_tensors());
 
         uvb.to_safetensors()
+    }
+
+    <span class="comment">// NOTE: We ONLY calibrate the text bits of these models, so we should only track/return those parts!!
+
+    </span><span class="doccomment">/// This is used for imatrix generation internally. Begin stats tracking.
+    </span><span class="kw">fn </span>begin_track_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;()&gt; {
+        <span class="kw">let </span>layers = <span class="self">self
+            </span>.language_model
+            .get_layers()
+            .<span class="number">0
+            </span>.into_iter()
+            .map(|(layer, <span class="kw">_</span>)| layer)
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        <span class="kw">for </span>layer <span class="kw">in </span>layers {
+            Arc::get_mut(layer).unwrap().begin_track_stats()<span class="question-mark">?</span>;
+        }
+        <span class="prelude-val">Ok</span>(())
+    }
+
+    <span class="doccomment">/// End stats tracking and return the imatrix data
+    </span><span class="kw">fn </span>extract_imatrix_data(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; candle_core::Result&lt;HashMap&lt;usize, <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;&gt;&gt; {
+        <span class="kw">let </span>layers = <span class="self">self
+            </span>.language_model
+            .get_layers()
+            .<span class="number">0
+            </span>.into_iter()
+            .enumerate()
+            .map(|(i, (layer, <span class="kw">_</span>))| (i, layer))
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        <span class="kw">let </span><span class="kw-2">mut </span>data = HashMap::new();
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span>layers {
+            data.insert(i, <span class="prelude-val">Some</span>(layer.end_track_stats()<span class="question-mark">?</span>.to_vec1::&lt;f32&gt;()<span class="question-mark">?</span>));
+        }
+        <span class="prelude-val">Ok</span>(data)
     }
 }
 

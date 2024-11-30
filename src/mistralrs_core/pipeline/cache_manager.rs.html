@@ -1266,7 +1266,7 @@
             }
         };
         <span class="kw-2">*</span>cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
-        <span class="prelude-val">Ok</span>((k, v))
+        <span class="prelude-val">Ok</span>((k.contiguous()<span class="question-mark">?</span>, v.contiguous()<span class="question-mark">?</span>))
     }
 
     <span class="doccomment">/// Update the KV cache and return (k,v,attn_mask)
@@ -1322,7 +1322,7 @@
             }
         };
         <span class="kw-2">*</span>cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
-        <span class="prelude-val">Ok</span>((k, v, attention_mask))
+        <span class="prelude-val">Ok</span>((k.contiguous()<span class="question-mark">?</span>, v.contiguous()<span class="question-mark">?</span>, attention_mask))
     }
 }
 

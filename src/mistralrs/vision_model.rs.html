@@ -224,7 +224,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) hf_revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapMetadata&gt;,
@@ -268,7 +268,7 @@
             max_num_seqs: <span class="number">32</span>,
             with_logging: <span class="bool-val">false</span>,
             device_mapping: <span class="prelude-val">None</span>,
-            imatrix: <span class="prelude-val">None</span>,
+            calibration_file: <span class="prelude-val">None</span>,
         }
     }
 
@@ -326,9 +326,9 @@
         <span class="self">self
     </span>}
 
-    <span class="doccomment">/// Utilise this imatrix file during ISQ
-    </span><span class="kw">pub fn </span>with_imatrix(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.imatrix = <span class="prelude-val">Some</span>(path);
+    <span class="doccomment">/// Utilise this calibration_file file during ISQ
+    </span><span class="kw">pub fn </span>with_calibration_file(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.calibration_file = <span class="prelude-val">Some</span>(path);
         <span class="self">self
     </span>}
 
@@ -385,7 +385,7 @@
             write_uqff: <span class="self">self</span>.write_uqff,
             from_uqff: <span class="self">self</span>.from_uqff,
             max_edge: <span class="self">self</span>.max_edge,
-            imatrix: <span class="self">self</span>.imatrix,
+            calibration_file: <span class="self">self</span>.calibration_file,
         };
 
         <span class="kw">if </span><span class="self">self</span>.with_logging {

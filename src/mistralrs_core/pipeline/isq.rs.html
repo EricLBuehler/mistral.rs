@@ -754,11 +754,7 @@
 <a href="#753" id="753">753</a>
 <a href="#754" id="754">754</a>
 <a href="#755" id="755">755</a>
-<a href="#756" id="756">756</a>
-<a href="#757" id="757">757</a>
-<a href="#758" id="758">758</a>
-<a href="#759" id="759">759</a>
-<a href="#760" id="760">760</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#756" id="756">756</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     fs::File,
@@ -902,8 +898,7 @@
 
     <span class="doccomment">/// This is used for imatrix generation internally. Begin stats tracking.
     </span><span class="kw">fn </span>begin_track_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;()&gt; {
-        <span class="comment">// TODO: make this required.
-        </span><span class="kw">let </span>layers = <span class="self">self
+        <span class="kw">let </span>layers = <span class="self">self
             </span>.get_layers()
             .<span class="number">0
             </span>.into_iter()
@@ -917,8 +912,7 @@
 
     <span class="doccomment">/// End stats tracking and return the imatrix data
     </span><span class="kw">fn </span>extract_imatrix_data(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; candle_core::Result&lt;HashMap&lt;usize, <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;&gt;&gt; {
-        <span class="comment">// TODO: make this required.
-        </span><span class="kw">let </span>layers = <span class="self">self
+        <span class="kw">let </span>layers = <span class="self">self
             </span>.get_layers()
             .<span class="number">0
             </span>.into_iter()
@@ -947,8 +941,7 @@
     <span class="doccomment">/// Corresponds to `IsqOrganization::MoeExpertsOnly`
     /// This is used for imatrix generation internally. Begin stats tracking.
     </span><span class="kw">fn </span>begin_track_stats_moe_experts_only(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; anyhow::Result&lt;()&gt; {
-        <span class="comment">// TODO: make this required.
-        </span><span class="kw">let </span>layers = <span class="self">self
+        <span class="kw">let </span>layers = <span class="self">self
             </span>.get_layers()
             .<span class="number">0
             </span>.into_iter()
@@ -965,8 +958,7 @@
     </span><span class="kw">fn </span>extract_imatrix_data_moe_experts_only(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
     ) -&gt; candle_core::Result&lt;HashMap&lt;usize, <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;&gt;&gt; {
-        <span class="comment">// TODO: make this required.
-        </span><span class="kw">let </span>layers = <span class="self">self
+        <span class="kw">let </span>layers = <span class="self">self
             </span>.get_layers()
             .<span class="number">0
             </span>.into_iter()
@@ -1038,7 +1030,7 @@
                     <span class="macro">info!</span>(
                         <span class="string">"Quantizing with imatrix file `{}`, {} imatrix weights"</span>,
                         imatrix.display(),
-                        layer_to_weight.len()
+                        layer_to_weight.iter().filter(|(<span class="kw">_</span>, x)| x.is_some()).count()
                     );
                     <span class="prelude-val">Some</span>(layer_to_weight)
                 }
@@ -1051,7 +1043,7 @@
                     };
                     <span class="macro">info!</span>(
                         <span class="string">"Quantizing with collected imatrix data, {} imatrix weights"</span>,
-                        data.len()
+                        data.iter().filter(|(<span class="kw">_</span>, x)| x.is_some()).count()
                     );
                     <span class="prelude-val">Some</span>(data)
                 }
