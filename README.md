@@ -52,21 +52,16 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i vision-plain -m HuggingFaceTB/SmolVLM-Instruct -a idefics3
     ```
 
-- 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
-
-    ```
-    ./mistralrs-server -i toml -f toml-selectors/anymoe_lora.toml
-    ```
 - φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
 
     ```
     ./mistralrs-server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
     ```
 
-- 🌀 Run the Phi 3.5 MoE model with 128K context window: [documentation and guide here](docs/PHI3.5MOE.md)
+- 🧮 Enhance ISQ by collecting an imatrix from calibration data
 
     ```
-    ./mistralrs-server -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
+    ./mistralrs-server -i --isq Q4K plain -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
     ```
 
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)

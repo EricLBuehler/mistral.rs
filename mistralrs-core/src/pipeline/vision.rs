@@ -1,5 +1,5 @@
 use super::cache_manager::{FullCacheManager, NormalCacheManager};
-use super::isq::UqffFullSer;
+use super::isq::{ImatrixDataSource, UqffFullSer};
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
@@ -63,6 +63,7 @@ pub struct VisionPipeline {
     config: String,
     processor_filename: Option<PathBuf>,
     preprocessor_filename: Option<PathBuf>,
+    imatrix: Option<PathBuf>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -99,6 +100,7 @@ pub struct VisionSpecificConfig {
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
     pub max_edge: Option<u32>,
+    pub imatrix: Option<PathBuf>,
 }
 
 impl VisionLoaderBuilder {
@@ -320,6 +322,7 @@ impl Loader for VisionLoader {
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
+                self.config.imatrix.as_ref().map(ImatrixDataSource::File),
                 IsqOrganization::Default,
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
@@ -398,6 +401,7 @@ impl Loader for VisionLoader {
             config,
             processor_filename: paths.get_processor_config().clone(),
             preprocessor_filename: paths.get_preprocessor_config().clone(),
+            imatrix: self.config.imatrix.clone(),
         })))
     }
 
@@ -431,6 +435,7 @@ impl IsqPipelineMixin for VisionPipeline {
                 device,
                 self.topology.as_ref(),
                 self.silent,
+                self.imatrix.as_ref().map(ImatrixDataSource::File),
                 IsqOrganization::Default,
                 None,
                 UqffFullSer {

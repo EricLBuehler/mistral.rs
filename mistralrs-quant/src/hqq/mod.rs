@@ -590,7 +590,13 @@ impl QuantMethod for HqqLayer {
         dtype: Option<IsqType>,
         device: Device,
         n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>> {
+        if imatrix_weight.is_some() {
+            // TODO just warn?
+            candle_core::bail!("HQQ does not support imatrix.");
+        }
+
         n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let bits = match dtype {
             Some(IsqType::HQQ8) => HqqBits::Eight,

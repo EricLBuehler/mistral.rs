@@ -11,17 +11,18 @@ use candle_nn::Linear;
 
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
-    generate_isq,
+    generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
-    FP8Linear, GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde,
-    QuantizedSerdeType,
+    FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, QuantMethod, QuantMethodConfig,
+    QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
 pub struct UnquantLinear {
     w: Tensor,
     b: Option<Tensor>,
+    stats: Option<ImatrixLayerStats>,
 }
 
 impl QuantMethod for UnquantLinear {
@@ -38,6 +39,7 @@ impl QuantMethod for UnquantLinear {
             QuantMethodConfig::Unquantized(l) => Ok(Self {
                 w: l.weight().clone(),
                 b: l.bias().cloned(),
+                stats: None,
             }),
         }
     }
@@ -51,6 +53,10 @@ impl QuantMethod for UnquantLinear {
             [bsize, _, _] => self.w.broadcast_left(bsize)?,
             _ => self.w.clone(),
         };
+
+        if let Some(stats) = &self.stats {
+            stats.process(a)?;
+        }
 
         if let Some(b) = self.b.as_ref() {
             let mut tgt_shape = a.dims().to_vec();
@@ -106,6 +112,7 @@ impl QuantMethod for UnquantLinear {
         Ok(Arc::new(Self {
             w: (&self.w + delta)?,
             b: self.b.clone(),
+            stats: self.stats.clone(),
         }))
     }
 
@@ -122,10 +129,16 @@ impl QuantMethod for UnquantLinear {
         dtype: Option<IsqType>,
         device: Device,
         n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>> {
         match dtype {
             /*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
+                if imatrix_weight.is_some() {
+                    // TODO just warn?
+                    candle_core::bail!("HQQ does not support imatrix.");
+                }
+
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let bits = match dtype.unwrap() {
                     IsqType::HQQ8 => HqqBits::Eight,
@@ -168,7 +181,11 @@ impl QuantMethod for UnquantLinear {
                 | IsqType::Q8_1,
             ) => {
                 let dtype: GgmlDType = dtype.unwrap().try_into()?;
-                let res = generate_isq!(self.w, device, dtype, n_quantized);
+                let res = if let Some(imatrix_weight) = imatrix_weight {
+                    generate_isq_imatrix!(self.w, imatrix_weight, device, dtype, n_quantized)
+                } else {
+                    generate_isq!(self.w, device, dtype, n_quantized)
+                };
                 Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
                     b: self
@@ -178,6 +195,11 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             Some(IsqType::F8E4M3) => {
+                if imatrix_weight.is_some() {
+                    // TODO just warn?
+                    candle_core::bail!("F8E4M3 does not support imatrix.");
+                }
+
                 let w = self.w.to_device(&device)?;
                 let b = if let Some(b) = &self.b {
                     Some(b.to_device(&device)?)
@@ -190,6 +212,8 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             None => {
+                // Ignore imatrix altogether
+
                 let w = self.w.to_device(&device)?;
                 let b = if let Some(b) = &self.b {
                     Some(b.to_device(&device)?)
@@ -228,6 +252,21 @@ impl QuantMethod for UnquantLinear {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         Some((self.w.clone(), self.b.clone()))
+    }
+
+    fn begin_track_stats(&mut self) -> Result<()> {
+        self.stats = Some(ImatrixLayerStats::new(&self.w, self.w.device())?);
+        Ok(())
+    }
+
+    fn end_track_stats(&self) -> Result<Tensor> {
+        if let Some(stats) = &self.stats {
+            let imatrix = stats.compute_imatrix()?;
+            stats.clear()?;
+            Ok(imatrix)
+        } else {
+            candle_core::bail!("`{}` does not support tracking stats.", self.name())
+        }
     }
 }
 
@@ -303,6 +342,6 @@ impl QuantizedSerde for UnquantLinear {
             None
         };
 
-        Ok(Arc::new(Self { w, b }))
+        Ok(Arc::new(Self { w, b, stats: None }))
     }
 }
