@@ -8,6 +8,8 @@ Mistral.rs supports enhancing the performance of models quantized with ISQ by co
 - `Q5K`
 - `Q6K`
 
+Currently, only `plain` models support using an imatrix. Support for vision models is coming.
+
 Using an imatrix causes the quantization process to take longer as the data must be collected, but there is no inference-time performance decrease.
 
 To use this, simply specify the calibration data file in the various APIs:
