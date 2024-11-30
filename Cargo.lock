@@ -2326,7 +2326,6 @@ dependencies = [
  "tokenizers",
  "tokio",
  "tokio-rayon",
- "toktrie",
  "toktrie_hf_tokenizers",
  "toml",
  "tqdm",

@@ -3,10 +3,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use llguidance::{
     api::{ParserLimits, RegexNode, TopLevelGrammar},
-    lark_to_llguidance, JsonCompileOptions, TokenParser,
+    lark_to_llguidance,
+    toktrie::{InferenceCapabilities, TokEnv},
+    JsonCompileOptions, TokenParser,
 };
 use tokenizers::Tokenizer;
-use toktrie::{InferenceCapabilities, TokEnv};
 
 use crate::Constraint;
 

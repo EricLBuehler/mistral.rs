@@ -1,5 +1,6 @@
 use candle_core::Tensor;
 use either::Either;
+use llguidance::toktrie::TokEnv;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
@@ -10,13 +11,12 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc::Receiver, Mutex};
-use toktrie::TokEnv;
 
 use crate::{
     pipeline::{
-        text_models_inputs_processor::PagedAttentionMeta, AdapterInstruction, CacheBackendMetadata,
-        CacheInstruction, EitherCache, NormalCache,
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
+        text_models_inputs_processor::PagedAttentionMeta,
+        AdapterInstruction, CacheBackendMetadata, CacheInstruction, EitherCache, NormalCache,
     },
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     response::CompletionChoice,
