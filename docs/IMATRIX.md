@@ -8,11 +8,13 @@ Mistral.rs supports enhancing the performance of models quantized with ISQ by co
 - `Q5K`
 - `Q6K`
 
+> **What is an imatrix?** An imatrix (importance matrix) is generated from data collected during the execution of the model on calibration data. This data is used to enhance the performance of the model by enabling a weighted RMSE minimization when quantizing the tensor. For more information, see the [original PR](https://github.com/ggerganov/llama.cpp/pull/4861).
+
 Currently, only `plain` models support using an imatrix. Support for vision models is coming.
 
 Using an imatrix causes the quantization process to take longer as the data must be collected, but there is no inference-time performance decrease.
 
-To use this, simply specify the calibration data file in the various APIs:
+To use this, simply specify the calibration data file in the various APIs as detailed below.
 
 ## With the CLI
 ```

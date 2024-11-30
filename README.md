@@ -58,7 +58,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
     ```
 
-- 🧮 Enhance ISQ by collecting an imatrix from calibration data
+- 🧮 Enhance ISQ by collecting an imatrix from calibration data: [documentation](docs/IMATRIX.md)
 
     ```
     ./mistralrs-server -i --isq Q4K plain -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
@@ -91,6 +91,7 @@ Mistral.rs supports several model categories:
 - Python API
 - Grammar support with Regex and Yacc
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
+    - Enhance performance with an [imatrix](docs/IMATRIX.md)!
 
 **Fast**:
 - Apple silicon support: ARM NEON, Accelerate, Metal
