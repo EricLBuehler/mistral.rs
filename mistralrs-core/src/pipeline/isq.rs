@@ -142,7 +142,6 @@ pub trait IsqModel {
 
     /// This is used for imatrix generation internally. Begin stats tracking.
     fn begin_track_stats(&mut self) -> anyhow::Result<()> {
-        // TODO: make this required.
         let layers = self
             .get_layers()
             .0
@@ -157,7 +156,6 @@ pub trait IsqModel {
 
     /// End stats tracking and return the imatrix data
     fn extract_imatrix_data(&mut self) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
-        // TODO: make this required.
         let layers = self
             .get_layers()
             .0
@@ -187,7 +185,6 @@ pub trait IsqModel {
     /// Corresponds to `IsqOrganization::MoeExpertsOnly`
     /// This is used for imatrix generation internally. Begin stats tracking.
     fn begin_track_stats_moe_experts_only(&mut self) -> anyhow::Result<()> {
-        // TODO: make this required.
         let layers = self
             .get_layers()
             .0
@@ -205,7 +202,6 @@ pub trait IsqModel {
     fn extract_imatrix_data_moe_experts_only(
         &mut self,
     ) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
-        // TODO: make this required.
         let layers = self
             .get_layers()
             .0
@@ -278,7 +274,7 @@ pub trait IsqModel {
                     info!(
                         "Quantizing with imatrix file `{}`, {} imatrix weights",
                         imatrix.display(),
-                        layer_to_weight.len()
+                        layer_to_weight.iter().filter(|(_, x)| x.is_some()).count()
                     );
                     Some(layer_to_weight)
                 }
@@ -291,7 +287,7 @@ pub trait IsqModel {
                     };
                     info!(
                         "Quantizing with collected imatrix data, {} imatrix weights",
-                        data.len()
+                        data.iter().filter(|(_, x)| x.is_some()).count()
                     );
                     Some(data)
                 }

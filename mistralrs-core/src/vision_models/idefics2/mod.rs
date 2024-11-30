@@ -1269,6 +1269,9 @@ impl VisionModel for Idefics2 {
     fn cache(&self) -> &EitherCache {
         self.text_model.cache()
     }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        self.text_model.cache_mut()
+    }
     fn device(&self) -> &Device {
         self.text_model.device()
     }
@@ -1280,5 +1283,9 @@ impl VisionModel for Idefics2 {
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.text_model.config()
+    }
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
+        let args: Option<Tensor> = None;
+        Box::new(args)
     }
 }

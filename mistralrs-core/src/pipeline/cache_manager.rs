@@ -511,7 +511,7 @@ impl Cache {
             }
         };
         *cache = Some((k.clone(), v.clone()));
-        Ok((k, v))
+        Ok((k.contiguous()?, v.contiguous()?))
     }
 
     /// Update the KV cache and return (k,v,attn_mask)
@@ -567,7 +567,7 @@ impl Cache {
             }
         };
         *cache = Some((k.clone(), v.clone()));
-        Ok((k, v, attention_mask))
+        Ok((k.contiguous()?, v.contiguous()?, attention_mask))
     }
 }
 
