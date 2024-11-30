@@ -127,7 +127,7 @@ mod tests {
         let b = x;
 
         // FP8 quantized matmul
-        let _res = handle.batch_matmul(
+        let _res = handle.batch_matmul_f8(
             &a,
             &b,
             &dequant_a_scale,

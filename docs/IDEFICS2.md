@@ -27,7 +27,7 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 ---
 
 **Image:**
-<img src="https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg" width = "1000" height = "666">
+<img src="https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg" width = "1000" height = "666">
 
 **Prompt:**
 ```
@@ -53,7 +53,9 @@ cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m Hugg
 2) Send a request
 
 ```py
-import openai
+from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
     model="idefics2",
@@ -64,7 +66,7 @@ completion = client.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg"
+                        "url": "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg"
                     },
                 },
                 {
@@ -109,7 +111,7 @@ async fn main() -> Result<()> {
     .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+        "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),
@@ -162,7 +164,7 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg"
+                            "url": "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg"
                         },
                     },
                     {

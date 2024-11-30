@@ -36,6 +36,7 @@ pub trait InputsProcessor {
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
@@ -119,12 +120,13 @@ pub mod text_models_inputs_processor {
 
     // chunk_offset_toks is the number of tokens by which the tokens are offset,
     // chunk_offset_toks / prompt_batchsize = number of batches
-    fn make_prompt_chunk<T: WithDType + Debug>(
+    pub fn make_prompt_chunk<T: WithDType + Debug>(
         chunk_offset_toks: usize,
         toks: Vec<Vec<T>>,
-        input_seqs: &[&Sequence],
+        seq_ids: &[usize],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
     ) -> Result<InputMetadata> {
         let max_len = toks
@@ -143,17 +145,26 @@ pub mod text_models_inputs_processor {
         let mut paged_attn_context_lens = Vec::new();
         let mut seqlens_q = vec![0];
         let mut seqlens_k = vec![0];
-        for (seq, mut ctxt) in input_seqs.iter().zip(toks) {
+        for (seq_id, mut ctxt) in seq_ids.iter().zip(toks) {
             let prompt_len = ctxt.len();
             let offset = last_n_context_len.unwrap_or_default();
             seqlen_offsets.push(offset.1 + chunk_offset_toks);
 
             position_ids.push(ctxt.len() + chunk_offset_toks);
             ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
-            context_lens.push((
-                ctxt.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
-                last_n_context_len.map(|(a, _)| a).unwrap_or(1),
-            ));
+            // If we are returning raw logits, we want to not trim the logits at all.
+            if return_raw_logits {
+                if last_n_context_len.is_some() {
+                    anyhow::bail!("`return_raw_logits` is incompatible with `last_n_context_len`");
+                }
+
+                context_lens.push((0, ctxt.len()));
+            } else {
+                context_lens.push((
+                    ctxt.len() - last_n_context_len.map(|(a, _)| a).unwrap_or(1),
+                    last_n_context_len.map(|(a, _)| a).unwrap_or(1),
+                ));
+            }
 
             seqlens_q.push(ctxt.len() as u32);
             seqlens_k.push((ctxt.len() + chunk_offset_toks) as u32);
@@ -161,7 +172,7 @@ pub mod text_models_inputs_processor {
             seqs_tensors.push(Tensor::new(ctxt, device).unwrap().unsqueeze(0).unwrap());
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
-                let table = paged_attn_metadata.block_engine.block_tables.get(seq.id());
+                let table = paged_attn_metadata.block_engine.block_tables.get(seq_id);
 
                 if table.is_none() {
                     // Will be None during profiling.
@@ -466,6 +477,7 @@ pub mod text_models_inputs_processor {
         input_seqs: &[&mut Sequence],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
     ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
@@ -498,9 +510,13 @@ pub mod text_models_inputs_processor {
                     make_prompt_chunk(
                         i * prompt_batchsize,
                         toks,
-                        &seq_ns.iter().map(|i| &*input_seqs[*i]).collect::<Vec<_>>(),
+                        &seq_ns
+                            .iter()
+                            .map(|i| *input_seqs[*i].id())
+                            .collect::<Vec<_>>(),
                         device,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_deref_mut(),
                     )
                     .map(|inputs| InnerInputProcessorOutput {
@@ -521,9 +537,10 @@ pub mod text_models_inputs_processor {
                 make_prompt_chunk(
                     0,
                     toks,
-                    &input_seqs.iter().map(|s| &**s).collect::<Vec<_>>(),
+                    &input_seqs.iter().map(|s| *s.id()).collect::<Vec<_>>(),
                     device,
                     last_n_context_len,
+                    return_raw_logits,
                     paged_attn_metadata,
                 )
                 .map(|inputs| InnerInputProcessorOutput {
@@ -534,12 +551,14 @@ pub mod text_models_inputs_processor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_completion_input<T: WithDType + std::fmt::Debug>(
         toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
         paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
     ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
@@ -549,6 +568,7 @@ pub mod text_models_inputs_processor {
                 input_seqs,
                 device,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata,
                 prompt_batchsize,
             );
@@ -591,6 +611,7 @@ pub mod text_models_inputs_processor {
             device: &Device,
             no_kv_cache: bool,
             last_n_context_len: Option<(usize, usize)>,
+            return_raw_logits: bool,
             _: Option<Arc<dyn Any>>,
             mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
             prompt_batchsize: Option<NonZeroUsize>,
@@ -605,6 +626,7 @@ pub mod text_models_inputs_processor {
                         input_seqs,
                         device,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
                     )
@@ -617,6 +639,7 @@ pub mod text_models_inputs_processor {
                         device,
                         no_kv_cache,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
                     ))
@@ -676,6 +699,7 @@ pub mod text_models_inputs_processor {
                         input_seqs,
                         device,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
                     )
@@ -722,6 +746,7 @@ pub mod text_models_inputs_processor {
                         input_seqs,
                         device,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
                     )
@@ -769,6 +794,7 @@ pub mod text_models_inputs_processor {
                         device,
                         no_kv_cache,
                         last_n_context_len,
+                        return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
                     )

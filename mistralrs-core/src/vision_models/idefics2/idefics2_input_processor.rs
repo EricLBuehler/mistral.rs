@@ -22,29 +22,37 @@ use crate::{
     MessageContent, Pipeline, Tool,
 };
 
-use super::{
+use crate::vision_models::{
     image_processor::{ImagePreProcessor, PreprocessedImages},
     preprocessor_config::{PreProcessorConfig, ToFilter},
     processor_config::ProcessorConfig,
 };
 
 // Input processor
-pub struct Idefics2ImageProcessor;
+pub struct Idefics2ImageProcessor {
+    max_edge: Option<u32>,
+}
 // Processor
 pub struct Idefics2Processor {
     config: ProcessorConfig,
     preprocessor_config: PreProcessorConfig,
     fake_image_token: &'static str,
     image_token: &'static str,
+    max_edge: Option<u32>,
 }
 
 impl Idefics2Processor {
-    pub fn new(config: ProcessorConfig, preprocessor_config: PreProcessorConfig) -> Self {
+    pub fn new(
+        config: ProcessorConfig,
+        preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
+    ) -> Self {
         Self {
             config,
             preprocessor_config,
             fake_image_token: "<fake_token_around_image>",
             image_token: "<image>",
+            max_edge,
         }
     }
 }
@@ -55,6 +63,7 @@ impl Processor for Idefics2Processor {
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
+        add_special_tokens: bool,
         tools: Vec<Tool>,
     ) -> anyhow::Result<(Vec<u32>, String)> {
         let mut prompt = apply_chat_template(
@@ -95,13 +104,15 @@ impl Processor for Idefics2Processor {
             anyhow::bail!("Idefics2InputProcessor requires a specified tokenizer.",);
         };
         let encoding = tokenizer
-            .encode(prompt.clone(), true)
+            .encode(prompt.clone(), add_special_tokens)
             .map_err(anyhow::Error::msg)?;
         Ok((encoding.get_ids().to_vec(), prompt))
     }
 
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
-        Arc::new(Idefics2ImageProcessor)
+        Arc::new(Idefics2ImageProcessor {
+            max_edge: self.max_edge,
+        })
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
@@ -126,6 +137,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
@@ -166,6 +178,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 input_seqs,
                 device,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
             )
@@ -182,6 +195,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 device,
                 no_kv_cache,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
             )
@@ -208,10 +222,15 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     aspect_ratio_ids: _,
                     aspect_ratio_mask: _,
                     num_tiles: _,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
+                    rows: _,
+                    cols: _,
                 } = self
                     .preprocess(
                         seq.take_images()
                             .expect("Need to have images by this point."),
+                        vec![],
                         config,
                         device,
                         (usize::MAX, usize::MAX), // Don't use it here...
@@ -256,10 +275,13 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
     fn preprocess(
         &self,
         mut images: Vec<DynamicImage>,
+        videos: Vec<Vec<DynamicImage>>,
         config: &PreProcessorConfig,
         device: &Device,
         (_bs, _max_num_images): (usize, usize),
     ) -> Result<PreprocessedImages> {
+        assert!(videos.is_empty());
+
         let mut patch_masks = Vec::new();
         let mut pixel_values = Vec::new();
 
@@ -301,6 +323,10 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
 
                 *image = image.resize_exact(w as u32, h as u32, config.resampling.to_filter()?);
             }
+        }
+
+        if let Some(max_edge) = self.max_edge {
+            images = mistralrs_vision::pad_to_max_edge(&images, max_edge);
         }
 
         let mut max_h = 0;
@@ -364,6 +390,10 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             aspect_ratio_ids: None,
             aspect_ratio_mask: None,
             num_tiles: None,
+            image_grid_thw: None,
+            video_grid_thw: None,
+            rows: None,
+            cols: None,
         })
     }
 }

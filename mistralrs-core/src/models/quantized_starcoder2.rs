@@ -10,7 +10,7 @@ use crate::layers::{CausalMasker, MatMul, QLinear, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::Cache;
+use crate::pipeline::{EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
@@ -68,7 +68,7 @@ impl LayerWeights {
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, hidden_size) = x.dims3()?;
@@ -124,7 +124,7 @@ impl LayerWeights {
                 )?
             }
             None => {
-                let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+                let (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
             }
@@ -147,7 +147,7 @@ pub struct ModelWeights {
     output: QMatMul,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
     pub device: Device,
-    pub cache: Cache,
+    pub cache: EitherCache,
     pub max_seq_len: usize,
 }
 
@@ -352,7 +352,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             output,
             mapper: Some(mapper),
             device: device.clone(),
-            cache: Cache::new(block_count, false),
+            cache: EitherCache::Normal(NormalCache::new(block_count, context_window)),
             max_seq_len: context_window,
         })
     }
@@ -368,13 +368,13 @@ impl ModelWeights {
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = input_ids.dims2()?;
         let mut xs = self.tok_embeddings.forward(input_ids)?;
-        let mut cache = self.cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let cache = &mut self.cache.normal().0;
+        let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
+                .unwrap_or(cache as &dyn PastKvLenCache),
             DType::F32,
             self.layers[0].n_head,
         )?;

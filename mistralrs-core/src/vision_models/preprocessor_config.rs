@@ -18,11 +18,17 @@ pub struct PreProcessorConfig {
     pub(crate) image_std: Option<[f64; 3]>,
     pub(crate) rescale_factor: Option<f64>,
     pub(crate) resampling: Option<usize>,
+    pub(crate) max_image_size: Option<HashMap<String, u32>>,
     pub(crate) size: Option<HashMap<String, u32>>,
     pub(crate) crop_size: Option<HashMap<String, u32>>,
     pub(crate) num_img_tokens: Option<usize>,
     pub(crate) num_crops: Option<usize>,
     pub(crate) max_image_tiles: Option<usize>,
+    pub(crate) min_pixels: Option<usize>,
+    pub(crate) max_pixels: Option<usize>,
+    pub(crate) patch_size: Option<usize>,
+    pub(crate) merge_size: Option<usize>,
+    pub(crate) temporal_patch_size: Option<usize>,
 }
 
 #[allow(dead_code)]

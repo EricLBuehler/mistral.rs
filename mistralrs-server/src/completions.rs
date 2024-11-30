@@ -75,6 +75,7 @@ impl futures::Stream for Streamer {
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::Chunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Raw { .. } => unreachable!(),
             },
             Err(_) => Poll::Pending,
         }
@@ -210,6 +211,7 @@ fn parse_request(
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
             logits_processors: None,
+            return_raw_logits: false,
         }),
         is_streaming,
     ))
@@ -298,6 +300,7 @@ pub async fn completions(
             Response::Done(_) => unreachable!(),
             Response::ModelError(_, _) => unreachable!(),
             Response::ImageGeneration(_) => unreachable!(),
+            Response::Raw { .. } => unreachable!(),
         }
     }
 }

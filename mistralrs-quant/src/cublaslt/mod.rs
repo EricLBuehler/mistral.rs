@@ -13,7 +13,7 @@ mod api;
 mod matmul;
 
 #[cfg(feature = "cuda")]
-pub use api::{fused_batch_matmul_f8, CublasLt};
+pub use api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};
 
 pub enum F8MatmulOutType {
     F8,
@@ -49,6 +49,7 @@ pub fn maybe_init_cublas_lt_wrapper() {
                         _ => None,
                     });
             }
+            #[allow(static_mut_refs)]
             let cublaslt: Option<&'static CublasLtWrapper> = CUBLASLT.as_ref();
             *CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
         });
@@ -80,7 +81,7 @@ impl CublasLtWrapper {
     ///
     /// The resulting tensor is of shape NxM
     #[allow(clippy::too_many_arguments)]
-    pub fn batch_matmul(
+    pub fn batch_matmul_f8(
         &self,
         a: &Tensor,
         b: &Tensor,
@@ -113,6 +114,60 @@ impl CublasLtWrapper {
                 bias,
                 inner_act,
                 out_dtype,
+                self.cublaslt.clone(),
+            )?;
+
+            if Some(CandleActivation::Swiglu) == act {
+                result = candle_nn::ops::swiglu(&result)?;
+            }
+            Ok(result)
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            candle_core::bail!("`cuda` feature is not enabled")
+        }
+    }
+
+    /// Fused batch matmul + add + Relu/Gelu activation using CublasLt.
+    ///
+    /// # Arguments
+    ///
+    /// * `a` - Input tensor of size BxMxK
+    /// * `b` - Input tensor of size BxNxK
+    /// * `out` - Optional Output tensor of size BxNxK.
+    ///           If set and beta != 0, will be added to the end result of A*B before `act`
+    /// * `alpha` - Optional scaling factor for A*B
+    /// * `beta` - Optional scaling factor for C
+    /// * `bias` - Optional bias tensor of size M
+    /// * `act` - Optional Gelu or Relu activation. If set, will be added to the end result
+    ///
+    /// The resulting tensor is of shape NxM
+    #[allow(clippy::too_many_arguments)]
+    pub fn batch_matmul(
+        &self,
+        a: &Tensor,
+        b: &Tensor,
+        out: Option<&Tensor>,
+        alpha: Option<f32>,
+        beta: Option<f32>,
+        bias: Option<&Tensor>,
+        act: Option<CandleActivation>,
+    ) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        {
+            let inner_act = act.map(|a| match a {
+                CandleActivation::Relu => matmul::Activation::Relu,
+                CandleActivation::Gelu => matmul::Activation::Gelu,
+                _ => unreachable!("Unsupported activation in cublaslt matmul"),
+            });
+            let mut result = fused_batch_matmul(
+                a,
+                b,
+                out,
+                alpha,
+                beta,
+                bias,
+                inner_act,
                 self.cublaslt.clone(),
             )?;
 

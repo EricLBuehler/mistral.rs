@@ -83,6 +83,7 @@ impl InputsProcessor for LLaVAInputProcessor {
         device: &Device,
         no_kv_cache: bool,
         last_n_context_len: Option<(usize, usize)>,
+        return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
@@ -131,8 +132,18 @@ impl InputsProcessor for LLaVAInputProcessor {
                     aspect_ratio_ids: _,
                     aspect_ratio_mask: _,
                     num_tiles: _,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
+                    rows: _,
+                    cols: _,
                 } = self
-                    .preprocess(imgs.clone(), config, device, (usize::MAX, usize::MAX))
+                    .preprocess(
+                        imgs.clone(),
+                        vec![],
+                        config,
+                        device,
+                        (usize::MAX, usize::MAX),
+                    )
                     .expect("Preprocessor failed");
                 pixel_values_accum.push(pixel_values);
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
@@ -152,6 +163,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                         device,
                         no_kv_cache,
                         last_n_context_len,
+                        return_raw_logits,
                         other_config,
                         paged_attn_metadata,
                         None, // TODO
@@ -268,6 +280,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                 input_seqs,
                 device,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
             )
@@ -278,6 +291,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                 device,
                 no_kv_cache,
                 last_n_context_len,
+                return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
             )
@@ -324,6 +338,7 @@ impl ImagePreProcessor for LLaVAInputProcessor {
     fn preprocess(
         &self,
         images: Vec<image::DynamicImage>,
+        videos: Vec<Vec<image::DynamicImage>>,
         config: &preprocessor_config::PreProcessorConfig,
         device: &candle_core::Device,
         (_, _): (usize, usize),
@@ -331,6 +346,7 @@ impl ImagePreProcessor for LLaVAInputProcessor {
         if images.len() > 1 {
             candle_core::bail!("Can only process one image per batch"); // This is no different from phi3_input_processor
         };
+        assert!(videos.is_empty());
         let resized_size = *config.size.as_ref().unwrap().get("shortest_edge").unwrap() as usize;
 
         let original_size = images[0].dimensions();
@@ -374,6 +390,10 @@ impl ImagePreProcessor for LLaVAInputProcessor {
             aspect_ratio_ids: None,
             aspect_ratio_mask: None,
             num_tiles: None,
+            image_grid_thw: None,
+            video_grid_thw: None,
+            rows: None,
+            cols: None,
         })
     }
 }

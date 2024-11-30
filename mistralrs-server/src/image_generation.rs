@@ -82,6 +82,7 @@ fn parse_request(
         tool_choice: None,
         tools: None,
         logits_processors: None,
+        return_raw_logits: false,
     }))
 }
 
@@ -144,5 +145,6 @@ pub async fn image_generation(
         Response::Chunk(_) => unreachable!(),
         Response::Done(_) => unreachable!(),
         Response::ModelError(_, _) => unreachable!(),
+        Response::Raw { .. } => unreachable!(),
     }
 }

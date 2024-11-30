@@ -20,13 +20,14 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        IsqModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(bool, word_emb_default, false);
+serde_default_fn!(bool, use_flash_attn_default, false);
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Config {
@@ -36,6 +37,7 @@ pub struct Config {
     pub num_hidden_layers: usize,
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
+    #[serde(default = "use_flash_attn_default")]
     pub use_flash_attn: bool,
     pub rms_norm_eps: f64,
     pub rope_theta: f32,
@@ -68,8 +70,7 @@ impl CausalSelfAttention {
         attention_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        block_idx: usize,
-        kv_cache: &mut crate::pipeline::LayerCaches,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -122,9 +123,8 @@ impl CausalSelfAttention {
         }
 
         let mut y = match &self.paged_attn {
-            Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
                     &k,
                     &v,
@@ -133,11 +133,28 @@ impl CausalSelfAttention {
                     Some(value_cache),
                     input_metadata,
                     None,
-                )?
-            }
+                )?,
+                None => {
+                    let mut input_metadata = PagedAttentionInputMetadata {
+                        block_tables: None,
+                        context_lens: None,
+                        max_context_len: None,
+                        slot_mappings: Tensor::new(&[0f32], q.device())?,
+                    };
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        attention_mask.clone().as_ref(),
+                        None,
+                        None,
+                        &mut input_metadata,
+                        None,
+                    )?
+                }
+            },
             None => {
-                let (k, v) =
-                    crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
+                let (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(
                     &q,
@@ -331,8 +348,7 @@ impl Block {
         attention_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        block_idx: usize,
-        kv_cache: &mut crate::pipeline::LayerCaches,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -343,7 +359,6 @@ impl Block {
             attention_mask,
             seqlen_offsets,
             start_offsets_kernel,
-            block_idx,
             kv_cache,
             metadata,
             flash_params,
@@ -393,60 +408,36 @@ pub struct Llama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
-    kv_cache: crate::pipeline::Cache,
+    kv_cache: crate::pipeline::EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
 }
 
 impl Llama {
-    pub fn forward(
-        &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        context_lens: Vec<(usize, usize)>,
-        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
-        let mut x = self.wte.forward(input_ids)?;
-        let mut cache = self.kv_cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(
-            input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
-            x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
-        )?;
-        for (block_idx, block) in self.blocks.iter().enumerate() {
-            x = self.mapper.map(x, block_idx)?;
-            x = block.forward(
-                &x,
-                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
-                seqlen_offsets,
-                start_offsets_kernel.clone(),
-                block_idx,
-                &mut cache,
-                metadata
-                    .as_mut()
-                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
-                flash_params,
-            )?;
-        }
-        let x = x.to_device(&self.device)?;
-        let mut x = self.ln_f.forward(&x)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
-        extract_logits(&xs, context_lens)
-    }
-
     pub fn new(
         cfg: &Config,
         vb: VarBuilder,
+        is_gptx: bool,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Self> {
+        let vb_m = vb.pp("model");
+        let vb_lm_head = vb.pp("lm_head");
+        Self::new_inner(
+            cfg,
+            vb_m,
+            vb_lm_head,
+            is_gptx,
+            normal_loading_metadata,
+            attention_mechanism,
+        )
+    }
+
+    pub fn new_inner(
+        cfg: &Config,
+        vb_m: VarBuilder,
+        vb_lm_head: VarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -463,14 +454,14 @@ impl Llama {
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
             mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &None,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
@@ -483,7 +474,7 @@ impl Llama {
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            mapper.set_nm_device(vb.pp("model.norm"), false),
+            mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut ropes = HashMap::new();
@@ -494,7 +485,7 @@ impl Llama {
             ropes.insert(
                 device.location(),
                 Arc::new(Llama3RotaryEmbedding::new_llama3(
-                    vb.dtype(),
+                    vb_m.dtype(),
                     cfg,
                     device,
                     is_gptx,
@@ -528,7 +519,7 @@ impl Llama {
                         ),
                     };
                     Block::load(
-                        vb.pp(format!("model.layers.{i}")),
+                        vb_m.pp(format!("layers.{i}")),
                         cfg,
                         &*mapper,
                         i,
@@ -545,7 +536,10 @@ impl Llama {
             blocks,
             ln_f,
             lm_head,
-            kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
+            kv_cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             device: normal_loading_metadata.real_device,
             mapper,
             cfg: ModelConfigMetadata {
@@ -557,6 +551,75 @@ impl Llama {
                 head_dim: None,
             },
         })
+    }
+
+    pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.wte.forward(input_ids)
+    }
+
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        self.forward_embeds(
+            input_ids,
+            self.wte.forward(input_ids)?,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+            metadata,
+            flash_params,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_embeds(
+        &self,
+        input_ids: &Tensor,
+        input_embeds: Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        let mut x = input_embeds;
+        let cache = &mut self.kv_cache.normal().0;
+        let mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache),
+            x.dtype(),
+            self.blocks[0].attn.num_attention_heads,
+        )?;
+        for (block_idx, block) in self.blocks.iter().enumerate() {
+            x = self.mapper.map(x, block_idx)?;
+            x = block.forward(
+                &x,
+                &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                seqlen_offsets,
+                start_offsets_kernel.clone(),
+                &mut cache[block_idx],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
+                flash_params,
+            )?;
+        }
+        let x = x.to_device(&self.device)?;
+        let mut x = self.ln_f.forward(&x)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            x = x.to_dtype(t)?;
+        }
+        let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
+        extract_logits(&xs, context_lens)
     }
 }
 
@@ -601,6 +664,23 @@ impl IsqModel for Llama {
 
         uvb.to_safetensors()
     }
+
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        // NOTE: dependant on the exact implementation in get_layers!
+        let mut names = Vec::new();
+        // lm_head
+        names.push(None);
+        for i in 0..self.blocks.len() {
+            names.push(Some(format!("blk.{i}.attn_q.weight")));
+            names.push(Some(format!("blk.{i}.attn_k.weight")));
+            names.push(Some(format!("blk.{i}.attn_v.weight")));
+            names.push(Some(format!("blk.{i}.attn_output.weight")));
+            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
+            names.push(Some(format!("blk.{i}.ffn_up.weight")));
+            names.push(Some(format!("blk.{i}.ffn_down.weight")));
+        }
+        Ok(names)
+    }
 }
 
 impl NormalModel for Llama {
@@ -640,8 +720,11 @@ impl NormalModel for Llama {
     ) -> Result<Tensor> {
         unimplemented!()
     }
-    fn cache(&self) -> &crate::pipeline::Cache {
+    fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
+    }
+    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
+        &mut self.kv_cache
     }
     fn device(&self) -> &Device {
         &self.device

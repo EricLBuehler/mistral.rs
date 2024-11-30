@@ -21,25 +21,14 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers_masker::masked_fill,
+    ops::RepeatInterleaveOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
-
-fn repeat_interleave(xs: &Tensor, repeats: usize, dim: usize) -> Result<Tensor> {
-    // For metal
-    assert!(xs.dtype().is_float());
-    let indices = Tensor::new(
-        (0..xs.dim(dim)?)
-            .flat_map(|i| vec![i as u32; repeats])
-            .collect::<Vec<_>>(),
-        xs.device(),
-    )?;
-    xs.index_select(&indices, dim)
-}
 
 // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L99
 fn prepare_cross_attention_mask(
@@ -49,11 +38,9 @@ fn prepare_cross_attention_mask(
 ) -> Result<(Tensor, Tensor)> {
     let bs = cross_attention_mask.dim(0)?;
     let text_total_length = cross_attention_mask.dim(1)?;
-    let mut cross_attn_mask = repeat_interleave(
-        &cross_attention_mask.to_dtype(DType::F32)?,
-        num_vision_tokens,
-        3,
-    )?;
+    let mut cross_attn_mask = cross_attention_mask
+        .to_dtype(DType::F32)?
+        .repeat_interleave(num_vision_tokens, 3)?;
     cross_attn_mask = cross_attn_mask.reshape((bs, text_total_length, ()))?;
     cross_attn_mask = cross_attn_mask.unsqueeze(1)?;
 
@@ -109,9 +96,8 @@ impl MLlamaModel {
         Ok(Self {
             vision_model: MLlamaVisionModel::new(
                 &cfg.vision_config,
-                vb.pp("vision_model")
-                    .set_device(real_dev.clone())
-                    .set_dtype(vision_model_dtype),
+                vb.pp("vision_model").set_dtype(vision_model_dtype),
+                &real_dev,
             )?,
             language_model: MLlamaTextModel::new(
                 &cfg.text_config,
@@ -195,7 +181,7 @@ pub(crate) struct MLlamaSpecificArgs {
 }
 
 impl VisionModel for MLlamaModel {
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         &self.language_model.cache
     }
     fn config(&self) -> &ModelConfigMetadata {
@@ -249,7 +235,14 @@ impl IsqModel for MLlamaModel {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        self.language_model.get_layers()
+        let (mut layers, mapper) = self.language_model.get_layers();
+        layers.extend(
+            self.vision_model
+                .get_isq_layers()
+                .into_iter()
+                .map(|layer| (layer, None)),
+        );
+        (layers, mapper)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
@@ -267,29 +260,3 @@ impl IsqModel for MLlamaModel {
 }
 
 impl AnyMoeBaseModelMixin for MLlamaModel {}
-
-#[cfg(test)]
-mod tests {
-    use candle_core::{Device, Result, Tensor};
-
-    use super::repeat_interleave;
-
-    #[test]
-    fn test_repeat_interleave() -> Result<()> {
-        let input = Tensor::new(
-            vec![vec![vec![1f32, 2., 3.], vec![4f32, 5., 6.]]],
-            &Device::Cpu,
-        )?;
-
-        let repeat_interleaved = repeat_interleave(&input, 2, 2)?;
-        assert_eq!(
-            repeat_interleaved.to_vec3::<f32>()?,
-            vec![vec![
-                vec![1., 1., 2., 2., 3., 3.],
-                vec![4., 4., 5., 5., 6., 6.]
-            ]]
-        );
-
-        Ok(())
-    }
-}

@@ -5,11 +5,13 @@ extend-ignore-identifiers-re = [
     "arange",
     "Nd",
     "nin",
-    "cudaDevAttrMaxSharedMemoryPerBlockOptin"
+    "cudaDevAttrMaxSharedMemoryPerBlockOptin",
+    "_thw"
 ]
 
 [files]
 extend-exclude = [
     "mistralrs-pyo3/pdoc/*",
-    "examples/server/phi3_duckduckgo_mistral.rs.ipynb"
+    "examples/server/phi3_duckduckgo_mistral.rs.ipynb",
+    "calibration_data/*"
 ]

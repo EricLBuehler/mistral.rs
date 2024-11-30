@@ -1,5 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+pub(crate) mod idefics2_input_processor;
+
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     conv2d, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
@@ -16,7 +18,7 @@ use crate::{
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
+        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -1134,7 +1136,7 @@ impl Idefics2 {
 
             let patch_attention_mask = patches_subgrid
                 .sum((D::Minus1, D::Minus2))?
-                .gt(0.0)?
+                .eq((patch_size * patch_size) as f64)?
                 .to_dtype(DType::U8)?;
 
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
@@ -1150,7 +1152,7 @@ impl Idefics2 {
                 &patch_attention_mask.reshape((pixel_values.dim(0)?, ()))?,
             )?;
 
-            if CausalMasker.calculate_past_kv_len(&self.text_model.cache.lock())? == 0 {
+            if CausalMasker.calculate_past_kv_len(&self.text_model.cache.full().lock())? == 0 {
                 self.inputs_merger(
                     input_ids,
                     &self.text_model.get_input_embeddings(input_ids)?,
@@ -1264,7 +1266,7 @@ impl VisionModel for Idefics2 {
             flash_params,
         )
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         self.text_model.cache()
     }
     fn device(&self) -> &Device {

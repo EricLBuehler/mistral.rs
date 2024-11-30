@@ -9,6 +9,7 @@ pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
+use std::time::Instant;
 use std::{
     cell::RefCell,
     error::Error,
@@ -22,6 +23,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::mpsc::{channel, Sender};
+use tracing::info;
+use tracing::warn;
 
 mod cuda;
 mod device_map;
@@ -78,11 +81,11 @@ pub use pipeline::{
     MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
     NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
     SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource, VisionLoader,
-    VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
+    VisionLoaderBuilder, VisionLoaderType, VisionPromptPrefixer, VisionSpecificConfig,
 };
 pub use request::{
-    Constraint, ImageGenerationResponseFormat, MessageContent, NormalRequest, Request,
-    RequestMessage,
+    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, MessageContent,
+    NormalRequest, Request, RequestMessage, TokenizationRequest,
 };
 pub use response::*;
 pub use sampler::{
@@ -108,6 +111,7 @@ static ENGINE_ID: AtomicUsize = AtomicUsize::new(0);
 pub struct MistralRsConfig {
     pub kind: ModelKind,
     pub device: Device,
+    pub category: ModelCategory,
 }
 
 /// The MistralRs struct handles sending requests to the engine.
@@ -297,7 +301,7 @@ impl MistralRs {
         let category = pipeline.try_lock().unwrap().category();
         let model_supports_reduced_gemm = match category {
             ModelCategory::Text => true,
-            ModelCategory::Vision { has_conv2d } => !has_conv2d,
+            ModelCategory::Vision { has_conv2d, .. } => !has_conv2d,
             ModelCategory::Diffusion => true,
         };
         if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
@@ -330,7 +334,11 @@ impl MistralRs {
 
         let kind = pipeline.try_lock().unwrap().get_metadata().kind.clone();
         let device = pipeline.try_lock().unwrap().device();
-        let config = MistralRsConfig { kind, device };
+        let config = MistralRsConfig {
+            kind,
+            device,
+            category: category.clone(),
+        };
 
         let engine_handler = thread::spawn(move || {
             let rt = Runtime::new().unwrap();
@@ -351,6 +359,49 @@ impl MistralRs {
         });
 
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
+
+        // Do a dummy run
+        if matches!(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
+            let clone_sender = sender.read().unwrap().clone();
+            tokio::task::block_in_place(|| {
+                let (tx, mut rx) = channel(1);
+                let req = Request::Normal(NormalRequest {
+                    id: 0,
+                    messages: RequestMessage::Completion {
+                        text: "dummy".to_string(),
+                        echo_prompt: false,
+                        best_of: 1,
+                    },
+                    sampling_params: SamplingParams {
+                        max_len: Some(1),
+                        ..SamplingParams::deterministic()
+                    },
+                    response: tx,
+                    return_logprobs: false,
+                    is_streaming: true,
+                    constraint: Constraint::None,
+                    suffix: None,
+                    adapters: None,
+                    tool_choice: None,
+                    tools: None,
+                    logits_processors: None,
+                    return_raw_logits: false,
+                });
+                info!("Beginning dummy run.");
+                let start = Instant::now();
+                clone_sender.blocking_send(req).unwrap();
+
+                if let Some(_resp) = rx.blocking_recv() {
+                    let end = Instant::now();
+                    info!(
+                        "Dummy run completed in {}s.",
+                        end.duration_since(start).as_secs_f64()
+                    );
+                } else {
+                    warn!("Dummy run failed!");
+                }
+            });
+        }
 
         Arc::new(Self {
             engine_id,
@@ -442,7 +493,7 @@ impl MistralRs {
     }
 
     pub fn get_model_category(&self) -> ModelCategory {
-        self.category
+        self.category.clone()
     }
 
     pub fn next_request_id(&self) -> usize {

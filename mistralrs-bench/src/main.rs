@@ -2,11 +2,11 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, Loader, LoaderBuilder,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelDType, ModelSelected, NormalRequest,
-    PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams, SchedulerConfig,
-    TokenSource, Usage,
+    get_model_dtype, initialize_logging, paged_attn_supported, parse_isq_value, Constraint,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, IsqType,
+    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
+    NormalRequest, PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams,
+    SchedulerConfig, TokenSource, Usage,
 };
 use std::sync::Arc;
 use std::{fmt::Display, num::NonZeroUsize};
@@ -83,6 +83,7 @@ fn run_bench(
         tools: None,
         tool_choice: None,
         logits_processors: None,
+        return_raw_logits: false,
     });
 
     let mut usages = Vec::new();
@@ -115,6 +116,7 @@ fn run_bench(
                     }
                     Response::CompletionChunk(_) => unreachable!(),
                     Response::ImageGeneration(_) => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
                 },
                 None => unreachable!("Expected a Done response, got None",),
             }
@@ -252,6 +254,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         tools: None,
         tool_choice: None,
         logits_processors: None,
+        return_raw_logits: false,
     });
 
     sender
@@ -293,6 +296,10 @@ struct Args {
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
+
+    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    #[arg(long = "isq", value_parser = parse_isq_value)]
+    in_situ_quant: Option<IsqType>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs. If this is not set and the device is CUDA, it will default to
     /// using `pa-gpu-mem-usage` set to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
@@ -343,6 +350,8 @@ fn main() -> anyhow::Result<()> {
         Some(x) => Some(NonZeroUsize::new(x).unwrap()),
         None => None,
     };
+
+    let dtype = get_model_dtype(&args.model)?;
 
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
@@ -473,11 +482,11 @@ fn main() -> anyhow::Result<()> {
     let pipeline = loader.load_model_from_hf(
         None,
         token_source,
-        &ModelDType::Auto,
+        &dtype,
         &device,
         false,
         mapper,
-        None,
+        args.in_situ_quant,
         cache_config,
     )?;
     info!("Model loaded.");

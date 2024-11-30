@@ -1,18 +1,16 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::ops::Mul;
+use std::{ops::Mul, sync::Arc};
 
-use candle_core::{DType, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{
-    conv2d_no_bias, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
-    LayerNorm, LayerNormConfig, Linear, Module, VarBuilder,
+    conv2d_no_bias, embedding, layer_norm, Conv2d, Conv2dConfig, Embedding, LayerNorm,
+    LayerNormConfig, Module, VarBuilder,
 };
+use mistralrs_quant::QuantMethod;
 
 use crate::{
-    attention::SdpaParams,
-    layers::{FusedBiasLinear, Sdpa},
-    pipeline::IsqModel,
-    utils::unvarbuilder::UnVarBuilder,
+    attention::SdpaParams, layers::Sdpa, pipeline::IsqModel, utils::unvarbuilder::UnVarBuilder,
 };
 
 use super::{MLlamaVisionConfig, VisionActivation};
@@ -128,10 +126,10 @@ impl MLlamaPrecomputedAspectRatioEmbedding {
 }
 
 struct MLlamaVisionAttention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     sdpa_params: SdpaParams,
     num_heads: usize,
     head_dim: usize,
@@ -141,24 +139,28 @@ impl MLlamaVisionAttention {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         Ok(Self {
-            q_proj: linear_no_bias(
+            q_proj: mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
+                &None,
                 vb.pp("q_proj"),
             )?,
-            k_proj: linear_no_bias(
+            k_proj: mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
+                &None,
                 vb.pp("k_proj"),
             )?,
-            v_proj: linear_no_bias(
+            v_proj: mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
+                &None,
                 vb.pp("v_proj"),
             )?,
-            o_proj: linear_no_bias(
+            o_proj: mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
+                &None,
                 vb.pp("o_proj"),
             )?,
             sdpa_params: SdpaParams {
@@ -175,9 +177,19 @@ impl MLlamaVisionAttention {
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L243
     fn forward(&self, hidden_state: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
-        let mut q = self.q_proj.forward(hidden_state)?;
-        let mut k = self.k_proj.forward(hidden_state)?;
-        let mut v = self.v_proj.forward(hidden_state)?;
+        let mut hidden_state = hidden_state.clone();
+        let original_dtype = hidden_state.dtype();
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            hidden_state = hidden_state.to_dtype(t)?;
+        }
+        let mut q = self.q_proj.forward(&hidden_state)?;
+        let mut k = self.k_proj.forward(&hidden_state)?;
+        let mut v = self.v_proj.forward(&hidden_state)?;
+        if self.q_proj.quantized_act_type().is_some() {
+            q = q.to_dtype(original_dtype)?;
+            k = k.to_dtype(original_dtype)?;
+            v = v.to_dtype(original_dtype)?;
+        }
 
         // Should be same, no caching...
         let (bs, q_sq, _) = q.dims3()?;
@@ -193,14 +205,12 @@ impl MLlamaVisionAttention {
             .reshape((bs, k_sq, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        let attn_output = Sdpa
+        let mut attn_output = Sdpa
             .run_attention(
-                &q.contiguous()?.to_dtype(DType::F32)?,
-                &k.contiguous()?.to_dtype(DType::F32)?,
-                &v.contiguous()?.to_dtype(DType::F32)?,
-                attention_mask
-                    .map(|m| m.to_dtype(DType::F32).unwrap())
-                    .as_ref(),
+                &q.contiguous()?,
+                &k.contiguous()?,
+                &v.contiguous()?,
+                attention_mask,
                 None,
                 &self.sdpa_params,
             )?
@@ -209,37 +219,56 @@ impl MLlamaVisionAttention {
             .reshape((bs, q_sq, ()))?
             .to_dtype(q.dtype())?;
 
-        self.o_proj.forward(&attn_output)
+        if let Some(t) = self.q_proj.quantized_act_type() {
+            attn_output = attn_output.to_dtype(t)?;
+        }
+        let mut res = self.o_proj.forward(&attn_output)?;
+        if self.q_proj.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
 struct MLlamaMlp {
     act: VisionActivation,
-    fc1: FusedBiasLinear,
-    fc2: FusedBiasLinear,
+    fc1: Arc<dyn QuantMethod>,
+    fc2: Arc<dyn QuantMethod>,
 }
 
 impl MLlamaMlp {
     fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             act: cfg.hidden_act,
-            fc1: FusedBiasLinear::try_from(linear(
+            fc1: mistralrs_quant::linear(
                 cfg.hidden_size,
                 cfg.intermediate_size,
+                &None,
                 vb.pp("fc1"),
-            )?)?,
-            fc2: FusedBiasLinear::try_from(linear(
+            )?,
+            fc2: mistralrs_quant::linear(
                 cfg.intermediate_size,
                 cfg.hidden_size,
+                &None,
                 vb.pp("fc2"),
-            )?)?,
+            )?,
         })
     }
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L223
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        self.fc2
-            .forward(&self.act.forward(&self.fc1.forward(hidden_states)?)?)
+        let original_dtype = hidden_states.dtype();
+        let mut hidden_states = hidden_states.clone();
+        if let Some(t) = self.fc1.quantized_act_type() {
+            hidden_states = hidden_states.to_dtype(t)?;
+        }
+        hidden_states = self
+            .fc2
+            .forward(&self.act.forward(&self.fc1.forward(&hidden_states)?)?)?;
+        if self.fc1.quantized_act_type().is_some() {
+            hidden_states = hidden_states.to_dtype(original_dtype)?;
+        }
+        Ok(hidden_states)
     }
 }
 
@@ -253,15 +282,24 @@ struct MLlamaVisionEncoderLayer {
 }
 
 impl MLlamaVisionEncoderLayer {
-    fn new<const GATED: bool>(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new<const GATED: bool>(
+        cfg: &MLlamaVisionConfig,
+        vb: VarBuilder,
+        real_dev: &Device,
+    ) -> Result<Self> {
         let self_attn = MLlamaVisionAttention::new(cfg, vb.pp("self_attn"))?;
         let mlp = MLlamaMlp::new(cfg, vb.pp("mlp"))?;
 
-        let input_layernorm = layer_norm(cfg.hidden_size, cfg.norm_eps, vb.pp("input_layernorm"))?;
+        let input_layernorm = layer_norm(
+            cfg.hidden_size,
+            cfg.norm_eps,
+            vb.pp("input_layernorm").set_device(real_dev.clone()),
+        )?;
         let post_attention_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.norm_eps,
-            vb.pp("post_attention_layernorm"),
+            vb.pp("post_attention_layernorm")
+                .set_device(real_dev.clone()),
         )?;
 
         if GATED {
@@ -270,8 +308,8 @@ impl MLlamaVisionEncoderLayer {
                 mlp,
                 input_layernorm,
                 post_attention_layernorm,
-                gate_attn: Some(vb.get((1,), "gate_attn")?),
-                gate_ffn: Some(vb.get((1,), "gate_ffn")?),
+                gate_attn: Some(vb.get((1,), "gate_attn")?.to_device(real_dev)?),
+                gate_ffn: Some(vb.get((1,), "gate_ffn")?.to_device(real_dev)?),
             })
         } else {
             Ok(Self {
@@ -320,6 +358,7 @@ impl MLlamaVisionEncoder {
         cfg: &MLlamaVisionConfig,
         num_layers: usize,
         vb: VarBuilder,
+        real_dev: &Device,
     ) -> Result<Self> {
         let mut layers = Vec::with_capacity(num_layers);
         let layers_vb = vb.pp("layers");
@@ -327,25 +366,29 @@ impl MLlamaVisionEncoder {
             layers.push(MLlamaVisionEncoderLayer::new::<GATED>(
                 cfg,
                 layers_vb.pp(i),
+                real_dev,
             )?);
         }
         Ok(Self { layers })
     }
 
     // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/mllama/modeling_mllama.py#L394
-    /// Also return hidden states, all hidden states for this later
+    /// Also (optionally) return hidden states at some indices
     fn forward_with_states(
         &self,
         hidden_state: &Tensor,
         attention_mask: Option<&Tensor>,
+        intermediate_layers_indices: Option<&[usize]>,
     ) -> Result<(Tensor, Vec<Tensor>)> {
         let mut hidden_state = hidden_state.clone();
         let mut hidden_states = Vec::new();
-        for layer in &self.layers {
-            hidden_states.push(hidden_state.clone());
+        for (i, layer) in self.layers.iter().enumerate() {
+            if intermediate_layers_indices.is_some_and(|indices: &[usize]| indices.contains(&i)) {
+                hidden_states.push(hidden_state.clone());
+            }
             hidden_state = layer.forward(&hidden_state, attention_mask)?;
+            hidden_state.device().synchronize()?;
         }
-        hidden_states.push(hidden_state.clone());
         Ok((hidden_state, hidden_states))
     }
 
@@ -364,16 +407,6 @@ impl MLlamaVisionEncoder {
             if let Some(gate) = layer.gate_ffn.clone() {
                 uvb_l.add_tensor("gate_ffn", gate);
             }
-
-            let uvb_attn = uvb_l.pp("self_attn");
-            uvb_attn.pp("q_proj").add(&layer.self_attn.q_proj);
-            uvb_attn.pp("k_proj").add(&layer.self_attn.k_proj);
-            uvb_attn.pp("v_proj").add(&layer.self_attn.v_proj);
-            uvb_attn.pp("o_proj").add(&layer.self_attn.o_proj);
-
-            let uvb_mlp = uvb_l.pp("mlp");
-            uvb_mlp.pp("fc1").add(&layer.mlp.fc1);
-            uvb_mlp.pp("fc2").add(&layer.mlp.fc2);
         }
 
         uvb_t.to_safetensors()
@@ -429,12 +462,12 @@ pub(super) struct MLlamaVisionModel {
     transformer: MLlamaVisionEncoder,
     global_transformer: MLlamaVisionEncoder,
     pub(super) num_patches: usize,
-    intermediate_layers_indices: Tensor,
+    intermediate_layers_indices: Vec<usize>,
     num_attn_heads: usize,
 }
 
 impl MLlamaVisionModel {
-    pub(super) fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
+    pub(super) fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder, real_dev: &Device) -> Result<Self> {
         let patch_embedding = conv2d_no_bias(
             cfg.num_channels,
             cfg.hidden_size,
@@ -443,41 +476,53 @@ impl MLlamaVisionModel {
                 stride: cfg.patch_size,
                 ..Default::default()
             },
-            vb.pp("patch_embedding"),
+            vb.pp("patch_embedding").set_device(real_dev.clone()),
         )?;
 
-        let class_embedding = vb.get((cfg.hidden_size,), "class_embedding")?;
-        let gated_positional_embedding =
-            MLlamaPrecomputedPositionEmbedding::new(cfg, vb.pp("gated_positional_embedding"))?;
+        let class_embedding = vb
+            .get((cfg.hidden_size,), "class_embedding")?
+            .to_device(real_dev)?;
+        let gated_positional_embedding = MLlamaPrecomputedPositionEmbedding::new(
+            cfg,
+            vb.pp("gated_positional_embedding")
+                .set_device(real_dev.clone()),
+        )?;
 
         let pre_tile_positional_embedding = MLlamaPrecomputedAspectRatioEmbedding::new::<true>(
             cfg,
-            vb.pp("pre_tile_positional_embedding"),
+            vb.pp("pre_tile_positional_embedding")
+                .set_device(real_dev.clone()),
         )?;
         let post_tile_positional_embedding = MLlamaPrecomputedAspectRatioEmbedding::new::<true>(
             cfg,
-            vb.pp("post_tile_positional_embedding"),
+            vb.pp("post_tile_positional_embedding")
+                .set_device(real_dev.clone()),
         )?;
 
         // layer norms
         let layernorm_pre = layer_norm(
             cfg.hidden_size,
             LayerNormConfig::default(),
-            vb.pp("layernorm_pre"),
+            vb.pp("layernorm_pre").set_device(real_dev.clone()),
         )?;
         let layernorm_post = layer_norm(
             cfg.hidden_size,
             LayerNormConfig::default(),
-            vb.pp("layernorm_post"),
+            vb.pp("layernorm_post").set_device(real_dev.clone()),
         )?;
 
         // encoders
-        let transformer =
-            MLlamaVisionEncoder::new::<false>(cfg, cfg.num_hidden_layers, vb.pp("transformer"))?;
+        let transformer = MLlamaVisionEncoder::new::<false>(
+            cfg,
+            cfg.num_hidden_layers,
+            vb.pp("transformer"),
+            real_dev,
+        )?;
         let global_transformer = MLlamaVisionEncoder::new::<true>(
             cfg,
             cfg.num_global_layers,
             vb.pp("global_transformer"),
+            real_dev,
         )?;
 
         Ok(Self {
@@ -491,13 +536,7 @@ impl MLlamaVisionModel {
             transformer,
             global_transformer,
             num_patches: (cfg.image_size / cfg.patch_size).pow(2) + 1,
-            intermediate_layers_indices: Tensor::new(
-                cfg.intermediate_layers_indices
-                    .iter()
-                    .map(|i| *i as u32)
-                    .collect::<Vec<_>>(),
-                vb.device(),
-            )?,
+            intermediate_layers_indices: cfg.intermediate_layers_indices.clone(),
             num_attn_heads: cfg.num_attention_heads,
         })
     }
@@ -580,9 +619,17 @@ impl MLlamaVisionModel {
 
         // Apply encoder
         hidden_state = hidden_state.reshape((bs * num_concurrent_media, (), dim))?;
-        let (mut hidden_state, all_intermediate_hidden_states) = self
-            .transformer
-            .forward_with_states(&hidden_state, Some(&attention_mask))?;
+        let (mut hidden_state, all_intermediate_hidden_states) =
+            self.transformer.forward_with_states(
+                &hidden_state,
+                Some(&attention_mask),
+                Some(&self.intermediate_layers_indices),
+            )?;
+
+        // Collect intermediate layer outputs from encoder output
+        let mut intermediate_hidden_states =
+            Tensor::stack(&all_intermediate_hidden_states, D::Minus1)?;
+        drop(all_intermediate_hidden_states);
 
         hidden_state = self.layernorm_post.forward(&hidden_state)?;
 
@@ -601,9 +648,11 @@ impl MLlamaVisionModel {
             num_tiles * (num_patches as isize + num_padding_patches) as usize,
             dim,
         ))?;
-        (hidden_state, _) = self
-            .global_transformer
-            .forward_with_states(&hidden_state, Some(&attention_mask))?;
+        (hidden_state, _) = self.global_transformer.forward_with_states(
+            &hidden_state,
+            Some(&attention_mask),
+            None,
+        )?;
 
         // Remove padding from hidden state
         hidden_state = hidden_state.reshape((
@@ -619,13 +668,6 @@ impl MLlamaVisionModel {
         )?;
         hidden_state =
             hidden_state.reshape((bs, num_concurrent_media, num_tiles, num_patches, dim))?;
-
-        // Collect intermediate layer outputs from encoder output
-        let mut intermediate_hidden_states =
-            Tensor::stack(&all_intermediate_hidden_states, D::Minus1)?;
-        drop(all_intermediate_hidden_states);
-        intermediate_hidden_states = intermediate_hidden_states
-            .index_select(&self.intermediate_layers_indices, D::Minus1)?;
 
         // Remove padding from intermediate hidden states
         intermediate_hidden_states = intermediate_hidden_states.reshape((
@@ -655,6 +697,29 @@ impl MLlamaVisionModel {
         let (bs, _, hidden_size) = hidden_state.dims3()?;
         let class_embedding = self.class_embedding.expand((bs, 1, hidden_size))?;
         Tensor::cat(&[class_embedding, hidden_state.clone()], 1)
+    }
+
+    pub fn get_isq_layers(&mut self) -> Vec<&mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>> {
+        let mut layers = Vec::new();
+        for layer in &mut self.global_transformer.layers {
+            layers.push(&mut layer.self_attn.q_proj);
+            layers.push(&mut layer.self_attn.k_proj);
+            layers.push(&mut layer.self_attn.v_proj);
+            layers.push(&mut layer.self_attn.o_proj);
+
+            layers.push(&mut layer.mlp.fc1);
+            layers.push(&mut layer.mlp.fc2);
+        }
+        for layer in &mut self.transformer.layers {
+            layers.push(&mut layer.self_attn.q_proj);
+            layers.push(&mut layer.self_attn.k_proj);
+            layers.push(&mut layer.self_attn.v_proj);
+            layers.push(&mut layer.self_attn.o_proj);
+
+            layers.push(&mut layer.mlp.fc1);
+            layers.push(&mut layer.mlp.fc2);
+        }
+        layers
     }
 }
 

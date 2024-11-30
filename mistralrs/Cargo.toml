@@ -12,10 +12,11 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core = { version = "0.3.2", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.3.4", path = "../mistralrs-core" }
 anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
+candle-nn.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 image.workspace = true
@@ -24,6 +25,7 @@ either.workspace = true
 futures.workspace = true
 reqwest.workspace = true
 rand = "0.8.5"
+clap.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]
@@ -135,4 +137,16 @@ required-features = []
 
 [[example]]
 name = "llama_vision_multiturn"
+required-features = []
+
+[[example]]
+name = "qwen2vl"
+required-features = []
+
+[[example]]
+name = "idefics3"
+required-features = []
+
+[[example]]
+name = "imatrix"
 required-features = []

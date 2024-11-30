@@ -8,7 +8,7 @@ use candle_nn::{Conv2d, Embedding, LayerNorm, Linear};
 use itertools::Itertools;
 use mistralrs_quant::QuantMethod;
 
-use crate::layers::{FusedBiasLinear, QLinear, RmsNorm};
+use crate::layers::{F32RmsNorm, QLinear, RmsNorm};
 
 pub trait ToTensors {
     /// Tensor names to tensors
@@ -22,6 +22,12 @@ impl ToTensors for Embedding {
 }
 
 impl ToTensors for RmsNorm {
+    fn to_tensors(&self) -> HashMap<String, Tensor> {
+        HashMap::from_iter([("weight".to_string(), self.weight().clone())])
+    }
+}
+
+impl ToTensors for F32RmsNorm {
     fn to_tensors(&self) -> HashMap<String, Tensor> {
         HashMap::from_iter([("weight".to_string(), self.weight().clone())])
     }
@@ -54,15 +60,6 @@ impl ToTensors for Conv2d {
         if let Some(bias) = self.bias() {
             map.insert("bias".to_string(), bias.clone());
         }
-        map
-    }
-}
-
-impl ToTensors for FusedBiasLinear {
-    fn to_tensors(&self) -> HashMap<String, Tensor> {
-        let mut map = HashMap::new();
-        map.insert("weight".to_string(), self.w.clone());
-        map.insert("bias".to_string(), self.b.clone());
         map
     }
 }

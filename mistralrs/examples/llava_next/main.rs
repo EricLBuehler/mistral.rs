@@ -13,18 +13,19 @@ async fn main() -> Result<()> {
     .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+        "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),
     };
     let image = image::load_from_memory(&bytes)?;
 
-    let messages = VisionMessages::new().add_llava_image_message(
+    let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
         "What is depicted here? Please describe the scene in detail.",
         image,
-    );
+        &model,
+    )?;
 
     let response = model.send_chat_request(messages).await?;
 

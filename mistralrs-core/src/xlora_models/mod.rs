@@ -13,7 +13,10 @@ mod starcoder2;
 
 use std::sync::Arc;
 
-use crate::{lora::Ordering, pipeline::text_models_inputs_processor::FlashParams};
+use crate::{
+    lora::Ordering,
+    pipeline::{text_models_inputs_processor::FlashParams, EitherCache},
+};
 use candle_core::{DType, Device, Result, Tensor};
 pub(crate) use config::XLoraConfig;
 pub(crate) use gemma::XLoraModel as XLoraGemma;
@@ -54,7 +57,7 @@ trait ScalingsMaker {
         context_lens: &[usize],
         flash_params: &FlashParams,
     ) -> Result<Tensor>;
-    fn get_cache(&self) -> &Cache;
+    fn get_cache(&self) -> &EitherCache;
 
     #[allow(clippy::too_many_arguments)]
     fn get_scalings(
@@ -75,7 +78,7 @@ trait ScalingsMaker {
         let (_, seq_len) = input_ids.dims2()?;
 
         if let Some(ref non_granular_state) = non_granular_state {
-            if let Some(scalings_cache) = &*self.get_cache().get_scalings_cache() {
+            if let Some(scalings_cache) = &*self.get_cache().full().get_scalings_cache() {
                 return Ok(scalings_cache.clone());
             }
             if seq_len == 1 {
@@ -104,13 +107,13 @@ trait ScalingsMaker {
             )?;
 
             let mut new_cache = Vec::new();
-            for _ in 0..self.get_cache().xlora_lock().len() {
+            for _ in 0..self.get_cache().full().xlora_lock().len() {
                 new_cache.push(Some((
                     Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
                     Tensor::zeros((1,), DType::U8, &Device::Cpu)?,
                 )));
             }
-            self.get_cache().lock().clone_from(&new_cache);
+            self.get_cache().full().lock().clone_from(&new_cache);
 
             res
         } else {
@@ -132,7 +135,7 @@ trait ScalingsMaker {
             if *get_mut_arcmutex!(non_granular_state.non_granular_index)
                 == non_granular_state.tgt_non_granular_index
             {
-                *self.get_cache().get_scalings_cache() = Some(scalings.clone());
+                *self.get_cache().full().get_scalings_cache() = Some(scalings.clone());
             }
         }
         Ok(scalings)

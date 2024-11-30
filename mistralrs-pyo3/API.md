@@ -35,6 +35,8 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `LLaVaNext`
 - `LLaVa`
 - `VLlama`
+- `Qwen2VL`
+- `Idefics3`
 
 ### Architecture for diffusion models
 - `Flux`
@@ -150,6 +152,7 @@ class Which(Enum):
         topology: str | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        max_edge: int | None = None
 
     @dataclass
     class DiffusionPlain:

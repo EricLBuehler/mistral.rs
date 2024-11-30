@@ -9,7 +9,7 @@ use tokio::sync::{
 };
 use crate::{
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
-    pipeline::DiffusionGenerationParams,
+    pipeline::{DiffusionGenerationParams, KvCache},
     response::CompletionChoice,
     tools::ToolCallingMatcher,
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
@@ -164,6 +164,7 @@ pub struct Sequence {
     creation_time: u64,
     prompt: String,
     sequence_stepping_type: SeqStepType,
+    pub(crate) return_raw_logits: bool,
 
     // Image generation
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
@@ -183,10 +184,14 @@ pub struct Sequence {
     adapters: Option<Vec<String>>,
 
     // Cache
+    normal_cache: Vec<Option<KvCache>>,
     scaling_cache: Option<Tensor>,
     cache: LayerCaches,
     draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
+
+    // Preallocated KV cache
+    seq_preallocated_cache: Option<Tensor>,
 
     // Mutables
     tokens: Vec<u32>,
@@ -200,6 +205,9 @@ pub struct Sequence {
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
     input_images: Option<Vec<image::DynamicImage>>,
+    pub cached_pixel_values: Option<Tensor>,
+    pub cached_img_thw: Option<Tensor>,
+    pub cached_vid_thw: Option<Tensor>,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -272,6 +280,10 @@ impl Sequence {
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
+        // Preallocated KV cache
+        seq_preallocated_cache: Option<Tensor>,
+        //
+        return_raw_logits: bool,
     ) -> Self {
         let prompt_len = tokens.len();
         let mut custom_metadata = if let Some(block_size) = block_size {
@@ -292,6 +304,7 @@ impl Sequence {
             id,
             timestamp,
             state: RwLock::new(SequenceState::Waiting),
+            normal_cache: vec![None; layers],
             cache: vec![None; layers],
             draft_cache: vec![None; layers],
             xlora_cache: if is_xlora {
@@ -299,6 +312,7 @@ impl Sequence {
             } else {
                 None
             },
+            seq_preallocated_cache,
             responder,
             sampler: sampler.into(),
             stop_tokens,
@@ -330,6 +344,10 @@ impl Sequence {
             image_gen_response_format,
             sequence_stepping_type,
             diffusion_params,
+            cached_pixel_values: None,
+            cached_img_thw: None,
+            cached_vid_thw: None,
+            return_raw_logits,
         }
     }
 
@@ -438,6 +456,10 @@ impl Sequence {
         &self.prompt
     }
 
+    pub fn set_initial_prompt(&mut self, new: String) {
+        self.prompt = new;
+    }
+
     /// This will also set prompt_len
     pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
         self.tokens.clone_from(&toks);
@@ -458,6 +480,14 @@ impl Sequence {
 
     pub fn completion_bytes(&self) -> &[u8] {
         &self.completion_bytes
+    }
+
+    pub fn preallocated_cache(&self) -> Option<&Tensor> {
+        self.seq_preallocated_cache.as_ref()
+    }
+
+    pub fn normal_cache(&mut self) -> &mut Vec<Option<KvCache>> {
+        &mut self.normal_cache
     }
 
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
@@ -672,6 +702,13 @@ impl Sequence {
         self.update_time_info();
     }
 
+    pub fn add_raw_choice_to_group(&self, logit_chunks: Vec<Tensor>) {
+        get_mut_group!(self)
+            .raw_choices
+            .push((logit_chunks, self.tokens.clone()));
+        self.update_time_info();
+    }
+
     pub fn add_completion_choice_to_group(&self, mut choice: CompletionChoice) {
         choice.text = format!(
             "{}{}{}",
@@ -709,6 +746,10 @@ impl Sequence {
         self.input_images.take()
     }
 
+    pub fn clone_images(&mut self) -> Option<Vec<image::DynamicImage>> {
+        self.input_images.clone()
+    }
+
     pub fn images(&self) -> Option<&[image::DynamicImage]> {
         self.input_images.as_deref()
     }
@@ -736,6 +777,7 @@ pub struct SequenceGroup {
     pub total_completion_time: u128,
     choices: Vec<Choice>,
     image_choices: Vec<ImageChoice>,
+    raw_choices: Vec<(Vec<Tensor>, Vec<u32>)>,
     completion_choices: Vec<(f32, CompletionChoice)>,
     pub chat_streaming_chunks: Vec<ChunkChoice>,
     pub completion_streaming_chunks: Vec<CompletionChunkChoice>,
@@ -748,6 +790,7 @@ impl SequenceGroup {
         Self {
             choices: Vec::new(),
             image_choices: Vec::new(),
+            raw_choices: Vec::new(),
             completion_choices: Vec::new(),
             n_choices,
             total_prompt_toks: 0,
@@ -809,6 +852,24 @@ impl SequenceGroup {
     ) -> Result<(), SendError<Response>> {
         if self.choices.len() == self.n_choices {
             sender.send(Response::Done(response)).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn maybe_send_raw_done_response(
+        &self,
+        sender: Sender<Response>,
+    ) -> Result<(), SendError<Response>> {
+        if self.raw_choices.len() == self.n_choices {
+            assert_eq!(self.raw_choices.len(), 1);
+            let (logits_chunks, tokens) = self.raw_choices[0].clone();
+            sender
+                .send(Response::Raw {
+                    logits_chunks,
+                    tokens,
+                })
+                .await?;
         }
 
         Ok(())

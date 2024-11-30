@@ -40,21 +40,28 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
     ```
 
-- 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
+- 🌟📷 Run the **Qwen2-VL** Model: [documentation and guide here](docs/QWEN2VL.md)
 
     ```
-    ./mistralrs-server -i toml -f toml-selectors/anymoe_lora.toml
+    ./mistralrs-server -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
     ```
+
+- 🤗📷 Run the **Smol VLM** Model: [documentation and guide here](docs/IDEFICS3.md)
+
+    ```
+    ./mistralrs-server -i vision-plain -m HuggingFaceTB/SmolVLM-Instruct -a idefics3
+    ```
+
 - φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
 
     ```
     ./mistralrs-server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
     ```
 
-- 🌀 Run the Phi 3.5 MoE model with 128K context window: [documentation and guide here](docs/PHI3.5MOE.md)
+- 🧮 Enhance ISQ by collecting an imatrix from calibration data: [documentation](docs/IMATRIX.md)
 
     ```
-    ./mistralrs-server -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
+    ./mistralrs-server -i --isq Q4K plain -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
     ```
 
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
@@ -84,6 +91,7 @@ Mistral.rs supports several model categories:
 - Python API
 - Grammar support with Regex and Yacc
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
+    - Enhance performance with an [imatrix](docs/IMATRIX.md)!
 
 **Fast**:
 - Apple silicon support: ARM NEON, Accelerate, Metal
@@ -143,6 +151,8 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |LLaVa Next|✅| |✅|✅|
 |LLaVa|✅| |✅|✅|
 |Llama 3.2 Vision|✅| |✅| |
+|Qwen2-VL|✅| |✅| |
+|Idefics 3|✅| |✅|✅|
 
 ## APIs and Integrations
 
@@ -407,6 +417,8 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `llava_next`
 - `llava`
 - `vllama`
+- `qwen2vl`
+- `idefics3`
 
 ### Supported GGUF architectures
 
@@ -495,6 +507,8 @@ Please submit more benchmarks via raising an issue!
 |LLaVa Next| | |✅|
 |LLaVa| | |✅|
 |Llama 3.2 Vision| | |✅|
+|Qwen2-VL| | |✅|
+|Idefics 3| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -521,7 +535,8 @@ Please submit more benchmarks via raising an issue!
 |Starcoder 2|✅| | |
 |LLaVa Next| | | |
 |LLaVa| | | |
-|Llama 3.2 Vision| | | |
+|Qwen2-VL| | | |
+|Idefics 3| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -541,6 +556,8 @@ Please submit more benchmarks via raising an issue!
 |LLaVa Next|✅|
 |LLaVa|✅|
 |Llama 3.2 Vision| |
+|Qwen2-VL| |
+|Idefics 3|✅|
 
 
 ### Using derivative model

@@ -159,6 +159,15 @@ macro_rules! get_paths {
                 model_id
             ))
         };
+        let chat_template_json_filename = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"chat_template.json".to_string())
+        {
+            info!("Loading `chat_template.json` at `{}`", $this.model_id);
+            Some($crate::api_get_file!(api, "chat_template.json", model_id))
+        } else {
+            None
+        };
         Ok(Box::new($path_name {
             tokenizer_filename,
             config_filename,
@@ -173,6 +182,7 @@ macro_rules! get_paths {
             lora_preload_adapter_info,
             preprocessor_config,
             processor_config,
+            chat_template_json_filename,
         }))
     }};
 }
@@ -330,6 +340,20 @@ macro_rules! get_paths_gguf {
             PathBuf::from_str("")?
         };
 
+        let chat_template_json_filename = if $crate::api_dir_list!(api, model_id)
+            .collect::<Vec<_>>()
+            .contains(&"chat_template.json".to_string())
+        {
+            info!("Loading `chat_template.json` at `{}`", this_model_id);
+            Some($crate::api_get_file!(
+                api,
+                "chat_template.json",
+                model_id
+            ))
+        } else {
+            None
+        };
+
         Ok(Box::new($path_name {
             tokenizer_filename,
             config_filename: PathBuf::from_str("")?,
@@ -343,7 +367,8 @@ macro_rules! get_paths_gguf {
             gen_conf,
             lora_preload_adapter_info,
             preprocessor_config,
-            processor_config
+            processor_config,
+            chat_template_json_filename,
         }))
     }};
 }

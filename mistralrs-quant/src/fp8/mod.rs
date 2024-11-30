@@ -101,7 +101,7 @@ impl QuantMethod for FP8Linear {
                 let b = x;
 
                 handle
-                    .batch_matmul(
+                    .batch_matmul_f8(
                         &a,
                         &b,
                         &self.dequant_w_scale,
@@ -151,6 +151,7 @@ impl QuantMethod for FP8Linear {
         _dtype: Option<IsqType>,
         _device: Device,
         _n_quantized: &AtomicUsize,
+        _imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
     }
