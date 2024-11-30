@@ -171,7 +171,7 @@ fn naive_sdpa(
             mask.unwrap(),
             1. / (head_dim as f32).sqrt(),
         )?;
-        Ok(MatMul.matmul(&att, v).unwrap())
+        MatMul.matmul(&att, v)
     } else {
         let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
         if let Some(softcap) = sdpa_params.softcap {
