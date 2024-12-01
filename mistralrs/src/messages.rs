@@ -6,7 +6,7 @@ use image::DynamicImage;
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 
-/// A type which can be used as a request.
+/// A type which can be used as a chat request.
 pub trait RequestLike {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
     fn take_messages(&mut self) -> RequestMessage;

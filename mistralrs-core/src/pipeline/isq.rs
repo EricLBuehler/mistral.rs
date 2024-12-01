@@ -387,7 +387,7 @@ pub trait IsqModel {
 
             // Get the MINIMUM of the max isq threads the quant method allows
             #[cfg(not(feature = "metal"))]
-            let minimum_max_threads = {
+            let mut minimum_max_threads = {
                 let current_rayon_threads = rayon::current_num_threads();
                 tensors
                     .iter()
@@ -404,7 +404,12 @@ pub trait IsqModel {
                     .unwrap_or(current_rayon_threads)
             };
             #[cfg(feature = "metal")]
-            let minimum_max_threads = 1;
+            let mut minimum_max_threads = 1;
+
+            if matches!(imatrix_source, Some(ImatrixDataSource::Collected)) {
+                // Collected imatrix means that the model is potentially on the gpu already
+                minimum_max_threads = 1;
+            }
 
             info!("Applying ISQ on {minimum_max_threads} threads.");
 
