@@ -958,7 +958,7 @@
                 }
             }
         }
-        <span class="prelude-val">Ok</span>((k, v, <span class="prelude-val">None</span>))
+        <span class="prelude-val">Ok</span>((k, v, mask.cloned()))
     }
 
     <span class="kw">pub fn </span>append(<span class="kw-2">&amp;mut </span><span class="self">self</span>, k: <span class="kw-2">&amp;</span>Tensor, v: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
