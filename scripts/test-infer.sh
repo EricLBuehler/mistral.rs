@@ -14,7 +14,7 @@ curl -X POST "${TRT_API_BASE}completions" \
   "prompt": "Here is a one line joke: ",
   "max_tokens": 100,
   "temperature": 0.7,
-  "n": 5
+  "n": 1
 }' | jq
 ;;
 
@@ -27,7 +27,7 @@ curl -X POST "${TRT_API_BASE}completions" \
   "prompt": "Here is a one line joke: ",
   "max_tokens": 100,
   "temperature": 0.7,
-  "n": 5
+  "n": 1
 }'
 ;;
 
