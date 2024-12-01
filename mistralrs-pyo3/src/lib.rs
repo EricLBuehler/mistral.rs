@@ -24,11 +24,11 @@ use mistralrs_core::{
     DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams,
     DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder,
     GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse,
-    ImageGenerationResponseFormat, Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig,
-    Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
-    SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource, TokenizationRequest, Tool,
-    Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    ImageGenerationResponseFormat, LlguidanceGrammar, Loader, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
+    PagedAttentionConfig, Request as _Request, RequestMessage, Response, ResponseOk,
+    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
+    TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
@@ -380,6 +380,40 @@ fn parse_which(
     })
 }
 
+fn build_constraint(grammar: Option<&str>, grammar_type: Option<&str>) -> PyApiResult<Constraint> {
+    if grammar_type.is_none() {
+        if grammar.is_some() {
+            return Err(PyApiErr::from(
+                "Grammar text is specified but not grammar type",
+            ));
+        }
+        return Ok(Constraint::None);
+    }
+
+    let grammar =
+        grammar.ok_or_else(|| PyApiErr::from("Grammar type is specified but not grammar text"))?;
+
+    let constraint = match grammar_type.unwrap() {
+        "regex" => Constraint::Regex(grammar.to_string()),
+        "lark" => Constraint::Lark(grammar.to_string()),
+        "json_schema" => {
+            let value = serde_json::from_str::<serde_json::Value>(grammar)
+                .map_err(|e| PyApiErr::from(format!("Failed to parse JSON schema: {e}")))?;
+            Constraint::JsonSchema(value)
+        }
+        "llguidance" => {
+            let value = serde_json::from_str::<LlguidanceGrammar>(grammar).map_err(|e| {
+                PyApiErr::from(format!("Failed to parse JSON llguidance object: {e}"))
+            })?;
+            Constraint::Llguidance(value)
+        }
+        _ => return Err(PyApiErr::from(
+            "Grammar type is specified but is not `regex`, `lark`, `json_schema`, nor `llguidance`",
+        )),
+    };
+
+    Ok(constraint)
+}
 #[pymethods]
 impl Runner {
     #[new]
@@ -653,27 +687,8 @@ impl Runner {
                 .stop_seqs
                 .as_ref()
                 .map(|x| StopTokens::Seqs(x.to_vec()));
-            let constraint = if request.grammar_type == Some("regex".to_string()) {
-                if request.grammar.is_none() {
-                    return Err(PyApiErr::from(
-                        "Grammar type is specified but not grammar text",
-                    ));
-                }
-                Constraint::Regex(request.grammar.as_ref().unwrap().clone())
-            } else if request.grammar_type == Some("lark".to_string()) {
-                if request.grammar.is_none() {
-                    return Err(PyApiErr::from(
-                        "Grammar type is specified but not grammar text",
-                    ));
-                }
-                Constraint::Lark(request.grammar.as_ref().unwrap().clone())
-            } else if request.grammar_type.is_some() {
-                return Err(PyApiErr::from(
-                    "Grammar type is specified but is not `regex` or `lark`",
-                ));
-            } else {
-                Constraint::None
-            };
+            let constraint =
+                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
 
             let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
                 Some(DrySamplingParams::new_with_defaults(
@@ -919,27 +934,8 @@ impl Runner {
                 .stop_seqs
                 .as_ref()
                 .map(|x| StopTokens::Seqs(x.to_vec()));
-            let constraint = if request.grammar_type == Some("regex".to_string()) {
-                if request.grammar.is_none() {
-                    return Err(PyApiErr::from(
-                        "Grammar type is specified but not grammar text",
-                    ));
-                }
-                Constraint::Regex(request.grammar.as_ref().unwrap().clone())
-            } else if request.grammar_type == Some("lark".to_string()) {
-                if request.grammar.is_none() {
-                    return Err(PyApiErr::from(
-                        "Grammar type is specified but not grammar text",
-                    ));
-                }
-                Constraint::Lark(request.grammar.as_ref().unwrap().clone())
-            } else if request.grammar_type.is_some() {
-                return Err(PyApiErr::from(
-                    "Grammar type is specified but is not `regex` or `lark`",
-                ));
-            } else {
-                Constraint::None
-            };
+            let constraint =
+                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
 
             let tool_choice = request.tool_choice.as_ref().map(|x| match x {
                 ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
