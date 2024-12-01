@@ -22,6 +22,7 @@ repository = "https://github.com/EricLBuehler/mistral.rs"
 keywords = ["machine-learning"]
 categories = ["science"]
 license = "MIT"
+rust-version = "1.82"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
