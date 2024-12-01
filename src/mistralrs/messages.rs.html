@@ -640,7 +640,7 @@
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>serde_json::{json, Value};
 
-<span class="doccomment">/// A type which can be used as a request.
+<span class="doccomment">/// A type which can be used as a chat request.
 </span><span class="kw">pub trait </span>RequestLike {
     <span class="kw">fn </span>messages_ref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[IndexMap&lt;String, MessageContent&gt;];
     <span class="kw">fn </span>take_messages(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; RequestMessage;

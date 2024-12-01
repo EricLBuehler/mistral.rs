@@ -754,7 +754,12 @@
 <a href="#753" id="753">753</a>
 <a href="#754" id="754">754</a>
 <a href="#755" id="755">755</a>
-<a href="#756" id="756">756</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     fs::File,
@@ -1143,7 +1148,7 @@
 
             <span class="comment">// Get the MINIMUM of the max isq threads the quant method allows
             </span><span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
-            </span><span class="kw">let </span>minimum_max_threads = {
+            </span><span class="kw">let </span><span class="kw-2">mut </span>minimum_max_threads = {
                 <span class="kw">let </span>current_rayon_threads = rayon::current_num_threads();
                 tensors
                     .iter()
@@ -1160,7 +1165,12 @@
                     .unwrap_or(current_rayon_threads)
             };
             <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
-            </span><span class="kw">let </span>minimum_max_threads = <span class="number">1</span>;
+            </span><span class="kw">let </span><span class="kw-2">mut </span>minimum_max_threads = <span class="number">1</span>;
+
+            <span class="kw">if </span><span class="macro">matches!</span>(imatrix_source, <span class="prelude-val">Some</span>(ImatrixDataSource::Collected)) {
+                <span class="comment">// Collected imatrix means that the model is potentially on the gpu already
+                </span>minimum_max_threads = <span class="number">1</span>;
+            }
 
             <span class="macro">info!</span>(<span class="string">"Applying ISQ on {minimum_max_threads} threads."</span>);
 
