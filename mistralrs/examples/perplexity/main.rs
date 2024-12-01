@@ -140,10 +140,7 @@ async fn main() -> Result<()> {
     println!();
     println!(
         "Final perplexity for `{}`, ISQ `{:?}`: {}±{} ppl",
-        args.file,
-        quant,
-        mean,
-        std_dev
+        args.file, quant, mean, std_dev
     );
 
     Ok(())
