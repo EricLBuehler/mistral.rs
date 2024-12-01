@@ -245,4 +245,8 @@ impl Model {
     pub fn config(&self) -> &MistralRsConfig {
         self.runner.config()
     }
+
+    pub fn inner(&self) -> &MistralRs {
+        &self.runner
+    }
 }
