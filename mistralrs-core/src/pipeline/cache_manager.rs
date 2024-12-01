@@ -203,7 +203,7 @@ impl KvCache {
                 }
             }
         }
-        Ok((k, v, None))
+        Ok((k, v, mask.cloned()))
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
