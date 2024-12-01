@@ -1549,7 +1549,7 @@
             RequestMessage::Chat(<span class="kw">_</span>)
             | RequestMessage::CompletionTokens(<span class="kw">_</span>)
             | RequestMessage::VisionChat { .. }
-            | RequestMessage::ImageGeneration { .. } =&gt; <span class="number">1</span>,
+            | RequestMessage::ImageGeneration { .. } =&gt; <span class="prelude-val">None</span>,
         };
         <span class="kw">if </span>is_chat
             &amp;&amp; !<span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)

@@ -973,7 +973,7 @@
         .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
-            <span class="number">1</span>, <span class="bool-val">false</span>, <span class="bool-val">false</span>, <span class="number">0</span>,
+            <span class="number">1</span>, <span class="bool-val">false</span>, <span class="bool-val">false</span>, <span class="prelude-val">None</span>,
         )));
 
         <span class="kw">let </span><span class="kw-2">mut </span>latest_loss = <span class="macro">vec!</span>[<span class="number">0.0</span>; optimizers.len()];

@@ -231,8 +231,7 @@
 <a href="#230" id="230">230</a>
 <a href="#231" id="231">231</a>
 <a href="#232" id="232">232</a>
-<a href="#233" id="233">233</a>
-<a href="#234" id="234">234</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
+<a href="#233" id="233">233</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>mistralrs_core::{ImageGenerationResponseFormat, Tool, ToolChoice};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::{collections::HashMap, ops::Deref};
@@ -389,9 +388,8 @@
     </span><span class="kw">pub </span>model: String,
     <span class="attr">#[schema(example = <span class="string">"Say this is a test."</span>)]
     </span><span class="kw">pub </span>prompt: String,
-    <span class="attr">#[serde(default = <span class="string">"default_1usize"</span>)]
-    #[schema(example = <span class="number">1</span>)]
-    </span><span class="kw">pub </span>best_of: usize,
+    <span class="attr">#[schema(example = <span class="number">1</span>)]
+    </span><span class="kw">pub </span>best_of: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="attr">#[serde(rename = <span class="string">"echo"</span>)]
     #[serde(default = <span class="string">"default_false"</span>)]
     #[schema(example = <span class="bool-val">false</span>)]

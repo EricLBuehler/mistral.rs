@@ -807,7 +807,7 @@
         messages: RequestMessage::Completion {
             text: <span class="string">"Hello!"</span>.to_string(),
             echo_prompt: <span class="bool-val">false</span>,
-            best_of: <span class="number">1</span>,
+            best_of: <span class="prelude-val">None</span>,
         },
         sampling_params: sampling_params.clone(),
         response: tx,
@@ -1099,7 +1099,7 @@
                 RequestMessage::Completion {
                     text: <span class="string">"Rust"</span>.to_string(),
                     echo_prompt: <span class="bool-val">false</span>,
-                    best_of: <span class="number">1</span>,
+                    best_of: <span class="prelude-val">None</span>,
                 },
                 args.n_gen - <span class="number">1</span>,
                 <span class="kw-2">*</span>concurrency,

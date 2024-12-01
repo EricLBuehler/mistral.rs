@@ -949,7 +949,19 @@
 <a href="#948" id="948">948</a>
 <a href="#949" id="949">949</a>
 <a href="#950" id="950">950</a>
-<a href="#951" id="951">951</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -1729,7 +1741,7 @@
 
 <span class="kw">pub struct </span>SequenceGroup {
     n_choices: usize, <span class="comment">// The target number of choices to return. Can be decreased if an error is thrown.
-    </span>best_of: usize,   <span class="comment">// Top n seqs based on cumulative logprobs.
+    </span>best_of: <span class="prelude-ty">Option</span>&lt;usize&gt;, <span class="comment">// Top n seqs based on cumulative logprobs.
     </span><span class="kw">pub </span>total_prompt_toks: usize,
     <span class="kw">pub </span>total_toks: usize,
     <span class="kw">pub </span>total_prompt_time: u128,
@@ -1746,7 +1758,12 @@
 }
 
 <span class="kw">impl </span>SequenceGroup {
-    <span class="kw">pub fn </span>new(n_choices: usize, is_streaming: bool, is_chat: bool, best_of: usize) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(
+        n_choices: usize,
+        is_streaming: bool,
+        is_chat: bool,
+        best_of: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             choices: Vec::new(),
             image_choices: Vec::new(),
@@ -1766,21 +1783,28 @@
         }
     }
 
-    <span class="doccomment">/// This does not apply best_of.
-    </span><span class="kw">pub fn </span>get_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Choice] {
+    <span class="kw">pub fn </span>get_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[Choice] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.choices
     }
 
-    <span class="doccomment">/// This applies the best_of.
+    <span class="doccomment">/// This may apply the best_of.
     </span><span class="kw">pub fn </span>get_completion_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;CompletionChoice&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>choices = <span class="self">self</span>.completion_choices.clone();
-        <span class="comment">// Sort by descending logprobs
-        </span>choices.sort_by(|a, b| b.<span class="number">0</span>.partial_cmp(<span class="kw-2">&amp;</span>a.<span class="number">0</span>).expect(<span class="string">"No ordering."</span>));
-        choices
-            .into_iter()
-            .take(<span class="self">self</span>.best_of)
-            .map(|(<span class="kw">_</span>, x)| x)
-            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(best_of) = <span class="self">self</span>.best_of {
+            <span class="kw">let </span><span class="kw-2">mut </span>choices = <span class="self">self</span>.completion_choices.clone();
+            <span class="comment">// Sort by descending logprobs
+            </span>choices.sort_by(|a, b| b.<span class="number">0</span>.partial_cmp(<span class="kw-2">&amp;</span>a.<span class="number">0</span>).expect(<span class="string">"No ordering."</span>));
+            choices
+                .into_iter()
+                .take(best_of)
+                .map(|(<span class="kw">_</span>, x)| x)
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+        } <span class="kw">else </span>{
+            <span class="self">self</span>.completion_choices
+                .clone()
+                .into_iter()
+                .map(|(<span class="kw">_</span>, x)| x)
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+        }
     }
 
     <span class="kw">pub fn </span>get_image_choices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[ImageChoice] {
