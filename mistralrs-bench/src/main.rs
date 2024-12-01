@@ -242,7 +242,7 @@ fn warmup_run(mistralrs: Arc<MistralRs>) {
         messages: RequestMessage::Completion {
             text: "Hello!".to_string(),
             echo_prompt: false,
-            best_of: 1,
+            best_of: None,
         },
         sampling_params: sampling_params.clone(),
         response: tx,
@@ -534,7 +534,7 @@ fn main() -> anyhow::Result<()> {
                 RequestMessage::Completion {
                     text: "Rust".to_string(),
                     echo_prompt: false,
-                    best_of: 1,
+                    best_of: None,
                 },
                 args.n_gen - 1,
                 *concurrency,
