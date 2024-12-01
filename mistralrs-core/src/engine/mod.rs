@@ -534,7 +534,7 @@ impl Engine {
             RequestMessage::Chat(_)
             | RequestMessage::CompletionTokens(_)
             | RequestMessage::VisionChat { .. }
-            | RequestMessage::ImageGeneration { .. } => 1,
+            | RequestMessage::ImageGeneration { .. } => None,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
