@@ -1,5 +1,5 @@
 use either::Either;
-use mistralrs_core::{ImageGenerationResponseFormat, Tool, ToolChoice};
+use mistralrs_core::{ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
 use utoipa::ToSchema;
@@ -75,7 +75,7 @@ pub enum Grammar {
     #[serde(rename = "json_schema")]
     JsonSchema(serde_json::Value),
     #[serde(rename = "llguidance")]
-    Llguidance(serde_json::Value),
+    Llguidance(LlguidanceGrammar),
     #[serde(rename = "lark")]
     Lark(String),
 }

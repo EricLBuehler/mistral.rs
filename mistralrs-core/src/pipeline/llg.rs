@@ -28,7 +28,7 @@ pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<Top
         Constraint::JsonSchema(value) => {
             JsonCompileOptions::default().json_to_llg_no_validate(value.clone())?
         }
-        Constraint::Llguidance(value) => serde_json::from_value(value.clone())?,
+        Constraint::Llguidance(value) => value.clone(),
         Constraint::None => return Ok(None),
     };
     Ok(Some(grm))
