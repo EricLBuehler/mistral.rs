@@ -364,7 +364,7 @@ impl Loader for GGMLLoader {
             Model::Llama(ref l) => l.max_seq_len,
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
         };
-        let tok_env = build_tok_env(tokenizer.clone()).into();
+        let tok_env = build_tok_env(tokenizer.clone());
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.normal().0.len(),
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
