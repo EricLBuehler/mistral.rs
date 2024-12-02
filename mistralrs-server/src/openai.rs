@@ -159,9 +159,8 @@ pub struct CompletionRequest {
     pub model: String,
     #[schema(example = "Say this is a test.")]
     pub prompt: String,
-    #[serde(default = "default_1usize")]
     #[schema(example = 1)]
-    pub best_of: usize,
+    pub best_of: Option<usize>,
     #[serde(rename = "echo")]
     #[serde(default = "default_false")]
     #[schema(example = false)]

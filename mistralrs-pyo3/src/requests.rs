@@ -21,7 +21,7 @@ pub enum ToolChoice {
 pub struct CompletionRequest {
     pub(crate) _model: String,
     pub(crate) prompt: String,
-    pub(crate) best_of: usize,
+    pub(crate) best_of: Option<usize>,
     pub(crate) echo_prompt: bool,
     pub(crate) presence_penalty: Option<f32>,
     pub(crate) frequency_penalty: Option<f32>,
@@ -77,7 +77,7 @@ impl CompletionRequest {
     fn new(
         prompt: String,
         model: String,
-        best_of: usize,
+        best_of: Option<usize>,
         echo_prompt: bool,
         presence_penalty: Option<f32>,
         frequency_penalty: Option<f32>,

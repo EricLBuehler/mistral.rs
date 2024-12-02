@@ -11,7 +11,7 @@ pub struct VisionModelBuilder {
     pub(crate) hf_revision: Option<String>,
     pub(crate) write_uqff: Option<PathBuf>,
     pub(crate) from_uqff: Option<PathBuf>,
-    pub(crate) imatrix: Option<PathBuf>,
+    pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapMetadata>,
@@ -55,7 +55,7 @@ impl VisionModelBuilder {
             max_num_seqs: 32,
             with_logging: false,
             device_mapping: None,
-            imatrix: None,
+            calibration_file: None,
         }
     }
 
@@ -113,9 +113,9 @@ impl VisionModelBuilder {
         self
     }
 
-    /// Utilise this imatrix file during ISQ
-    pub fn with_imatrix(mut self, path: PathBuf) -> Self {
-        self.imatrix = Some(path);
+    /// Utilise this calibration_file file during ISQ
+    pub fn with_calibration_file(mut self, path: PathBuf) -> Self {
+        self.calibration_file = Some(path);
         self
     }
 
@@ -172,7 +172,7 @@ impl VisionModelBuilder {
             write_uqff: self.write_uqff,
             from_uqff: self.from_uqff,
             max_edge: self.max_edge,
-            imatrix: self.imatrix,
+            calibration_file: self.calibration_file,
         };
 
         if self.with_logging {

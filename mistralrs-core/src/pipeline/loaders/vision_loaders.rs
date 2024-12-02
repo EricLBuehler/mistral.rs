@@ -50,9 +50,12 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
+    fn cache_mut(&mut self) -> &mut EitherCache;
     fn max_seq_len(&self) -> usize;
     fn has_conv2d(&self) -> bool;
     fn config(&self) -> &ModelConfigMetadata;
+    /// For a prompt without images. Requires batch size of 1!
+    fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any>;
 }
 
 pub trait VisionModelLoader: IsqModelLoader {

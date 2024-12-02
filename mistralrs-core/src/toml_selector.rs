@@ -294,8 +294,8 @@ pub enum TomlModelSelected {
         /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
         max_edge: Option<u32>,
 
-        /// .imatrix file to enhance GGUF quantizations with.
-        imatrix: Option<PathBuf>,
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
+        calibration_file: Option<PathBuf>,
     },
 }
 
@@ -639,7 +639,7 @@ fn loader_from_selected(
             write_uqff,
             from_uqff,
             max_edge,
-            imatrix,
+            calibration_file,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -648,7 +648,7 @@ fn loader_from_selected(
                 write_uqff,
                 from_uqff,
                 max_edge,
-                imatrix,
+                calibration_file,
             },
             args.chat_template,
             args.tokenizer_json,

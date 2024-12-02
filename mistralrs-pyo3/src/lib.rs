@@ -353,7 +353,7 @@ fn parse_which(
             from_uqff,
             dtype: _,
             max_edge,
-            imatrix,
+            calibration_file,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -362,7 +362,7 @@ fn parse_which(
                 write_uqff,
                 from_uqff,
                 max_edge,
-                imatrix,
+                calibration_file,
             },
             chat_template,
             tokenizer_json,

@@ -604,6 +604,8 @@ If you want to add a new model, please contact us via an issue and we can coordi
     - Set the `CUDA_NVCC_FLAGS` environment variable to `-fPIE` during build: `CUDA_NVCC_FLAGS=-fPIE`
 - Error `CUDA_ERROR_NOT_FOUND` or symbol not found when using a normal or vison model:
     - For non-quantized models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device.
+- What is the minimum supported CUDA compute cap?
+    - The minimum CUDA compute cap is **5.3**.
 
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.

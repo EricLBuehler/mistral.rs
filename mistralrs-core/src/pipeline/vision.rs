@@ -15,6 +15,7 @@ use crate::paged_attention::{calculate_cache_config, AttentionImplementation, Ca
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_tok_env;
 use crate::pipeline::sampling::sample_and_add_toks;
+use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
@@ -41,6 +42,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -63,7 +65,6 @@ pub struct VisionPipeline {
     config: String,
     processor_filename: Option<PathBuf>,
     preprocessor_filename: Option<PathBuf>,
-    imatrix: Option<PathBuf>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -100,7 +101,7 @@ pub struct VisionSpecificConfig {
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
     pub max_edge: Option<u32>,
-    pub imatrix: Option<PathBuf>,
+    pub calibration_file: Option<PathBuf>,
 }
 
 impl VisionLoaderBuilder {
@@ -236,7 +237,7 @@ impl Loader for VisionLoader {
         )?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
-        let mut loading_isq = in_situ_quant.is_some();
+        let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
                 .0
@@ -244,7 +245,9 @@ impl Loader for VisionLoader {
                 .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
         }
 
-        let load_device = if !loading_isq {
+        // Load onto the regular device if not using isq or if the calibration file is specified
+        let load_device = if !loading_isq || self.config.calibration_file.is_some() {
+            loading_isq = false;
             device.clone()
         } else {
             Device::Cpu
@@ -314,15 +317,90 @@ impl Loader for VisionLoader {
             None,
         );
 
+        if let Some(calibration_file) = &self.config.calibration_file {
+            let calibration_data = std::fs::read_to_string(calibration_file)?;
+            // Tokenize, don't add bos yet
+            let tokens = tokenizer
+                .encode(calibration_data, false)
+                .map_err(anyhow::Error::msg)?
+                .get_ids()
+                .to_vec();
+            info!(
+                "Collecting imatrix from calibration file `{}` of {} tokens.",
+                calibration_file.display(),
+                tokens.len()
+            );
+            let bos_toks = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
+            let bos_tok_id = tokenizer
+                .token_to_id(&bos_toks[0])
+                .expect("Somehow the bos token is not present.");
+
+            // NOTE: We ONLY calibrate the text bits of these models!!
+            // So only those should be tracked!
+            model.begin_track_stats()?;
+
+            const CHUNK_SIZE: usize = 1024;
+            let n_chunks: usize = tokens.len().div_ceil(CHUNK_SIZE);
+            let start = Instant::now();
+            for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
+                let chunk = [vec![bos_tok_id], chunk.to_vec()].concat();
+                let chunk_len = chunk.len();
+
+                let start = Instant::now();
+                let inputs =
+                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None)?;
+                let _ = model.forward(
+                    &inputs.input,
+                    None, // NOTE: We ONLY calibrate the text bits of these models!!
+                    &inputs.positions,
+                    inputs.positions_kernel,
+                    inputs.context_lens,
+                    inputs.position_ids,
+                    model.default_model_specific_args(&inputs.input),
+                    None,
+                    &inputs.flash_meta,
+                )?;
+                match model.cache_mut() {
+                    EitherCache::Full(full) => {
+                        for layer in &mut *full.lock() {
+                            *layer = None
+                        }
+                    }
+                    EitherCache::Normal(normal) => {
+                        for layer in &mut *normal.lock().unwrap().0 {
+                            layer.set_len(0);
+                        }
+                    }
+                }
+                let end = Instant::now();
+                info!(
+                    "Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s",
+                    i + 1,
+                    end.duration_since(start).as_secs_f32()
+                );
+            }
+            load_device.synchronize()?;
+            let end = Instant::now();
+            info!(
+                "Finished collecting imatrix in {:.2}s",
+                end.duration_since(start).as_secs_f32()
+            );
+        }
+
         if (in_situ_quant.is_some() || self.config.topology.is_some())
             && self.config.from_uqff.is_none()
         {
+            let imatrix_source = self
+                .config
+                .calibration_file
+                .as_ref()
+                .map(|_| ImatrixDataSource::Collected);
             model.quantize(
                 in_situ_quant,
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
-                self.config.imatrix.as_ref().map(ImatrixDataSource::File),
+                imatrix_source,
                 IsqOrganization::Default,
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
@@ -401,7 +479,6 @@ impl Loader for VisionLoader {
             config,
             processor_filename: paths.get_processor_config().clone(),
             preprocessor_filename: paths.get_preprocessor_config().clone(),
-            imatrix: self.config.imatrix.clone(),
         })))
     }
 
@@ -435,7 +512,7 @@ impl IsqPipelineMixin for VisionPipeline {
                 device,
                 self.topology.as_ref(),
                 self.silent,
-                self.imatrix.as_ref().map(ImatrixDataSource::File),
+                None,
                 IsqOrganization::Default,
                 None,
                 UqffFullSer {

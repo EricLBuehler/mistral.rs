@@ -480,15 +480,18 @@ impl DecoderLayer {
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            position_ids,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let xs = self
+            .self_attn
+            .forward(
+                &xs,
+                attention_mask,
+                seqlen_offsets,
+                position_ids,
+                kv_cache,
+                metadata,
+                flash_params,
+            )
+            .unwrap();
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -1169,6 +1172,7 @@ impl IsqModel for Model {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct Phi3VisionSpecificArgs {
     pub image_sizes: Option<Vec<(usize, usize)>>,
 }
@@ -1203,6 +1207,9 @@ impl VisionModel for Model {
     fn cache(&self) -> &EitherCache {
         &self.cache
     }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.cache
+    }
     fn device(&self) -> &Device {
         &self.device
     }
@@ -1214,6 +1221,9 @@ impl VisionModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
+        Box::new(Phi3VisionSpecificArgs::default())
     }
 }
 

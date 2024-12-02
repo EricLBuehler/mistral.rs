@@ -373,7 +373,7 @@ impl MistralRs {
                     messages: RequestMessage::Completion {
                         text: "dummy".to_string(),
                         echo_prompt: false,
-                        best_of: 1,
+                        best_of: None,
                     },
                     sampling_params: SamplingParams {
                         max_len: Some(1),

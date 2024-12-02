@@ -42,7 +42,7 @@ pub enum RequestMessage {
     Completion {
         text: String,
         echo_prompt: bool,
-        best_of: usize,
+        best_of: Option<usize>,
     },
     CompletionTokens(Vec<u32>),
     VisionChat {

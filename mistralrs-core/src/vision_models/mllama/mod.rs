@@ -5,7 +5,7 @@ mod inputs_processor;
 mod text;
 mod vision;
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 pub(crate) use config::{MLlamaConfig, MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig};
 use config::{MLlamaVisionConfig, VisionActivation};
@@ -174,6 +174,7 @@ impl MLlamaModel {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct MLlamaSpecificArgs {
     pub aspect_ratio_ids: Option<Tensor>,
     pub aspect_ratio_mask: Option<Tensor>,
@@ -183,6 +184,9 @@ pub(crate) struct MLlamaSpecificArgs {
 impl VisionModel for MLlamaModel {
     fn cache(&self) -> &EitherCache {
         &self.language_model.cache
+    }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.language_model.cache
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.language_model.cfg
@@ -226,6 +230,9 @@ impl VisionModel for MLlamaModel {
             context_lens,
         )
     }
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
+        Box::new(MLlamaSpecificArgs::default())
+    }
 }
 
 impl IsqModel for MLlamaModel {
@@ -256,6 +263,40 @@ impl IsqModel for MLlamaModel {
             .extend(self.vision_model.residual_tensors());
 
         uvb.to_safetensors()
+    }
+
+    // NOTE: We ONLY calibrate the text bits of these models, so we should only track/return those parts!!
+
+    /// This is used for imatrix generation internally. Begin stats tracking.
+    fn begin_track_stats(&mut self) -> anyhow::Result<()> {
+        let layers = self
+            .language_model
+            .get_layers()
+            .0
+            .into_iter()
+            .map(|(layer, _)| layer)
+            .collect::<Vec<_>>();
+        for layer in layers {
+            Arc::get_mut(layer).unwrap().begin_track_stats()?;
+        }
+        Ok(())
+    }
+
+    /// End stats tracking and return the imatrix data
+    fn extract_imatrix_data(&mut self) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+        let layers = self
+            .language_model
+            .get_layers()
+            .0
+            .into_iter()
+            .enumerate()
+            .map(|(i, (layer, _))| (i, layer))
+            .collect::<Vec<_>>();
+        let mut data = HashMap::new();
+        for (i, layer) in layers {
+            data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
+        }
+        Ok(data)
     }
 }
 

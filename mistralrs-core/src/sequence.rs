@@ -769,7 +769,7 @@ impl Sequence {
 
 pub struct SequenceGroup {
     n_choices: usize, // The target number of choices to return. Can be decreased if an error is thrown.
-    best_of: usize,   // Top n seqs based on cumulative logprobs.
+    best_of: Option<usize>, // Top n seqs based on cumulative logprobs.
     pub total_prompt_toks: usize,
     pub total_toks: usize,
     pub total_prompt_time: u128,
@@ -786,7 +786,12 @@ pub struct SequenceGroup {
 }
 
 impl SequenceGroup {
-    pub fn new(n_choices: usize, is_streaming: bool, is_chat: bool, best_of: usize) -> Self {
+    pub fn new(
+        n_choices: usize,
+        is_streaming: bool,
+        is_chat: bool,
+        best_of: Option<usize>,
+    ) -> Self {
         Self {
             choices: Vec::new(),
             image_choices: Vec::new(),
@@ -806,21 +811,28 @@ impl SequenceGroup {
         }
     }
 
-    /// This does not apply best_of.
     pub fn get_choices(&self) -> &[Choice] {
         &self.choices
     }
 
-    /// This applies the best_of.
+    /// This may apply the best_of.
     pub fn get_completion_choices(&self) -> Vec<CompletionChoice> {
-        let mut choices = self.completion_choices.clone();
-        // Sort by descending logprobs
-        choices.sort_by(|a, b| b.0.partial_cmp(&a.0).expect("No ordering."));
-        choices
-            .into_iter()
-            .take(self.best_of)
-            .map(|(_, x)| x)
-            .collect::<Vec<_>>()
+        if let Some(best_of) = self.best_of {
+            let mut choices = self.completion_choices.clone();
+            // Sort by descending logprobs
+            choices.sort_by(|a, b| b.0.partial_cmp(&a.0).expect("No ordering."));
+            choices
+                .into_iter()
+                .take(best_of)
+                .map(|(_, x)| x)
+                .collect::<Vec<_>>()
+        } else {
+            self.completion_choices
+                .clone()
+                .into_iter()
+                .map(|(_, x)| x)
+                .collect::<Vec<_>>()
+        }
     }
 
     pub fn get_image_choices(&self) -> &[ImageChoice] {
