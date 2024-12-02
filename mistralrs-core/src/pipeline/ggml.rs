@@ -1,4 +1,5 @@
 use super::cache_manager::FullCacheManager;
+use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
@@ -8,8 +9,6 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
     ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
-use crate::aici::bintokens::build_tok_trie;
-use crate::aici::toktree::TokTrie;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::get_chat_template;
@@ -365,7 +364,7 @@ impl Loader for GGMLLoader {
             Model::Llama(ref l) => l.max_seq_len,
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
         };
-        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let tok_env = build_tok_env(tokenizer.clone());
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.normal().0.len(),
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
@@ -385,7 +384,7 @@ impl Loader for GGMLLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie: Some(tok_trie),
+                tok_env: Some(tok_env),
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
                 eos_tok: eos,

@@ -1,5 +1,5 @@
 use either::Either;
-use mistralrs_core::{ImageGenerationResponseFormat, Tool, ToolChoice};
+use mistralrs_core::{ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
 use utoipa::ToSchema;
@@ -72,8 +72,12 @@ fn default_response_format() -> ImageGenerationResponseFormat {
 pub enum Grammar {
     #[serde(rename = "regex")]
     Regex(String),
-    #[serde(rename = "yacc")]
-    Yacc(String),
+    #[serde(rename = "json_schema")]
+    JsonSchema(serde_json::Value),
+    #[serde(rename = "llguidance")]
+    Llguidance(LlguidanceGrammar),
+    #[serde(rename = "lark")]
+    Lark(String),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]

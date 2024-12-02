@@ -1,3 +1,19 @@
+use crate::{
+    get_mut_group,
+    pipeline::LayerCaches,
+    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
+    sampler::{Logprobs, Sampler},
+    ChatCompletionResponse, Usage,
+};
+use crate::{
+    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
+    pipeline::{DiffusionGenerationParams, KvCache},
+    response::CompletionChoice,
+    tools::ToolCallingMatcher,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
+    ImageGenerationResponse, ImageGenerationResponseFormat,
+};
+use candle_core::Tensor;
 use std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -7,25 +23,6 @@ use tokio::sync::{
     mpsc::{error::SendError, Sender},
     Mutex, MutexGuard,
 };
-
-use crate::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
-    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
-    pipeline::{DiffusionGenerationParams, KvCache},
-    response::CompletionChoice,
-    tools::ToolCallingMatcher,
-    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
-    ImageGenerationResponse, ImageGenerationResponseFormat,
-};
-use crate::{
-    get_mut_group,
-    pipeline::LayerCaches,
-    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
-    sampler::{Logprobs, Sampler},
-    ChatCompletionResponse, Usage,
-};
-use candle_core::Tensor;
-use regex_automata::util::primitives::StateID;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
@@ -68,8 +65,7 @@ pub enum SequenceState {
 }
 
 pub enum SequenceRecognizer {
-    Regex(Box<StackRecognizer<StateID, RecRx>>),
-    Cfg(Box<CfgParser>),
+    Llguidance(Box<llguidance::Constraint>),
     None,
 }
 
@@ -173,9 +169,6 @@ pub struct Sequence {
     // Image generation
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
     diffusion_params: Option<DiffusionGenerationParams>,
-
-    // Grammars
-    pub(crate) tok_trie: Option<TokTrie>,
 
     // Completion requests
     suffix: Option<String>,
@@ -283,7 +276,6 @@ impl Sequence {
         // Paged attention
         block_size: Option<usize>,
         //
-        tok_trie: Option<TokTrie>,
         tools: Option<Arc<ToolCallingMatcher>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
@@ -348,7 +340,6 @@ impl Sequence {
             adapters,
             input_images,
             custom_metadata,
-            tok_trie,
             tools,
             image_gen_response_format,
             sequence_stepping_type,

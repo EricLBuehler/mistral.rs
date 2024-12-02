@@ -46,7 +46,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e89da841a80418a9b391ebaea17f5c112ffaaa96f621d2c285b5174da76b9011"
 dependencies = [
  "cfg-if",
+ "getrandom",
  "once_cell",
+ "serde",
  "version_check",
  "zerocopy",
 ]
@@ -332,6 +334,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "borrow-or-share"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3eeab4423108c5d7c744f4d234de88d18d636100093ae04caf4825134b9c3a32"
+
+[[package]]
 name = "buildstructor"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -491,6 +499,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cbindgen"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fce8dd7fcfcbf3a0a87d8f515194b49d6135acab73e18bd380d1d93bb1a15eb"
+dependencies = [
+ "clap",
+ "heck 0.4.1",
+ "indexmap",
+ "log",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.85",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "cc"
 version = "1.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -590,7 +617,7 @@ version = "4.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ac6a0c7b1a9e9a5186361f67dfa1b88213572f427fb9ab038efb2bd8c582dab"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.85",
@@ -949,6 +976,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "derivre"
+version = "0.1.0"
+source = "git+https://github.com/microsoft/derivre?rev=02ee497e6e404a0b402b4f68a9abf599d22ed2ed#02ee497e6e404a0b402b4f68a9abf599d22ed2ed"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "bytemuck",
+ "bytemuck_derive",
+ "hashbrown 0.14.5",
+ "regex-syntax 0.8.5",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1051,7 +1091,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1e6a265c649f3f5979b601d26f1d05ada116434c87741c9493cb56218f76cbc"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.85",
@@ -1156,6 +1196,17 @@ dependencies = [
  "num-traits",
  "rand",
  "rand_distr",
+]
+
+[[package]]
+name = "fluent-uri"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1918b65d96df47d3591bed19c5cca17e3fa5d0707318e4b5ef2eae01764df7e5"
+dependencies = [
+ "borrow-or-share",
+ "ref-cast",
+ "serde",
 ]
 
 [[package]]
@@ -1547,6 +1598,12 @@ checksum = "1e087f84d4f86bf4b218b927129862374b72199ae7d8657835f1e89000eea4fb"
 
 [[package]]
 name = "heck"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
+
+[[package]]
+name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
@@ -1556,6 +1613,23 @@ name = "hermit-abi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d231dfb89cfffdbc30e7fc41579ed6066ad03abda9e567ccafae602b97ec5024"
+
+[[package]]
+name = "hf-hub"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b780635574b3d92f036890d8373433d6f9fc7abb320ee42a5c25897fc8ed732"
+dependencies = [
+ "dirs",
+ "indicatif",
+ "log",
+ "native-tls",
+ "rand",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "ureq",
+]
 
 [[package]]
 name = "http"
@@ -1926,6 +2000,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78b3ae25bc7c8c38cec158d1f2757ee79e9b3740fbc7ccf0e59e4b08d793fa89"
 
 [[package]]
+name = "llguidance"
+version = "0.4.1"
+source = "git+https://github.com/microsoft/llguidance?rev=cfef3df97372a7b84d74976ff41cc9cb78bca6cc#cfef3df97372a7b84d74976ff41cc9cb78bca6cc"
+dependencies = [
+ "anyhow",
+ "cbindgen",
+ "derivre",
+ "indexmap",
+ "instant",
+ "referencing",
+ "regex-syntax 0.8.5",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "toktrie",
+ "url",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2204,6 +2297,7 @@ dependencies = [
  "indicatif",
  "intel-mkl-src",
  "itertools 0.13.0",
+ "llguidance",
  "lrtable",
  "minijinja",
  "minijinja-contrib",
@@ -2232,6 +2326,7 @@ dependencies = [
  "tokenizers",
  "tokio",
  "tokio-rayon",
+ "toktrie_hf_tokenizers",
  "toml",
  "tqdm",
  "tracing",
@@ -2971,7 +3066,7 @@ version = "0.22.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae1e3f09eecd94618f60a455a23def79f79eba4dc561a97324bf9ac8c6df30ce"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "pyo3-build-config",
  "quote",
@@ -3173,6 +3268,39 @@ dependencies = [
  "getrandom",
  "libredox",
  "thiserror",
+]
+
+[[package]]
+name = "ref-cast"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ccf0a6f84d5f1d581da8b41b47ec8600871962f2a528115b542b362d4b744931"
+dependencies = [
+ "ref-cast-impl",
+]
+
+[[package]]
+name = "ref-cast-impl"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcc303e793d3734489387d205e9b186fac9c6cfacedd98cbb2e8a5943595f3e6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.85",
+]
+
+[[package]]
+name = "referencing"
+version = "0.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb853437e467c693ac1dc8c1520105a31b8c2588544ff2f3cfa5a7c706c6c069"
+dependencies = [
+ "ahash",
+ "fluent-uri",
+ "once_cell",
+ "percent-encoding",
+ "serde_json",
 ]
 
 [[package]]
@@ -3544,6 +3672,7 @@ version = "1.0.132"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d726bfaff4b320266d395898905d0eba0345aae23b54aee3a737e260fd46db03"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "ryu",
@@ -3783,7 +3912,7 @@ version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
 dependencies = [
- "heck",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "rustversion",
@@ -4009,6 +4138,7 @@ dependencies = [
  "derive_builder",
  "esaxx-rs",
  "getrandom",
+ "hf-hub",
  "indicatif",
  "itertools 0.12.1",
  "lazy_static",
@@ -4102,6 +4232,33 @@ dependencies = [
  "futures-sink",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "toktrie"
+version = "0.1.0"
+source = "git+https://github.com/microsoft/llguidance?rev=cfef3df97372a7b84d74976ff41cc9cb78bca6cc#cfef3df97372a7b84d74976ff41cc9cb78bca6cc"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "bytemuck_derive",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "toktrie_hf_tokenizers"
+version = "0.1.0"
+source = "git+https://github.com/microsoft/llguidance?rev=cfef3df97372a7b84d74976ff41cc9cb78bca6cc#cfef3df97372a7b84d74976ff41cc9cb78bca6cc"
+dependencies = [
+ "anyhow",
+ "log",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tokenizers",
+ "toktrie",
 ]
 
 [[package]]
@@ -4416,6 +4573,7 @@ dependencies = [
  "base64 0.22.1",
  "flate2",
  "log",
+ "native-tls",
  "once_cell",
  "rustls",
  "rustls-pki-types",

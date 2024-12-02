@@ -89,7 +89,7 @@ Mistral.rs supports several model categories:
 **Easy**:
 - Lightweight OpenAI API compatible HTTP server
 - Python API
-- Grammar support with Regex and Yacc
+- Grammar support with JSON Schema, Regex, Lark, and Guidance via [LLGuidance library](https://github.com/microsoft/llguidance)
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
     - Enhance performance with an [imatrix](docs/IMATRIX.md)!
 

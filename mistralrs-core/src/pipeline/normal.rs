@@ -1,5 +1,6 @@
 use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::ImatrixDataSource;
+use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
@@ -14,8 +15,6 @@ use super::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
     NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
-use crate::aici::bintokens::build_tok_trie;
-use crate::aici::toktree::TokTrie;
 use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -529,7 +528,7 @@ impl Loader for NormalLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
+        let tok_env = build_tok_env(tokenizer.clone());
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
@@ -551,7 +550,7 @@ impl Loader for NormalLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie: Some(tok_trie),
+                tok_env: Some(tok_env),
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
                 eos_tok: eos,

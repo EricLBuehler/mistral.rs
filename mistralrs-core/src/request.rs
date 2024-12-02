@@ -13,11 +13,15 @@ use crate::{
 use std::{fmt::Debug, sync::Arc};
 use tokio::sync::mpsc::Sender;
 
+pub type LlguidanceGrammar = llguidance::api::TopLevelGrammar;
+
 #[derive(Clone)]
-/// Control the constraint with Regex or Yacc.
+/// Control the constraint with llguidance.
 pub enum Constraint {
     Regex(String),
-    Yacc(String),
+    Lark(String),
+    JsonSchema(serde_json::Value),
+    Llguidance(LlguidanceGrammar),
     None,
 }
 

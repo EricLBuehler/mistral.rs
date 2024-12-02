@@ -79,6 +79,9 @@ safetensors = "0.4.5"
 serde_plain = "1.0.2"
 as-any = "0.3.1"
 float8.workspace = true
+llguidance = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc", default-features = false, features = ["lark"] }
+toktrie_hf_tokenizers = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc" }
+
 
 [features]
 pyo3_macros = ["pyo3"]

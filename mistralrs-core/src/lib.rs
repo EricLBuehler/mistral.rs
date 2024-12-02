@@ -26,7 +26,6 @@ use tokio::sync::mpsc::{channel, Sender};
 use tracing::info;
 use tracing::warn;
 
-mod aici;
 mod cuda;
 mod device_map;
 mod engine;
@@ -85,8 +84,8 @@ pub use pipeline::{
     VisionLoaderBuilder, VisionLoaderType, VisionPromptPrefixer, VisionSpecificConfig,
 };
 pub use request::{
-    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, MessageContent,
-    NormalRequest, Request, RequestMessage, TokenizationRequest,
+    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
+    MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
 };
 pub use response::*;
 pub use sampler::{
@@ -104,6 +103,9 @@ pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
 pub use utils::paged_attn_supported;
+
+// re-export llguidance for easier LlguidanceGrammar construction
+pub use llguidance;
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
