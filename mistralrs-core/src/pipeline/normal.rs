@@ -1,5 +1,6 @@
 use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::ImatrixDataSource;
+use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
@@ -14,7 +15,6 @@ use super::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
     NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
-use super::llg::build_tok_env;
 use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};

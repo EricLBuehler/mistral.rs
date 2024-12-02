@@ -1,11 +1,9 @@
-use std::{
-    fmt::Display,
-    sync::{Arc, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
-};
-use tokio::sync::{
-    mpsc::{error::SendError, Sender},
-    Mutex, MutexGuard,
+use crate::{
+    get_mut_group,
+    pipeline::LayerCaches,
+    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
+    sampler::{Logprobs, Sampler},
+    ChatCompletionResponse, Usage,
 };
 use crate::{
     paged_attention::{BlockEngineSequence, LogicalTokenBlock},
@@ -15,14 +13,16 @@ use crate::{
     CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
     ImageGenerationResponse, ImageGenerationResponseFormat,
 };
-use crate::{
-    get_mut_group,
-    pipeline::LayerCaches,
-    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
-    sampler::{Logprobs, Sampler},
-    ChatCompletionResponse, Usage,
-};
 use candle_core::Tensor;
+use std::{
+    fmt::Display,
+    sync::{Arc, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::{
+    mpsc::{error::SendError, Sender},
+    Mutex, MutexGuard,
+};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
