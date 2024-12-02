@@ -785,8 +785,8 @@
 <a href="#784" id="784">784</a>
 <a href="#785" id="785">785</a>
 <a href="#786" id="786">786</a>
-<a href="#787" id="787">787</a>
-<a href="#788" id="788">788</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#787" id="787">787</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
@@ -796,8 +796,6 @@
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
     ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
-<span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
-<span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
@@ -1281,7 +1279,7 @@
             Model::Starcoder2(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
             Model::Qwen2(<span class="kw-2">ref </span>p) =&gt; p.max_seq_len,
         };
-        <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
+        <span class="kw">let </span>tok_env = build_tok_env(tokenizer.clone());
         <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model {
             Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
             Model::Phi2(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
@@ -1320,7 +1318,7 @@
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie: <span class="prelude-val">Some</span>(tok_trie),
+                tok_env: <span class="prelude-val">Some</span>(tok_env),
                 has_no_kv_cache: <span class="self">self</span>.no_kv_cache,
                 num_hidden_layers,
                 eos_tok: eos,

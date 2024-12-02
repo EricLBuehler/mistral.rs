@@ -792,7 +792,8 @@
 <a href="#791" id="791">791</a>
 <a href="#792" id="792">792</a>
 <a href="#793" id="793">793</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
-<span class="kw">use </span><span class="kw">super</span>::isq::{ImatrixDataSource, UqffFullSer};
+<span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
+<span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
@@ -803,10 +804,9 @@
 <span class="kw">use super</span>::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
 };
-<span class="kw">use </span><span class="kw">crate</span>::aici::bintokens::build_tok_trie;
-<span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::llg::build_tok_env;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::make_prompt_chunk;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
@@ -1234,7 +1234,7 @@
         };
 
         <span class="kw">let </span>max_seq_len = model.max_seq_len();
-        <span class="kw">let </span>tok_trie: Arc&lt;TokTrie&gt; = build_tok_trie(tokenizer.clone()).into();
+        <span class="kw">let </span>tok_env = build_tok_env(tokenizer.clone());
         <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model.cache() {
             EitherCache::Full(full) =&gt; full.lock().len(),
             EitherCache::Normal(normal) =&gt; normal.lock().unwrap().<span class="number">0</span>.len(),
@@ -1249,7 +1249,7 @@
             model_id: <span class="self">self</span>.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie: <span class="prelude-val">Some</span>(tok_trie),
+                tok_env: <span class="prelude-val">Some</span>(tok_env),
                 is_xlora: <span class="bool-val">false</span>,
                 num_hidden_layers,
                 eos_tok: eos,

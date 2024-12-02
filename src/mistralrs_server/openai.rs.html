@@ -231,8 +231,12 @@
 <a href="#230" id="230">230</a>
 <a href="#231" id="231">231</a>
 <a href="#232" id="232">232</a>
-<a href="#233" id="233">233</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
-<span class="kw">use </span>mistralrs_core::{ImageGenerationResponseFormat, Tool, ToolChoice};
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
+<span class="kw">use </span>mistralrs_core::{ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::{collections::HashMap, ops::Deref};
 <span class="kw">use </span>utoipa::ToSchema;
@@ -305,8 +309,12 @@
 </span><span class="kw">pub enum </span>Grammar {
     <span class="attr">#[serde(rename = <span class="string">"regex"</span>)]
     </span>Regex(String),
-    <span class="attr">#[serde(rename = <span class="string">"yacc"</span>)]
-    </span>Yacc(String),
+    <span class="attr">#[serde(rename = <span class="string">"json_schema"</span>)]
+    </span>JsonSchema(serde_json::Value),
+    <span class="attr">#[serde(rename = <span class="string">"llguidance"</span>)]
+    </span>Llguidance(LlguidanceGrammar),
+    <span class="attr">#[serde(rename = <span class="string">"lark"</span>)]
+    </span>Lark(String),
 }
 
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]

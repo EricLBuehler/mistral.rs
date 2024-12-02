@@ -220,25 +220,7 @@
 <a href="#219" id="219">219</a>
 <a href="#220" id="220">220</a>
 <a href="#221" id="221">221</a>
-<a href="#222" id="222">222</a>
-<a href="#223" id="223">223</a>
-<a href="#224" id="224">224</a>
-<a href="#225" id="225">225</a>
-<a href="#226" id="226">226</a>
-<a href="#227" id="227">227</a>
-<a href="#228" id="228">228</a>
-<a href="#229" id="229">229</a>
-<a href="#230" id="230">230</a>
-<a href="#231" id="231">231</a>
-<a href="#232" id="232">232</a>
-<a href="#233" id="233">233</a>
-<a href="#234" id="234">234</a>
-<a href="#235" id="235">235</a>
-<a href="#236" id="236">236</a>
-<a href="#237" id="237">237</a>
-<a href="#238" id="238">238</a>
-<a href="#239" id="239">239</a>
-<a href="#240" id="240">240</a></pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>debug;
+<a href="#222" id="222">222</a></pre></div><pre class="rust"><code><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>debug;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>gguf_metadata;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>log;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>memory_usage;
@@ -438,24 +420,6 @@
                 <span class="kw">break </span>inner;
             }
         }
-    };
-}
-
-<span class="attr">#[doc(hidden)]
-#[macro_export]
-</span><span class="macro">macro_rules!</span> get_bias_if_not_allowed {
-    (<span class="macro-nonterminal">$tok_trie</span>:expr, <span class="macro-nonterminal">$rx</span>:expr, <span class="macro-nonterminal">$next_token_id</span>:expr) =&gt; {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(tok_trie) = <span class="kw-2">&amp;</span><span class="macro-nonterminal">$tok_trie </span>{
-            <span class="kw">if </span>tok_trie.token_allowed(<span class="macro-nonterminal">$rx</span>, <span class="macro-nonterminal">$next_token_id</span>) {
-                <span class="prelude-val">None
-            </span>} <span class="kw">else </span>{
-                <span class="kw">let </span><span class="kw-2">mut </span>token_set = tok_trie.alloc_token_set();
-                tok_trie.compute_bias(<span class="macro-nonterminal">$rx</span>, <span class="kw-2">&amp;mut </span>token_set);
-                <span class="prelude-val">Some</span>(token_set)
-            }
-        } <span class="kw">else </span>{
-            <span class="prelude-val">None
-        </span>}
     };
 }
 

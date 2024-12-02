@@ -952,16 +952,23 @@
 <a href="#951" id="951">951</a>
 <a href="#952" id="952">952</a>
 <a href="#953" id="953">953</a>
-<a href="#954" id="954">954</a>
-<a href="#955" id="955">955</a>
-<a href="#956" id="956">956</a>
-<a href="#957" id="957">957</a>
-<a href="#958" id="958">958</a>
-<a href="#959" id="959">959</a>
-<a href="#960" id="960">960</a>
-<a href="#961" id="961">961</a>
-<a href="#962" id="962">962</a>
-<a href="#963" id="963">963</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#954" id="954">954</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
+    get_mut_group,
+    pipeline::LayerCaches,
+    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
+    sampler::{Logprobs, Sampler},
+    ChatCompletionResponse, Usage,
+};
+<span class="kw">use crate</span>::{
+    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
+    pipeline::{DiffusionGenerationParams, KvCache},
+    response::CompletionChoice,
+    tools::ToolCallingMatcher,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
+    ImageGenerationResponse, ImageGenerationResponseFormat,
+};
+<span class="kw">use </span>candle_core::Tensor;
+<span class="kw">use </span>std::{
     fmt::Display,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -970,25 +977,6 @@
     mpsc::{error::SendError, Sender},
     Mutex, MutexGuard,
 };
-
-<span class="kw">use crate</span>::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
-    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
-    pipeline::{DiffusionGenerationParams, KvCache},
-    response::CompletionChoice,
-    tools::ToolCallingMatcher,
-    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
-    ImageGenerationResponse, ImageGenerationResponseFormat,
-};
-<span class="kw">use crate</span>::{
-    get_mut_group,
-    pipeline::LayerCaches,
-    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
-    sampler::{Logprobs, Sampler},
-    ChatCompletionResponse, Usage,
-};
-<span class="kw">use </span>candle_core::Tensor;
-<span class="kw">use </span>regex_automata::util::primitives::StateID;
 
 <span class="attr">#[derive(Clone, Copy, PartialEq, Debug)]
 </span><span class="kw">pub enum </span>StopReason {
@@ -1031,8 +1019,7 @@
 }
 
 <span class="kw">pub enum </span>SequenceRecognizer {
-    Regex(Box&lt;StackRecognizer&lt;StateID, RecRx&gt;&gt;),
-    Cfg(Box&lt;CfgParser&gt;),
+    Llguidance(Box&lt;llguidance::Constraint&gt;),
     <span class="prelude-val">None</span>,
 }
 
@@ -1136,9 +1123,6 @@
     <span class="comment">// Image generation
     </span>image_gen_response_format: <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt;,
     diffusion_params: <span class="prelude-ty">Option</span>&lt;DiffusionGenerationParams&gt;,
-
-    <span class="comment">// Grammars
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) tok_trie: <span class="prelude-ty">Option</span>&lt;TokTrie&gt;,
 
     <span class="comment">// Completion requests
     </span>suffix: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -1246,8 +1230,7 @@
         <span class="comment">// Paged attention
         </span>block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         <span class="comment">//
-        </span>tok_trie: <span class="prelude-ty">Option</span>&lt;TokTrie&gt;,
-        tools: <span class="prelude-ty">Option</span>&lt;Arc&lt;ToolCallingMatcher&gt;&gt;,
+        </span>tools: <span class="prelude-ty">Option</span>&lt;Arc&lt;ToolCallingMatcher&gt;&gt;,
         image_gen_response_format: <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt;,
         sequence_stepping_type: SeqStepType,
         diffusion_params: <span class="prelude-ty">Option</span>&lt;DiffusionGenerationParams&gt;,
@@ -1311,7 +1294,6 @@
             adapters,
             input_images,
             custom_metadata,
-            tok_trie,
             tools,
             image_gen_response_format,
             sequence_stepping_type,

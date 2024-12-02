@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["clone_vec_as_bytes","from_hex_string","limit_bytes","limit_str","to_hex_string","vec_from_bytes"],"struct":["U32Pair"]};

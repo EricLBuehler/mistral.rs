@@ -930,6 +930,7 @@
 <span class="kw">mod </span>gguf;
 <span class="kw">mod </span>inputs_processor;
 <span class="kw">mod </span>isq;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>llg;
 <span class="kw">mod </span>loaders;
 <span class="kw">mod </span>macros;
 <span class="kw">mod </span>normal;
@@ -941,7 +942,6 @@
 <span class="kw">mod </span>vision;
 
 <span class="kw">pub use </span><span class="kw">super</span>::diffusion_models::DiffusionGenerationParams;
-<span class="kw">use </span><span class="kw">crate</span>::aici::toktree::TokTrie;
 <span class="kw">use </span><span class="kw">crate</span>::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
@@ -994,7 +994,7 @@
 <span class="kw">pub struct </span>GeneralMetadata {
     <span class="kw">pub </span>max_seq_len: usize,
     <span class="doccomment">/// Only None if it doesnt make sense for the model
-    </span><span class="kw">pub </span>tok_trie: <span class="prelude-ty">Option</span>&lt;Arc&lt;TokTrie&gt;&gt;,
+    </span><span class="kw">pub </span>tok_env: <span class="prelude-ty">Option</span>&lt;llguidance::toktrie::TokEnv&gt;,
     <span class="kw">pub </span>has_no_kv_cache: bool,
     <span class="kw">pub </span>num_hidden_layers: usize,
     <span class="kw">pub </span>eos_tok: Vec&lt;u32&gt;,

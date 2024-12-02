@@ -302,7 +302,9 @@
 <a href="#301" id="301">301</a>
 <a href="#302" id="302">302</a>
 <a href="#303" id="303">303</a>
-<a href="#304" id="304">304</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>std::{
     env,
     error::Error,
@@ -505,8 +507,10 @@
             is_streaming,
             suffix: oairequest.suffix,
             constraint: <span class="kw">match </span>oairequest.grammar {
-                <span class="prelude-val">Some</span>(Grammar::Yacc(yacc)) =&gt; Constraint::Yacc(yacc),
                 <span class="prelude-val">Some</span>(Grammar::Regex(regex)) =&gt; Constraint::Regex(regex),
+                <span class="prelude-val">Some</span>(Grammar::Lark(lark)) =&gt; Constraint::Lark(lark),
+                <span class="prelude-val">Some</span>(Grammar::JsonSchema(schema)) =&gt; Constraint::JsonSchema(schema),
+                <span class="prelude-val">Some</span>(Grammar::Llguidance(llguidance)) =&gt; Constraint::Llguidance(llguidance),
                 <span class="prelude-val">None </span>=&gt; Constraint::None,
             },
             adapters: oairequest.adapters,
