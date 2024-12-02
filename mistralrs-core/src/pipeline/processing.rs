@@ -30,12 +30,13 @@ pub enum MessagesAction {
 /// Also includes method to retrieve the input processor for processing inputs for the
 /// model.
 pub trait Processor {
-    /// Get the tokens and the untokenized prompt
+    /// Get the tokens and the untokenized prompt. `add_special_tokens` should usually be true.
     fn process(
         &self,
         pipeline: &dyn Pipeline,
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
+        add_special_tokens: bool,
         tools: Vec<Tool>,
     ) -> Result<(Vec<u32>, String)> {
         let prompt = apply_chat_template(
@@ -50,7 +51,7 @@ pub trait Processor {
             .with_context(|| {
                 "Default `Processor::process` requires the model to have a tokenizer."
             })?
-            .encode(prompt.clone(), true)
+            .encode(prompt.clone(), add_special_tokens)
             .map_err(anyhow::Error::msg)?;
         Ok((encoding.get_ids().to_vec(), prompt))
     }
@@ -84,8 +85,13 @@ pub(crate) fn apply_chat_template(
                                 'outer: for content_row in rv {
                                     for (content_k, content_v) in content_row {
                                         if content_k == "text" {
-                                            new_message.insert(k, Either::Left(content_v));
-                                            break 'outer;
+                                            if let Some(content_str) = content_v.as_str() {
+                                                new_message.insert(
+                                                    k,
+                                                    Either::Left(content_str.to_string()),
+                                                );
+                                                break 'outer;
+                                            }
                                         }
                                     }
                                 }
@@ -149,6 +155,6 @@ impl Processor for BasicProcessor {
         &[]
     }
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::FlattenOnlyText
+        MessagesAction::Keep
     }
 }

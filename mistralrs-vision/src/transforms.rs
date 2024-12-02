@@ -85,7 +85,12 @@ impl ImageTransform for Normalize {
     fn map(&self, x: &Self::Input, _: &Device) -> Result<Self::Output> {
         let num_channels = x.dim(0)?;
         if self.mean.len() != num_channels || self.std.len() != num_channels {
-            candle_core::bail!("Num channels must match number of mean and std.");
+            candle_core::bail!(
+                "Num channels ({}) must match number of mean ({}) and std ({}).",
+                num_channels,
+                self.mean.len(),
+                self.std.len()
+            );
         }
         let mut accum = Vec::new();
         for (i, channel) in x.chunk(num_channels, 0)?.iter().enumerate() {

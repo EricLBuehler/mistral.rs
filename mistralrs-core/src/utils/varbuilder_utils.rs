@@ -1,6 +1,11 @@
 //! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc, thread::JoinHandle};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::Arc,
+    thread::{self, JoinHandle},
+};
 
 use candle_core::{
     pickle::PthTensors, safetensors::MmapedSafetensors, DType, Device, Result, Tensor,
@@ -9,14 +14,11 @@ use candle_nn::{
     var_builder::{SimpleBackend, VarBuilderArgs},
     VarBuilder,
 };
-use either::Either;
 use regex::Regex;
 
 use crate::lora::LoraConfig;
 use crate::utils::progress::IterWithProgress;
 use derive_new::new;
-
-use super::progress::{Joinable, NonThreadingHandle, Parellelize};
 
 trait TensorLoaderBackend {
     fn get_names(&self) -> Vec<String>;
@@ -89,21 +91,13 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
 ) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
     #[allow(clippy::type_complexity)]
-    let mut handles: Vec<
-        Either<
-            JoinHandle<Result<HashMap<String, Tensor>>>,
-            NonThreadingHandle<
-                Result<HashMap<String, Tensor>>,
-                Box<dyn FnOnce() -> Result<HashMap<String, Tensor>> + Send + 'static>,
-            >,
-        >,
-    > = Vec::new();
+    let mut handles: Vec<JoinHandle<Result<HashMap<String, Tensor>>>> = Vec::new();
 
     for path in paths {
         let device = device.clone();
         if let Some(regexes) = make_dummy_regexes.clone() {
             let predicate = predicate.clone();
-            handles.push(Parellelize::spawn(Box::new(move || {
+            handles.push(thread::spawn(Box::new(move || {
                 let loader = Common::new();
                 loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |key| {
                     regexes.iter().any(|r| r.is_match(key))
@@ -111,7 +105,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
             })));
         } else {
             let predicate = predicate.clone();
-            handles.push(Parellelize::spawn(Box::new(move || {
+            handles.push(thread::spawn(Box::new(move || {
                 let loader = Common::new();
                 loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |_| false)
             })));
@@ -121,7 +115,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
         let device = device.clone();
         if let Some(regexes) = make_dummy_regexes.clone() {
             let predicate = predicate.clone();
-            handles.push(Parellelize::spawn(Box::new(move || {
+            handles.push(thread::spawn(Box::new(move || {
                 let loader = XLora::new(i + 1);
                 loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |key| {
                     regexes.iter().any(|r| r.is_match(key))
@@ -129,7 +123,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
             })));
         } else {
             let predicate = predicate.clone();
-            handles.push(Parellelize::spawn(Box::new(move || {
+            handles.push(thread::spawn(Box::new(move || {
                 let loader = XLora::new(i + 1);
                 loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |_| false)
             })));

@@ -5,6 +5,7 @@ use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use either::Either;
 use indexmap::IndexMap;
 use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
+use serde_json::Value;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -20,13 +21,14 @@ use candle_core::{Device, Result};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams, DiffusionLoaderBuilder,
-    DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
-    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
-    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams,
+    DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse,
+    ImageGenerationResponseFormat, LlguidanceGrammar, Loader, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
+    PagedAttentionConfig, Request as _Request, RequestMessage, Response, ResponseOk,
+    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
+    TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
@@ -35,7 +37,7 @@ mod requests;
 mod stream;
 mod util;
 mod which;
-use which::{Architecture, VisionArchitecture, Which};
+use which::{Architecture, DiffusionArchitecture, VisionArchitecture, Which};
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 
@@ -90,6 +92,8 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
+            imatrix,
+            calibration_file,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -98,6 +102,8 @@ fn parse_which(
                 organization: organization.map(Into::into).unwrap_or(Default::default()),
                 write_uqff,
                 from_uqff,
+                imatrix,
+                calibration_file,
             },
             chat_template,
             tokenizer_json,
@@ -124,6 +130,8 @@ fn parse_which(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                imatrix: None,
+                calibration_file: None,
             },
             chat_template,
             tokenizer_json,
@@ -158,6 +166,8 @@ fn parse_which(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                imatrix: None,
+                calibration_file: None,
             },
             chat_template,
             tokenizer_json,
@@ -342,6 +352,8 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
+            max_edge,
+            calibration_file,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -349,6 +361,8 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff,
+                max_edge,
+                calibration_file,
             },
             chat_template,
             tokenizer_json,
@@ -366,6 +380,40 @@ fn parse_which(
     })
 }
 
+fn build_constraint(grammar: Option<&str>, grammar_type: Option<&str>) -> PyApiResult<Constraint> {
+    if grammar_type.is_none() {
+        if grammar.is_some() {
+            return Err(PyApiErr::from(
+                "Grammar text is specified but not grammar type",
+            ));
+        }
+        return Ok(Constraint::None);
+    }
+
+    let grammar =
+        grammar.ok_or_else(|| PyApiErr::from("Grammar type is specified but not grammar text"))?;
+
+    let constraint = match grammar_type.unwrap() {
+        "regex" => Constraint::Regex(grammar.to_string()),
+        "lark" => Constraint::Lark(grammar.to_string()),
+        "json_schema" => {
+            let value = serde_json::from_str::<serde_json::Value>(grammar)
+                .map_err(|e| PyApiErr::from(format!("Failed to parse JSON schema: {e}")))?;
+            Constraint::JsonSchema(value)
+        }
+        "llguidance" => {
+            let value = serde_json::from_str::<LlguidanceGrammar>(grammar).map_err(|e| {
+                PyApiErr::from(format!("Failed to parse JSON llguidance object: {e}"))
+            })?;
+            Constraint::Llguidance(value)
+        }
+        _ => return Err(PyApiErr::from(
+            "Grammar type is specified but is not `regex`, `lark`, `json_schema`, nor `llguidance`",
+        )),
+    };
+
+    Ok(constraint)
+}
 #[pymethods]
 impl Runner {
     #[new]
@@ -639,27 +687,8 @@ impl Runner {
                 .stop_seqs
                 .as_ref()
                 .map(|x| StopTokens::Seqs(x.to_vec()));
-            let constraint = if request.grammar_type == Some("regex".to_string()) {
-                if request.grammar.is_none() {
-                    return Err(PyApiErr::from(
-                        "Grammar type is specified but not grammar text",
-                    ));
-                }
-                Constraint::Regex(request.grammar.as_ref().unwrap().clone())
-            } else if request.grammar_type == Some("yacc".to_string()) {
-                if request.grammar.is_none() {
-                    return Err(PyApiErr::from(
-                        "Grammar type is specified but not grammar text",
-                    ));
-                }
-                Constraint::Yacc(request.grammar.as_ref().unwrap().clone())
-            } else if request.grammar_type.is_some() {
-                return Err(PyApiErr::from(
-                    "Grammar type is specified but is not `regex` or `yacc`",
-                ));
-            } else {
-                Constraint::None
-            };
+            let constraint =
+                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
 
             let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
                 Some(DrySamplingParams::new_with_defaults(
@@ -681,7 +710,7 @@ impl Runner {
                             Either::Left(content) => {
                                 let mut message_map: IndexMap<
                                     String,
-                                    Either<String, Vec<IndexMap<String, String>>>,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
                                 > = IndexMap::new();
                                 message_map.insert(
                                     "role".to_string(),
@@ -758,7 +787,7 @@ impl Runner {
                                 }
                                 let mut message_map: IndexMap<
                                     String,
-                                    Either<String, Vec<IndexMap<String, String>>>,
+                                    Either<String, Vec<IndexMap<String, Value>>>,
                                 > = IndexMap::new();
                                 message_map.insert(
                                     "role".to_string(),
@@ -772,11 +801,13 @@ impl Runner {
 
                                 let mut content_map = Vec::new();
                                 let mut content_image_map = IndexMap::new();
-                                content_image_map.insert("type".to_string(), "image".to_string());
+                                content_image_map
+                                    .insert("type".to_string(), Value::String("image".to_string()));
                                 content_map.push(content_image_map);
                                 let mut content_text_map = IndexMap::new();
-                                content_text_map.insert("type".to_string(), "text".to_string());
-                                content_text_map.insert("text".to_string(), content);
+                                content_text_map
+                                    .insert("type".to_string(), Value::String("text".to_string()));
+                                content_text_map.insert("text".to_string(), Value::String(content));
                                 content_map.push(content_text_map);
 
                                 message_map
@@ -806,7 +837,7 @@ impl Runner {
                     let mut messages = Vec::new();
                     let mut message_map: IndexMap<
                         String,
-                        Either<String, Vec<IndexMap<String, String>>>,
+                        Either<String, Vec<IndexMap<String, Value>>>,
                     > = IndexMap::new();
                     message_map.insert("role".to_string(), Either::Left("user".to_string()));
                     message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
@@ -862,6 +893,7 @@ impl Runner {
                 tool_choice,
                 tools,
                 logits_processors: None,
+                return_raw_logits: false,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -884,6 +916,7 @@ impl Runner {
                     Response::CompletionModelError(_, _) => unreachable!(),
                     Response::CompletionChunk(_) => unreachable!(),
                     Response::ImageGeneration(_) => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
                 }
             }
         })
@@ -901,27 +934,8 @@ impl Runner {
                 .stop_seqs
                 .as_ref()
                 .map(|x| StopTokens::Seqs(x.to_vec()));
-            let constraint = if request.grammar_type == Some("regex".to_string()) {
-                if request.grammar.is_none() {
-                    return Err(PyApiErr::from(
-                        "Grammar type is specified but not grammar text",
-                    ));
-                }
-                Constraint::Regex(request.grammar.as_ref().unwrap().clone())
-            } else if request.grammar_type == Some("yacc".to_string()) {
-                if request.grammar.is_none() {
-                    return Err(PyApiErr::from(
-                        "Grammar type is specified but not grammar text",
-                    ));
-                }
-                Constraint::Yacc(request.grammar.as_ref().unwrap().clone())
-            } else if request.grammar_type.is_some() {
-                return Err(PyApiErr::from(
-                    "Grammar type is specified but is not `regex` or `yacc`",
-                ));
-            } else {
-                Constraint::None
-            };
+            let constraint =
+                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
 
             let tool_choice = request.tool_choice.as_ref().map(|x| match x {
                 ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
@@ -985,6 +999,7 @@ impl Runner {
                 tool_choice,
                 tools,
                 logits_processors: None,
+                return_raw_logits: false,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1003,6 +1018,7 @@ impl Runner {
                 Response::ModelError(_, _) => unreachable!(),
                 Response::CompletionChunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Raw { .. } => unreachable!(),
             }
         })
     }
@@ -1040,6 +1056,7 @@ impl Runner {
             tool_choice: None,
             tools: None,
             logits_processors: None,
+            return_raw_logits: false,
         });
 
         let sender = self.runner.get_sender()?;
@@ -1073,6 +1090,40 @@ impl Runner {
             .blocking_send(request)
             .unwrap();
     }
+
+    /// Tokenize some text, returning raw tokens.
+    fn tokenize_text(&self, text: String, add_special_tokens: bool) -> PyApiResult<Vec<u32>> {
+        let (tx, mut rx) = channel(1);
+        let request = _Request::Tokenize(TokenizationRequest {
+            text: Either::Right(text),
+            tools: None,
+            add_generation_prompt: true,
+            add_special_tokens,
+            response: tx,
+        });
+
+        self.runner.get_sender()?.blocking_send(request).unwrap();
+
+        rx.blocking_recv()
+            .context("Channel was erroneously closed!")?
+            .map_err(PyApiErr::from)
+    }
+
+    /// Detokenize some tokens, returning text.
+    fn detokenize_text(&self, tokens: Vec<u32>, skip_special_tokens: bool) -> PyApiResult<String> {
+        let (tx, mut rx) = channel(1);
+        let request = _Request::Detokenize(DetokenizationRequest {
+            tokens,
+            skip_special_tokens,
+            response: tx,
+        });
+
+        self.runner.get_sender()?.blocking_send(request).unwrap();
+
+        rx.blocking_recv()
+            .context("Channel was erroneously closed!")?
+            .map_err(PyApiErr::from)
+    }
 }
 
 #[pymodule]
@@ -1085,6 +1136,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CompletionRequest>()?;
     m.add_class::<Architecture>()?;
     m.add_class::<VisionArchitecture>()?;
+    m.add_class::<DiffusionArchitecture>()?;
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
     m.add_class::<ToolChoice>()?;

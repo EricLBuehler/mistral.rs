@@ -1,10 +1,11 @@
 use anyhow::Context;
-use candle_core::{Device, Result};
+use candle_core::{Device, Result, Tensor};
+use either::Either;
 use mistralrs_core::*;
 use std::sync::Arc;
 use tokio::sync::mpsc::channel;
 
-use crate::RequestLike;
+use crate::{RequestLike, TextMessages};
 
 /// Gets the best device, cpu, cuda if compiled with CUDA, or Metal
 pub fn best_device(force_cpu: bool) -> Result<Device> {
@@ -76,6 +77,7 @@ impl Model {
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
+            return_raw_logits: false,
         });
 
         self.runner.get_sender()?.send(request).await?;
@@ -90,6 +92,53 @@ impl Model {
         };
 
         Ok(response)
+    }
+
+    /// Generate with the model, returning raw logits of the first token generated.
+    ///
+    /// Returns the chunks of the logits (1 or more, determined by prompt batchsize) and the tokens.
+    pub async fn send_raw_chat_request<R: RequestLike>(
+        &self,
+        mut request: R,
+    ) -> anyhow::Result<(Vec<Tensor>, Vec<u32>)> {
+        let (tx, mut rx) = channel(1);
+
+        let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
+            (Some(a), Some(b))
+        } else {
+            (None, None)
+        };
+        let request = Request::Normal(NormalRequest {
+            messages: request.take_messages(),
+            sampling_params: request.take_sampling_params(),
+            response: tx,
+            return_logprobs: request.return_logprobs(),
+            is_streaming: false,
+            id: 0,
+            constraint: request.take_constraint(),
+            suffix: None,
+            adapters: request.take_adapters(),
+            tools,
+            tool_choice,
+            logits_processors: request.take_logits_processors(),
+            return_raw_logits: true,
+        });
+
+        self.runner.get_sender()?.send(request).await?;
+
+        let ResponseOk::Raw {
+            logits_chunks,
+            tokens,
+        } = rx
+            .recv()
+            .await
+            .context("Channel was erroneously closed!")?
+            .as_result()?
+        else {
+            anyhow::bail!("Got unexpected response type.")
+        };
+
+        Ok((logits_chunks, tokens))
     }
 
     pub async fn generate_image(
@@ -117,6 +166,7 @@ impl Model {
             tool_choice: None,
             tools: None,
             logits_processors: None,
+            return_raw_logits: false,
         });
 
         self.runner.get_sender()?.send(request).await?;
@@ -152,8 +202,51 @@ impl Model {
         Ok(self.runner.get_sender()?.send(request).await?)
     }
 
+    /// Tokenize some text or messages.
+    /// - `tools` is only used if messages are provided.
+    pub async fn tokenize(
+        &self,
+        text: Either<TextMessages, String>,
+        tools: Option<Vec<Tool>>,
+        add_special_tokens: bool,
+        add_generation_prompt: bool,
+    ) -> anyhow::Result<Vec<u32>> {
+        let (tx, mut rx) = channel(1);
+        let request = Request::Tokenize(TokenizationRequest {
+            text: text.map_left(Into::into),
+            tools,
+            add_special_tokens,
+            add_generation_prompt,
+            response: tx,
+        });
+        self.runner.get_sender()?.send(request).await?;
+
+        rx.recv().await.context("Channel was erroneously closed!")?
+    }
+
+    /// Detokenize some tokens.
+    pub async fn detokenize(
+        &self,
+        tokens: Vec<u32>,
+        skip_special_tokens: bool,
+    ) -> anyhow::Result<String> {
+        let (tx, mut rx) = channel(1);
+        let request = Request::Detokenize(DetokenizationRequest {
+            tokens,
+            skip_special_tokens,
+            response: tx,
+        });
+        self.runner.get_sender()?.send(request).await?;
+
+        rx.recv().await.context("Channel was erroneously closed!")?
+    }
+
     /// Retrieve some information about this model.
     pub fn config(&self) -> &MistralRsConfig {
         self.runner.config()
+    }
+
+    pub fn inner(&self) -> &MistralRs {
+        &self.runner
     }
 }

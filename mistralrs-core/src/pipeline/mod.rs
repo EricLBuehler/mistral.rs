@@ -6,20 +6,20 @@ mod ggml;
 mod gguf;
 mod inputs_processor;
 mod isq;
+pub(crate) mod llg;
 mod loaders;
 mod macros;
 mod normal;
 mod paths;
 mod processing;
+mod response;
 mod sampling;
 mod speculative;
 mod vision;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
-use crate::aici::toktree::TokTrie;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
-use crate::diffusion_models::response::send_responses;
-use crate::paged_attention::{CacheConfig, CacheEngine};
+use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManager;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use chat_template::ChatTemplate;
@@ -31,11 +31,12 @@ pub use inputs_processor::InputProcessorOutput;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization};
 pub use loaders::{
     AdapterKind, AutoLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
-    Gemma2Loader, GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
-    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
-    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
-    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Starcoder2Loader, TokenSource,
-    VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    Gemma2Loader, GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
+    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader,
+    Qwen2VLLoader, Starcoder2Loader, TokenSource, VLlamaLoader, VisionLoaderType, VisionModel,
+    VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -49,6 +50,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokenizers::Tokenizer;
 pub use vision::{VisionLoader, VisionLoaderBuilder, VisionSpecificConfig};
 
@@ -57,7 +59,9 @@ use candle_core::{DType, Device, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
-pub use self::cache_manager::{Cache, CacheManager, LayerCaches};
+pub use self::cache_manager::{
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache,
+};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
@@ -66,7 +70,7 @@ use self::text_models_inputs_processor::PagedAttentionMeta;
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
     /// Only None if it doesnt make sense for the model
-    pub tok_trie: Option<Arc<TokTrie>>,
+    pub tok_env: Option<llguidance::toktrie::TokEnv>,
     pub has_no_kv_cache: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
@@ -79,6 +83,7 @@ pub struct GeneralMetadata {
     pub cache_config: Option<CacheConfig>,
     pub cache_engine: Option<CacheEngine>,
     pub prompt_batchsize: Option<NonZeroUsize>,
+    pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
 }
 
 pub enum AdapterInstruction {
@@ -89,7 +94,9 @@ pub enum AdapterInstruction {
 pub enum CacheInstruction {
     In(AdapterInstruction),
     Out,
+    /// load_preallocated_cache means to load the preallocated cache, if applicable.
     Reset {
+        load_preallocated_cache: bool,
         reset_non_granular: bool,
         adapter_inst: AdapterInstruction,
     },
@@ -119,8 +126,14 @@ pub trait CacheManagerMixin {
     /// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool);
-    fn cache(&self) -> &Cache;
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    );
+    fn cache(&self) -> &EitherCache;
 }
 
 pub trait AdapterActivationMixin {
@@ -191,12 +204,35 @@ pub trait AnyMoePipelineMixin {
     }
 }
 
-/// Category of the model.
-#[derive(PartialEq, Copy, Clone)]
+/// Category of the model. This can also be used to extract model-category specific tools,
+/// such as the vision model prompt prefixer.
+#[derive(Clone)]
 pub enum ModelCategory {
     Text,
-    Vision { has_conv2d: bool },
+    Vision {
+        has_conv2d: bool,
+        prefixer: Arc<dyn VisionPromptPrefixer>,
+    },
     Diffusion,
+}
+
+impl PartialEq for ModelCategory {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Text, Self::Text) => true,
+            (Self::Vision { .. }, Self::Vision { .. }) => true,
+            (Self::Diffusion, Self::Diffusion) => true,
+            (Self::Text, _) => false,
+            (Self::Vision { .. }, _) => false,
+            (Self::Diffusion, _) => false,
+        }
+    }
+}
+
+/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at
+pub trait VisionPromptPrefixer: Send + Sync {
+    /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
+    fn prefix_image(&self, image_index: usize, prompt: &str) -> String;
 }
 
 pub enum CacheBackendMetadata<'a> {
@@ -214,6 +250,7 @@ pub enum CacheBackendMetadata<'a> {
 
 #[derive(Clone, Debug)]
 pub enum ForwardInputsResult {
+    RawLogits { logits: Tensor },
     CausalGeneration { logits: Tensor },
     Image { images: Vec<DynamicImage> },
 }
@@ -222,6 +259,9 @@ impl ForwardInputsResult {
     fn index_bs(&self, bs_idx: usize) -> candle_core::Result<Self> {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
+                logits: logits.i(bs_idx)?,
+            }),
+            Self::RawLogits { logits } => Ok(Self::RawLogits {
                 logits: logits.i(bs_idx)?,
             }),
             Self::Image { images } => Ok(Self::Image {
@@ -233,6 +273,9 @@ impl ForwardInputsResult {
     fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
         match self {
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
+                logits: logits.to_device(device)?,
+            }),
+            Self::RawLogits { logits } => Ok(Self::RawLogits {
                 logits: logits.to_device(device)?,
             }),
             Self::Image { .. } => Ok(self.clone()),
@@ -254,18 +297,21 @@ pub trait Pipeline:
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
+        return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
+    /// Returns the total of model execution time.
     #[allow(clippy::too_many_arguments)]
     async fn step(
         &mut self,
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
+        return_raw_logits: bool,
         prefix_cacher: &mut PrefixCacheManager,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata<'_>,
-    ) -> Result<(), candle_core::Error> {
+    ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 let inputs_iter = self.get_processor().inputs_processor().process_inputs(
@@ -276,14 +322,27 @@ pub trait Pipeline:
                     &self.device(),
                     self.get_metadata().has_no_kv_cache,
                     None,
+                    return_raw_logits,
                     self.get_input_processor_config(),
                     None,
                     self.get_metadata().prompt_batchsize,
                 );
 
                 let mut logits = vec![None; input_seqs.len()];
+                let prompt_batchsize = self
+                    .get_metadata()
+                    .prompt_batchsize
+                    .map(NonZeroUsize::get)
+                    .unwrap_or(1);
+                let len_inputs = input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks().len().div_ceil(prompt_batchsize))
+                    .max()
+                    .unwrap();
+                let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
 
-                for (i, inputs) in inputs_iter.enumerate() {
+                let mut exec_duration = Duration::ZERO;
+                for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
@@ -320,6 +379,7 @@ pub trait Pipeline:
                                 };
                             }
                             CacheInstruction::Reset {
+                                load_preallocated_cache,
                                 reset_non_granular,
                                 ref adapter_inst,
                             } => {
@@ -335,17 +395,62 @@ pub trait Pipeline:
                                     }
                                     AdapterInstruction::None => 0,
                                 };
-                                self.set_none_cache(reset_non_granular, false)
+                                self.set_none_cache(
+                                    input_seqs,
+                                    reset_non_granular,
+                                    false,
+                                    load_preallocated_cache,
+                                )
                             }
                             _ => unreachable!("Unreachable PRE cache op."),
                         }
                     }
 
-                    let raw_logits = self.forward_inputs(inputs)?;
+                    let start = Instant::now();
+                    let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
-                        logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                        if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
+                            raw_out_logits[seq_idx][i] =
+                                Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                        } else {
+                            logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                        }
                     }
+                }
+
+                match post_op {
+                    CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
+                    CacheInstruction::Nothing(_) => (),
+                    CacheInstruction::Reset {
+                        load_preallocated_cache,
+                        reset_non_granular,
+                        adapter_inst: _,
+                    } => self.set_none_cache(
+                        input_seqs,
+                        reset_non_granular,
+                        false,
+                        load_preallocated_cache,
+                    ),
+                    _ => unreachable!("Unreachable POST cache op."),
+                }
+
+                if raw_out_logits[0][0].is_some() {
+                    let start = Instant::now();
+                    response::send_raw_responses(
+                        input_seqs,
+                        raw_out_logits
+                            .into_iter()
+                            .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
+                            .collect(),
+                    )
+                    .await?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
+
+                    return Ok(exec_duration);
                 }
 
                 let logits = logits
@@ -356,17 +461,9 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
-                match post_op {
-                    CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
-                    CacheInstruction::Nothing(_) => (),
-                    CacheInstruction::Reset {
-                        reset_non_granular,
-                        adapter_inst: _,
-                    } => self.set_none_cache(reset_non_granular, false),
-                    _ => unreachable!("Unreachable POST cache op."),
-                }
-
+                let start = Instant::now();
                 match &logits[0] {
+                    ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
                             input_seqs,
@@ -390,7 +487,7 @@ pub trait Pipeline:
                         .await?;
                     }
                     ForwardInputsResult::Image { .. } => {
-                        send_responses(
+                        response::send_image_responses(
                             input_seqs,
                             logits
                                 .into_iter()
@@ -412,7 +509,10 @@ pub trait Pipeline:
                         .await?;
                     }
                 }
-                Ok(())
+                let end = Instant::now();
+                exec_duration += end.duration_since(start);
+
+                Ok(exec_duration)
             }
             CacheBackendMetadata::PagedAttention {
                 metadata,
@@ -434,24 +534,61 @@ pub trait Pipeline:
                     &self.device(),
                     self.get_metadata().has_no_kv_cache,
                     None,
+                    return_raw_logits,
                     self.get_input_processor_config(),
                     Some(metadata),
                     self.get_metadata().prompt_batchsize,
                 );
 
                 let mut logits = vec![None; input_seqs.len()];
+                let prompt_batchsize = self
+                    .get_metadata()
+                    .prompt_batchsize
+                    .map(NonZeroUsize::get)
+                    .unwrap_or(1);
+                let len_inputs = input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks().len().div_ceil(prompt_batchsize))
+                    .max()
+                    .unwrap();
+                let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
 
-                for inputs in inputs_iter {
+                let mut exec_duration = Duration::ZERO;
+                for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
                     } = inputs.map_err(candle_core::Error::msg)?;
 
-                    let raw_logits = self.forward_inputs(inputs)?;
+                    let start = Instant::now();
+                    let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
 
                     for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
-                        logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                        if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
+                            raw_out_logits[seq_idx][i] =
+                                Some(logits.i(logit_idx)?.to_device(&Device::Cpu)?);
+                        } else {
+                            logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
+                        }
                     }
+                }
+
+                if raw_out_logits[0][0].is_some() {
+                    let start = Instant::now();
+                    response::send_raw_responses(
+                        input_seqs,
+                        raw_out_logits
+                            .into_iter()
+                            .map(|raw| raw.into_iter().flatten().collect::<Vec<_>>())
+                            .collect(),
+                    )
+                    .await?;
+                    let end = Instant::now();
+                    exec_duration += end.duration_since(start);
+
+                    return Ok(exec_duration);
                 }
 
                 let logits = logits
@@ -462,7 +599,9 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
+                let start = Instant::now();
                 match &logits[0] {
+                    ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
                         self.sample_causal_gen(
                             input_seqs,
@@ -484,7 +623,7 @@ pub trait Pipeline:
                         .await?;
                     }
                     ForwardInputsResult::Image { .. } => {
-                        send_responses(
+                        response::send_image_responses(
                             input_seqs,
                             logits
                                 .into_iter()
@@ -506,7 +645,10 @@ pub trait Pipeline:
                         .await?;
                     }
                 }
-                Ok(())
+                let end = Instant::now();
+                exec_duration += end.duration_since(start);
+
+                Ok(exec_duration)
             }
         }
     }
@@ -539,6 +681,7 @@ mod tests {
     use crate::MessageContent;
     use either::Either;
     use indexmap::IndexMap;
+    use serde_json::Value;
 
     macro_rules! hashmap {
         (@single $($x:tt)*) => (());
@@ -550,7 +693,7 @@ mod tests {
                 let _cap = hashmap!(@count $($key),*);
                 let mut _map = ::indexmap::IndexMap::with_capacity(_cap);
                 $(
-                    let _ = _map.insert($key, $value);
+                    let _ = _map.insert($key, Value::String($value));
                 )*
                 _map
             }
@@ -655,7 +798,7 @@ mod tests {
         ];
         let mut inputs = Vec::new();
         for [role, content] in messages {
-            let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+            let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
                 IndexMap::new();
             message.insert("role".to_string(), Either::Left(role.to_string()));
             message.insert("content".to_string(), Either::Left(content.to_string()));
@@ -689,7 +832,7 @@ mod tests {
 
         let mut inputs = Vec::new();
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("system".to_string()));
         message.insert(
@@ -701,7 +844,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("user".to_string()));
         message.insert(
@@ -718,7 +861,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("assistant".to_string()));
         message.insert(
@@ -730,7 +873,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("user".to_string()));
         message.insert(
@@ -747,7 +890,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("assistant".to_string()));
         message.insert(
@@ -759,7 +902,7 @@ mod tests {
         );
         inputs.push(message);
 
-        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, String>>>> =
+        let mut message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
         message.insert("role".to_string(), Either::Left("user".to_string()));
         message.insert(

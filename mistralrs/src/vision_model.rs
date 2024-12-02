@@ -11,9 +11,11 @@ pub struct VisionModelBuilder {
     pub(crate) hf_revision: Option<String>,
     pub(crate) write_uqff: Option<PathBuf>,
     pub(crate) from_uqff: Option<PathBuf>,
+    pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapMetadata>,
+    pub(crate) max_edge: Option<u32>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
@@ -43,6 +45,7 @@ impl VisionModelBuilder {
             prompt_batchsize: None,
             chat_template: None,
             tokenizer_json: None,
+            max_edge: None,
             loader_type,
             dtype: ModelDType::Auto,
             force_cpu: false,
@@ -52,6 +55,7 @@ impl VisionModelBuilder {
             max_num_seqs: 32,
             with_logging: false,
             device_mapping: None,
+            calibration_file: None,
         }
     }
 
@@ -109,6 +113,12 @@ impl VisionModelBuilder {
         self
     }
 
+    /// Utilise this calibration_file file during ISQ
+    pub fn with_calibration_file(mut self, path: PathBuf) -> Self {
+        self.calibration_file = Some(path);
+        self
+    }
+
     /// Set the maximum number of sequences which can be run at once.
     pub fn with_max_num_seqs(mut self, max_num_seqs: usize) -> Self {
         self.max_num_seqs = max_num_seqs;
@@ -134,6 +144,13 @@ impl VisionModelBuilder {
         self
     }
 
+    /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
+    /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
+    pub fn from_max_edge(mut self, max_edge: u32) -> Self {
+        self.max_edge = Some(max_edge);
+        self
+    }
+
     /// Path to write a UQFF file to.
     ///
     /// The parent (part of the path excluding the filename) will determine where any other files
@@ -154,6 +171,8 @@ impl VisionModelBuilder {
             topology: self.topology,
             write_uqff: self.write_uqff,
             from_uqff: self.from_uqff,
+            max_edge: self.max_edge,
+            calibration_file: self.calibration_file,
         };
 
         if self.with_logging {

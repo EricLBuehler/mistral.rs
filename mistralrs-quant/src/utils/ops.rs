@@ -52,7 +52,18 @@ impl CustomOp2 for BitWiseOr {
         }
         match s1 {
             CpuStorage::U8(vs1) => {
-                let vs2 = &s2.as_slice::<u8>().unwrap();
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((start, end)) => &vs1[start..end],
+                    None => candle_core::bail!("Input tensor s1 must be contiguous"),
+                };
+                let vs2 = s2.as_slice::<u8>()?;
+                let vs2 = match l2.contiguous_offsets() {
+                    Some((start, end)) => &vs2[start..end],
+                    None => candle_core::bail!("Input tensor s2 must be contiguous"),
+                };
+                if vs1.len() != vs2.len() {
+                    candle_core::bail!("Input tensors must have the same number of elements");
+                };
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::U8(result);
                 Ok((result, l1.shape().clone()))
@@ -177,6 +188,64 @@ impl CustomOp2 for BitWiseOr {
         };
         Ok((dst, l1.shape().clone()))
     }
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle_core::MetalStorage,
+        l1: &Layout,
+        s2: &candle_core::MetalStorage,
+        l2: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        if l1.shape() != l2.shape() || l1.stride() != l2.stride() {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: l1.shape().clone(),
+                rhs: l2.shape().clone(),
+                op: "bitwise-or",
+            });
+        }
+        if s1.dtype() != s2.dtype() {
+            return Err(Error::DTypeMismatchBinaryOp {
+                lhs: s1.dtype(),
+                rhs: s2.dtype(),
+                op: "bitwise-or",
+            });
+        }
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+        if !l2.is_contiguous() {
+            candle_core::bail!("Input tensor s2 must be contiguous");
+        }
+
+        let command_buffer = s1.device().command_buffer()?;
+        command_buffer.set_label("bitwise-or");
+
+        let device = s1.device();
+
+        let out_shape = l1.shape().clone();
+
+        let output = device.new_buffer(out_shape.elem_count(), s1.dtype(), "bitwise-or")?;
+
+        crate::metal_kernels::call_bitwise_or(
+            device.device(),
+            &command_buffer,
+            &crate::metal_kernels::Kernels::new(),
+            s1.dtype(),
+            s1.buffer(),
+            s2.buffer(),
+            out_shape.elem_count(),
+            &output,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let newstorage = candle_core::MetalStorage::new(
+            output,
+            device.clone(),
+            out_shape.elem_count(),
+            s1.dtype(),
+        );
+        Ok((newstorage, out_shape))
+    }
 }
 
 #[allow(dead_code)]
@@ -185,14 +254,6 @@ pub trait BitWiseOp {
 }
 
 impl BitWiseOp for Tensor {
-    #[cfg(feature = "metal")]
-    fn bitwise_or(&self, rhs: &Tensor) -> Result<Tensor> {
-        let original_device = rhs.device();
-        self.to_device(&candle_core::Device::Cpu)?
-            .apply_op2_no_bwd(&rhs.to_device(&candle_core::Device::Cpu)?, &BitWiseOr)?
-            .to_device(original_device)
-    }
-    #[cfg(not(feature = "metal"))]
     fn bitwise_or(&self, rhs: &Tensor) -> Result<Tensor> {
         self.apply_op2_no_bwd(rhs, &BitWiseOr)
     }
@@ -212,6 +273,9 @@ impl CustomOp1 for Leftshift {
     }
 
     fn cpu_fwd(&self, s1: &CpuStorage, l1: &Layout) -> Result<(CpuStorage, Shape)> {
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
         match s1 {
             CpuStorage::U8(vs1) => {
                 let result = self.leftshift(vs1);
@@ -235,6 +299,9 @@ impl CustomOp1 for Leftshift {
     }
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
         let dev = s1.device().clone();
         let (d_in1_ptr, elem_count) = match s1.dtype() {
             DType::U8 => {
@@ -309,6 +376,45 @@ impl CustomOp1 for Leftshift {
         };
         Ok((dst, l1.shape().clone()))
     }
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle_core::MetalStorage,
+        l1: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+
+        let command_buffer = s1.device().command_buffer()?;
+        command_buffer.set_label("bitwise-leftshift");
+
+        let device = s1.device();
+
+        let out_shape = l1.shape().clone();
+
+        let output = device.new_buffer(out_shape.elem_count(), s1.dtype(), "bitwise-leftshift")?;
+
+        crate::metal_kernels::call_bitwise_leftshift(
+            device.device(),
+            &command_buffer,
+            &crate::metal_kernels::Kernels::new(),
+            s1.dtype(),
+            s1.buffer(),
+            self.0 as u32,
+            out_shape.elem_count(),
+            &output,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let newstorage = candle_core::MetalStorage::new(
+            output,
+            device.clone(),
+            out_shape.elem_count(),
+            s1.dtype(),
+        );
+        Ok((newstorage, out_shape))
+    }
 }
 
 #[allow(dead_code)]
@@ -317,14 +423,6 @@ pub trait LeftshiftOp {
 }
 
 impl LeftshiftOp for Tensor {
-    #[cfg(feature = "metal")]
-    fn leftshift(&self, n: usize) -> Result<Tensor> {
-        let original_device = self.device();
-        self.to_device(&candle_core::Device::Cpu)?
-            .apply_op1_no_bwd(&Leftshift(n))?
-            .to_device(original_device)
-    }
-    #[cfg(not(feature = "metal"))]
     fn leftshift(&self, n: usize) -> Result<Tensor> {
         self.apply_op1_no_bwd(&Leftshift(n))
     }
@@ -397,5 +495,68 @@ mod tests {
         assert_eq!(av, [0b00001111]);
         assert_eq!(bv, [0b00001111]);
         assert_eq!(c, [0b11111111]);
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn test_bitpack_8bit() {
+        use crate::HqqBits;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Eight;
+        let device = Device::Cpu;
+        let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[1, 2], [3, 4], [255, 0]]);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_bitpack_8bit() {
+        use crate::HqqBits;
+        use candle_core::DType;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Eight;
+        let device = Device::new_cuda(0).unwrap();
+        let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_dtype(DType::U8)
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[1, 2], [3, 4], [255, 0]]);
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn test_bitpack_4bit() {
+        use crate::HqqBits;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Four;
+        let device = Device::Cpu;
+        let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[19, 36]]);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_bitpack_4bit() {
+        use crate::HqqBits;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Four;
+        let device = Device::new_cuda(0).unwrap();
+        let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[19, 36]]);
     }
 }

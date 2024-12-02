@@ -23,10 +23,12 @@ rayon.workspace = true
 byteorder = "1.5.0"
 float8.workspace = true
 once_cell.workspace = true
+metal = { version = "0.27.0", features = ["mps"], optional = true }
+thiserror = "1"
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
-metal = ["candle-core/metal", "candle-nn/metal"]
+metal = ["candle-core/metal", "candle-nn/metal", "dep:metal"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }

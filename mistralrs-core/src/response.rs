@@ -3,6 +3,7 @@ use std::{
     fmt::{Debug, Display},
 };
 
+use candle_core::Tensor;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::{pyclass, pymethods};
 use serde::Serialize;
@@ -238,6 +239,11 @@ pub enum Response {
     CompletionChunk(CompletionChunkResponse),
     // Image generation
     ImageGeneration(ImageGenerationResponse),
+    // Raw
+    Raw {
+        logits_chunks: Vec<Tensor>,
+        tokens: Vec<u32>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -250,6 +256,11 @@ pub enum ResponseOk {
     CompletionChunk(CompletionChunkResponse),
     // Image generation
     ImageGeneration(ImageGenerationResponse),
+    // Raw
+    Raw {
+        logits_chunks: Vec<Tensor>,
+        tokens: Vec<u32>,
+    },
 }
 
 pub enum ResponseErr {
@@ -312,6 +323,13 @@ impl Response {
                 Err(Box::new(ResponseErr::CompletionModelError(e, x)))
             }
             Self::ImageGeneration(x) => Ok(ResponseOk::ImageGeneration(x)),
+            Self::Raw {
+                logits_chunks,
+                tokens,
+            } => Ok(ResponseOk::Raw {
+                logits_chunks,
+                tokens,
+            }),
         }
     }
 }

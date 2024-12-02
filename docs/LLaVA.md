@@ -63,7 +63,9 @@ cargo run  --features cuda -- --port 1234  --isq Q4K --chat-template ./chat_temp
 2) Send a request
 
 ```py
-import openai
+from openai import OpenAI
+
+client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
     model="llava_next",
@@ -119,7 +121,7 @@ async fn main() -> Result<()> {
     .await?;
 
     let bytes = match reqwest::blocking::get(
-        "https://d2r55xnwy6nx47.cloudfront.net/uploads/2018/02/Ants_Lede1300.jpg",
+        "https://cdn.britannica.com/45/5645-050-B9EC0205/head-treasure-flower-disk-flowers-inflorescence-ray.jpg",
     ) {
         Ok(http_resp) => http_resp.bytes()?.to_vec(),
         Err(e) => anyhow::bail!(e),

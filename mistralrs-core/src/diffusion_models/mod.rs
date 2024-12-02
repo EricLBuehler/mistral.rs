@@ -1,6 +1,5 @@
 pub(crate) mod flux;
 pub(crate) mod processor;
-pub(crate) mod response;
 
 macro_rules! generate_repr {
     ($t:ident) => {

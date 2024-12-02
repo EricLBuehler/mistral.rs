@@ -1,6 +1,7 @@
 use candle_core::{DType, Result, Tensor};
 use candle_nn::Linear;
 use float8::F8E4M3;
+use half::bf16;
 
 use super::FP8Linear;
 
@@ -36,9 +37,19 @@ impl FP8Linear {
         let max_v = F8E4M3::MAX.to_f32();
         let scale = (max_v / amax).clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32());
         let scale = Tensor::new(scale, data.device())?;
-        let qw = data
-            .broadcast_mul(&scale.to_dtype(data.dtype())?)?
-            .to_dtype(dtype)?;
+        let to_cast = data.broadcast_mul(&scale.to_dtype(data.dtype())?)?;
+        let qw = if data.device().is_metal() {
+            // Evil hack to allow metal shader to get the double value!
+            let transmute_data = to_cast
+                .flatten_all()?
+                .to_vec1::<bf16>()?
+                .into_iter()
+                .map(|x| x.to_f64_const().to_bits() as i64)
+                .collect::<Vec<_>>();
+            Tensor::from_vec(transmute_data, data.shape(), data.device())?.to_dtype(dtype)?
+        } else {
+            to_cast.to_dtype(dtype)?
+        };
         Ok(QuantizationResult {
             qw,
             quantize_scale: scale.clone(),
@@ -69,9 +80,12 @@ mod tests {
 
     #[test]
     fn test_roundtrip_f8e4m3() -> Result<()> {
+        #[cfg(not(feature = "metal"))]
         let dev = Device::cuda_if_available(0)?;
+        #[cfg(feature = "metal")]
+        let dev = Device::new_metal(0)?;
 
-        let data = Tensor::rand(0., 1., (32, 32), &dev)?.to_dtype(DType::F32)?;
+        let data = Tensor::rand(0f32, 1f32, (32, 32), &dev)?;
 
         let QuantizationResult {
             qw,
@@ -127,7 +141,7 @@ mod tests {
         let b = x;
 
         // FP8 quantized matmul
-        let _res = handle.batch_matmul(
+        let _res = handle.batch_matmul_f8(
             &a,
             &b,
             &dequant_a_scale,

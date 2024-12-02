@@ -4,8 +4,9 @@ use super::*;
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use serde_json::{json, Value};
 
-/// A type which can be used as a request.
+/// A type which can be used as a chat request.
 pub trait RequestLike {
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
     fn take_messages(&mut self) -> RequestMessage;
@@ -24,6 +25,12 @@ pub trait RequestLike {
 ///
 /// Sampling is deterministic.
 pub struct TextMessages(Vec<IndexMap<String, MessageContent>>);
+
+impl From<TextMessages> for Vec<IndexMap<String, MessageContent>> {
+    fn from(value: TextMessages) -> Self {
+        value.0
+    }
+}
 
 /// A chat message role.
 pub enum TextMessageRole {
@@ -133,6 +140,7 @@ impl VisionMessages {
         self
     }
 
+    #[deprecated(since = "0.3.4", note = "use add_image_message")]
     /// This handles adding the `<|image_{N}|>` prefix to the prompt.
     pub fn add_phiv_image_message(
         mut self,
@@ -155,6 +163,7 @@ impl VisionMessages {
         self
     }
 
+    #[deprecated(since = "0.3.4", note = "use add_image_message")]
     /// This handles adding the `<|image|>` prefix to the prompt.
     pub fn add_vllama_image_message(
         mut self,
@@ -173,6 +182,7 @@ impl VisionMessages {
         self
     }
 
+    #[deprecated(since = "0.3.4", note = "use add_image_message")]
     /// This handles adding the `<image>` prefix to the prompt.
     pub fn add_llava_image_message(
         mut self,
@@ -191,6 +201,7 @@ impl VisionMessages {
         self
     }
 
+    #[deprecated(since = "0.3.4", note = "use add_image_message")]
     pub fn add_idefics_image_message(
         mut self,
         role: TextMessageRole,
@@ -203,15 +214,53 @@ impl VisionMessages {
             (
                 "content".to_string(),
                 Either::Right(vec![
-                    IndexMap::from([("type".to_string(), "image".to_string())]),
+                    IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
                     IndexMap::from([
-                        ("type".to_string(), "text".to_string()),
-                        ("content".to_string(), text.to_string()),
+                        ("type".to_string(), Value::String("text".to_string())),
+                        ("content".to_string(), Value::String(text.to_string())),
                     ]),
                 ]),
             ),
         ]));
         self
+    }
+
+    pub fn add_image_message(
+        mut self,
+        role: TextMessageRole,
+        text: impl ToString,
+        image: DynamicImage,
+        model: &Model,
+    ) -> anyhow::Result<Self> {
+        let prefixer = match &model.config().category {
+            ModelCategory::Text | ModelCategory::Diffusion => {
+                anyhow::bail!("`add_image_message` expects a vision model.")
+            }
+            ModelCategory::Vision {
+                has_conv2d: _,
+                prefixer,
+            } => prefixer,
+        };
+        self.images.push(image);
+        self.messages.push(IndexMap::from([
+            ("role".to_string(), Either::Left(role.to_string())),
+            (
+                "content".to_string(),
+                Either::Right(vec![
+                    IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
+                    IndexMap::from([
+                        ("type".to_string(), Value::String("text".to_string())),
+                        (
+                            "text".to_string(),
+                            Value::String(
+                                prefixer.prefix_image(self.images.len() - 1, &text.to_string()),
+                            ),
+                        ),
+                    ]),
+                ]),
+            ),
+        ]));
+        Ok(self)
     }
 
     pub fn clear(mut self) -> Self {
@@ -330,10 +379,63 @@ impl RequestBuilder {
         }
     }
 
+    /// Add a message to the request.
+    ///
+    /// For messages with tool calls, use [`Self::add_message_with_tool_call`].
+    /// For messages with tool outputs, use [`Self::add_tool_message`].
     pub fn add_message(mut self, role: TextMessageRole, text: impl ToString) -> Self {
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
             ("content".to_string(), Either::Left(text.to_string())),
+        ]));
+        self
+    }
+
+    /// Add a message with the output of a tool call.
+    pub fn add_tool_message(mut self, tool_content: impl ToString, tool_id: impl ToString) -> Self {
+        self.messages.push(IndexMap::from([
+            (
+                "role".to_string(),
+                Either::Left(TextMessageRole::Tool.to_string()),
+            ),
+            (
+                "content".to_string(),
+                Either::Left(tool_content.to_string()),
+            ),
+            (
+                "tool_call_id".to_string(),
+                Either::Left(tool_id.to_string()),
+            ),
+        ]));
+        self
+    }
+
+    pub fn add_message_with_tool_call(
+        mut self,
+        role: TextMessageRole,
+        text: impl ToString,
+        tool_calls: Vec<ToolCallResponse>,
+    ) -> Self {
+        let tool_messages = tool_calls
+            .iter()
+            .map(|t| {
+                IndexMap::from([
+                    ("id".to_string(), Value::String(t.id.clone())),
+                    ("type".to_string(), Value::String(t.tp.to_string())),
+                    (
+                        "function".to_string(),
+                        json!({
+                            "name": t.function.name,
+                            "arguments": t.function.arguments,
+                        }),
+                    ),
+                ])
+            })
+            .collect();
+        self.messages.push(IndexMap::from([
+            ("role".to_string(), Either::Left(role.to_string())),
+            ("content".to_string(), Either::Left(text.to_string())),
+            ("function".to_string(), Either::Right(tool_messages)),
         ]));
         self
     }
@@ -523,6 +625,7 @@ impl RequestLike for RequestBuilder {
             Some((other_ts, other_tc))
         }
     }
+
     fn take_sampling_params(&mut self) -> SamplingParams {
         let mut other = SamplingParams::deterministic();
         std::mem::swap(&mut other, &mut self.sampling_params);

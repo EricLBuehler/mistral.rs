@@ -893,8 +893,7 @@ void marlin_matmul(const void* A, const void* B, void* s, void* C, int prob_m, i
   }
 
   if (!is_valid_config(th_config, prob_m, prob_n, prob_k)) {
-    throw std::runtime_error(
-        "Invalid thread config");
+    assert(false);
   }
 
   int num_threads = th_config.num_threads;
@@ -941,7 +940,7 @@ void marlin_matmul(const void* A, const void* B, void* s, void* C, int prob_m, i
     CALL_IF(8, 4, 128)
     CALL_IF(4, 8, 128)
     else {
-      throw std::runtime_error("Unsupported shapes: MKN");
+      assert(false);
     }
 
     A_ptr += 16 * thread_m_blocks * (prob_k / 8) * par;
@@ -949,15 +948,31 @@ void marlin_matmul(const void* A, const void* B, void* s, void* C, int prob_m, i
   }
 }
 
-extern "C" void marlin_4bit_f16(const void* A, const void* B, void* s, void* C, int prob_m, int prob_k, 
-                 int prob_n, void* workspace, int groupsize
-                 ) {
+extern "C" void marlin_4bit_f16(
+  const void* A,
+  const void* B,
+  void* s,
+  void* C,
+  int prob_m,
+  int prob_k, 
+  int prob_n,
+  void* workspace,
+  int groupsize
+) {
     marlin_matmul<half>(A, B, s, C, prob_m, prob_k, prob_n, workspace, groupsize);
 }
 
-extern "C" void marlin_4bit_bf16(const void* A, const void* B, void* s, void* C, int prob_m, int prob_k, 
-                 int prob_n, void* workspace, int groupsize
-                 ) {
+extern "C" void marlin_4bit_bf16(
+  const void* A,
+  const void* B,
+  void* s,
+  void* C,
+  int prob_m,
+  int prob_k, 
+  int prob_n,
+  void* workspace,
+  int groupsize
+) {
     marlin_matmul<nv_bfloat16>(A, B, s, C, prob_m, prob_k, prob_n, workspace, groupsize);
 }
 
@@ -1204,9 +1219,14 @@ __global__ void gptq_marlin_repack_kernel(
               b_q_weight_ptr, perm_ptr, out_ptr, size_k, size_n);             \
     }
 
-extern "C" void gptq_marlin_repack(void* weight, void* perm, void* out,
-                                 int size_k, int size_n,
-                                 int num_bits) {
+extern "C" void gptq_marlin_repack(
+  void* weight,
+  void* perm,
+  void* out,
+  int size_k,
+  int size_n,
+  int num_bits
+) {
   // Verify compatibility with marlin tile of 16x64
   assert(size_k % tile_k_size == 0);
   assert(size_n % tile_n_size == 0);

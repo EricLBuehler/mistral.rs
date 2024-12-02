@@ -1,8 +1,8 @@
 use super::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
-    DiffusionModel, DiffusionModelLoader, FluxLoader, ForwardInputsResult, GeneralMetadata,
-    IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    DiffusionModel, DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
@@ -30,7 +30,7 @@ pub struct DiffusionPipeline {
     model: Box<dyn DiffusionModel + Send + Sync>,
     model_id: String,
     metadata: Arc<GeneralMetadata>,
-    dummy_cache: Cache,
+    dummy_cache: EitherCache,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -216,7 +216,7 @@ impl Loader for DiffusionLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie: None,
+                tok_env: None,
                 is_xlora: false,
                 num_hidden_layers: 1, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
                 eos_tok: vec![],
@@ -227,8 +227,9 @@ impl Loader for DiffusionLoader {
                 cache_config: None,
                 cache_engine: None,
                 prompt_batchsize: None,
+                model_metadata: None,
             }),
-            dummy_cache: Cache::new(0, false),
+            dummy_cache: EitherCache::Full(Cache::new(0, false)),
         })))
     }
 
@@ -262,8 +263,15 @@ impl IsqPipelineMixin for DiffusionPipeline {
 impl CacheManagerMixin for DiffusionPipeline {
     fn clone_in_cache(&self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) {}
     fn clone_out_cache(&self, _seqs: &mut [&mut Sequence], _modify_draft_cache: bool) {}
-    fn set_none_cache(&self, _reset_non_granular: bool, _modify_draft_cache: bool) {}
-    fn cache(&self) -> &Cache {
+    fn set_none_cache(
+        &self,
+        _seqs: &mut [&mut Sequence],
+        _reset_non_granular: bool,
+        _modify_draft_cache: bool,
+        _load_preallocated_cache: bool,
+    ) {
+    }
+    fn cache(&self) -> &EitherCache {
         &self.dummy_cache
     }
 }
@@ -292,7 +300,13 @@ impl MetadataMixin for DiffusionPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for DiffusionPipeline {
-    fn forward_inputs(&mut self, inputs: Box<dyn Any>) -> candle_core::Result<ForwardInputsResult> {
+    fn forward_inputs(
+        &mut self,
+        inputs: Box<dyn Any>,
+        return_raw_logits: bool,
+    ) -> candle_core::Result<ForwardInputsResult> {
+        assert!(!return_raw_logits);
+
         let ModelInputs { prompts, params } = *inputs.downcast().expect("Downcast failed.");
         let img = self.model.forward(prompts, params)?.to_dtype(DType::U8)?;
         let (_b, c, h, w) = img.dims4()?;

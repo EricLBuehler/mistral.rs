@@ -88,9 +88,8 @@ impl CausalSelfAttention {
             .transpose(1, 2)?;
 
         let mut y = match &self.paged_attn {
-            Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
                     &k,
                     &v,
@@ -99,8 +98,26 @@ impl CausalSelfAttention {
                     Some(value_cache),
                     input_metadata,
                     None,
-                )?
-            }
+                )?,
+                None => {
+                    let mut input_metadata = PagedAttentionInputMetadata {
+                        block_tables: None,
+                        context_lens: None,
+                        max_context_len: None,
+                        slot_mappings: Tensor::new(&[0f32], q.device())?,
+                    };
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        attention_mask.clone().as_ref(),
+                        None,
+                        None,
+                        &mut input_metadata,
+                        None,
+                    )?
+                }
+            },
             None => {
                 let (k, v) =
                     crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
@@ -351,7 +368,7 @@ pub struct Llama {
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
-    kv_cache: crate::pipeline::Cache,
+    kv_cache: crate::pipeline::EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     rope_parameters: (Tensor, Tensor),
@@ -447,7 +464,10 @@ impl Llama {
             blocks,
             ln_f,
             lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
-            kv_cache: crate::pipeline::Cache::new(cfg.num_hidden_layers, false),
+            kv_cache: crate::pipeline::EitherCache::Full(crate::pipeline::Cache::new(
+                cfg.num_hidden_layers,
+                false,
+            )),
             device: normal_loading_metadata.real_device,
             mapper,
             rope_parameters,
@@ -509,8 +529,8 @@ impl LLaVALLM for Llama {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = input_embed;
-        let mut cache = self.kv_cache.lock();
-        let mask = CausalMasker.make_causal_mask_as_attn_bias(
+        let mut cache = self.kv_cache.full().lock();
+        let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
                 .as_ref()
@@ -582,8 +602,11 @@ impl NormalModel for Llama {
     ) -> Result<Tensor> {
         unimplemented!()
     }
-    fn cache(&self) -> &crate::pipeline::Cache {
+    fn cache(&self) -> &crate::pipeline::EitherCache {
         &self.kv_cache
+    }
+    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
+        &mut self.kv_cache
     }
     fn device(&self) -> &Device {
         &self.device

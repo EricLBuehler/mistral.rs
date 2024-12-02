@@ -180,7 +180,7 @@ macro_rules! handle_pipeline_forward_error {
                 // Also reset non granular state because:
                 // - The sequence is gone
                 // - We should reset the state then, including draft.
-                p.set_none_cache(true, true);
+                p.set_none_cache($seq_slice, true, true, false);
                 $prefix_cacher.evict_all_to_cpu().unwrap();
 
                 continue $label;
@@ -197,24 +197,6 @@ macro_rules! get_mut_group {
             if let Ok(inner) = $this.group.try_lock() {
                 break inner;
             }
-        }
-    };
-}
-
-#[doc(hidden)]
-#[macro_export]
-macro_rules! get_bias_if_not_allowed {
-    ($tok_trie:expr, $rx:expr, $next_token_id:expr) => {
-        if let Some(tok_trie) = &$tok_trie {
-            if tok_trie.token_allowed($rx, $next_token_id) {
-                None
-            } else {
-                let mut token_set = tok_trie.alloc_token_set();
-                tok_trie.compute_bias($rx, &mut token_set);
-                Some(token_set)
-            }
-        } else {
-            None
         }
     };
 }

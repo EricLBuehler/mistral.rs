@@ -1,26 +1,28 @@
-use super::cache_manager::DefaultCacheManager;
+use super::cache_manager::{FullCacheManager, NormalCacheManager};
+use super::isq::ImatrixDataSource;
+use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
     TokenSource, XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, ForwardInputsResult,
-    IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory,
+    PreProcessingMixin,
 };
 use super::{
     AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
     NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
-use crate::aici::bintokens::build_tok_trie;
-use crate::aici::toktree::TokTrie;
 use crate::amoe::AnyMoeExpertType;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::get_chat_template;
 use crate::pipeline::isq::UqffFullSer;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::{get_chat_template, Cache};
+use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
@@ -45,6 +47,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -64,6 +67,7 @@ pub struct NormalPipeline {
     template_filename: Option<PathBuf>,
     generation_config: Option<PathBuf>,
     config: String,
+    imatrix: Option<PathBuf>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -106,6 +110,8 @@ pub struct NormalSpecificConfig {
     pub organization: IsqOrganization,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
+    pub imatrix: Option<PathBuf>,
+    pub calibration_file: Option<PathBuf>,
 }
 
 impl NormalLoaderBuilder {
@@ -308,7 +314,15 @@ impl Loader for NormalLoader {
                 .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
         }
 
-        let load_device = if !loading_isq {
+        if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
+            anyhow::bail!(
+                "`imatrix` and `calibration_file` were both specified, this is not allowed."
+            );
+        }
+
+        // Load onto the regular device if not using isq or if the calibration file is specified
+        let load_device = if !loading_isq || self.config.calibration_file.is_some() {
+            loading_isq = false;
             device.clone()
         } else {
             Device::Cpu
@@ -373,16 +387,104 @@ impl Loader for NormalLoader {
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
             .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
-        let chat_template = get_chat_template(paths, &self.chat_template, None);
+        let chat_template = get_chat_template(
+            paths,
+            &paths
+                .get_chat_template_json()
+                .as_ref()
+                .map(|x| x.to_string_lossy().to_string())
+                .clone(),
+            &self.chat_template,
+            None,
+        );
+
+        if let Some(calibration_file) = &self.config.calibration_file {
+            let calibration_data = std::fs::read_to_string(calibration_file)?;
+            // Tokenize, don't add bos yet
+            let tokens = tokenizer
+                .encode(calibration_data, false)
+                .map_err(anyhow::Error::msg)?
+                .get_ids()
+                .to_vec();
+            info!(
+                "Collecting imatrix from calibration file `{}` of {} tokens.",
+                calibration_file.display(),
+                tokens.len()
+            );
+            let bos_toks = chat_template.bos_tok().map(|b| vec![b]).unwrap_or_default();
+            let bos_tok_id = tokenizer
+                .token_to_id(&bos_toks[0])
+                .expect("Somehow the bos token is not present.");
+
+            match self.config.organization {
+                IsqOrganization::Default => model.begin_track_stats()?,
+                IsqOrganization::MoeExpertsOnly => model.begin_track_stats_moe_experts_only()?,
+            }
+
+            const CHUNK_SIZE: usize = 1024;
+            let n_chunks = tokens.len().div_ceil(CHUNK_SIZE);
+            let start = Instant::now();
+            for (i, chunk) in tokens.chunks(CHUNK_SIZE).enumerate() {
+                let chunk = [vec![bos_tok_id], chunk.to_vec()].concat();
+                let chunk_len = chunk.len();
+
+                let start = Instant::now();
+                let inputs =
+                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None)?;
+                let _ = model.forward(
+                    &inputs.input,
+                    &inputs.positions,
+                    inputs.positions_kernel,
+                    inputs.context_lens,
+                    inputs.position_ids,
+                    None,
+                    &inputs.flash_meta,
+                )?;
+                match model.cache_mut() {
+                    EitherCache::Full(full) => {
+                        for layer in &mut *full.lock() {
+                            *layer = None
+                        }
+                    }
+                    EitherCache::Normal(normal) => {
+                        for layer in &mut *normal.lock().unwrap().0 {
+                            layer.set_len(0);
+                        }
+                    }
+                }
+                let end = Instant::now();
+                info!(
+                    "Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s",
+                    i + 1,
+                    end.duration_since(start).as_secs_f32()
+                );
+            }
+            load_device.synchronize()?;
+            let end = Instant::now();
+            info!(
+                "Finished collecting imatrix in {:.2}s",
+                end.duration_since(start).as_secs_f32()
+            );
+        }
 
         if (in_situ_quant.is_some() || self.config.topology.is_some())
             && self.config.from_uqff.is_none()
         {
+            let imatrix_source = match (
+                self.config.imatrix.as_ref(),
+                self.config.calibration_file.is_some(),
+            ) {
+                (None, false) => None,
+                (Some(file), false) => Some(ImatrixDataSource::File(file)),
+                (None, true) => Some(ImatrixDataSource::Collected),
+                (Some(_), true) => unreachable!(),
+            };
             model.quantize(
                 in_situ_quant,
                 device.clone(),
                 self.config.topology.as_ref(),
                 silent,
+                imatrix_source,
                 self.config.organization,
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
@@ -426,10 +528,14 @@ impl Loader for NormalLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let tok_trie: Arc<TokTrie> = build_tok_trie(tokenizer.clone()).into();
-        let num_hidden_layers = model.cache().lock().len();
+        let tok_env = build_tok_env(tokenizer.clone());
+        let num_hidden_layers = match model.cache() {
+            EitherCache::Full(full) => full.lock().len(),
+            EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
+        };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
+        let model_metadata = Arc::new(model.config().clone());
         Ok(Arc::new(Mutex::new(NormalPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -444,7 +550,7 @@ impl Loader for NormalLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie: Some(tok_trie),
+                tok_env: Some(tok_env),
                 has_no_kv_cache: self.no_kv_cache,
                 num_hidden_layers,
                 eos_tok: eos,
@@ -455,6 +561,7 @@ impl Loader for NormalLoader {
                 cache_config,
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
+                model_metadata: Some(model_metadata),
             }),
             topology: self.config.topology.clone(),
             silent,
@@ -462,6 +569,7 @@ impl Loader for NormalLoader {
             template_filename: paths.get_template_filename().clone(),
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
+            imatrix: self.config.imatrix.clone(),
         })))
     }
 
@@ -495,6 +603,7 @@ impl IsqPipelineMixin for NormalPipeline {
                 device,
                 self.topology.as_ref(),
                 self.silent,
+                self.imatrix.as_ref().map(ImatrixDataSource::File),
                 self.organization,
                 None,
                 UqffFullSer {
@@ -512,18 +621,41 @@ impl IsqPipelineMixin for NormalPipeline {
 
 impl CacheManagerMixin for NormalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        DefaultCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        } else {
+            NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        }
     }
-    fn set_none_cache(&self, reset_non_granular: bool, modify_draft_cache: bool) {
-        DefaultCacheManager.set_none_cache(self, modify_draft_cache);
+    fn set_none_cache(
+        &self,
+        seqs: &mut [&mut Sequence],
+        reset_non_granular: bool,
+        modify_draft_cache: bool,
+        load_preallocated_cache: bool,
+    ) {
+        if matches!(self.model.cache(), EitherCache::Full(_)) {
+            FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
+        } else {
+            NormalCacheManager.set_none_cache(
+                self,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            );
+        }
         if reset_non_granular {
             self.reset_non_granular_state()
         }
     }
-    fn cache(&self) -> &Cache {
+    fn cache(&self) -> &EitherCache {
         self.model.cache()
     }
 }
@@ -548,7 +680,7 @@ impl MetadataMixin for NormalPipeline {
     }
     fn reset_non_granular_state(&self) {
         if let Some(s) = self.non_granular_state.as_ref() {
-            *self.cache().get_scalings_cache() = None;
+            *self.cache().full().get_scalings_cache() = None;
             *get_mut_arcmutex!(s.non_granular_index) = 0;
         }
     }
@@ -562,6 +694,7 @@ impl Pipeline for NormalPipeline {
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
+        return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
         let ModelInputs {
             input_ids,
@@ -616,7 +749,11 @@ impl Pipeline for NormalPipeline {
                 flash_meta_full.as_ref().unwrap_or(&flash_meta),
             )?,
         };
-        Ok(ForwardInputsResult::CausalGeneration { logits })
+        if return_raw_logits {
+            Ok(ForwardInputsResult::RawLogits { logits })
+        } else {
+            Ok(ForwardInputsResult::CausalGeneration { logits })
+        }
     }
     async fn sample_causal_gen(
         &self,

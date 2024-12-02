@@ -75,6 +75,7 @@ impl futures::Stream for Streamer {
                 Response::CompletionModelError(_, _) => unreachable!(),
                 Response::Chunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::Raw { .. } => unreachable!(),
             },
             Err(_) => Poll::Pending,
         }
@@ -200,14 +201,17 @@ fn parse_request(
             is_streaming,
             suffix: oairequest.suffix,
             constraint: match oairequest.grammar {
-                Some(Grammar::Yacc(yacc)) => Constraint::Yacc(yacc),
                 Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
+                Some(Grammar::Lark(lark)) => Constraint::Lark(lark),
+                Some(Grammar::JsonSchema(schema)) => Constraint::JsonSchema(schema),
+                Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
                 None => Constraint::None,
             },
             adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
             logits_processors: None,
+            return_raw_logits: false,
         }),
         is_streaming,
     ))
@@ -296,6 +300,7 @@ pub async fn completions(
             Response::Done(_) => unreachable!(),
             Response::ModelError(_, _) => unreachable!(),
             Response::ImageGeneration(_) => unreachable!(),
+            Response::Raw { .. } => unreachable!(),
         }
     }
 }
