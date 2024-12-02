@@ -104,6 +104,9 @@ pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
 pub use utils::paged_attn_supported;
 
+// re-export llguidance for easier LlguidanceGrammar construction
+pub use llguidance;
+
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 static ENGINE_ID: AtomicUsize = AtomicUsize::new(0);
