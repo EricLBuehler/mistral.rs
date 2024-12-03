@@ -38,7 +38,8 @@ impl QuantMethod for GgufMatMul {
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
-            | QuantMethodConfig::FP8 { .. } => unreachable!(),
+            | QuantMethodConfig::FP8 { .. }
+            | QuantMethodConfig::Bnb { .. } => unreachable!(),
         }
     }
 

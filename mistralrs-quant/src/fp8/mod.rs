@@ -41,7 +41,8 @@ impl QuantMethod for FP8Linear {
             | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
-            | QuantMethodConfig::Unquantized(_) => unreachable!(),
+            | QuantMethodConfig::Unquantized(_)
+            | QuantMethodConfig::Bnb { .. } => unreachable!(),
             QuantMethodConfig::FP8 { lin, dtype } => {
                 let QuantizationResult {
                     qw,
