@@ -13,6 +13,7 @@ use candle_core::{
 #[cfg(feature = "metal")]
 mod metal_kernels;
 
+mod bitsandbytes;
 mod cublaslt;
 mod dummy;
 mod fp8;
@@ -23,6 +24,7 @@ mod imatrix;
 mod unquantized;
 mod utils;
 
+pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;
@@ -37,25 +39,50 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub enum QuantMethodType {
-    #[default]
     #[serde(rename = "gptq")]
     Gptq,
+    #[serde(rename = "unreachable")]
+    Unreachable,
+    #[default]
+    #[serde(rename = "bitsandbytes")]
+    Bitsandbytes,
 }
 
 impl Display for QuantMethodType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Gptq => write!(f, "GPTQ"),
+            Self::Bitsandbytes => write!(f, "bnb"),
+            Self::Unreachable => write!(f, "unreachable",),
         }
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct QuantizedConfig {
-    pub bits: usize,
-    pub quant_method: QuantMethodType,
-    pub group_size: usize,
+    // GPTQ
+    pub bits: Option<usize>,
+    pub group_size: Option<usize>,
     pub checkpoint_format: Option<String>,
+
+    // BNB
+    pub bnb_4bit_quant_type: Option<String>,
+
+    pub quant_method: QuantMethodType,
+}
+
+impl QuantizedConfig {
+    pub fn get_bits_name(&self, _vb: &VarBuilder) -> String {
+        match self.bits {
+            Some(bits) => format!("{bits} bits"),
+            None => {
+                // Assume bnb
+                self.bnb_4bit_quant_type
+                    .clone()
+                    .unwrap_or("int8".to_string())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +117,12 @@ pub enum QuantMethodConfig {
     FP8 {
         lin: Linear,
         dtype: DType,
+    },
+    Bnb {
+        weight: Tensor,
+        bias: Option<Tensor>,
+        params: BnbQuantParmas,
+        quant_ty: BnbQuantType,
     },
 }
 
@@ -260,6 +293,10 @@ pub fn linear_no_bias(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Bitsandbytes => {
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
+            }
+            QuantMethodType::Unreachable => unreachable!(),
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
@@ -285,6 +322,10 @@ pub fn linear(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Bitsandbytes => {
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
+            }
+            QuantMethodType::Unreachable => unreachable!(),
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)

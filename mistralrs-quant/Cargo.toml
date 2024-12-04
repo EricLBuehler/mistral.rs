@@ -16,6 +16,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 half.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 lazy_static = "1.4"
 paste = "1.0.15"
 tracing.workspace = true
