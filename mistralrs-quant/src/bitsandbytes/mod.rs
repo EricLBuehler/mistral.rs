@@ -17,6 +17,7 @@ mod op;
 mod quantize;
 
 const SUPPORTED_BLOCKSIZE: [usize; 7] = [2048, 4096, 1024, 512, 256, 128, 64];
+pub(crate) const ISQ_BNB_BLOCKSIZE: usize = 64;
 
 #[derive(Debug, Deserialize, Clone, Copy)]
 pub enum BnbDType {
@@ -28,13 +29,6 @@ pub enum BnbDType {
     F16,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum BnbQuantType {
-    Int8,
-    Fp4,
-    Nf4,
-}
-
 impl From<BnbDType> for DType {
     fn from(value: BnbDType) -> Self {
         match value {
@@ -43,6 +37,24 @@ impl From<BnbDType> for DType {
             BnbDType::F16 => Self::F16,
         }
     }
+}
+
+impl From<DType> for BnbDType {
+    fn from(value: DType) -> Self {
+        match value {
+            DType::F32 => Self::F32,
+            DType::BF16 => Self::BF16,
+            DType::F16 => Self::F16,
+            _ => panic!("impossible dtype!"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BnbQuantType {
+    Int8,
+    Fp4,
+    Nf4,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,6 +205,11 @@ impl BnbLinear {
         )?
         .to_dtype(out_dtype)
     }
+
+    pub fn with_bias(mut self, bias: Tensor) -> Self {
+        self.bias = Some(bias);
+        self
+    }
 }
 
 impl QuantMethod for BnbLinear {
@@ -251,12 +268,39 @@ impl QuantMethod for BnbLinear {
 
     fn apply_isq(
         self: Arc<Self>,
-        _dtype: Option<IsqType>,
-        _device: Device,
-        _n_quantized: &AtomicUsize,
-        _imatrix_weight: Option<Vec<f32>>,
+        dtype: Option<IsqType>,
+        device: Device,
+        n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+        if imatrix_weight.is_some() {
+            // TODO just warn?
+            candle_core::bail!("HQQ does not support imatrix.");
+        }
+
+        n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let bits = match dtype {
+            Some(IsqType::FP4) => BnbQuantType::Fp4,
+            Some(IsqType::NF4) => BnbQuantType::Nf4,
+            Some(IsqType::INT8) => BnbQuantType::Int8,
+            _ => candle_core::bail!("Expected a BNB ISQ type."),
+        };
+        let dequant = Self::dequantize(&self.weight, &self.params, self.quant_ty)?;
+        let res = Self::quantize_onto(
+            &dequant,
+            bits,
+            self.params.dtype,
+            self.params.blocksize,
+            dequant.device(),
+        )?;
+        if let Some(ref bias) = self.bias {
+            let bias = bias
+                .to_device(&device)?
+                .to_dtype(res.dtype_and_device().0)?;
+            Ok(Arc::new(res.with_bias(bias)))
+        } else {
+            Ok(Arc::new(res))
+        }
     }
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {

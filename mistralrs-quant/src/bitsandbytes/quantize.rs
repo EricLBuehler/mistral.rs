@@ -1,6 +1,8 @@
+#![allow(clippy::excessive_precision)]
+
 use std::f32;
 
-use candle_core::{DType, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
 use super::{BnbDType, BnbLinear, BnbQuantParmas, BnbQuantType};
 
@@ -51,8 +53,8 @@ pub fn quantize_block_int8(
 ) {
     // 1. Find absmax in block
     let mut absmax_block = f32::NEG_INFINITY;
-    for i in block_idx..block_end {
-        absmax_block = absmax_block.max(a[i].abs());
+    for a_i in a.iter().take(block_end).skip(block_idx) {
+        absmax_block = absmax_block.max(a_i.abs());
     }
 
     absmax[block_idx / blocksize] = absmax_block;
@@ -109,29 +111,30 @@ fn d_quantize_fp4(x: f32) -> u8 {
     if x > 0.29166667 {
         if x > 0.583333 {
             if x > 0.8333333 {
-                return 0b0011 + sign;
+                0b0011 + sign
             } else {
-                return 0b0010 + sign;
+                0b0010 + sign
             }
         } else {
             if x > 0.4166667 {
-                return 0b0101 + sign;
+                0b0101 + sign
             } else {
-                return 0b0100 + sign;
+                0b0100 + sign
             }
         }
     } else {
         if x > 0.0859375 {
             if x > 0.20833333 {
-                return 0b0111 + sign;
+                0b0111 + sign
             } else {
-                return 0b0110 + sign;
+                0b0110 + sign
             }
         } else {
+            #[allow(clippy::identity_op)]
             if x > 0.00260417 {
-                return 0b0001 + sign;
+                0b0001 + sign
             } else {
-                return 0b0000 + sign;
+                0b0000 + sign
             }
         }
     }
@@ -142,29 +145,29 @@ fn d_quantize_nf4(x: f32) -> u8 {
         if x > 0.3893125355243683 {
             if x > 0.6427869200706482 {
                 if x > 0.8614784181118011 {
-                    return 0b1111;
+                    0b1111
                 } else {
-                    return 0b1110;
+                    0b1110
                 }
             } else {
                 if x > 0.5016634166240692 {
-                    return 0b1101;
+                    0b1101
                 } else {
-                    return 0b1100;
+                    0b1100
                 }
             }
         } else {
             if x > 0.2035212516784668 {
                 if x > 0.2920137718319893 {
-                    return 0b1011;
+                    0b1011
                 } else {
-                    return 0b1010;
+                    0b1010
                 }
             } else {
                 if x > 0.1202552504837513 {
-                    return 0b1001;
+                    0b1001
                 } else {
-                    return 0b1000;
+                    0b1000
                 }
             }
         }
@@ -172,29 +175,29 @@ fn d_quantize_nf4(x: f32) -> u8 {
         if x > -0.33967943489551544 {
             if x > -0.13791173323988914 {
                 if x > -0.045525018125772476 {
-                    return 0b0111;
+                    0b0111
                 } else {
-                    return 0b0110;
+                    0b0110
                 }
             } else {
                 if x > -0.23460740596055984 {
-                    return 0b0101;
+                    0b0101
                 } else {
-                    return 0b0100;
+                    0b0100
                 }
             }
         } else {
             if x > -0.6106329262256622 {
                 if x > -0.4599952697753906 {
-                    return 0b0011;
+                    0b0011
                 } else {
-                    return 0b0010;
+                    0b0010
                 }
             } else {
                 if x > -0.8480964004993439 {
-                    return 0b0001;
+                    0b0001
                 } else {
-                    return 0b0000;
+                    0b0000
                 }
             }
         }
@@ -522,8 +525,8 @@ fn quantize_cpu(a: &[f32], blocksize: usize, quant_ty: BnbQuantType) -> Result<Q
                 let block_end = block_idx + valid_items;
 
                 let mut absmax_block = f32::NEG_INFINITY;
-                for i in block_idx..block_end {
-                    absmax_block = absmax_block.max(a[i].abs());
+                for a_i in a.iter().take(block_end).skip(block_idx) {
+                    absmax_block = absmax_block.max(a_i.abs());
                 }
 
                 absmax[block_idx / blocksize] = absmax_block;
@@ -533,12 +536,12 @@ fn quantize_cpu(a: &[f32], blocksize: usize, quant_ty: BnbQuantType) -> Result<Q
                     let mut packed_4bit = 0u8;
                     match quant_ty {
                         BnbQuantType::Fp4 => {
-                            packed_4bit |= d_quantize_fp4(a[2 * i] as f32 * absmax_block) << 4;
-                            packed_4bit |= d_quantize_fp4(a[2 * i + 1] as f32 * absmax_block);
+                            packed_4bit |= d_quantize_fp4(a[2 * i] * absmax_block) << 4;
+                            packed_4bit |= d_quantize_fp4(a[2 * i + 1] * absmax_block);
                         }
                         BnbQuantType::Nf4 => {
-                            packed_4bit |= d_quantize_nf4(a[2 * i] as f32 * absmax_block) << 4;
-                            packed_4bit |= d_quantize_nf4(a[2 * i + 1] as f32 * absmax_block);
+                            packed_4bit |= d_quantize_nf4(a[2 * i] * absmax_block) << 4;
+                            packed_4bit |= d_quantize_nf4(a[2 * i + 1] * absmax_block);
                         }
                         BnbQuantType::Int8 => unreachable!(),
                     }
@@ -556,11 +559,12 @@ fn quantize_cpu(a: &[f32], blocksize: usize, quant_ty: BnbQuantType) -> Result<Q
 }
 
 impl BnbLinear {
-    pub fn quantize(
+    pub fn quantize_onto(
         x: &Tensor,
         quant_ty: BnbQuantType,
         out_ty: BnbDType,
         blocksize: usize,
+        device: &Device,
     ) -> Result<Self> {
         let data = x.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
         let QuantizeResults {
@@ -572,9 +576,9 @@ impl BnbLinear {
         let code_len = code.len();
         let absmax_len = absmax.len();
 
-        let weight = Tensor::from_vec(weight, (weight_len, 1), x.device())?;
-        let code = Tensor::from_vec(code, (code_len,), x.device())?;
-        let absmax = Tensor::from_vec(absmax, (absmax_len,), x.device())?;
+        let weight = Tensor::from_vec(weight, (weight_len, 1), device)?;
+        let code = Tensor::from_vec(code, (code_len,), device)?;
+        let absmax = Tensor::from_vec(absmax, (absmax_len,), device)?;
 
         Ok(Self {
             weight,
@@ -604,7 +608,7 @@ mod tests {
         let dev = Device::Cpu;
 
         let data = Tensor::randn(0f32, 1f32, (256, 256), &dev)?;
-        let layer = BnbLinear::quantize(&data, BnbQuantType::Nf4, BnbDType::F32, 64)?;
+        let layer = BnbLinear::quantize_onto(&data, BnbQuantType::Nf4, BnbDType::F32, 64, &dev)?;
         let dequant = BnbLinear::dequantize(&layer.weight, &layer.params, BnbQuantType::Nf4)?;
 
         let err = (data - dequant)?.abs()?.mean_all()?.to_scalar::<f32>()?;
@@ -618,7 +622,7 @@ mod tests {
         let dev = Device::Cpu;
 
         let data = Tensor::randn(0f32, 1f32, (256, 256), &dev)?;
-        let layer = BnbLinear::quantize(&data, BnbQuantType::Fp4, BnbDType::F32, 64)?;
+        let layer = BnbLinear::quantize_onto(&data, BnbQuantType::Fp4, BnbDType::F32, 64, &dev)?;
         let dequant = BnbLinear::dequantize(&layer.weight, &layer.params, BnbQuantType::Fp4)?;
 
         let err = (data - dequant)?.abs()?.mean_all()?.to_scalar::<f32>()?;
@@ -632,7 +636,7 @@ mod tests {
         let dev = Device::Cpu;
 
         let data = Tensor::randn(0f32, 1f32, (256, 256), &dev)?;
-        let layer = BnbLinear::quantize(&data, BnbQuantType::Int8, BnbDType::F32, 64)?;
+        let layer = BnbLinear::quantize_onto(&data, BnbQuantType::Int8, BnbDType::F32, 64, &dev)?;
         let dequant = BnbLinear::dequantize(&layer.weight, &layer.params, BnbQuantType::Int8)?;
 
         let err = (data - dequant)?.abs()?.mean_all()?.to_scalar::<f32>()?;
