@@ -396,6 +396,94 @@ impl CustomOp3 for DequantizeOp {
 
         Ok((out, self.shape.clone()))
     }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        input_s: &candle_core::MetalStorage,
+        input_l: &candle_core::Layout,
+        absmax_s: &candle_core::MetalStorage,
+        absmax_l: &candle_core::Layout,
+        code_s: &candle_core::MetalStorage,
+        code_l: &candle_core::Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        use candle_core::DType;
+
+        if !(input_l.is_contiguous() && absmax_l.is_contiguous() && code_l.is_contiguous()) {
+            candle_core::bail!("All inputs must be contiguous");
+        }
+
+        let command_buffer = input_s.device().command_buffer()?;
+        command_buffer.set_label("dequant-bnb-nf4");
+
+        let device = input_s.device();
+
+        let output = device.new_buffer(
+            self.shape.elem_count(),
+            self.out_ty.into(),
+            "dequant-bnb-nf4",
+        )?;
+
+        if input_s.dtype() != DType::U8 {
+            candle_core::bail!("input must be u8");
+        }
+        if code_s.dtype() != DType::F32 {
+            candle_core::bail!("code must be f32");
+        }
+        if absmax_s.dtype() != DType::F32 {
+            candle_core::bail!("absmax must be f32");
+        }
+
+        match self.quant_ty {
+            BnbQuantType::Nf4 => crate::metal_kernels::call_dequant_bnb_nf4(
+                device.device(),
+                &command_buffer,
+                &crate::metal_kernels::Kernels::new(),
+                self.out_ty.into(),
+                input_s.buffer(),
+                absmax_s.buffer(),
+                code_s.buffer(),
+                &*output,
+                self.blocksize,
+                self.n,
+            )
+            .map_err(candle_core::Error::wrap)?,
+            BnbQuantType::Fp4 => crate::metal_kernels::call_dequant_bnb_fp4(
+                device.device(),
+                &command_buffer,
+                &crate::metal_kernels::Kernels::new(),
+                self.out_ty.into(),
+                input_s.buffer(),
+                absmax_s.buffer(),
+                code_s.buffer(),
+                &*output,
+                self.blocksize,
+                self.n,
+            )
+            .map_err(candle_core::Error::wrap)?,
+            BnbQuantType::Int8 => crate::metal_kernels::call_dequant_bnb_int8(
+                device.device(),
+                &command_buffer,
+                &crate::metal_kernels::Kernels::new(),
+                self.out_ty.into(),
+                input_s.buffer(),
+                absmax_s.buffer(),
+                code_s.buffer(),
+                &*output,
+                self.blocksize,
+                self.n,
+            )
+            .map_err(candle_core::Error::wrap)?,
+        };
+
+        let newstorage = candle_core::MetalStorage::new(
+            output,
+            device.clone(),
+            self.shape.elem_count(),
+            self.out_ty.into(),
+        );
+        Ok((newstorage, self.shape.clone()))
+    }
 }
 
 pub fn dequantize(
