@@ -66,14 +66,14 @@ pub struct BnbQuantParmas {
 }
 
 #[derive(Debug)]
-pub struct BnbQuantLinear {
+pub struct BnbLinear {
     weight: Tensor,
     bias: Option<Tensor>,
     params: BnbQuantParmas,
     quant_ty: BnbQuantType,
 }
 
-impl BnbQuantLinear {
+impl BnbLinear {
     pub fn linear_b(_in_dim: usize, out_dim: usize, bias: bool, vb: VarBuilder) -> Result<Self> {
         let weight = vb.get_unchecked_dtype("weight", DType::U8)?;
 
@@ -82,7 +82,7 @@ impl BnbQuantLinear {
         if !vb_w.contains_tensor("quant_state.bitsandbytes__nf4")
             && !vb_w.contains_tensor("quant_state.bitsandbytes__fp4")
         {
-            candle_core::bail!("`BnbQuantLinear` expects either `...__nf4` or `...__fp4` tensors, this means the layer is not 4bit.");
+            candle_core::bail!("`BnbLinear` expects either `...__nf4` or `...__fp4` tensors, this means the layer is not 4bit.");
         }
 
         let bias = if bias {
@@ -194,7 +194,7 @@ impl BnbQuantLinear {
     }
 }
 
-impl QuantMethod for BnbQuantLinear {
+impl QuantMethod for BnbLinear {
     fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
     where
         Self: Sized,
@@ -263,7 +263,7 @@ impl QuantMethod for BnbQuantLinear {
     }
 }
 
-impl QuantizedSerde for BnbQuantLinear {
+impl QuantizedSerde for BnbLinear {
     fn isq_serde_supported(&self) -> bool {
         true
     }

@@ -5,7 +5,6 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use bitsandbytes::{BnbQuantLinear, BnbQuantParmas, BnbQuantType};
 use candle_core::{
     quantized::{GgmlDType, QTensor},
     DType, Device, Result, Tensor,
@@ -25,6 +24,7 @@ mod imatrix;
 mod unquantized;
 mod utils;
 
+pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;
@@ -294,7 +294,7 @@ pub fn linear_no_bias(
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
             QuantMethodType::Bitsandbytes => {
-                Arc::new(BnbQuantLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
             QuantMethodType::Unreachable => unreachable!(),
         }
@@ -323,7 +323,7 @@ pub fn linear(
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
             QuantMethodType::Bitsandbytes => {
-                Arc::new(BnbQuantLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
             QuantMethodType::Unreachable => unreachable!(),
         }
