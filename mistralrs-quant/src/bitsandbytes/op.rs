@@ -507,3 +507,187 @@ pub fn dequantize(
         },
     )
 }
+
+struct Gemv4bit {
+    a: Tensor,
+    w_shape: Shape,
+    blocksize: usize,
+}
+
+impl Gemv4bit {
+    #[cfg(feature = "cuda")]
+    fn dispatch_cuda_kernel<T: WithDType + DeviceRepr + ValidAsZeroBits>(
+        &self,
+        (m, n, k): (i32, i32, i32),
+        (lda, ldb, ldc): (i32, i32, i32),
+        a: &CudaSlice<T>,
+        input: &CudaSlice<u8>,
+        code: &CudaSlice<f32>,
+        absmax: &CudaSlice<f32>,
+        dev: &CudaDevice,
+        out_shape: &Shape,
+        kernel: unsafe extern "C" fn(
+            i32,
+            i32,
+            i32,
+            *const T,
+            *const u8,
+            *const f32,
+            *const f32,
+            *mut T,
+            i32,
+            i32,
+            i32,
+            i32,
+            CUstream,
+        ),
+    ) -> Result<CudaSlice<T>> {
+        use candle_core::cuda::{cudarc::driver::DevicePtr, WrapErr};
+
+        let out = unsafe { dev.alloc::<T>(out_shape.elem_count()).w()? };
+        unsafe {
+            kernel(
+                m,
+                n,
+                k,
+                (*a.device_ptr()) as *const T,
+                (*input.device_ptr()) as *const u8,
+                (*absmax.device_ptr()) as *const f32,
+                (*code.device_ptr()) as *const f32,
+                (*out.device_ptr()) as *mut T,
+                lda,
+                ldb,
+                ldc,
+                self.blocksize as i32,
+                *dev.cu_stream(),
+            )
+        };
+
+        Ok(out)
+    }
+}
+
+impl CustomOp3 for Gemv4bit {
+    fn name(&self) -> &'static str {
+        "bnb-gemv-4bit"
+    }
+    fn cpu_fwd(
+        &self,
+        _s1: &CpuStorage,
+        _l1: &candle_core::Layout,
+        _s2: &CpuStorage,
+        _l2: &candle_core::Layout,
+        _s3: &CpuStorage,
+        _l3: &candle_core::Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        candle_core::bail!("bnb-gemv-4bit is unimplemented for cpu.")
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        input_s: &candle_core::CudaStorage,
+        input_l: &candle_core::Layout,
+        absmax_s: &candle_core::CudaStorage,
+        absmax_l: &candle_core::Layout,
+        code_s: &candle_core::CudaStorage,
+        code_l: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, Shape)> {
+        use candle_core::{DType, Storage, D};
+
+        if !(input_l.is_contiguous() && absmax_l.is_contiguous() && code_l.is_contiguous()) {
+            candle_core::bail!("All inputs must be contiguous");
+        }
+        let input_slice = input_s.as_cuda_slice::<u8>()?;
+        let absmax_slice = absmax_s.as_cuda_slice::<f32>()?;
+        let code_slice = code_s.as_cuda_slice::<f32>()?;
+
+        let out_shape = if self.a.rank() == 3 {
+            Shape::from_dims(&[self.a.dims()[0], self.a.dims()[1], self.w_shape.dims()[0]])
+        } else {
+            Shape::from_dims(&[self.a.dims()[0], self.w_shape.dims()[0]])
+        };
+
+        let (m, n, k) = (input_l.dims()[0] as i32, 1, input_l.dims()[1] as i32);
+        let (lda, ldb, ldc) = (
+            input_l.dims()[0] as i32,
+            self.a.dim(D::Minus1)?.div_ceil(2) as i32,
+            input_l.dims()[0] as i32,
+        );
+
+        let dev = input_s.device().clone();
+        let (storage, _) = self.a.storage_and_layout();
+        let a_storage = if let Storage::Cuda(cuda) = &*storage {
+            cuda
+        } else {
+            candle_core::bail!("expected cuda `a`")
+        };
+
+        let out = match self.a.dtype() {
+            DType::F32 => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<f32>(
+                    (m, n, k),
+                    (lda, ldb, ldc),
+                    a_storage.as_cuda_slice::<f32>()?,
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    &out_shape,
+                    ffi::gemm_4bit_inference_naive_f32,
+                )?,
+                dev,
+            ),
+            DType::F16 => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<half::f16>(
+                    (m, n, k),
+                    (lda, ldb, ldc),
+                    a_storage.as_cuda_slice::<half::f16>()?,
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    &out_shape,
+                    ffi::gemm_4bit_inference_naive_f16,
+                )?,
+                dev,
+            ),
+            DType::BF16 => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<half::bf16>(
+                    (m, n, k),
+                    (lda, ldb, ldc),
+                    a_storage.as_cuda_slice::<half::bf16>()?,
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    &out_shape,
+                    ffi::gemm_4bit_inference_naive_bf16,
+                )?,
+                dev,
+            ),
+            _ => unreachable!(),
+        };
+
+        Ok((out, out_shape.clone()))
+    }
+}
+
+pub fn gemv_4bit(
+    a: &Tensor,
+    weight: &Tensor,
+    absmax: &Tensor,
+    code: &Tensor,
+    w_shape: Shape,
+    blocksize: usize,
+) -> Result<Tensor> {
+    weight.apply_op3(
+        absmax,
+        code,
+        Gemv4bit {
+            a: a.clone(),
+            w_shape,
+            blocksize,
+        },
+    )
+}
