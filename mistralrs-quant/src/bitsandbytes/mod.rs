@@ -14,6 +14,7 @@ use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
 mod ffi;
 
 mod op;
+mod quantize;
 
 const SUPPORTED_BLOCKSIZE: [usize; 7] = [2048, 4096, 1024, 512, 256, 128, 64];
 
@@ -160,7 +161,7 @@ impl BnbLinear {
     }
 
     /// Dequantize input (u8). Handles nested absmax dequantization.
-    fn dequantize(
+    pub(crate) fn dequantize(
         input: &Tensor,
         params: &BnbQuantParmas,
         quant_ty: BnbQuantType,
