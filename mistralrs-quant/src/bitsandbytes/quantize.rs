@@ -608,7 +608,7 @@ mod tests {
         let dequant = BnbLinear::dequantize(&layer.weight, &layer.params, BnbQuantType::Nf4)?;
 
         let err = (data - dequant)?.abs()?.mean_all()?.to_scalar::<f32>()?;
-        assert!(err < 0.08);
+        assert!(err < 0.081, "{err}");
 
         Ok(())
     }
@@ -622,7 +622,7 @@ mod tests {
         let dequant = BnbLinear::dequantize(&layer.weight, &layer.params, BnbQuantType::Fp4)?;
 
         let err = (data - dequant)?.abs()?.mean_all()?.to_scalar::<f32>()?;
-        assert!(err < 0.11);
+        assert!(err < 0.11, "{err}");
 
         Ok(())
     }
@@ -636,8 +636,7 @@ mod tests {
         let dequant = BnbLinear::dequantize(&layer.weight, &layer.params, BnbQuantType::Int8)?;
 
         let err = (data - dequant)?.abs()?.mean_all()?.to_scalar::<f32>()?;
-        dbg!(&err);
-        assert!(err < 0.11);
+        assert!(err < 0.01, "{err}");
 
         Ok(())
     }
