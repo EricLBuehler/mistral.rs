@@ -482,7 +482,9 @@ pub fn gptq_linear(
                 &scales,
                 in_dim / pack_factor!(bits),
                 out_dim,
-                config.group_size as i32,
+                config
+                    .group_size
+                    .expect("GPTQ requires group size in config.") as i32,
                 bits as u32,
             )?
         } else {

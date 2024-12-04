@@ -62,6 +62,7 @@ fn main() {
             "kernels/gptq/q_gemm.cu",
             "kernels/hqq/hqq.cu",
             "kernels/ops/ops.cu",
+            "kernels/bitsandbytes/dequant.cu",
         ];
         if compile_marlin {
             lib_files.push("kernels/marlin/marlin_kernel.cu");

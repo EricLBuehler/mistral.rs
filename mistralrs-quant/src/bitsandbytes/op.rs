@@ -2,9 +2,18 @@
 
 use std::fmt::Debug;
 
+#[cfg(feature = "cuda")]
+use candle_core::cuda::{
+    cudarc::driver::{sys::CUstream, CudaSlice, DeviceRepr, ValidAsZeroBits},
+    CudaDevice,
+};
+
 use candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp3, Result, Shape, Tensor, WithDType,
 };
+
+#[cfg(feature = "cuda")]
+use crate::bitsandbytes::ffi;
 
 use super::{BnbDType, BnbQuantType};
 
@@ -189,6 +198,33 @@ impl DequantizeOp {
             }
         }
     }
+
+    #[cfg(feature = "cuda")]
+    fn dispatch_cuda_kernel<T: WithDType + DeviceRepr + ValidAsZeroBits>(
+        &self,
+        input: &CudaSlice<u8>,
+        code: &CudaSlice<f32>,
+        absmax: &CudaSlice<f32>,
+        dev: &CudaDevice,
+        kernel: unsafe extern "C" fn(*const f32, *const u8, *const f32, *mut T, i32, i32, CUstream),
+    ) -> Result<CudaSlice<T>> {
+        use candle_core::cuda::{cudarc::driver::DevicePtr, WrapErr};
+
+        let out = unsafe { dev.alloc::<T>(self.shape.elem_count()).w()? };
+        unsafe {
+            kernel(
+                (*code.device_ptr()) as *const _,
+                (*input.device_ptr()) as *const _,
+                (*absmax.device_ptr()) as *const _,
+                (*out.device_ptr()) as *mut _,
+                self.blocksize as i32,
+                self.shape.elem_count() as i32,
+                *dev.cu_stream(),
+            )
+        };
+
+        Ok(out)
+    }
 }
 
 impl CustomOp3 for DequantizeOp {
@@ -244,6 +280,121 @@ impl CustomOp3 for DequantizeOp {
                 t
             ),
         }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        input_s: &candle_core::CudaStorage,
+        input_l: &candle_core::Layout,
+        absmax_s: &candle_core::CudaStorage,
+        absmax_l: &candle_core::Layout,
+        code_s: &candle_core::CudaStorage,
+        code_l: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, Shape)> {
+        if !(input_l.is_contiguous() && absmax_l.is_contiguous() && code_l.is_contiguous()) {
+            candle_core::bail!("All inputs must be contiguous");
+        }
+        let input_slice = input_s.as_cuda_slice::<u8>()?;
+        let absmax_slice = absmax_s.as_cuda_slice::<f32>()?;
+        let code_slice = code_s.as_cuda_slice::<f32>()?;
+        let dev = input_s.device().clone();
+        let out = match (self.out_ty, self.quant_ty) {
+            (BnbDType::F32, BnbQuantType::Nf4) => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<f32>(
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    ffi::dequantize_blockwise_f32_nf4,
+                )?,
+                dev,
+            ),
+            (BnbDType::F16, BnbQuantType::Nf4) => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<half::f16>(
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    ffi::dequantize_blockwise_f16_nf4,
+                )?,
+                dev,
+            ),
+            (BnbDType::BF16, BnbQuantType::Nf4) => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<half::bf16>(
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    ffi::dequantize_blockwise_bf16_nf4,
+                )?,
+                dev,
+            ),
+
+            (BnbDType::F32, BnbQuantType::Fp4) => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<f32>(
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    ffi::dequantize_blockwise_f32_fp4,
+                )?,
+                dev,
+            ),
+            (BnbDType::F16, BnbQuantType::Fp4) => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<half::f16>(
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    ffi::dequantize_blockwise_f16_fp4,
+                )?,
+                dev,
+            ),
+            (BnbDType::BF16, BnbQuantType::Fp4) => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<half::bf16>(
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    ffi::dequantize_blockwise_bf16_fp4,
+                )?,
+                dev,
+            ),
+
+            (BnbDType::F32, BnbQuantType::Int8) => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<f32>(
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    ffi::dequantize_blockwise_f32_int8,
+                )?,
+                dev,
+            ),
+            (BnbDType::F16, BnbQuantType::Int8) => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<half::f16>(
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    ffi::dequantize_blockwise_f16_int8,
+                )?,
+                dev,
+            ),
+            (BnbDType::BF16, BnbQuantType::Int8) => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<half::bf16>(
+                    input_slice,
+                    code_slice,
+                    absmax_slice,
+                    &dev,
+                    ffi::dequantize_blockwise_bf16_int8,
+                )?,
+                dev,
+            ),
+        };
+
+        Ok((out, self.shape.clone()))
     }
 }
 

@@ -10,6 +10,9 @@ use serde::Deserialize;
 
 use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
 
+#[cfg(feature = "cuda")]
+mod ffi;
+
 mod op;
 
 const SUPPORTED_BLOCKSIZE: [usize; 7] = [2048, 4096, 1024, 512, 256, 128, 64];
@@ -220,6 +223,7 @@ impl QuantMethod for BnbQuantLinear {
         let w = Self::dequantize(&self.weight, &self.params, self.quant_ty)?
             .t()?
             .to_dtype(xs.dtype())?;
+        // dbg!(&w.mean_all());
         let res = xs.broadcast_matmul(&w)?;
         if let Some(bias) = &self.bias {
             res + bias
