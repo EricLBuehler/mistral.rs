@@ -345,7 +345,8 @@
 <a href="#344" id="344">344</a>
 <a href="#345" id="345">345</a>
 <a href="#346" id="346">346</a>
-<a href="#347" id="347">347</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
     num::NonZeroUsize,
@@ -382,7 +383,8 @@
             | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
-            | QuantMethodConfig::FP8 { .. } =&gt; <span class="macro">unreachable!</span>(),
+            | QuantMethodConfig::FP8 { .. }
+            | QuantMethodConfig::Bnb { .. } =&gt; <span class="macro">unreachable!</span>(),
             QuantMethodConfig::Unquantized(l) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
                 w: l.weight().clone(),
                 b: l.bias().cloned(),

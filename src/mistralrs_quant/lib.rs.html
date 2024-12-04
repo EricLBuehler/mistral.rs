@@ -314,7 +314,48 @@
 <a href="#313" id="313">313</a>
 <a href="#314" id="314">314</a>
 <a href="#315" id="315">315</a>
-<a href="#316" id="316">316</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
@@ -329,6 +370,7 @@
 <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">mod </span>metal_kernels;
 
+<span class="kw">mod </span>bitsandbytes;
 <span class="kw">mod </span>cublaslt;
 <span class="kw">mod </span>dummy;
 <span class="kw">mod </span>fp8;
@@ -339,6 +381,7 @@
 <span class="kw">mod </span>unquantized;
 <span class="kw">mod </span>utils;
 
+<span class="kw">pub use </span>bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 <span class="kw">pub use </span>dummy::DummyLayer;
 <span class="kw">pub use </span>fp8::FP8Linear;
 <span class="kw">pub use </span>gguf::GgufMatMul;
@@ -353,25 +396,50 @@
 
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 </span><span class="kw">pub enum </span>QuantMethodType {
-    <span class="attr">#[default]
-    #[serde(rename = <span class="string">"gptq"</span>)]
+    <span class="attr">#[serde(rename = <span class="string">"gptq"</span>)]
     </span>Gptq,
+    <span class="attr">#[serde(rename = <span class="string">"unreachable"</span>)]
+    </span>Unreachable,
+    <span class="attr">#[default]
+    #[serde(rename = <span class="string">"bitsandbytes"</span>)]
+    </span>Bitsandbytes,
 }
 
 <span class="kw">impl </span>Display <span class="kw">for </span>QuantMethodType {
     <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
         <span class="kw">match </span><span class="self">self </span>{
             <span class="self">Self</span>::Gptq =&gt; <span class="macro">write!</span>(f, <span class="string">"GPTQ"</span>),
+            <span class="self">Self</span>::Bitsandbytes =&gt; <span class="macro">write!</span>(f, <span class="string">"bnb"</span>),
+            <span class="self">Self</span>::Unreachable =&gt; <span class="macro">write!</span>(f, <span class="string">"unreachable"</span>,),
         }
     }
 }
 
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 </span><span class="kw">pub struct </span>QuantizedConfig {
-    <span class="kw">pub </span>bits: usize,
-    <span class="kw">pub </span>quant_method: QuantMethodType,
-    <span class="kw">pub </span>group_size: usize,
+    <span class="comment">// GPTQ
+    </span><span class="kw">pub </span>bits: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub </span>group_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub </span>checkpoint_format: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+    <span class="comment">// BNB
+    </span><span class="kw">pub </span>bnb_4bit_quant_type: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+    <span class="kw">pub </span>quant_method: QuantMethodType,
+}
+
+<span class="kw">impl </span>QuantizedConfig {
+    <span class="kw">pub fn </span>get_bits_name(<span class="kw-2">&amp;</span><span class="self">self</span>, _vb: <span class="kw-2">&amp;</span>VarBuilder) -&gt; String {
+        <span class="kw">match </span><span class="self">self</span>.bits {
+            <span class="prelude-val">Some</span>(bits) =&gt; <span class="macro">format!</span>(<span class="string">"{bits} bits"</span>),
+            <span class="prelude-val">None </span>=&gt; {
+                <span class="comment">// Assume bnb
+                </span><span class="self">self</span>.bnb_4bit_quant_type
+                    .clone()
+                    .unwrap_or(<span class="string">"int8"</span>.to_string())
+            }
+        }
+    }
 }
 
 <span class="attr">#[derive(Debug, Clone)]
@@ -406,6 +474,12 @@
     FP8 {
         lin: Linear,
         dtype: DType,
+    },
+    Bnb {
+        weight: Tensor,
+        bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+        params: BnbQuantParmas,
+        quant_ty: BnbQuantType,
     },
 }
 
@@ -576,6 +650,10 @@
     <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
         <span class="kw">match </span>quant_conf.quant_method {
             QuantMethodType::Gptq =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
+            QuantMethodType::Bitsandbytes =&gt; {
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">false</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
+            }
+            QuantMethodType::Unreachable =&gt; <span class="macro">unreachable!</span>(),
         }
     } <span class="kw">else </span>{
         <span class="comment">// Handle the case where the layer is dummy (no tensors)
@@ -601,6 +679,10 @@
     <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
         <span class="kw">match </span>quant_conf.quant_method {
             QuantMethodType::Gptq =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
+            QuantMethodType::Bitsandbytes =&gt; {
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">false</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
+            }
+            QuantMethodType::Unreachable =&gt; <span class="macro">unreachable!</span>(),
         }
     } <span class="kw">else </span>{
         <span class="comment">// Handle the case where the layer is dummy (no tensors)

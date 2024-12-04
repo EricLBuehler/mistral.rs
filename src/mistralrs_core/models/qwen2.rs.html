@@ -1268,9 +1268,9 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>quant_cfg) = <span class="kw-2">&amp;</span>cfg.quantization_config {
             <span class="macro">tracing::info!</span>(
-                <span class="string">"Using {} quantization in {} bits."</span>,
+                <span class="string">"Using {} quantization: {}."</span>,
                 quant_cfg.quant_method.to_string(),
-                quant_cfg.bits
+                quant_cfg.get_bits_name(<span class="kw-2">&amp;</span>vb)
             );
         }
         <span class="kw">let </span>mapper = normal_loading_metadata.mapper;
