@@ -270,10 +270,8 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>>;
 
-    /// If the quant is backed by a qmatmul.
-    fn to_gguf_quant(&self) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("This layer cannot be directly converted to a GGUF quantization.");
-    }
+    /// Convert to an equivalent gguf quantization, if applicable.
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>>;
 
     /// If the quant is backed by a qmatmul.
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;

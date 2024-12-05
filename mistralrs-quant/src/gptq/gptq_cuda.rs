@@ -342,6 +342,10 @@ impl QuantMethod for GptqLayer {
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
     }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
+    }
 }
 
 impl QuantizedSerde for GptqLayer {

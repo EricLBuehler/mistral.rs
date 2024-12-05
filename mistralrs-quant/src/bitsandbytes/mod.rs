@@ -265,7 +265,7 @@ impl QuantMethod for BnbLinear {
         None
     }
 
-    fn to_gguf_quant(&self) -> Result<Arc<dyn QuantMethod>> {
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
         let weight = Self::dequantize(&self.weight, &self.params, self.quant_ty)?;
         let bias = self.bias.clone();
 
