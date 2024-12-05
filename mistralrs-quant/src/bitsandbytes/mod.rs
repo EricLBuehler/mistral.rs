@@ -6,7 +6,7 @@ use std::{
 
 use candle_core::{
     quantized::{GgmlDType, QTensor},
-    Context, DType, Device, Result, Shape, Tensor,
+    Context, DType, Device, Result, Shape, Tensor, D,
 };
 use candle_nn::VarBuilder;
 use serde::Deserialize;
@@ -268,9 +268,18 @@ impl QuantMethod for BnbLinear {
     fn to_gguf_quant(&self) -> Result<Arc<dyn QuantMethod>> {
         let weight = Self::dequantize(&self.weight, &self.params, self.quant_ty)?;
         let bias = self.bias.clone();
+
+        let last_dim = weight.dim(D::Minus1)?;
         let dtype = match self.quant_ty {
-            BnbQuantType::Fp4 | BnbQuantType::Nf4 => GgmlDType::Q4K,
+            BnbQuantType::Fp4 | BnbQuantType::Nf4 if last_dim % 256 == 0 => GgmlDType::Q4K,
+            BnbQuantType::Fp4 | BnbQuantType::Nf4 if last_dim % 64 == 0 && last_dim % 256 != 0 => {
+                GgmlDType::Q4_0
+            }
+            BnbQuantType::Fp4 | BnbQuantType::Nf4 if last_dim % 64 != 0 && last_dim % 256 != 0 => {
+                GgmlDType::F32
+            }
             BnbQuantType::Int8 => GgmlDType::Q8_0,
+            _ => unreachable!(),
         };
         let qmatmul = QTensor::quantize(&weight, dtype)?;
         Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
