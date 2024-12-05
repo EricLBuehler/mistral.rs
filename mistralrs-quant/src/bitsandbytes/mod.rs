@@ -4,11 +4,14 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{Context, DType, Device, Result, Shape, Tensor};
+use candle_core::{
+    quantized::{GgmlDType, QTensor},
+    Context, DType, Device, Result, Shape, Tensor,
+};
 use candle_nn::VarBuilder;
 use serde::Deserialize;
 
-use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
+use crate::{GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
 
 #[cfg(feature = "cuda")]
 mod ffi;
@@ -260,6 +263,20 @@ impl QuantMethod for BnbLinear {
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
+    }
+
+    fn to_gguf_quant(&self) -> Result<Arc<dyn QuantMethod>> {
+        let weight = Self::dequantize(&self.weight, &self.params, self.quant_ty)?;
+        let bias = self.bias.clone();
+        let dtype = match self.quant_ty {
+            BnbQuantType::Fp4 | BnbQuantType::Nf4 => GgmlDType::Q4K,
+            BnbQuantType::Int8 => GgmlDType::Q8_0,
+        };
+        let qmatmul = QTensor::quantize(&weight, dtype)?;
+        Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: Arc::new(qmatmul),
+            b: bias,
+        })?))
     }
 }
 

@@ -271,6 +271,11 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     ) -> Result<Arc<dyn QuantMethod>>;
 
     /// If the quant is backed by a qmatmul.
+    fn to_gguf_quant(&self) -> Result<Arc<dyn QuantMethod>> {
+        candle_core::bail!("This layer cannot be directly converted to a GGUF quantization.");
+    }
+
+    /// If the quant is backed by a qmatmul.
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
 
     fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
