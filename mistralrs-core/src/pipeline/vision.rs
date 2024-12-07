@@ -303,9 +303,10 @@ impl Loader for VisionLoader {
             Some(processor.get_special_tokens()),
         )?;
 
-        let gen_conf: Option<GenerationConfig> = paths
-            .get_gen_conf_filename()
-            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+        let gen_conf: Option<GenerationConfig> = paths.get_gen_conf_filename().map(|f| {
+            serde_json::from_str(&fs::read_to_string(f).unwrap())
+                .expect("bos_token_id/eos_token_id missing in generation_config.json")
+        });
         let chat_template = get_chat_template(
             paths,
             &paths
