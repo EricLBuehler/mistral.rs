@@ -791,7 +791,8 @@
 <a href="#790" id="790">790</a>
 <a href="#791" id="791">791</a>
 <a href="#792" id="792">792</a>
-<a href="#793" id="793">793</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -1096,9 +1097,10 @@
             <span class="prelude-val">Some</span>(processor.get_special_tokens()),
         )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths
-            .get_gen_conf_filename()
-            .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
+        <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths.get_gen_conf_filename().map(|f| {
+            serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap())
+                .expect(<span class="string">"bos_token_id/eos_token_id missing in generation_config.json"</span>)
+        });
         <span class="kw">let </span>chat_template = get_chat_template(
             paths,
             <span class="kw-2">&amp;</span>paths

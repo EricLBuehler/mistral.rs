@@ -901,7 +901,9 @@
 <a href="#900" id="900">900</a>
 <a href="#901" id="901">901</a>
 <a href="#902" id="902">902</a>
-<a href="#903" id="903">903</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
@@ -1287,9 +1289,11 @@
         };
 
         <span class="kw">let </span>tokenizer = get_tokenizer(paths.get_tokenizer_filename(), <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths
-            .get_gen_conf_filename()
-            .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
+        <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths.get_gen_conf_filename().map(|f| {
+            serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap())
+                .expect(<span class="string">"bos_token_id/eos_token_id missing in generation_config.json"</span>)
+        });
+
         <span class="kw">let </span>chat_template = get_chat_template(
             paths,
             <span class="kw-2">&amp;</span>paths
