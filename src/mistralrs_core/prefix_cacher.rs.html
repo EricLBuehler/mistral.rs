@@ -202,7 +202,11 @@
 <a href="#201" id="201">201</a>
 <a href="#202" id="202">202</a>
 <a href="#203" id="203">203</a>
-<a href="#204" id="204">204</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex};
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex};
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>radix_trie::{Trie, TrieCommon, TrieKey};
@@ -351,6 +355,10 @@
         }
         <span class="comment">// Intentionally evict the first ones first, as they are the oldest
         </span><span class="kw">for </span>(cache, xlora_cache) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.eviction_cache_ptrs {
+            <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>].is_none() {
+                <span class="comment">// TODO: add support for normal cache
+                </span><span class="kw">continue</span>;
+            }
             <span class="kw">if </span>!<span class="macro">matches!</span>(
                 <span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>]
                     .as_ref()
