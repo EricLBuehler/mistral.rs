@@ -122,20 +122,7 @@
 <a href="#121" id="121">121</a>
 <a href="#122" id="122">122</a>
 <a href="#123" id="123">123</a>
-<a href="#124" id="124">124</a>
-<a href="#125" id="125">125</a>
-<a href="#126" id="126">126</a>
-<a href="#127" id="127">127</a>
-<a href="#128" id="128">128</a>
-<a href="#129" id="129">129</a>
-<a href="#130" id="130">130</a>
-<a href="#131" id="131">131</a>
-<a href="#132" id="132">132</a>
-<a href="#133" id="133">133</a>
-<a href="#134" id="134">134</a>
-<a href="#135" id="135">135</a>
-<a href="#136" id="136">136</a>
-<a href="#137" id="137">137</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
+<a href="#124" id="124">124</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 
 <span class="kw">use </span><span class="kw">crate</span>::hqq::optimize::OptResults;
 
@@ -190,26 +177,13 @@
         }
 
         <span class="comment">// We only support using optimization!
-        /*let (quant_w, scale, zero) = if let Some(optimization_steps) = cfg.optimization_steps {
-            let result = Self::optimize_weights_proximal_legacy(
-                &amp;w,
-                &amp;scale,
-                zero,
-                0.,
-                max_v,
-                cfg.axis,
-                OptParams::default(optimization_steps),
-            )?;
-            (result.wq, result.scale, result.zero)
-        } else {
-            (
-                w.broadcast_mul(&amp;scale)?
-                    .broadcast_add(&amp;zero)?
-                    .clamp(0., max_v)?,
-                scale,
-                zero,
-            )
-        };*/
+        // let (wq, scale, zero) = (
+        //         w.broadcast_mul(&amp;scale)?
+        //             .broadcast_add(&amp;zero)?
+        //             .clamp(0., max_v)?,
+        //         scale,
+        //         zero,
+        //     );
         </span><span class="kw">let </span>OptResults { wq, scale, zero } = <span class="self">Self</span>::optimize_weights_proximal_legacy(
             <span class="kw-2">&amp;</span>w,
             <span class="kw-2">&amp;</span>scale,
@@ -250,7 +224,7 @@
         </span><span class="kw">let </span>dev = Device::new_metal(<span class="number">0</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>data = Tensor::rand(<span class="number">0f32</span>, <span class="number">1f32</span>, (<span class="number">10</span>, <span class="number">10</span>), <span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
-        <span class="kw">let </span>hqq = HqqLayer::quantize(
+        <span class="kw">let </span>_hqq = HqqLayer::quantize(
             <span class="kw-2">&amp;</span>data,
             <span class="kw-2">&amp;</span>dev,
             HqqConfig {
@@ -263,13 +237,13 @@
             },
         )<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>dequant = hqq.dequantize()<span class="question-mark">?</span>;
-        <span class="macro">println!</span>(<span class="string">"Initial:\n{data}"</span>);
-        <span class="macro">println!</span>(<span class="string">"Dequantized:\n{dequant}"</span>);
-        <span class="comment">// println!("Difference:\n{}", (&amp;dequant - &amp;data)?.abs()?);
+        <span class="comment">// let dequant = hqq.dequantize()?;
+        // println!("Initial:\n{data}");
+        // println!("Dequantized:\n{dequant}");
+        // println!("Difference:\n{}", (&amp;dequant - &amp;data)?.abs()?);
 
-        </span><span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span>dequant - <span class="kw-2">&amp;</span>data)<span class="question-mark">?</span>.abs()<span class="question-mark">?</span>.mean_all()<span class="question-mark">?</span>);
-        <span class="prelude-val">Ok</span>(())
+        // dbg!(&amp;(&amp;dequant - &amp;data)?.abs()?.mean_all()?);
+        </span><span class="prelude-val">Ok</span>(())
     }
 }
 </code></pre></div></section></main></body></html>
