@@ -631,6 +631,10 @@ impl QuantMethod for HqqLayer {
         // Use 1 because we quantize on the GPU
         Some(1.try_into().unwrap())
     }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
+    }
 }
 
 // Serialization structure:

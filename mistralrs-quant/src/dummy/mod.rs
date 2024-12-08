@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use candle_core::Result;
+
 use crate::{QuantMethod, QuantizedSerde};
 
 #[derive(Debug)]
@@ -45,6 +49,10 @@ impl QuantMethod for DummyLayer {
     }
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         None
+    }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
     }
 }
 
