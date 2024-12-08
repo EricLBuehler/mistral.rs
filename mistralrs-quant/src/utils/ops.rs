@@ -233,6 +233,8 @@ impl CustomOp2 for BitWiseOr {
             s1.dtype(),
             s1.buffer(),
             s2.buffer(),
+            l1.start_offset(),
+            l2.start_offset(),
             out_shape.elem_count(),
             &output,
         )
@@ -401,6 +403,7 @@ impl CustomOp1 for Leftshift {
             &crate::metal_kernels::Kernels::new(),
             s1.dtype(),
             s1.buffer(),
+            l1.start_offset(),
             self.0 as u32,
             out_shape.elem_count(),
             &output,
@@ -454,6 +457,19 @@ mod tests {
         assert_eq!(c, [[-1, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
     }
 
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_bitwise_or_metal() {
+        use crate::utils::ops::BitWiseOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_metal(0).unwrap();
+        let a =
+            Tensor::from_vec(vec![1i32, 2, 3, -1, -1, -1, -1, 4, 5, 7], (5, 2), &device).unwrap();
+        let b = Tensor::from_vec(vec![-1i32, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
+        let c = a.bitwise_or(&b).unwrap().to_vec2::<i32>().unwrap();
+        assert_eq!(c, [[-1, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
+    }
+
     #[test]
     fn test_leftshift_cpu() {
         use crate::utils::ops::LeftshiftOp;
@@ -470,6 +486,18 @@ mod tests {
         use crate::utils::ops::LeftshiftOp;
         use candle_core::Tensor;
         let device = candle_core::Device::new_cuda(0).unwrap();
+        let a = Tensor::from_vec(vec![1i32, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
+        let c = a.leftshift(2).unwrap().to_vec2::<i32>().unwrap();
+        assert_eq!(c, [[4, 8], [12, 16], [20, 24]]);
+    }
+
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_leftshift_metal() {
+        use crate::utils::ops::LeftshiftOp;
+        use candle_core::Tensor;
+        let device = candle_core::Device::new_metal(0).unwrap();
         let a = Tensor::from_vec(vec![1i32, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
         let c = a.leftshift(2).unwrap().to_vec2::<i32>().unwrap();
         assert_eq!(c, [[4, 8], [12, 16], [20, 24]]);
@@ -497,9 +525,8 @@ mod tests {
         assert_eq!(c, [0b11111111]);
     }
 
-    #[cfg(not(feature = "cuda"))]
     #[test]
-    fn test_bitpack_8bit() {
+    fn test_bitpack_8bit_cpu() {
         use crate::HqqBits;
         use candle_core::{Device, Tensor};
         let bits = HqqBits::Eight;
@@ -514,7 +541,7 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    fn test_bitpack_8bit() {
+    fn test_bitpack_8bit_cuda() {
         use crate::HqqBits;
         use candle_core::DType;
         use candle_core::{Device, Tensor};
@@ -530,7 +557,21 @@ mod tests {
         assert_eq!(c, [[1, 2], [3, 4], [255, 0]]);
     }
 
-    #[cfg(not(feature = "cuda"))]
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_bitpack_8bit_metal() {
+        use crate::HqqBits;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Eight;
+        let device = Device::new_metal(0).unwrap();
+        let wq = Tensor::from_vec(vec![257_i32, 258, 259, 260, 511, 512], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[1, 2], [3, 4], [255, 0]]);
+    }
+
     #[test]
     fn test_bitpack_4bit() {
         use crate::HqqBits;
@@ -547,11 +588,26 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    fn test_bitpack_4bit() {
+    fn test_bitpack_4bit_cuda() {
         use crate::HqqBits;
         use candle_core::{Device, Tensor};
         let bits = HqqBits::Four;
         let device = Device::new_cuda(0).unwrap();
+        let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
+        let c = bits.bitpack_type()(wq.clone())
+            .unwrap()
+            .to_vec2::<u8>()
+            .unwrap();
+        assert_eq!(c, [[19, 36]]);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_bitpack_4bit_metal() {
+        use crate::HqqBits;
+        use candle_core::{Device, Tensor};
+        let bits = HqqBits::Four;
+        let device = Device::new_metal(0).unwrap();
         let wq = Tensor::from_vec(vec![1_u8, 2, 3, 4, 5, 6], (3, 2), &device).unwrap();
         let c = bits.bitpack_type()(wq.clone())
             .unwrap()
