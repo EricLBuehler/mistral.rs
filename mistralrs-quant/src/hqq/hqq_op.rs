@@ -79,9 +79,6 @@ impl CustomOp3 for Dequant8Bit {
         let device = w.device();
 
         let out_shape = Shape::from_dims(&[self.h, self.w]);
-        assert_eq!(l_w.start_offset(), 0);
-        assert_eq!(l_s.start_offset(), 0);
-        assert_eq!(l_z.start_offset(), 0);
 
         let output = device.new_buffer(out_shape.elem_count(), s.dtype(), "dequant-8bit")?;
 
