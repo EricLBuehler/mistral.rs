@@ -4,8 +4,9 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{Context, DType, Device, Result, Shape, Tensor};
+use candle_core::{Context, DType, Device, Result, Shape, Tensor, D};
 use candle_nn::VarBuilder;
+use op::gemv_4bit;
 use serde::Deserialize;
 
 use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
@@ -220,11 +221,28 @@ impl QuantMethod for BnbLinear {
         }
     }
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w = Self::dequantize(&self.weight, &self.params, self.quant_ty)?
-            .t()?
-            .to_dtype(xs.dtype())?;
-        // dbg!(&w.mean_all());
-        let res = xs.broadcast_matmul(&w)?;
+        let use_gemv_kernel = xs.device().is_cuda() && xs.elem_count() == xs.dim(D::Minus1)?;
+        let res = if use_gemv_kernel {
+            let mut absmax = self.params.absmax.clone();
+            if let Some(nested) = &self.params.nested {
+                absmax = Self::dequantize(&self.params.absmax, nested, BnbQuantType::Int8)?;
+                absmax = (absmax + self.params.offset.context("`offset` must be present.")?)?;
+            }
+            gemv_4bit(
+                xs,
+                &self.weight,
+                &absmax,
+                &self.params.code,
+                self.params.shape.clone().unwrap(),
+                self.params.blocksize,
+            )
+            .unwrap()
+        } else {
+            let w = Self::dequantize(&self.weight, &self.params, self.quant_ty)?
+                .t()?
+                .to_dtype(xs.dtype())?;
+            xs.broadcast_matmul(&w)?
+        };
         if let Some(bias) = &self.bias {
             res + bias
         } else {
