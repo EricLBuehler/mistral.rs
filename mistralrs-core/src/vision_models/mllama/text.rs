@@ -2,14 +2,14 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{Device, IndexOp, Result, Tensor};
 use candle_nn::{embedding, Activation, Embedding, Module, VarBuilder};
 use mistralrs_quant::{linear_no_bias, QuantMethod, QuantMethodConfig, UnquantLinear};
 
 use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, F32RmsNorm, Llama3RotaryEmbedding, Sdpa},
+    layers::{CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{extract_logits, Cache, EitherCache, IsqModel, NormalLoadingMetadata},
@@ -176,12 +176,10 @@ impl MLlamaTextSelfAttention {
 
         let mut attn_output = Sdpa
             .run_attention(
-                &q.contiguous()?.to_dtype(DType::F32)?,
-                &k.contiguous()?.to_dtype(DType::F32)?,
-                &v.contiguous()?.to_dtype(DType::F32)?,
-                attention_mask
-                    .map(|m| m.to_dtype(DType::F32).unwrap())
-                    .as_ref(),
+                &q.contiguous()?,
+                &k.contiguous()?,
+                &v.contiguous()?,
+                attention_mask,
                 None,
                 &self.sdpa_params,
             )?
@@ -204,8 +202,8 @@ impl MLlamaTextSelfAttention {
 struct MLlamaSelfAttentionDecoderLayer {
     attn: MLlamaTextSelfAttention,
     mlp: MLlamaTextMlp,
-    input_layernorm: F32RmsNorm,
-    post_attention_layernorm: F32RmsNorm,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
 }
 
 impl MLlamaSelfAttentionDecoderLayer {
@@ -218,12 +216,12 @@ impl MLlamaSelfAttentionDecoderLayer {
         loading_isq: bool,
     ) -> Result<Self> {
         let mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
-        let input_layernorm = F32RmsNorm::new(
+        let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = F32RmsNorm::new(
+        let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
@@ -276,8 +274,8 @@ struct MLlamaTextCrossAttention {
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
-    q_norm: F32RmsNorm,
-    k_norm: F32RmsNorm,
+    q_norm: RmsNorm,
+    k_norm: RmsNorm,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -316,12 +314,12 @@ impl MLlamaTextCrossAttention {
                 &cfg.quantization_config,
                 vb.pp("o_proj"),
             )?,
-            q_norm: F32RmsNorm::new(
+            q_norm: RmsNorm::new(
                 cfg.head_dim(),
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("q_norm"), false),
             )?,
-            k_norm: F32RmsNorm::new(
+            k_norm: RmsNorm::new(
                 cfg.head_dim(),
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("k_norm"), false),
@@ -395,16 +393,11 @@ impl MLlamaTextCrossAttention {
 
         let mut attn_output = Sdpa
             .run_attention(
-                &q.contiguous()?.to_dtype(DType::F32)?,
-                &k.contiguous()?.to_dtype(DType::F32)?,
-                &v.contiguous()?.to_dtype(DType::F32)?,
+                &q.contiguous()?,
+                &k.contiguous()?,
+                &v.contiguous()?,
                 attention_mask
-                    .map(|m| {
-                        m.to_dtype(DType::F32)
-                            .unwrap()
-                            .repeat((1, self.num_heads, 1, 1))
-                            .unwrap()
-                    })
+                    .map(|m| m.repeat((1, self.num_heads, 1, 1)).unwrap())
                     .as_ref(),
                 None,
                 &self.sdpa_params,
@@ -430,8 +423,8 @@ struct MLlamaCrossAttentionDecoderLayer {
     attn_gate: Tensor,
     mlp: MLlamaTextMlp,
     mlp_gate: Tensor,
-    input_layernorm: F32RmsNorm,
-    post_attention_layernorm: F32RmsNorm,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
 }
 
 impl MLlamaCrossAttentionDecoderLayer {
@@ -443,12 +436,12 @@ impl MLlamaCrossAttentionDecoderLayer {
         loading_isq: bool,
     ) -> Result<Self> {
         let mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
-        let input_layernorm = F32RmsNorm::new(
+        let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = F32RmsNorm::new(
+        let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
@@ -513,7 +506,7 @@ enum MLlamaDecoderLayer {
 pub(super) struct MLlamaTextModel {
     embed_tokens: Embedding,
     lm_head: Arc<dyn QuantMethod>,
-    norm: F32RmsNorm,
+    norm: RmsNorm,
     layers: Vec<MLlamaDecoderLayer>,
     pub(crate) cfg: ModelConfigMetadata,
     pub(crate) cache: EitherCache,
@@ -559,7 +552,7 @@ impl MLlamaTextModel {
 
         let vb = vb.pp("model");
 
-        let norm = F32RmsNorm::new(
+        let norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp("norm"), false),
