@@ -761,13 +761,7 @@
 <a href="#760" id="760">760</a>
 <a href="#761" id="761">761</a>
 <a href="#762" id="762">762</a>
-<a href="#763" id="763">763</a>
-<a href="#764" id="764">764</a>
-<a href="#765" id="765">765</a>
-<a href="#766" id="766">766</a>
-<a href="#767" id="767">767</a>
-<a href="#768" id="768">768</a>
-<a href="#769" id="769">769</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#763" id="763">763</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{ops::Mul, sync::Arc};
 
@@ -1156,7 +1150,6 @@
                 hidden_states.push(hidden_state.clone());
             }
             hidden_state = layer.forward(<span class="kw-2">&amp;</span>hidden_state, attention_mask)<span class="question-mark">?</span>;
-            hidden_state.device().synchronize()<span class="question-mark">?</span>;
         }
         <span class="prelude-val">Ok</span>((hidden_state, hidden_states))
     }
@@ -1187,7 +1180,7 @@
     num_patches: usize,
     target_length: usize,
     dtype: DType,
-    num_attn_heads: usize,
+    _num_attn_heads: usize,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
     <span class="kw">let </span>(bs, max_num_tiles) = aspect_ratio_mask.dims2()<span class="question-mark">?</span>;
     <span class="kw">let </span><span class="kw-2">mut </span>attention_mask = aspect_ratio_mask
@@ -1212,12 +1205,7 @@
     <span class="comment">// Reshape to 2d and create 4d attn mask
     // (batch_size, 1, max_num_tiles * target_length, max_num_tiles * target_length)
     </span>attention_mask = attention_mask.reshape((bs, max_num_tiles * target_length, <span class="number">1</span>))<span class="question-mark">?</span>;
-    attention_mask =
-        attention_mask.matmul(<span class="kw-2">&amp;</span>attention_mask.transpose(D::Minus1, D::Minus2)<span class="question-mark">?</span>.mul(-<span class="number">1e15</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-    attention_mask
-        .unsqueeze(<span class="number">1</span>)<span class="question-mark">?
-        </span>.contiguous()<span class="question-mark">?
-        </span>.repeat((<span class="number">1</span>, num_attn_heads, <span class="number">1</span>, <span class="number">1</span>))
+    attention_mask.matmul(<span class="kw-2">&amp;</span>attention_mask.transpose(D::Minus1, D::Minus2)<span class="question-mark">?</span>.mul(-<span class="number">1e15</span>)<span class="question-mark">?</span>)
 }
 
 <span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">struct </span>MLlamaVisionModel {

@@ -769,25 +769,18 @@
 <a href="#768" id="768">768</a>
 <a href="#769" id="769">769</a>
 <a href="#770" id="770">770</a>
-<a href="#771" id="771">771</a>
-<a href="#772" id="772">772</a>
-<a href="#773" id="773">773</a>
-<a href="#774" id="774">774</a>
-<a href="#775" id="775">775</a>
-<a href="#776" id="776">776</a>
-<a href="#777" id="777">777</a>
-<a href="#778" id="778">778</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#771" id="771">771</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
-<span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{embedding, Activation, Embedding, Module, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::{linear_no_bias, QuantMethod, QuantMethodConfig, UnquantLinear};
 
 <span class="kw">use crate</span>::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, F32RmsNorm, Llama3RotaryEmbedding, Sdpa},
+    layers::{CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{extract_logits, Cache, EitherCache, IsqModel, NormalLoadingMetadata},
@@ -954,12 +947,10 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = Sdpa
             .run_attention(
-                <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
-                <span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
-                <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
-                attention_mask
-                    .map(|m| m.to_dtype(DType::F32).unwrap())
-                    .as_ref(),
+                <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>,
+                attention_mask,
                 <span class="prelude-val">None</span>,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
             )<span class="question-mark">?
@@ -982,8 +973,8 @@
 <span class="kw">struct </span>MLlamaSelfAttentionDecoderLayer {
     attn: MLlamaTextSelfAttention,
     mlp: MLlamaTextMlp,
-    input_layernorm: F32RmsNorm,
-    post_attention_layernorm: F32RmsNorm,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
 }
 
 <span class="kw">impl </span>MLlamaSelfAttentionDecoderLayer {
@@ -996,12 +987,12 @@
         loading_isq: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq))<span class="question-mark">?</span>;
-        <span class="kw">let </span>input_layernorm = F32RmsNorm::new(
+        <span class="kw">let </span>input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"input_layernorm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>post_attention_layernorm = F32RmsNorm::new(
+        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"post_attention_layernorm"</span>), <span class="bool-val">false</span>),
@@ -1054,8 +1045,8 @@
     k_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     v_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     o_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    q_norm: F32RmsNorm,
-    k_norm: F32RmsNorm,
+    q_norm: RmsNorm,
+    k_norm: RmsNorm,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -1094,12 +1085,12 @@
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
                 vb.pp(<span class="string">"o_proj"</span>),
             )<span class="question-mark">?</span>,
-            q_norm: F32RmsNorm::new(
+            q_norm: RmsNorm::new(
                 cfg.head_dim(),
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp(<span class="string">"q_norm"</span>), <span class="bool-val">false</span>),
             )<span class="question-mark">?</span>,
-            k_norm: F32RmsNorm::new(
+            k_norm: RmsNorm::new(
                 cfg.head_dim(),
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp(<span class="string">"k_norm"</span>), <span class="bool-val">false</span>),
@@ -1173,16 +1164,11 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = Sdpa
             .run_attention(
-                <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
-                <span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
-                <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>,
                 attention_mask
-                    .map(|m| {
-                        m.to_dtype(DType::F32)
-                            .unwrap()
-                            .repeat((<span class="number">1</span>, <span class="self">self</span>.num_heads, <span class="number">1</span>, <span class="number">1</span>))
-                            .unwrap()
-                    })
+                    .map(|m| m.repeat((<span class="number">1</span>, <span class="self">self</span>.num_heads, <span class="number">1</span>, <span class="number">1</span>)).unwrap())
                     .as_ref(),
                 <span class="prelude-val">None</span>,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
@@ -1208,8 +1194,8 @@
     attn_gate: Tensor,
     mlp: MLlamaTextMlp,
     mlp_gate: Tensor,
-    input_layernorm: F32RmsNorm,
-    post_attention_layernorm: F32RmsNorm,
+    input_layernorm: RmsNorm,
+    post_attention_layernorm: RmsNorm,
 }
 
 <span class="kw">impl </span>MLlamaCrossAttentionDecoderLayer {
@@ -1221,12 +1207,12 @@
         loading_isq: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq))<span class="question-mark">?</span>;
-        <span class="kw">let </span>input_layernorm = F32RmsNorm::new(
+        <span class="kw">let </span>input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"input_layernorm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>post_attention_layernorm = F32RmsNorm::new(
+        <span class="kw">let </span>post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"post_attention_layernorm"</span>), <span class="bool-val">false</span>),
@@ -1291,7 +1277,7 @@
 <span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">struct </span>MLlamaTextModel {
     embed_tokens: Embedding,
     lm_head: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    norm: F32RmsNorm,
+    norm: RmsNorm,
     layers: Vec&lt;MLlamaDecoderLayer&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) cfg: ModelConfigMetadata,
     <span class="kw">pub</span>(<span class="kw">crate</span>) cache: EitherCache,
@@ -1337,7 +1323,7 @@
 
         <span class="kw">let </span>vb = vb.pp(<span class="string">"model"</span>);
 
-        <span class="kw">let </span>norm = F32RmsNorm::new(
+        <span class="kw">let </span>norm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),

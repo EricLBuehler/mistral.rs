@@ -615,8 +615,7 @@
 <a href="#614" id="614">614</a>
 <a href="#615" id="615">615</a>
 <a href="#616" id="616">616</a>
-<a href="#617" id="617">617</a>
-<a href="#618" id="618">618</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
+<a href="#617" id="617">617</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, <span class="prelude-ty">Result</span>, Shape,
     Tensor, WithDType,
 };
@@ -1108,7 +1107,6 @@
         <span class="kw">let </span>c = a.leftshift(<span class="number">2</span>).unwrap().to_vec2::&lt;i32&gt;().unwrap();
         <span class="macro">assert_eq!</span>(c, [[<span class="number">4</span>, <span class="number">8</span>], [<span class="number">12</span>, <span class="number">16</span>], [<span class="number">20</span>, <span class="number">24</span>]]);
     }
-
 
     <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
     #[test]

@@ -310,7 +310,15 @@
 <a href="#309" id="309">309</a>
 <a href="#310" id="310">310</a>
 <a href="#311" id="311">311</a>
-<a href="#312" id="312">312</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -470,7 +478,10 @@
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
     </span><span class="kw">let </span>supports_attn_softmax = <span class="bool-val">true</span>;
 
-    <span class="kw">if </span>mask.is_some_and(|mask| mask.rank() == <span class="number">2</span>) &amp;&amp; supports_attn_softmax {
+    <span class="comment">// Use faster softmax if mask is rank 2 or it's rank 3 and bs 1
+    </span><span class="kw">if </span>mask.is_some_and(|mask| mask.rank() == <span class="number">2 </span>|| (mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1</span>))
+        &amp;&amp; supports_attn_softmax
+    {
         <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
             att = (att / softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
@@ -478,9 +489,14 @@
             att = (att * softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
         }
 
-        att = candle_nn::ops::attn_softmax_last_dim(
-            <span class="kw-2">&amp;</span>att,
-            mask.unwrap(),
+        <span class="kw">let </span>mask = <span class="kw">match </span>mask {
+            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dim(<span class="number">0</span>)<span class="question-mark">? </span>== <span class="number">1 </span>=&gt; mask.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>,
+            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">2 </span>=&gt; mask.clone(),
+            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+        };
+        candle_nn::ops::inplace_attn_softmax_last_dim(
+            <span class="kw-2">&amp;mut </span>att,
+            <span class="kw-2">&amp;</span>mask,
             <span class="number">1. </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
         )<span class="question-mark">?</span>;
         MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
@@ -496,7 +512,7 @@
             <span class="prelude-val">Some</span>(m) =&gt; att.broadcast_add(m)<span class="question-mark">?</span>,
             <span class="prelude-val">None </span>=&gt; att,
         };
-        att = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>att)<span class="question-mark">?</span>;
+        candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>att)<span class="question-mark">?</span>;
         MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
     }
 }
