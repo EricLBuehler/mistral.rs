@@ -170,7 +170,7 @@ fn naive_sdpa(
         }
 
         let mask = match mask {
-            Some(mask) if mask.rank() == 3 => mask.squeeze(0)?,
+            Some(mask) if mask.rank() == 3 && mask.dim(0)? == 1 => mask.squeeze(0)?,
             Some(mask) if mask.rank() == 2 => mask.clone(),
             _ => unreachable!(),
         };
