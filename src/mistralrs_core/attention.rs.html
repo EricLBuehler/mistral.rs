@@ -318,7 +318,9 @@
 <a href="#317" id="317">317</a>
 <a href="#318" id="318">318</a>
 <a href="#319" id="319">319</a>
-<a href="#320" id="320">320</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -579,11 +581,13 @@
                     <span class="kw">let </span>q = q.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
                     <span class="kw">let </span>v = v.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
                     <span class="kw">let </span>attention_bias = <span class="kw">match </span>mask {
+                        <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1 </span>=&gt; {
+                            <span class="prelude-val">Some</span>(mask.repeat((n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>)
+                        }
                         <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>=&gt; <span class="prelude-val">Some</span>(mask.clone()),
                         <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">4 </span>=&gt; <span class="prelude-val">Some</span>(mask.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>),
-                        <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">2 </span>=&gt; <span class="prelude-val">Some</span>(mask.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>),
                         <span class="prelude-val">Some</span>(mask) =&gt; {
-                            <span class="macro">candle_core::bail!</span>(<span class="string">"cublaslt attn mask: rank must be 3, 4, or 2"</span>)
+                            <span class="macro">candle_core::bail!</span>(<span class="string">"cublaslt attn mask: rank must be 3 or 4"</span>)
                         }
                         <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
                     };
