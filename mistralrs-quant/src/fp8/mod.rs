@@ -176,6 +176,10 @@ impl QuantMethod for FP8Linear {
             | IsqType::HQQ8 => None,
         }
     }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
+    }
 }
 
 // Serialization structure:

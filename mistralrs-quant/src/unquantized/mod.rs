@@ -269,6 +269,10 @@ impl QuantMethod for UnquantLinear {
             candle_core::bail!("`{}` does not support tracking stats.", self.name())
         }
     }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
+    }
 }
 
 // Serialization structure:
