@@ -443,7 +443,7 @@ impl CustomOp3 for DequantizeOp {
                 input_s.buffer(),
                 absmax_s.buffer(),
                 code_s.buffer(),
-                &*output,
+                &output,
                 self.blocksize,
                 self.n,
             )
@@ -456,7 +456,7 @@ impl CustomOp3 for DequantizeOp {
                 input_s.buffer(),
                 absmax_s.buffer(),
                 code_s.buffer(),
-                &*output,
+                &output,
                 self.blocksize,
                 self.n,
             )
@@ -469,7 +469,7 @@ impl CustomOp3 for DequantizeOp {
                 input_s.buffer(),
                 absmax_s.buffer(),
                 code_s.buffer(),
-                &*output,
+                &output,
                 self.blocksize,
                 self.n,
             )
