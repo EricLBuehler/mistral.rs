@@ -86,4 +86,50 @@ extern "C" {
         n: i32,
         stream: CUstream,
     );
+
+    pub(crate) fn gemm_4bit_inference_naive_f16(
+        m: i32,
+        n: i32,
+        k: i32,
+        a: *const f16,
+        b: *const u8,
+        absmax: *const f32,
+        code: *const f32,
+        out: *mut f16,
+        lda: i32,
+        ldb: i32,
+        ldc: i32,
+        blocksize: i32,
+        stream: CUstream,
+    );
+    pub(crate) fn gemm_4bit_inference_naive_bf16(
+        m: i32,
+        n: i32,
+        k: i32,
+        a: *const bf16,
+        b: *const u8,
+        absmax: *const f32,
+        datatype: *const f32,
+        out: *mut bf16,
+        lda: i32,
+        ldb: i32,
+        ldc: i32,
+        blocksize: i32,
+        stream: CUstream,
+    );
+    pub(crate) fn gemm_4bit_inference_naive_f32(
+        m: i32,
+        n: i32,
+        k: i32,
+        a: *const f32,
+        b: *const u8,
+        absmax: *const f32,
+        datatype: *const f32,
+        out: *mut f32,
+        lda: i32,
+        ldb: i32,
+        ldc: i32,
+        blocksize: i32,
+        stream: CUstream,
+    );
 }
