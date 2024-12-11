@@ -3,7 +3,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest
 runner = Runner(
     which=Which.Plain(
         model_id="meta-llama/Llama-3.2-3B-Instruct",
-        calibration_file="calibration_data/calibration_datav3_small.txt"
+        calibration_file="calibration_data/calibration_datav3_small.txt",
     ),
     in_situ_quant="Q4K",
 )
