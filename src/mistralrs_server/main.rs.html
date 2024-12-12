@@ -485,7 +485,8 @@
 <a href="#484" id="484">484</a>
 <a href="#485" id="485">485</a>
 <a href="#486" id="486">486</a>
-<a href="#487" id="487">487</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
@@ -760,16 +761,16 @@
     <span class="kw">let </span><span class="kw-2">mut </span>args = Args::parse();
     initialize_logging();
 
-    <span class="kw">let </span>port = args.port.expect(<span class="string">"Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?"</span>);
+    <span class="kw">let </span>setting_server = <span class="kw">if </span>!args.interactive_mode {
+        <span class="kw">let </span>port = args.port.expect(<span class="string">"Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?"</span>);
+        <span class="kw">let </span>ip = args.serve_ip.unwrap_or_else(|| <span class="string">"0.0.0.0"</span>.to_string());
 
-    <span class="kw">let </span>ip = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>ip) = args.serve_ip {
-        ip.to_string()
+        <span class="comment">// Create listener early to validate address before model loading
+        </span><span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{port}"</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="prelude-val">Some</span>((listener, ip, port))
     } <span class="kw">else </span>{
-        <span class="string">"0.0.0.0"</span>.to_string()
-    };
-
-    <span class="comment">// Create the TcpListener early to check if the address is available before loading the model
-    </span><span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{}"</span>, port)).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="prelude-val">None
+    </span>};
 
     <span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
     </span><span class="kw">let </span>use_flash_attn = <span class="bool-val">false</span>;
@@ -966,9 +967,10 @@
     <span class="kw">let </span>mistralrs = builder.build();
 
     <span class="kw">let </span>app = get_router(mistralrs);
-
-    <span class="macro">info!</span>(<span class="string">"Serving on http://{ip}:{}."</span>, port);
-    axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
+    <span class="kw">if let </span><span class="prelude-val">Some</span>((listener, ip, port)) = setting_server {
+        <span class="macro">info!</span>(<span class="string">"Serving on http://{ip}:{}."</span>, port);
+        axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
+    };
 
     <span class="prelude-val">Ok</span>(())
 }
