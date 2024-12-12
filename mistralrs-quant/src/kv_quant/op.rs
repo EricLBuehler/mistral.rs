@@ -17,6 +17,14 @@ impl KvQuantizeOp8Bit {
         }
         Ok(x_el_count / QK8_0 * Q8_0_TYPE_SIZE)
     }
+
+    pub fn narrow_qs(qs: &Tensor, start_block: usize, len_blocks: usize) -> Result<Tensor> {
+        qs.narrow(0, start_block * Q8_0_TYPE_SIZE, len_blocks * Q8_0_TYPE_SIZE)
+    }
+
+    pub fn narrow_xs(qs: &Tensor, start_block: usize, len_blocks: usize) -> Result<Tensor> {
+        qs.narrow(0, start_block * QK8_0, len_blocks * QK8_0)
+    }
 }
 
 impl InplaceOp2 for KvQuantizeOp8Bit {
@@ -175,6 +183,14 @@ impl KvQuantizeOp4Bit {
             candle_core::bail!("xs elem count must be a multiple of the block size {QK4_0}");
         }
         Ok(x_el_count / QK4_0 * Q4_0_TYPE_SIZE)
+    }
+
+    pub fn narrow_qs(qs: &Tensor, start_block: usize, len_blocks: usize) -> Result<Tensor> {
+        qs.narrow(0, start_block * Q4_0_TYPE_SIZE, len_blocks * Q4_0_TYPE_SIZE)
+    }
+
+    pub fn narrow_xs(qs: &Tensor, start_block: usize, len_blocks: usize) -> Result<Tensor> {
+        qs.narrow(0, start_block * QK4_0, len_blocks * QK4_0)
     }
 }
 
@@ -370,6 +386,37 @@ mod metal_tests {
     }
 
     #[test]
+    fn test_kvquant_roundtrip_8bit_narrow() -> candle_core::Result<()> {
+        use crate::kv_quant::op::KvQuantizeOp8Bit;
+
+        let dev = Device::new_metal(0)?;
+
+        let xs = Tensor::new(
+            (0..32 * 128)
+                .map(|i| 0.1 + 2.0 * (i as f32).cos())
+                .collect::<Vec<_>>(),
+            &dev,
+        )?;
+        let full_qs = Tensor::zeros(
+            KvQuantizeOp8Bit::compute_qs_elem_count(&xs)?,
+            DType::U8,
+            &dev,
+        )?;
+
+        let xs = KvQuantizeOp8Bit::narrow_xs(&xs, 64, 64)?;
+        let mut qs = KvQuantizeOp8Bit::narrow_qs(&full_qs, 64, 64)?;
+
+        super::quantize_inplace_8bit(&mut qs, &xs)?;
+
+        let dequant = super::dequantize_8bit(&qs, DType::F32)?.reshape(xs.shape())?;
+
+        let rmse = rmse(&xs.to_vec1::<f32>()?, &dequant.to_vec1::<f32>()?);
+        assert!(rmse < 0.002, "{rmse}");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_kvquant_roundtrip_4bit() -> candle_core::Result<()> {
         use crate::kv_quant::op::KvQuantizeOp4Bit;
 
@@ -386,6 +433,37 @@ mod metal_tests {
             DType::U8,
             &dev,
         )?;
+
+        super::quantize_inplace_4bit(&mut qs, &xs)?;
+
+        let dequant = super::dequantize_4bit(&qs, DType::F32)?.reshape(xs.shape())?;
+
+        let rmse = rmse(&xs.to_vec1::<f32>()?, &dequant.to_vec1::<f32>()?);
+        assert!(rmse < 0.002, "{rmse}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kvquant_roundtrip_4bit_narrow() -> candle_core::Result<()> {
+        use crate::kv_quant::op::KvQuantizeOp4Bit;
+
+        let dev = Device::new_metal(0)?;
+
+        let xs = Tensor::new(
+            (0..32 * 128)
+                .map(|i| 0.1 + 2.0 * (i as f32).cos())
+                .collect::<Vec<_>>(),
+            &dev,
+        )?;
+        let full_qs = Tensor::zeros(
+            KvQuantizeOp4Bit::compute_qs_elem_count(&xs)?,
+            DType::U8,
+            &dev,
+        )?;
+
+        let xs = KvQuantizeOp4Bit::narrow_xs(&xs, 64, 64)?;
+        let mut qs = KvQuantizeOp4Bit::narrow_qs(&full_qs, 64, 64)?;
 
         super::quantize_inplace_4bit(&mut qs, &xs)?;
 
