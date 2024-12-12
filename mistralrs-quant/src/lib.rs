@@ -21,6 +21,7 @@ mod gguf;
 mod gptq;
 mod hqq;
 mod imatrix;
+mod kv_quant;
 mod unquantized;
 mod utils;
 

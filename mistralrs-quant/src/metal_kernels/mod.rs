@@ -14,12 +14,14 @@ use crate::set_params;
 const HQQ_DEQUANTIZE: &str = include_str!("hqq_dequantize.metal");
 const BNB_DEQUANTIZE: &str = include_str!("bnb_dequantize.metal");
 const BITWISE: &str = include_str!("bitwise.metal");
+const KVQUANT: &str = include_str!("kv_quant.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     HqqDequant,
     BnbDequant,
     Bitwise,
+    KvQuant,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -72,6 +74,7 @@ impl Kernels {
             Source::HqqDequant => HQQ_DEQUANTIZE,
             Source::BnbDequant => BNB_DEQUANTIZE,
             Source::Bitwise => BITWISE,
+            Source::KvQuant => KVQUANT,
         }
     }
 
@@ -523,6 +526,154 @@ pub fn call_dequant_bnb_int8(
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+/// kv_n_blocks is the number of blocks in the kv cache.
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantize_q8_0_kv(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    q: &Buffer,
+    q_offset: usize,
+    kv_n_blocks: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "quantize_8bit_kv_float",
+        DType::BF16 => "quantize_8bit_kv_bfloat16_t",
+        DType::F16 => "quantize_8bit_kv_half",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::KvQuant, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, ((x, x_offset), (q, q_offset)));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, kv_n_blocks);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+/// kv_n_blocks is the number of blocks in the kv cache.
+#[allow(clippy::too_many_arguments)]
+pub fn call_dequantize_q8_0_kv(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    q: &Buffer,
+    q_offset: usize,
+    kv_n_blocks: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "dequantize_8bit_kv_float",
+        DType::BF16 => "dequantize_8bit_kv_bfloat16_t",
+        DType::F16 => "dequantize_8bit_kv_half",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::KvQuant, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, ((x, x_offset), (q, q_offset)));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, kv_n_blocks);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+/// kv_n_blocks is the number of blocks in the kv cache.
+#[allow(clippy::too_many_arguments)]
+pub fn call_quantize_q4_0_kv(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    q: &Buffer,
+    q_offset: usize,
+    kv_n_blocks: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "quantize_4bit_kv_float",
+        DType::BF16 => "quantize_4bit_kv_bfloat16_t",
+        DType::F16 => "quantize_4bit_kv_half",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::KvQuant, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, ((x, x_offset), (q, q_offset)));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, kv_n_blocks);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+/// kv_n_blocks is the number of blocks in the kv cache.
+#[allow(clippy::too_many_arguments)]
+pub fn call_dequantize_q4_0_kv(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    q: &Buffer,
+    q_offset: usize,
+    kv_n_blocks: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "dequantize_4bit_kv_float",
+        DType::BF16 => "dequantize_4bit_kv_bfloat16_t",
+        DType::F16 => "dequantize_4bit_kv_half",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::KvQuant, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, ((x, x_offset), (q, q_offset)));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, kv_n_blocks);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

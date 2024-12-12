@@ -15,7 +15,7 @@ template <typename T>
   [[kernel]] void bitwise_or<type>(                            \
     const device type* a [[buffer(0)]],                        \
     const device type* b [[buffer(1)]],                        \
-    device type* out [[buffer(2)]],                            \            
+    device type* out [[buffer(2)]],                            \
     uint tid [[ thread_position_in_grid ]]);
 
 instantiate_bitwise_or(uint8_t)
