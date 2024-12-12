@@ -231,10 +231,9 @@ impl QuantMethod for BnbLinear {
         let w = Self::dequantize(&self.weight, &self.params, self.quant_ty)?
             .t()?
             .to_dtype(xs.dtype())?;
-        // dbg!(&w.mean_all());
         let res = xs.broadcast_matmul(&w)?;
         if let Some(bias) = &self.bias {
-            res + bias
+            res.broadcast_add(bias)
         } else {
             Ok(res)
         }

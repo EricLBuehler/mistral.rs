@@ -234,7 +234,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn dequantize_w(&self) -> Result<Tensor>;
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// Automatically cast to requied quantization actiation type and back
+    /// Automatically cast to required quantization actiation type and back
     fn forward_autocast(&self, a: &Tensor) -> Result<Tensor> {
         let original_ty = a.dtype();
         let a = if let Some(t) = self.quantized_act_type() {
