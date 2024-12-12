@@ -213,8 +213,6 @@ Enabling features is done by passing `--features ...` to the build system. When 
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
 
-> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.3.1)
-
 - Install the [Python package here](mistralrs-pyo3/_README.md).
 - The Python package has [wheels on PyPi](mistralrs-pyo3/_README.md#installation-from-pypi)!
 
