@@ -340,7 +340,7 @@ pub fn linear(
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
             QuantMethodType::Bitsandbytes => {
-                Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
             }
             QuantMethodType::Unreachable => unreachable!(),
         }
