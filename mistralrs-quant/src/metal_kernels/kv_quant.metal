@@ -296,19 +296,14 @@ void quantize_row_q8_0_ref(const device T * x, device BlockQ8_0 * y) {
 
 template <typename T>
 [[kernel]] void quantize_8bit_kv(
-    const device T* k [[buffer(0)]],
-    const device T* v [[buffer(1)]],
-    device BlockQ8_0* out_k [[buffer(2)]],
-    device BlockQ8_0* out_v [[buffer(3)]],
+    const device T* x [[buffer(0)]],
+    device BlockQ8_0* q [[buffer(1)]],
     uint tid [[ thread_position_in_grid ]]
 ) {
-    const device T* k_block = k + tid*QK8_0;
-    const device T* v_block = v + tid*QK8_0;
-    device BlockQ8_0* o_k_block = out_k + tid;
-    device BlockQ8_0* o_v_block = out_v + tid;
+    const device T* x_block = x + tid*QK8_0;
+    device BlockQ8_0* q_block = q + tid;
 
-    quantize_row_q8_0_ref(k_block, o_k_block);
-    quantize_row_q8_0_ref(v_block, o_v_block);
+    quantize_row_q8_0_ref(x_block, q_block);
 }
 
 template <typename T>
@@ -324,28 +319,21 @@ void dequantize_row_q8_0(device T * y, const device BlockQ8_0 * x) {
 
 template <typename T>
 [[kernel]] void dequantize_8bit_kv(
-    device T* k [[buffer(0)]],
-    device T* v [[buffer(1)]],
-    const device BlockQ8_0* out_k [[buffer(2)]],
-    const device BlockQ8_0* out_v [[buffer(3)]],
+    device T* x [[buffer(0)]],
+    const device BlockQ8_0* q [[buffer(1)]],
     uint tid [[ thread_position_in_grid ]]
 ) {
-    device T* k_block = k + tid*QK8_0;
-    device T* v_block = v + tid*QK8_0;
-    const device BlockQ8_0* o_k_block = out_k + tid;
-    const device BlockQ8_0* o_v_block = out_v + tid;
+    device T* x_block = x + tid*QK8_0;
+    const device BlockQ8_0* q_block = q + tid;
 
-    dequantize_row_q8_0(k_block, o_k_block);
-    dequantize_row_q8_0(v_block, o_v_block);
+    dequantize_row_q8_0(x_block, q_block);
 }
 
 #define instantiate_quantize_8bit(type)                        \
   template [[host_name("quantize_8bit_kv_" #type)]]            \
   [[kernel]] void quantize_8bit_kv<type>(                      \
-    const device type* k [[buffer(0)]],                        \
-    const device type* v [[buffer(1)]],                        \
-    device BlockQ8_0* out_k [[buffer(2)]],                     \
-    device BlockQ8_0* out_v [[buffer(3)]],                     \
+    const device type* x [[buffer(0)]],                        \
+    device BlockQ8_0* q [[buffer(1)]],                     \
     uint tid [[ thread_position_in_grid ]]);                   \
 
 instantiate_quantize_8bit(float)
@@ -355,10 +343,8 @@ instantiate_quantize_8bit(bfloat16_t)
 #define instantiate_dequantize_8bit(type)                      \
   template [[host_name("dequantize_8bit_kv_" #type)]]          \
   [[kernel]] void dequantize_8bit_kv<type>(                    \
-    device type* k [[buffer(0)]],                        \
-    device type* v [[buffer(1)]],                        \
-    const device BlockQ8_0* out_k [[buffer(2)]],                     \
-    const device BlockQ8_0* out_v [[buffer(3)]],                     \
+    device type* x [[buffer(0)]],                        \
+    const device BlockQ8_0* q [[buffer(1)]],                     \
     uint tid [[ thread_position_in_grid ]]);                   \
 
 instantiate_dequantize_8bit(float)
@@ -413,19 +399,14 @@ void quantize_row_q4_0_ref(const device T * x, device BlockQ4_0 * y) {
 
 template <typename T>
 [[kernel]] void quantize_4bit_kv(
-    const device T* k [[buffer(0)]],
-    const device T* v [[buffer(1)]],
-    device BlockQ4_0* out_k [[buffer(2)]],
-    device BlockQ4_0* out_v [[buffer(3)]],
+    const device T* x [[buffer(0)]],
+    device BlockQ4_0* q [[buffer(1)]],
     uint tid [[ thread_position_in_grid ]]
 ) {
-    const device T* k_block = k + tid*QK4_0;
-    const device T* v_block = v + tid*QK4_0;
-    device BlockQ4_0* o_k_block = out_k + tid;
-    device BlockQ4_0* o_v_block = out_v + tid;
+    const device T* x_block = x + tid*QK4_0;
+    device BlockQ4_0* q_block = q + tid;
 
-    quantize_row_q4_0_ref(k_block, o_k_block);
-    quantize_row_q4_0_ref(v_block, o_v_block);
+    quantize_row_q4_0_ref(x_block, q_block);
 }
 
 template <typename T>
@@ -435,8 +416,8 @@ void dequantize_row_q4_0(device T * y, const device BlockQ4_0 * x) {
     const float d = x->d;
 
     for (int j = 0; j < qk/2; ++j) {
-        const int x0 = (x->qs[j] & 0x0F) - 8;
-        const int x1 = (x->qs[j] >>   4) - 8;
+        const int x0 = int(x->qs[j] & 0x0F) - 8;
+        const int x1 = int(x->qs[j] >>   4) - 8;
 
         y[j + 0   ] = T(x0*d);
         y[j + qk/2] = T(x1*d);
@@ -445,28 +426,21 @@ void dequantize_row_q4_0(device T * y, const device BlockQ4_0 * x) {
 
 template <typename T>
 [[kernel]] void dequantize_4bit_kv(
-    device T* k [[buffer(0)]],
-    device T* v [[buffer(1)]],
-    const device BlockQ4_0* out_k [[buffer(2)]],
-    const device BlockQ4_0* out_v [[buffer(3)]],
+    device T* x [[buffer(0)]],
+    const device BlockQ4_0* q [[buffer(1)]],
     uint tid [[ thread_position_in_grid ]]
 ) {
-    device T* k_block = k + tid*QK4_0;
-    device T* v_block = v + tid*QK4_0;
-    const device BlockQ4_0* o_k_block = out_k + tid;
-    const device BlockQ4_0* o_v_block = out_v + tid;
+    device T* x_block = x + tid*QK4_0;
+    const device BlockQ4_0* q_block = q + tid;
 
-    dequantize_row_q4_0(k_block, o_k_block);
-    dequantize_row_q4_0(v_block, o_v_block);
+    dequantize_row_q4_0(x_block, q_block);
 }
 
 #define instantiate_quantize_4bit(type)                        \
   template [[host_name("quantize_4bit_kv_" #type)]]            \
   [[kernel]] void quantize_4bit_kv<type>(                      \
-    const device type* k [[buffer(0)]],                        \
-    const device type* v [[buffer(1)]],                        \
-    device BlockQ4_0* out_k [[buffer(2)]],                     \
-    device BlockQ4_0* out_v [[buffer(3)]],                     \
+    const device type* x [[buffer(0)]],                        \
+    device BlockQ4_0* q [[buffer(1)]],                     \
     uint tid [[ thread_position_in_grid ]]);                   \
 
 instantiate_quantize_4bit(float)
@@ -476,10 +450,8 @@ instantiate_quantize_4bit(bfloat16_t)
 #define instantiate_dequantize_4bit(type)                      \
   template [[host_name("dequantize_4bit_kv_" #type)]]          \
   [[kernel]] void dequantize_4bit_kv<type>(                    \
-    device type* k [[buffer(0)]],                        \
-    device type* v [[buffer(1)]],                        \
-    const device BlockQ4_0* out_k [[buffer(2)]],                     \
-    const device BlockQ4_0* out_v [[buffer(3)]],                     \
+    device type* x [[buffer(0)]],                        \
+    const device BlockQ4_0* q [[buffer(1)]],                     \
     uint tid [[ thread_position_in_grid ]]);                   \
 
 instantiate_dequantize_4bit(float)
