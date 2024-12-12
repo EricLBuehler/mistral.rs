@@ -333,7 +333,7 @@ template <typename T>
   template [[host_name("quantize_8bit_kv_" #type)]]            \
   [[kernel]] void quantize_8bit_kv<type>(                      \
     const device type* x [[buffer(0)]],                        \
-    device BlockQ8_0* q [[buffer(1)]],                     \
+    device BlockQ8_0* q [[buffer(1)]],                         \
     uint tid [[ thread_position_in_grid ]]);                   \
 
 instantiate_quantize_8bit(float)
@@ -343,8 +343,8 @@ instantiate_quantize_8bit(bfloat16_t)
 #define instantiate_dequantize_8bit(type)                      \
   template [[host_name("dequantize_8bit_kv_" #type)]]          \
   [[kernel]] void dequantize_8bit_kv<type>(                    \
-    device type* x [[buffer(0)]],                        \
-    const device BlockQ8_0* q [[buffer(1)]],                     \
+    device type* x [[buffer(0)]],                              \
+    const device BlockQ8_0* q [[buffer(1)]],                   \
     uint tid [[ thread_position_in_grid ]]);                   \
 
 instantiate_dequantize_8bit(float)
@@ -440,7 +440,7 @@ template <typename T>
   template [[host_name("quantize_4bit_kv_" #type)]]            \
   [[kernel]] void quantize_4bit_kv<type>(                      \
     const device type* x [[buffer(0)]],                        \
-    device BlockQ4_0* q [[buffer(1)]],                     \
+    device BlockQ4_0* q [[buffer(1)]],                         \
     uint tid [[ thread_position_in_grid ]]);                   \
 
 instantiate_quantize_4bit(float)
@@ -450,8 +450,8 @@ instantiate_quantize_4bit(bfloat16_t)
 #define instantiate_dequantize_4bit(type)                      \
   template [[host_name("dequantize_4bit_kv_" #type)]]          \
   [[kernel]] void dequantize_4bit_kv<type>(                    \
-    device type* x [[buffer(0)]],                        \
-    const device BlockQ4_0* q [[buffer(1)]],                     \
+    device type* x [[buffer(0)]],                              \
+    const device BlockQ4_0* q [[buffer(1)]],                   \
     uint tid [[ thread_position_in_grid ]]);                   \
 
 instantiate_dequantize_4bit(float)
