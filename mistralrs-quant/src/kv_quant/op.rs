@@ -324,18 +324,35 @@ pub fn dequantize_4bit(qs: &Tensor, out_ty: DType) -> Result<Tensor> {
     qs.apply_op1_no_bwd(&KvDequantizeOp4Bit { out_ty })
 }
 
+#[cfg(feature = "metal")]
 #[cfg(test)]
-mod test {
-    #[cfg(feature = "metal")]
+mod metal_tests {
+    use candle_core::{DType, Device, Tensor};
+
+    /// Calculates the root mean square error between two vectors
+    fn rmse(a: &[f32], b: &[f32]) -> f32 {
+        assert_eq!(a.len(), b.len());
+        let sum = a
+            .iter()
+            .zip(b)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        sum / a.len() as f32
+    }
+
     #[test]
     fn test_kvquant_roundtrip_8bit() -> candle_core::Result<()> {
-        use candle_core::{DType, Device, Tensor};
-
         use crate::kv_quant::op::KvQuantizeOp8Bit;
 
         let dev = Device::new_metal(0)?;
 
-        let xs = Tensor::randn(0f32, 1f32, (64, 64), &dev)?;
+        let xs = Tensor::new(
+            (0..32 * 128)
+                .map(|i| 0.1 + 2.0 * (i as f32).cos())
+                .collect::<Vec<_>>(),
+            &dev,
+        )?;
         let mut qs = Tensor::zeros(
             KvQuantizeOp8Bit::compute_qs_elem_count(&xs)?,
             DType::U8,
@@ -346,23 +363,24 @@ mod test {
 
         let dequant = super::dequantize_8bit(&qs, DType::F32)?.reshape(xs.shape())?;
 
-        let diff = (xs - dequant)?.abs()?.mean_all()?.to_scalar::<f32>()?;
-        assert!(diff < 0.005, "{diff}");
+        let rmse = rmse(&xs.to_vec1::<f32>()?, &dequant.to_vec1::<f32>()?);
+        assert!(rmse < 0.002, "{rmse}");
 
         Ok(())
     }
 
-    #[cfg(feature = "metal")]
     #[test]
     fn test_kvquant_roundtrip_4bit() -> candle_core::Result<()> {
-        use candle_core::{DType, Device, Tensor};
-
         use crate::kv_quant::op::KvQuantizeOp4Bit;
 
         let dev = Device::new_metal(0)?;
 
-        let xs = Tensor::randn(0f32, 1f32, (32,), &dev)?;
-        println!("{xs}");
+        let xs = Tensor::new(
+            (0..32 * 128)
+                .map(|i| 0.1 + 2.0 * (i as f32).cos())
+                .collect::<Vec<_>>(),
+            &dev,
+        )?;
         let mut qs = Tensor::zeros(
             KvQuantizeOp4Bit::compute_qs_elem_count(&xs)?,
             DType::U8,
@@ -372,11 +390,9 @@ mod test {
         super::quantize_inplace_4bit(&mut qs, &xs)?;
 
         let dequant = super::dequantize_4bit(&qs, DType::F32)?.reshape(xs.shape())?;
-        // println!("{}", (&xs - &dequant)?.abs()?);
-        println!("{dequant}");
 
-        let diff = (xs - dequant)?.abs()?.mean_all()?.to_scalar::<f32>()?;
-        assert!(diff < 0.005, "{diff}");
+        let rmse = rmse(&xs.to_vec1::<f32>()?, &dequant.to_vec1::<f32>()?);
+        assert!(rmse < 0.002, "{rmse}");
 
         Ok(())
     }

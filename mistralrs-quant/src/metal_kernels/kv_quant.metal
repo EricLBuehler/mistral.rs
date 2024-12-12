@@ -359,7 +359,7 @@ instantiate_dequantize_8bit(bfloat16_t)
 
 struct BlockQ4_0 {
     half d;
-    char qs[QK4_0 / 2];
+    unsigned char qs[QK4_0 / 2];
 };
 
 static_assert(sizeof(BlockQ4_0) == sizeof(half) + QK4_0 / 2, "wrong q4_0 block size/padding");
