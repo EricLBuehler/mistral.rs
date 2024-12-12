@@ -11,12 +11,14 @@ use utils::{linear_split, EncoderProvider};
 
 use crate::set_params;
 
-const DEQUANTIZE: &str = include_str!("dequantize.metal");
+const HQQ_DEQUANTIZE: &str = include_str!("hqq_dequantize.metal");
+const BNB_DEQUANTIZE: &str = include_str!("bnb_dequantize.metal");
 const BITWISE: &str = include_str!("bitwise.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
-    Dequant,
+    HqqDequant,
+    BnbDequant,
     Bitwise,
 }
 
@@ -67,7 +69,8 @@ impl Kernels {
 
     fn get_library_source(&self, source: Source) -> &'static str {
         match source {
-            Source::Dequant => DEQUANTIZE,
+            Source::HqqDequant => HQQ_DEQUANTIZE,
+            Source::BnbDequant => BNB_DEQUANTIZE,
             Source::Bitwise => BITWISE,
         }
     }
@@ -158,7 +161,7 @@ pub fn call_dequant_8bit(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::Dequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::HqqDequant, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -197,7 +200,7 @@ pub fn call_dequant_4bit(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::Dequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::HqqDequant, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -236,7 +239,7 @@ pub fn call_dequant_2bit(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::Dequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::HqqDequant, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -275,7 +278,7 @@ pub fn call_dequant_1bit(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::Dequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::HqqDequant, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -314,7 +317,7 @@ pub fn call_dequant_3bit(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::Dequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::HqqDequant, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -337,6 +340,8 @@ pub fn call_bitwise_or(
     ty: DType,
     a: &Buffer,
     b: &Buffer,
+    a_offset: usize,
+    b_offset: usize,
     length: usize,
     output: &Buffer,
 ) -> Result<(), MetalKernelError> {
@@ -358,7 +363,7 @@ pub fn call_bitwise_or(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (a, b, output));
+    set_params!(encoder, ((a, a_offset), (b, b_offset), output));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -372,6 +377,7 @@ pub fn call_bitwise_leftshift(
     kernels: &Kernels,
     ty: DType,
     a: &Buffer,
+    a_offset: usize,
     k: u32,
     length: usize,
     output: &Buffer,
@@ -394,9 +400,129 @@ pub fn call_bitwise_leftshift(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (a, output, k));
+    set_params!(encoder, ((a, a_offset), output, k));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_dequant_bnb_nf4(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    input: &Buffer,
+    absmax: &Buffer,
+    code: &Buffer,
+    output: &Buffer,
+    blocksize: usize,
+    n: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "kernel_dequantize_nf4_float",
+        DType::BF16 => "kernel_dequantize_nf4_bfloat16_t",
+        DType::F16 => "kernel_dequantize_nf4_half",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::BnbDequant, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (code, input, absmax, output, blocksize as i32, n as i32)
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_dequant_bnb_fp4(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    input: &Buffer,
+    absmax: &Buffer,
+    code: &Buffer,
+    output: &Buffer,
+    blocksize: usize,
+    n: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "kernel_dequantize_fp4_float",
+        DType::BF16 => "kernel_dequantize_fp4_bfloat16_t",
+        DType::F16 => "kernel_dequantize_fp4_half",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::BnbDequant, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (code, input, absmax, output, blocksize as i32, n as i32)
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_dequant_bnb_int8(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    input: &Buffer,
+    absmax: &Buffer,
+    code: &Buffer,
+    output: &Buffer,
+    blocksize: usize,
+    n: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "kernel_dequantize_int8_float",
+        DType::BF16 => "kernel_dequantize_int8_bfloat16_t",
+        DType::F16 => "kernel_dequantize_int8_half",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::BnbDequant, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (code, input, absmax, output, blocksize as i32, n as i32)
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

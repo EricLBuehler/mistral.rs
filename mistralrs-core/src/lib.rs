@@ -26,7 +26,6 @@ use tokio::sync::mpsc::{channel, Sender};
 use tracing::info;
 use tracing::warn;
 
-mod aici;
 mod cuda;
 mod device_map;
 mod engine;
@@ -85,8 +84,8 @@ pub use pipeline::{
     VisionLoaderBuilder, VisionLoaderType, VisionPromptPrefixer, VisionSpecificConfig,
 };
 pub use request::{
-    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, MessageContent,
-    NormalRequest, Request, RequestMessage, TokenizationRequest,
+    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
+    MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
 };
 pub use response::*;
 pub use sampler::{
@@ -104,6 +103,9 @@ pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
 pub use utils::paged_attn_supported;
+
+// re-export llguidance for easier LlguidanceGrammar construction
+pub use llguidance;
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
@@ -361,48 +363,53 @@ impl MistralRs {
 
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
 
-        // Do a dummy run
-        if matches!(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
-            let clone_sender = sender.read().unwrap().clone();
-            tokio::task::block_in_place(|| {
-                let (tx, mut rx) = channel(1);
-                let req = Request::Normal(NormalRequest {
-                    id: 0,
-                    messages: RequestMessage::Completion {
-                        text: "dummy".to_string(),
-                        echo_prompt: false,
-                        best_of: 1,
-                    },
-                    sampling_params: SamplingParams {
-                        max_len: Some(1),
-                        ..SamplingParams::deterministic()
-                    },
-                    response: tx,
-                    return_logprobs: false,
-                    is_streaming: true,
-                    constraint: Constraint::None,
-                    suffix: None,
-                    adapters: None,
-                    tool_choice: None,
-                    tools: None,
-                    logits_processors: None,
-                    return_raw_logits: false,
-                });
-                info!("Beginning dummy run.");
-                let start = Instant::now();
-                clone_sender.blocking_send(req).unwrap();
+        // Skip the dummy run in Single Threaded mode as blocking operations are not allowed
+        if tokio::runtime::Handle::try_current()
+            .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread)
+        {
+            // Do a dummy run
+            if matches!(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
+                let clone_sender = sender.read().unwrap().clone();
+                tokio::task::block_in_place(|| {
+                    let (tx, mut rx) = channel(1);
+                    let req = Request::Normal(NormalRequest {
+                        id: 0,
+                        messages: RequestMessage::Completion {
+                            text: "dummy".to_string(),
+                            echo_prompt: false,
+                            best_of: None,
+                        },
+                        sampling_params: SamplingParams {
+                            max_len: Some(1),
+                            ..SamplingParams::deterministic()
+                        },
+                        response: tx,
+                        return_logprobs: false,
+                        is_streaming: true,
+                        constraint: Constraint::None,
+                        suffix: None,
+                        adapters: None,
+                        tool_choice: None,
+                        tools: None,
+                        logits_processors: None,
+                        return_raw_logits: false,
+                    });
+                    info!("Beginning dummy run.");
+                    let start = Instant::now();
+                    clone_sender.blocking_send(req).unwrap();
 
-                if let Some(_resp) = rx.blocking_recv() {
-                    let end = Instant::now();
-                    info!(
-                        "Dummy run completed in {}s.",
-                        end.duration_since(start).as_secs_f64()
-                    );
-                } else {
-                    warn!("Dummy run failed!");
-                }
-            });
-        }
+                    if let Some(_resp) = rx.blocking_recv() {
+                        let end = Instant::now();
+                        info!(
+                            "Dummy run completed in {}s.",
+                            end.duration_since(start).as_secs_f64()
+                        );
+                    } else {
+                        warn!("Dummy run failed!");
+                    }
+                });
+            }
+        };
 
         Arc::new(Self {
             engine_id,

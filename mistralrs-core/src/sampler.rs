@@ -696,22 +696,6 @@ impl Sampler {
 }
 
 mod tests {
-    use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-    use tokenizers::Tokenizer;
-
-    #[allow(dead_code)]
-    fn get_tokenizer() -> Tokenizer {
-        let api = ApiBuilder::new().with_progress(true).build().unwrap();
-        let api = api.repo(Repo::with_revision(
-            "EricB/mistralrs_tests".to_string(),
-            RepoType::Model,
-            "main".to_string(),
-        ));
-
-        let tokenizer_filename = api.get("tokenizer.json").unwrap();
-        Tokenizer::from_file(tokenizer_filename).unwrap()
-    }
-
     #[test]
     fn test_argmax() {
         use super::Sampler;
@@ -721,19 +705,8 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(
-            None,
-            10,
-            Some(get_tokenizer().into()),
-            None,
-            None,
-            None,
-            32,
-            0.1,
-            0.05,
-            vec![],
-        )
-        .unwrap();
+        let sampler =
+            Sampler::new(None, 10, None, None, None, None, 32, 0.1, 0.05, vec![]).unwrap();
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
@@ -753,19 +726,8 @@ mod tests {
         use std::sync::Arc;
         use std::sync::Mutex;
 
-        let sampler = Sampler::new(
-            None,
-            10,
-            Some(get_tokenizer().into()),
-            None,
-            None,
-            None,
-            32,
-            0.1,
-            0.05,
-            vec![],
-        )
-        .unwrap();
+        let sampler =
+            Sampler::new(None, 10, None, None, None, None, 32, 0.1, 0.05, vec![]).unwrap();
         let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler

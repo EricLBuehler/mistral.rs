@@ -147,6 +147,10 @@ impl PrefixCacheManager {
         }
         // Intentionally evict the first ones first, as they are the oldest
         for (cache, xlora_cache) in &self.eviction_cache_ptrs {
+            if get_mut_arcmutex!(cache.as_ref())[0].is_none() {
+                // TODO: add support for normal cache
+                continue;
+            }
             if !matches!(
                 get_mut_arcmutex!(cache.as_ref())[0]
                     .as_ref()

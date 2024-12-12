@@ -461,7 +461,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>) {
 
     info!("Starting interactive loop with generation params: {diffusion_params:?}");
     println!(
-        "{}{TEXT_INTERACTIVE_HELP}{}",
+        "{}{DIFFUSION_INTERACTIVE_HELP}{}",
         "=".repeat(20),
         "=".repeat(20)
     );
@@ -522,16 +522,22 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>) {
             logits_processors: None,
             return_raw_logits: false,
         });
+
+        let start = Instant::now();
         sender.send(req).await.unwrap();
 
         let ResponseOk::ImageGeneration(response) = rx.recv().await.unwrap().as_result().unwrap()
         else {
             panic!("Got unexpected response type.")
         };
+        let end = Instant::now();
+
+        let duration = end.duration_since(start).as_secs_f32();
+        let pixels_per_s = (diffusion_params.height * diffusion_params.width) as f32 / duration;
 
         println!(
-            "Image generated can be found at: image is at {}",
-            response.data[0].url.as_ref().unwrap()
+            "Image generated can be found at: image is at `{}`. Took {duration:.2}s ({pixels_per_s:.2} pixels/s).",
+            response.data[0].url.as_ref().unwrap(),
         );
 
         println!();

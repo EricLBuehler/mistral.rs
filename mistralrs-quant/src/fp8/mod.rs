@@ -41,7 +41,8 @@ impl QuantMethod for FP8Linear {
             | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
-            | QuantMethodConfig::Unquantized(_) => unreachable!(),
+            | QuantMethodConfig::Unquantized(_)
+            | QuantMethodConfig::Bnb { .. } => unreachable!(),
             QuantMethodConfig::FP8 { lin, dtype } => {
                 let QuantizationResult {
                     qw,
@@ -151,6 +152,7 @@ impl QuantMethod for FP8Linear {
         _dtype: Option<IsqType>,
         _device: Device,
         _n_quantized: &AtomicUsize,
+        _imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
     }

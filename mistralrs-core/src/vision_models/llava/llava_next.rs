@@ -3,6 +3,8 @@
     clippy::cast_precision_loss,
     clippy::too_many_arguments
 )]
+use std::any::Any;
+
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{linear, Activation, Linear, VarBuilder};
 
@@ -23,6 +25,7 @@ use crate::{AnyMoeConfig, AnyMoeExpertType};
 
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
 
+#[derive(Default)]
 pub(crate) struct LLaVANextVisionSpecificArgs {
     pub image_sizes: Option<Vec<(usize, usize)>>, // width, height
     pub num_image_tokens: Option<Vec<usize>>,     // number of image tokens for each image
@@ -419,6 +422,9 @@ impl VisionModel for Model {
     fn cache(&self) -> &crate::pipeline::EitherCache {
         self.llm.cache()
     }
+    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
+        self.llm.cache_mut()
+    }
 
     fn max_seq_len(&self) -> usize {
         self.config.text_config.max_length
@@ -430,6 +436,9 @@ impl VisionModel for Model {
 
     fn config(&self) -> &ModelConfigMetadata {
         self.llm.config()
+    }
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
+        Box::new(LLaVANextVisionSpecificArgs::default())
     }
 }
 

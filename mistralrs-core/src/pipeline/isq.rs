@@ -9,8 +9,9 @@ use std::{
 };
 
 use anyhow::Result;
-use candle_core::{Context, Device, Tensor};
+use candle_core::{quantized, Context, Device, Tensor};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use itertools::Itertools;
 use mistralrs_quant::{
     FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType,
     UnquantLinear,
@@ -124,6 +125,11 @@ pub struct UqffFullSer<'a> {
     pub preprocessor_filename: &'a Option<PathBuf>,
 }
 
+pub enum ImatrixDataSource<'a> {
+    File(&'a PathBuf),
+    Collected,
+}
+
 pub trait IsqModel {
     /// Corresponds to `IsqOrganization::Default`
     #[allow(clippy::type_complexity)]
@@ -133,6 +139,36 @@ pub trait IsqModel {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     );
+
+    /// This is used for imatrix generation internally. Begin stats tracking.
+    fn begin_track_stats(&mut self) -> anyhow::Result<()> {
+        let layers = self
+            .get_layers()
+            .0
+            .into_iter()
+            .map(|(layer, _)| layer)
+            .collect::<Vec<_>>();
+        for layer in layers {
+            Arc::get_mut(layer).unwrap().begin_track_stats()?;
+        }
+        Ok(())
+    }
+
+    /// End stats tracking and return the imatrix data
+    fn extract_imatrix_data(&mut self) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+        let layers = self
+            .get_layers()
+            .0
+            .into_iter()
+            .enumerate()
+            .map(|(i, (layer, _))| (i, layer))
+            .collect::<Vec<_>>();
+        let mut data = HashMap::new();
+        for (i, layer) in layers {
+            data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
+        }
+        Ok(data)
+    }
 
     /// Corresponds to `IsqOrganization::MoeExpertsOnly`
     /// https://arxiv.org/abs/2310.02410
@@ -144,6 +180,51 @@ pub trait IsqModel {
         &dyn DeviceMapper,
     ) {
         self.get_layers()
+    }
+
+    /// Corresponds to `IsqOrganization::MoeExpertsOnly`
+    /// This is used for imatrix generation internally. Begin stats tracking.
+    fn begin_track_stats_moe_experts_only(&mut self) -> anyhow::Result<()> {
+        let layers = self
+            .get_layers()
+            .0
+            .into_iter()
+            .map(|(layer, _)| layer)
+            .collect::<Vec<_>>();
+        for layer in layers {
+            Arc::get_mut(layer).unwrap().begin_track_stats()?;
+        }
+        Ok(())
+    }
+
+    /// Corresponds to `IsqOrganization::MoeExpertsOnly`
+    /// End stats tracking and return the imatrix data
+    fn extract_imatrix_data_moe_experts_only(
+        &mut self,
+    ) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+        let layers = self
+            .get_layers()
+            .0
+            .into_iter()
+            .enumerate()
+            .map(|(i, (layer, _))| (i, layer))
+            .collect::<Vec<_>>();
+        let mut data = HashMap::new();
+        for (i, layer) in layers {
+            data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
+        }
+        Ok(data)
+    }
+
+    /// Corresponding to the specific order the model produces ISQ layers (None means
+    /// do not search for in the imatrix file). This is used to pair ISQ layers with the
+    /// corresponding imatrix weights.
+    ///
+    /// - This is only for loading from a llama.cpp imatrix file.
+    /// - Corresponds to `IsqOrganization::Default`
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        // TODO: make this required.
+        candle_core::bail!("This model does not support quantizing with an imatrix.");
     }
 
     /// Residual tensors for generating a UQFF file. Counterpart to [`get_layers`].
@@ -165,15 +246,76 @@ pub trait IsqModel {
         device: Device,
         topology: Option<&Topology>,
         silent: bool,
+        imatrix_source: Option<ImatrixDataSource<'_>>,
         organization: IsqOrganization,
         write_artifacts: Option<&PathBuf>,
         full_ser: UqffFullSer<'_>,
     ) -> candle_core::Result<()> {
         {
+            let imatrix_to_weight = match imatrix_source {
+                Some(ImatrixDataSource::File(imatrix)) => {
+                    let mut imatrix_data = quantized::imatrix_file::load_imatrix(imatrix.clone())?;
+                    let imatrix_mapping = self
+                        .imatrix_names()?
+                        .into_iter()
+                        .enumerate()
+                        .collect::<HashMap<_, _>>();
+
+                    let layer_to_weight = imatrix_mapping
+                        .into_iter()
+                        .map(|(i, name)| {
+                            if let Some(name) = name {
+                                (i, Some(imatrix_data.remove(&name).unwrap()))
+                            } else {
+                                (i, None)
+                            }
+                        })
+                        .collect::<HashMap<_, _>>();
+                    info!(
+                        "Quantizing with imatrix file `{}`, {} imatrix weights",
+                        imatrix.display(),
+                        layer_to_weight.iter().filter(|(_, x)| x.is_some()).count()
+                    );
+                    Some(layer_to_weight)
+                }
+                Some(ImatrixDataSource::Collected) => {
+                    let data = match organization {
+                        IsqOrganization::Default => self.extract_imatrix_data()?,
+                        IsqOrganization::MoeExpertsOnly => {
+                            self.extract_imatrix_data_moe_experts_only()?
+                        }
+                    };
+                    info!(
+                        "Quantizing with collected imatrix data, {} imatrix weights",
+                        data.iter().filter(|(_, x)| x.is_some()).count()
+                    );
+                    Some(data)
+                }
+                None => {
+                    // Dummy, just for zip
+                    None
+                }
+            };
+
             let (mut tensors, mapper) = match organization {
                 IsqOrganization::Default => self.get_layers(),
                 IsqOrganization::MoeExpertsOnly => self.get_layers_moe_experts_only(),
             };
+
+            let imatrix_to_weight: Vec<Option<Vec<f32>>> =
+                if let Some(mut imatrix_to_weight) = imatrix_to_weight {
+                    let ordered_keys = imatrix_to_weight
+                        .keys()
+                        .copied()
+                        .sorted()
+                        .collect::<Vec<_>>();
+                    ordered_keys
+                        .into_iter()
+                        .map(|layer| imatrix_to_weight.remove(&layer).unwrap())
+                        .collect()
+                } else {
+                    vec![None; tensors.len()]
+                };
 
             let total_tensors = tensors.len();
             let n_quantized = AtomicUsize::new(0);
@@ -245,7 +387,7 @@ pub trait IsqModel {
 
             // Get the MINIMUM of the max isq threads the quant method allows
             #[cfg(not(feature = "metal"))]
-            let minimum_max_threads = {
+            let mut minimum_max_threads = {
                 let current_rayon_threads = rayon::current_num_threads();
                 tensors
                     .iter()
@@ -262,7 +404,12 @@ pub trait IsqModel {
                     .unwrap_or(current_rayon_threads)
             };
             #[cfg(feature = "metal")]
-            let minimum_max_threads = 1;
+            let mut minimum_max_threads = 1;
+
+            if matches!(imatrix_source, Some(ImatrixDataSource::Collected)) {
+                // Collected imatrix means that the model is potentially on the gpu already
+                minimum_max_threads = 1;
+            }
 
             info!("Applying ISQ on {minimum_max_threads} threads.");
 
@@ -277,24 +424,27 @@ pub trait IsqModel {
                     IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
                 };
                 if silent {
-                    tensors.par_iter_mut().zip(devices_and_dtypes).for_each(
-                        |((tensor, _), (device, dtype))| {
+                    tensors
+                        .par_iter_mut()
+                        .zip(devices_and_dtypes)
+                        .zip(imatrix_to_weight)
+                        .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
                             **tensor = tensor
                                 .clone()
-                                .apply_isq(dtype, device.clone(), &n_quantized)
+                                .apply_isq(dtype, device.clone(), &n_quantized, imatrix_weight)
                                 .unwrap();
                             device.synchronize().unwrap();
-                        },
-                    );
+                        });
                 } else {
                     tensors
                         .par_iter_mut()
                         .zip(devices_and_dtypes)
+                        .zip(imatrix_to_weight)
                         .progress_with(bar)
-                        .for_each(|((tensor, _), (device, dtype))| {
+                        .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
                             **tensor = tensor
                                 .clone()
-                                .apply_isq(dtype, device.clone(), &n_quantized)
+                                .apply_isq(dtype, device.clone(), &n_quantized, imatrix_weight)
                                 .unwrap();
                             device.synchronize().unwrap();
                         });

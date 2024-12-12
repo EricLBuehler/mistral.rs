@@ -203,24 +203,6 @@ macro_rules! get_mut_group {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! get_bias_if_not_allowed {
-    ($tok_trie:expr, $rx:expr, $next_token_id:expr) => {
-        if let Some(tok_trie) = &$tok_trie {
-            if tok_trie.token_allowed($rx, $next_token_id) {
-                None
-            } else {
-                let mut token_set = tok_trie.alloc_token_set();
-                tok_trie.compute_bias($rx, &mut token_set);
-                Some(token_set)
-            }
-        } else {
-            None
-        }
-    };
-}
-
-#[doc(hidden)]
-#[macro_export]
 macro_rules! serde_default_fn {
     ($t:ty, $name:ident, $v:expr) => {
         fn $name() -> $t {
