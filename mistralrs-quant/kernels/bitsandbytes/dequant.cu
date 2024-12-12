@@ -148,8 +148,10 @@ __global__ void kDequantizeBlockwise(float *code, unsigned char * A, float * abs
           #pragma unroll NUM_PER_TH
           for(int j = 0; j < NUM_PER_TH; j++)
           {
-            vals[j*2] = qvals[j] >> 4;//dDequantizeNF4(qvals[j] >> 4)* local_abs_max;
-            vals[j*2 + 1] = qvals[j] & 0x0F;//dDequantizeNF4(qvals[j] & 0x0F)* local_abs_max;
+            // vals[j*2] = qvals[j] >> 4;//dDequantizeNF4(qvals[j] >> 4)* local_abs_max;
+            // vals[j*2 + 1] = qvals[j] & 0x0F;//dDequantizeNF4(qvals[j] & 0x0F)* local_abs_max;
+            vals[j*2] = local_abs_max;//dDequantizeNF4(qvals[j] >> 4)* local_abs_max;
+            vals[j*2 + 1] = local_abs_max;//dDequantizeNF4(qvals[j] & 0x0F)* local_abs_max;
           }
           break;
     }
