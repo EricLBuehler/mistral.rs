@@ -54,7 +54,7 @@
 //! ```no_run
 //! use anyhow::Result;
 //! use mistralrs::{
-//!     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+//!     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder, Response
 //! };
 //!
 //! #[tokio::main]
