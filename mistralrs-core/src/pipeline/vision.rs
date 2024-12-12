@@ -1,34 +1,32 @@
 use super::cache_manager::{FullCacheManager, NormalCacheManager};
+use super::hf::get_paths;
 use super::isq::ImatrixDataSource;
 use super::isq::UqffFullSer;
 use super::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
-    CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
-    MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
-    XLoraPaths,
-};
-use super::{
-    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
+    AdapterActivationMixin, AnyMoePipelineMixin, CacheManager, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, GeneralMetadata, Idefics2Loader, Idefics3Loader, IsqPipelineMixin,
+    LLaVALoader, LLaVANextLoader, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    Phi3VLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader,
+    VisionLoaderType, VisionModel, VisionModelLoader, VisionPromptPrefixer,
 };
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_tok_env;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
-use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
+use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization};
 use crate::prefix_cacher::PrefixCacheManager;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
-use crate::utils::tokenizer::get_tokenizer;
-use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-use crate::vision_models::preprocessor_config::PreProcessorConfig;
-use crate::vision_models::processor_config::ProcessorConfig;
-use crate::vision_models::ModelInputs;
+use crate::utils::{
+    debug::DeviceRepr, tokenizer::get_tokenizer, tokens::get_token,
+    varbuilder_utils::from_mmaped_safetensors,
+};
+use crate::vision_models::{
+    preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig, ModelInputs,
+};
 use crate::{
-    api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
-    AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
-    TryIntoDType,
+    api_dir_list, api_get_file, get_uqff_paths, vision_normal_model_loader, AnyMoeExpertType,
+    DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -40,7 +38,6 @@ use std::any::Any;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokenizers::Tokenizer;
@@ -159,16 +156,19 @@ impl Loader for VisionLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
-            LocalModelPaths,
+        let paths: Box<dyn ModelPaths> = get_paths(
+            self.model_id.clone(),
+            self.tokenizer_json.as_deref(),
+            self.xlora_model_id.as_deref(),
+            self.xlora_order.as_ref(),
+            self.chat_template.as_deref(),
             &token_source,
             revision.clone(),
-            self,
             None,
             None,
             silent,
-            self.config.from_uqff.is_some()
-        );
+            self.config.from_uqff.is_some(),
+        )?;
         if let Some(from_uqff) = self.config.from_uqff.clone() {
             *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
         }
@@ -178,7 +178,7 @@ impl Loader for VisionLoader {
             .expect("Failed to write to token source") = Some(token_source);
         *self.revision.write().expect("Failed to write to revision") = revision;
         self.load_model_from_path(
-            &paths?,
+            &paths,
             dtype,
             device,
             silent,

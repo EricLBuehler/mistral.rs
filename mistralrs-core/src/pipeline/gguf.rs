@@ -49,7 +49,7 @@ use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
@@ -339,6 +339,7 @@ impl Loader for GGUFLoader {
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
             );
         }
+
         // Otherwise, the device mapper will print it
         if mapper.is_dummy()
             && (self.config.topology.is_none()
@@ -384,12 +385,18 @@ impl Loader for GGUFLoader {
             }
         };
 
-        // Only load gguf chat template if there is nothing else
-        let gguf_chat_template =
-            if paths.get_template_filename().is_none() && self.chat_template.is_none() {
-                get_gguf_chat_template(&model)?
-            } else {
-                None
+        // Handles the case where `self.chat_template` is either a file or a
+        // chat_template string literal. As a file, `self.chat_template`
+        // overrides the file from `paths`.
+        let (chat_template_file, chat_template_literal) =
+            match (paths.get_template_filename(), self.chat_template.clone()) {
+                // If chat_template is file, it overrides.
+                (_, Some(l)) if Path::new(&l).exists() => (Some(Path::new(&l).to_path_buf()), None),
+                // Otherwise, use the template file + chat_template literal (if provided).
+                (Some(f), l_opt) => (Some(Path::new(f).to_path_buf()), l_opt),
+                (None, Some(l)) => (None, Some(l)),
+                // Only load gguf chat template if there is nothing else
+                (None, None) => (None, get_gguf_chat_template(&model)?),
             };
 
         let has_adapter = self.kind.is_adapted();
@@ -478,10 +485,9 @@ impl Loader for GGUFLoader {
             &paths
                 .get_chat_template_json()
                 .as_ref()
-                .map(|x| x.to_string_lossy().to_string())
-                .clone(),
-            &self.chat_template,
-            gguf_chat_template,
+                .map(|x| x.to_string_lossy().to_string()),
+            &chat_template_file.map(|p| p.to_string_lossy().to_string()),
+            chat_template_literal,
         );
 
         let max_seq_len = match model {

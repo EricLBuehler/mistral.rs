@@ -7,14 +7,14 @@ use tracing::info;
 use crate::pipeline::TokenSource;
 
 #[derive(Error, Debug)]
-enum TokenRetrievalError {
+pub(crate) enum TokenRetrievalError {
     #[error("No home directory.")]
     HomeDirectoryMissing,
 }
 
 /// This reads a token from a specified source. If the token cannot be read, a warning is logged with `tracing`
 /// and *no token is used*.
-pub(crate) fn get_token(source: &TokenSource) -> Result<Option<String>> {
+pub(crate) fn get_token(source: &TokenSource) -> Result<Option<String>, TokenRetrievalError> {
     fn skip_token(input: &str) -> Option<String> {
         info!("Could not load token at {input:?}, using no HF token.");
         None
