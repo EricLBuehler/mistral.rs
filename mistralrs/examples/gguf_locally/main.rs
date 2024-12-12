@@ -18,15 +18,10 @@ async fn main() -> Result<()> {
     .build()
     .await?;
 
-    let messages = TextMessages::new()
-        .add_message(
-            TextMessageRole::System,
-            "You are an AI agent with a specialty in programming.",
-        )
-        .add_message(
-            TextMessageRole::User,
-            "Hello! How are you? Please write generic binary search function in Rust.",
-        );
+    let messages = TextMessages::new().add_message(
+        TextMessageRole::User,
+        "Hello! How are you? Please write generic binary search function in Rust.",
+    );
 
     let response = model.send_chat_request(messages).await?;
 

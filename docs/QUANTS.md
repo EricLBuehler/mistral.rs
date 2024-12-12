@@ -5,6 +5,7 @@ Mistral.rs supports the following quantization:
     - Q, K type
     - Supported in GGUF/GGML and GGUF/GGML adapter models
     - Supported in all plain and adapter models
+    - Imatrix quantization is supported
     - I quants coming!
     - CPU, CUDA, Metal (all supported devices)
     - 2, 3, 4, 5, 6, 8 bit
@@ -15,12 +16,19 @@ Mistral.rs supports the following quantization:
     - [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
 - HQQ
     - Supported in all plain and adapter models via ISQ
-    - CUDA and CPU only
     - 4, 8 bit
+    - CPU, CUDA, Metal (all supported devices)
+- FP8
+    - Supported in all plain and adapter models
+    - CPU, CUDA, Metal (all supported devices)
+- BNB
+    - Supported in all plai models
+    - bitsandbytes int8, fp4, nf4 support
 - ISQ
     - Q, K type GGUF quants
     - Supported in all plain and adapter models
     - HQQ quants
+    - FP8
     - CPU, CUDA, Metal (all supported devices)
 
 ## Using a GGUF quantized model

@@ -158,7 +158,10 @@ fn naive_sdpa(
     #[cfg(not(feature = "metal"))]
     let supports_attn_softmax = true;
 
-    if mask.is_some_and(|mask| mask.rank() == 2) && supports_attn_softmax {
+    // Use faster softmax if mask is rank 2 or it's rank 3 and bs 1
+    if mask.is_some_and(|mask| mask.rank() == 2 || (mask.rank() == 3 && mask.dims()[0] == 1))
+        && supports_attn_softmax
+    {
         let mut att = MatMul.matmul(q, &k.t()?)?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
@@ -166,9 +169,14 @@ fn naive_sdpa(
             att = (att * softcap as f64)?;
         }
 
-        att = candle_nn::ops::attn_softmax_last_dim(
-            &att,
-            mask.unwrap(),
+        let mask = match mask {
+            Some(mask) if mask.rank() == 3 && mask.dim(0)? == 1 => mask.squeeze(0)?,
+            Some(mask) if mask.rank() == 2 => mask.clone(),
+            _ => unreachable!(),
+        };
+        candle_nn::ops::inplace_attn_softmax_last_dim(
+            &mut att,
+            &mask,
             1. / (head_dim as f32).sqrt(),
         )?;
         MatMul.matmul(&att, v)
@@ -184,7 +192,7 @@ fn naive_sdpa(
             Some(m) => att.broadcast_add(m)?,
             None => att,
         };
-        att = candle_nn::ops::softmax_last_dim(&att)?;
+        candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
         MatMul.matmul(&att, v)
     }
 }
@@ -251,11 +259,13 @@ impl Sdpa {
                     let q = q.flatten(0, 1)?;
                     let v = v.flatten(0, 1)?;
                     let attention_bias = match mask {
+                        Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => {
+                            Some(mask.repeat((n_attn_heads, 1, 1))?)
+                        }
                         Some(mask) if mask.rank() == 3 => Some(mask.clone()),
                         Some(mask) if mask.rank() == 4 => Some(mask.flatten(0, 1)?),
-                        Some(mask) if mask.rank() == 2 => Some(mask.unsqueeze(0)?),
                         Some(mask) => {
-                            candle_core::bail!("cublaslt attn mask: rank must be 3, 4, or 2")
+                            candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
                         }
                         None => None,
                     };

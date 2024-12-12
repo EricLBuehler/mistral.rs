@@ -381,7 +381,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         .map_err(candle_core::Error::msg)?;
 
         let dummy_group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
-            1, false, false, 0,
+            1, false, false, None,
         )));
 
         let mut latest_loss = vec![0.0; optimizers.len()];
@@ -581,7 +581,6 @@ fn new_dummy_seq(
         None,
         images,
         None, // TODO incorrect for PagedAttention
-        None,
         None,
         None,
         SeqStepType::PromptAndDecode,

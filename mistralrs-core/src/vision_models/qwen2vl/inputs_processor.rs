@@ -450,8 +450,8 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 vec![],
                 vec![],
                 vec![vec![]; input_seqs.len()],
-                vec![0],
-                vec![0],
+                vec![0; input_seqs.len()],
+                vec![0; input_seqs.len()],
             )
         };
 

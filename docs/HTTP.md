@@ -9,7 +9,7 @@ The API consists of the following endpoints. They can be viewed in your browser 
 To support additional features, we have extended the completion and chat completion request objects. Both have the same keys added:
 
 - `top_k`: `int` | `null`. If non null, it is only relevant if positive.
-- `grammar`: `{"type" : "regex" | "yacc", "value": string}` or `null`. Grammar to use.
+- `grammar`: `{"type" : "regex" | "lark" | "json_schema" | "llguidance", "value": string}` or `null`. Grammar to use.
 - `adapters`: `array of string` | `null`. Adapter names to activate for this request.
 - `min_p`: `float` | `null`. If non null, it is only relevant if 1 >= min_p >= 0.
 

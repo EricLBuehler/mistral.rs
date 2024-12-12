@@ -276,9 +276,8 @@ impl Attention {
         }
 
         let mut attn_output = match &self.paged_attn {
-            Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
                     &k,
                     &v,
@@ -287,8 +286,26 @@ impl Attention {
                     Some(value_cache),
                     input_metadata,
                     None,
-                )?
-            }
+                )?,
+                None => {
+                    let mut input_metadata = PagedAttentionInputMetadata {
+                        block_tables: None,
+                        context_lens: None,
+                        max_context_len: None,
+                        slot_mappings: Tensor::new(&[0f32], q.device())?,
+                    };
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        attention_mask,
+                        None,
+                        None,
+                        &mut input_metadata,
+                        None,
+                    )?
+                }
+            },
             None => {
                 let (k, v) = kv_cache.append(&k, &v)?;
 
@@ -415,9 +432,9 @@ impl Model {
     ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
-                "Using {} quantization in {} bits.",
+                "Using {} quantization: {}.",
                 quant_cfg.quant_method.to_string(),
-                quant_cfg.bits
+                quant_cfg.get_bits_name(&vb)
             );
         }
         let mapper = normal_loading_metadata.mapper;
@@ -620,6 +637,23 @@ impl IsqModel for Model {
 
         uvb.to_safetensors()
     }
+
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        // NOTE: dependant on the exact implementation in get_layers!
+        let mut names = Vec::new();
+        // lm_head
+        names.push(None);
+        for i in 0..self.layers.len() {
+            names.push(Some(format!("blk.{i}.attn_q.weight")));
+            names.push(Some(format!("blk.{i}.attn_k.weight")));
+            names.push(Some(format!("blk.{i}.attn_v.weight")));
+            names.push(Some(format!("blk.{i}.attn_output.weight")));
+            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
+            names.push(Some(format!("blk.{i}.ffn_up.weight")));
+            names.push(Some(format!("blk.{i}.ffn_down.weight")));
+        }
+        Ok(names)
+    }
 }
 
 impl NormalModel for Model {
@@ -661,6 +695,9 @@ impl NormalModel for Model {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
+    }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

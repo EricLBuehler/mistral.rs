@@ -265,9 +265,8 @@ impl Attention {
             .forward(&q, &k, seqlen_offsets, position_ids)?;
 
         let mut attn_output = match &self.paged_attn {
-            Some(paged_attn) => {
-                let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
-                paged_attn.forward(
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
                     &k,
                     &v,
@@ -276,8 +275,26 @@ impl Attention {
                     Some(value_cache),
                     input_metadata,
                     None,
-                )?
-            }
+                )?,
+                None => {
+                    let mut input_metadata = PagedAttentionInputMetadata {
+                        block_tables: None,
+                        context_lens: None,
+                        max_context_len: None,
+                        slot_mappings: Tensor::new(&[0f32], q.device())?,
+                    };
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        attention_mask,
+                        None,
+                        None,
+                        &mut input_metadata,
+                        None,
+                    )?
+                }
+            },
             None => {
                 let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
                     kv_cache,
@@ -463,15 +480,18 @@ impl DecoderLayer {
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            position_ids,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let xs = self
+            .self_attn
+            .forward(
+                &xs,
+                attention_mask,
+                seqlen_offsets,
+                position_ids,
+                kv_cache,
+                metadata,
+                flash_params,
+            )
+            .unwrap();
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -1152,6 +1172,7 @@ impl IsqModel for Model {
     }
 }
 
+#[derive(Default)]
 pub(crate) struct Phi3VisionSpecificArgs {
     pub image_sizes: Option<Vec<(usize, usize)>>,
 }
@@ -1186,6 +1207,9 @@ impl VisionModel for Model {
     fn cache(&self) -> &EitherCache {
         &self.cache
     }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.cache
+    }
     fn device(&self) -> &Device {
         &self.device
     }
@@ -1197,6 +1221,9 @@ impl VisionModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
+        Box::new(Phi3VisionSpecificArgs::default())
     }
 }
 

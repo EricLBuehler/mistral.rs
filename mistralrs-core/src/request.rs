@@ -13,11 +13,15 @@ use crate::{
 use std::{fmt::Debug, sync::Arc};
 use tokio::sync::mpsc::Sender;
 
+pub type LlguidanceGrammar = llguidance::api::TopLevelGrammar;
+
 #[derive(Clone)]
-/// Control the constraint with Regex or Yacc.
+/// Control the constraint with llguidance.
 pub enum Constraint {
     Regex(String),
-    Yacc(String),
+    Lark(String),
+    JsonSchema(serde_json::Value),
+    Llguidance(LlguidanceGrammar),
     None,
 }
 
@@ -38,7 +42,7 @@ pub enum RequestMessage {
     Completion {
         text: String,
         echo_prompt: bool,
-        best_of: usize,
+        best_of: Option<usize>,
     },
     CompletionTokens(Vec<u32>),
     VisionChat {

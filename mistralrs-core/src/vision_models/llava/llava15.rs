@@ -3,6 +3,8 @@
     clippy::cast_precision_loss,
     clippy::too_many_arguments
 )]
+use std::any::Any;
+
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::amoe::MlpLayer;
@@ -326,6 +328,9 @@ impl VisionModel for Model {
     fn cache(&self) -> &crate::pipeline::EitherCache {
         self.llm.cache()
     }
+    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
+        self.llm.cache_mut()
+    }
 
     fn max_seq_len(&self) -> usize {
         self.config.text_config.max_length
@@ -337,6 +342,9 @@ impl VisionModel for Model {
 
     fn config(&self) -> &ModelConfigMetadata {
         self.llm.config()
+    }
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
+        Box::new(())
     }
 }
 

@@ -34,5 +34,5 @@
 
 ## Cross-device inference
 - [Device mapping](DEVICE_MAPPING.md)
-- [Topology](TOPOLOLGY.md)
+- [Topology](TOPOLOGY.md)
 

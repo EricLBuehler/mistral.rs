@@ -1,3 +1,19 @@
+use crate::{
+    get_mut_group,
+    pipeline::LayerCaches,
+    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
+    sampler::{Logprobs, Sampler},
+    ChatCompletionResponse, Usage,
+};
+use crate::{
+    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
+    pipeline::{DiffusionGenerationParams, KvCache},
+    response::CompletionChoice,
+    tools::ToolCallingMatcher,
+    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
+    ImageGenerationResponse, ImageGenerationResponseFormat,
+};
+use candle_core::Tensor;
 use std::{
     fmt::Display,
     sync::{Arc, RwLock},
@@ -7,25 +23,6 @@ use tokio::sync::{
     mpsc::{error::SendError, Sender},
     Mutex, MutexGuard,
 };
-
-use crate::{
-    aici::{cfg::CfgParser, recognizer::StackRecognizer, rx::RecRx, toktree::TokTrie},
-    paged_attention::{BlockEngineSequence, LogicalTokenBlock},
-    pipeline::{DiffusionGenerationParams, KvCache},
-    response::CompletionChoice,
-    tools::ToolCallingMatcher,
-    CompletionChunkChoice, CompletionChunkResponse, CompletionResponse, ImageChoice,
-    ImageGenerationResponse, ImageGenerationResponseFormat,
-};
-use crate::{
-    get_mut_group,
-    pipeline::LayerCaches,
-    response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
-    sampler::{Logprobs, Sampler},
-    ChatCompletionResponse, Usage,
-};
-use candle_core::Tensor;
-use regex_automata::util::primitives::StateID;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum StopReason {
@@ -68,8 +65,7 @@ pub enum SequenceState {
 }
 
 pub enum SequenceRecognizer {
-    Regex(Box<StackRecognizer<StateID, RecRx>>),
-    Cfg(Box<CfgParser>),
+    Llguidance(Box<llguidance::Constraint>),
     None,
 }
 
@@ -173,9 +169,6 @@ pub struct Sequence {
     // Image generation
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
     diffusion_params: Option<DiffusionGenerationParams>,
-
-    // Grammars
-    pub(crate) tok_trie: Option<TokTrie>,
 
     // Completion requests
     suffix: Option<String>,
@@ -283,7 +276,6 @@ impl Sequence {
         // Paged attention
         block_size: Option<usize>,
         //
-        tok_trie: Option<TokTrie>,
         tools: Option<Arc<ToolCallingMatcher>>,
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
@@ -348,7 +340,6 @@ impl Sequence {
             adapters,
             input_images,
             custom_metadata,
-            tok_trie,
             tools,
             image_gen_response_format,
             sequence_stepping_type,
@@ -778,7 +769,7 @@ impl Sequence {
 
 pub struct SequenceGroup {
     n_choices: usize, // The target number of choices to return. Can be decreased if an error is thrown.
-    best_of: usize,   // Top n seqs based on cumulative logprobs.
+    best_of: Option<usize>, // Top n seqs based on cumulative logprobs.
     pub total_prompt_toks: usize,
     pub total_toks: usize,
     pub total_prompt_time: u128,
@@ -795,7 +786,12 @@ pub struct SequenceGroup {
 }
 
 impl SequenceGroup {
-    pub fn new(n_choices: usize, is_streaming: bool, is_chat: bool, best_of: usize) -> Self {
+    pub fn new(
+        n_choices: usize,
+        is_streaming: bool,
+        is_chat: bool,
+        best_of: Option<usize>,
+    ) -> Self {
         Self {
             choices: Vec::new(),
             image_choices: Vec::new(),
@@ -815,21 +811,28 @@ impl SequenceGroup {
         }
     }
 
-    /// This does not apply best_of.
     pub fn get_choices(&self) -> &[Choice] {
         &self.choices
     }
 
-    /// This applies the best_of.
+    /// This may apply the best_of.
     pub fn get_completion_choices(&self) -> Vec<CompletionChoice> {
-        let mut choices = self.completion_choices.clone();
-        // Sort by descending logprobs
-        choices.sort_by(|a, b| b.0.partial_cmp(&a.0).expect("No ordering."));
-        choices
-            .into_iter()
-            .take(self.best_of)
-            .map(|(_, x)| x)
-            .collect::<Vec<_>>()
+        if let Some(best_of) = self.best_of {
+            let mut choices = self.completion_choices.clone();
+            // Sort by descending logprobs
+            choices.sort_by(|a, b| b.0.partial_cmp(&a.0).expect("No ordering."));
+            choices
+                .into_iter()
+                .take(best_of)
+                .map(|(_, x)| x)
+                .collect::<Vec<_>>()
+        } else {
+            self.completion_choices
+                .clone()
+                .into_iter()
+                .map(|(_, x)| x)
+                .collect::<Vec<_>>()
+        }
     }
 
     pub fn get_image_choices(&self) -> &[ImageChoice] {

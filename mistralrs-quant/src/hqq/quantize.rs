@@ -53,26 +53,13 @@ impl HqqLayer {
         }
 
         // We only support using optimization!
-        /*let (quant_w, scale, zero) = if let Some(optimization_steps) = cfg.optimization_steps {
-            let result = Self::optimize_weights_proximal_legacy(
-                &w,
-                &scale,
-                zero,
-                0.,
-                max_v,
-                cfg.axis,
-                OptParams::default(optimization_steps),
-            )?;
-            (result.wq, result.scale, result.zero)
-        } else {
-            (
-                w.broadcast_mul(&scale)?
-                    .broadcast_add(&zero)?
-                    .clamp(0., max_v)?,
-                scale,
-                zero,
-            )
-        };*/
+        // let (wq, scale, zero) = (
+        //         w.broadcast_mul(&scale)?
+        //             .broadcast_add(&zero)?
+        //             .clamp(0., max_v)?,
+        //         scale,
+        //         zero,
+        //     );
         let OptResults { wq, scale, zero } = Self::optimize_weights_proximal_legacy(
             &w,
             &scale,
@@ -113,7 +100,7 @@ mod test {
         let dev = Device::new_metal(0)?;
 
         let data = Tensor::rand(0f32, 1f32, (10, 10), &dev)?.to_dtype(DType::F32)?;
-        let hqq = HqqLayer::quantize(
+        let _hqq = HqqLayer::quantize(
             &data,
             &dev,
             HqqConfig {
@@ -126,12 +113,12 @@ mod test {
             },
         )?;
 
-        let dequant = hqq.dequantize()?;
-        println!("Initial:\n{data}");
-        println!("Dequantized:\n{dequant}");
+        // let dequant = hqq.dequantize()?;
+        // println!("Initial:\n{data}");
+        // println!("Dequantized:\n{dequant}");
         // println!("Difference:\n{}", (&dequant - &data)?.abs()?);
 
-        dbg!(&(&dequant - &data)?.abs()?.mean_all()?);
+        // dbg!(&(&dequant - &data)?.abs()?.mean_all()?);
         Ok(())
     }
 }

@@ -472,6 +472,9 @@ impl VisionModel for Qwen2VLModel {
     fn cache(&self) -> &EitherCache {
         &self.text.cache
     }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.text.cache
+    }
     fn device(&self) -> &Device {
         &self.text.device
     }
@@ -483,6 +486,20 @@ impl VisionModel for Qwen2VLModel {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
+    }
+    fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
+        assert_eq!(input_ids.dims()[0], 1);
+        Box::new(Qwen2VLVisionSpecificArgs {
+            input_ids_full: input_ids.clone(),
+            image_grid_thw: None,
+            video_grid_thw: None,
+            seqlens: vec![input_ids.dims()[1]],
+            continuous_img_pad: vec![],
+            continuous_vid_pad: vec![],
+            input_ids_searching: vec![vec![]; input_ids.dims()[0]],
+            image_nums: vec![0; input_ids.dims()[0]],
+            video_nums: vec![0; input_ids.dims()[0]],
+        })
     }
 }
 
