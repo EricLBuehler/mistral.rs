@@ -602,9 +602,9 @@ impl XLoraModel {
     ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
-                "Using {} quantization in {} bits.",
+                "Using {} quantization: {}.",
                 quant_cfg.quant_method.to_string(),
-                quant_cfg.bits
+                quant_cfg.get_bits_name(&vb)
             );
         }
         let mapper = normal_loading_metadata.mapper;
@@ -983,6 +983,9 @@ impl NormalModel for XLoraModel {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
+    }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

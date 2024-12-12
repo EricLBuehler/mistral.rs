@@ -216,7 +216,7 @@ impl Loader for DiffusionLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_trie: None,
+                tok_env: None,
                 is_xlora: false,
                 num_hidden_layers: 1, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
                 eos_tok: vec![],

@@ -48,6 +48,14 @@ pub enum TomlModelSelected {
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<PathBuf>,
+
+        /// .imatrix file to enhance GGUF quantizations with.
+        /// Incompatible with `--imatrix/-i`
+        imatrix: Option<PathBuf>,
+
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
+        /// Incompatible with `--imatrix/-i`
+        calibration_file: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -285,6 +293,9 @@ pub enum TomlModelSelected {
         /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
         /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
         max_edge: Option<u32>,
+
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
+        calibration_file: Option<PathBuf>,
     },
 }
 
@@ -379,6 +390,8 @@ fn loader_from_selected(
             organization,
             write_uqff,
             from_uqff,
+            imatrix,
+            calibration_file,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -387,6 +400,8 @@ fn loader_from_selected(
                 organization: organization.unwrap_or_default(),
                 write_uqff,
                 from_uqff,
+                imatrix,
+                calibration_file,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -411,6 +426,8 @@ fn loader_from_selected(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                imatrix: None,
+                calibration_file: None,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -443,6 +460,8 @@ fn loader_from_selected(
                 organization: Default::default(),
                 write_uqff,
                 from_uqff,
+                imatrix: None,
+                calibration_file: None,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -620,6 +639,7 @@ fn loader_from_selected(
             write_uqff,
             from_uqff,
             max_edge,
+            calibration_file,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -628,6 +648,7 @@ fn loader_from_selected(
                 write_uqff,
                 from_uqff,
                 max_edge,
+                calibration_file,
             },
             args.chat_template,
             args.tokenizer_json,

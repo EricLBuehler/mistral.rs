@@ -261,7 +261,8 @@ impl QuantMethod for GptqLayer {
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
-            | QuantMethodConfig::FP8 { .. } => {
+            | QuantMethodConfig::FP8 { .. }
+            | QuantMethodConfig::Bnb { .. } => {
                 unreachable!()
             }
         }
@@ -333,6 +334,7 @@ impl QuantMethod for GptqLayer {
         _dtype: Option<IsqType>,
         _device: Device,
         _n_quantized: &AtomicUsize,
+        _imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>> {
         candle_core::bail!("GPTQ quantization does not support ISQ.")
     }
@@ -370,7 +372,8 @@ pub fn gptq_linear(
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
 
-    let marlin_compatible = config.bits == 4 || config.bits == 8;
+    let bits = config.bits.expect("GPTQ requires bits in config");
+    let marlin_compatible = bits == 4 || bits == 8;
     let marlin_format = config
         .checkpoint_format
         .as_ref()
@@ -378,9 +381,9 @@ pub fn gptq_linear(
         && HAVE_MARLIN_KERNELS;
 
     let qw_shape = if marlin_format {
-        (in_dim / pack_factor!(config.bits) / 2, out_dim * 2)
+        (in_dim / pack_factor!(bits) / 2, out_dim * 2)
     } else {
-        (in_dim / pack_factor!(config.bits), out_dim)
+        (in_dim / pack_factor!(bits), out_dim)
     };
     let qweight = vb.get_with_hints_dtype(
         qw_shape,
@@ -388,7 +391,10 @@ pub fn gptq_linear(
         Default::default(),
         DType::I32,
     )?;
-    let scale_and_zero_size = in_dim / config.group_size;
+    let scale_and_zero_size = in_dim
+        / config
+            .group_size
+            .expect("GPTQ requires group size in config");
     let scales = vb.get_with_hints_dtype(
         (scale_and_zero_size, out_dim),
         if marlin_format { "s" } else { "scales" },
@@ -400,11 +406,11 @@ pub fn gptq_linear(
     } else {
         None
     };
-    let workspace = Tensor::zeros(out_dim / pack_factor!(config.bits), DType::U32, vb.device())?;
+    let workspace = Tensor::zeros(out_dim / pack_factor!(bits), DType::U32, vb.device())?;
 
     let config = if marlin_format {
         QuantMethodConfig::Gptq {
-            bits: config.bits as i32,
+            bits: bits as i32,
             use_exllama: false,
             q_weight: qweight,
             gptq_qzeros: None,
@@ -452,7 +458,7 @@ pub fn gptq_linear(
         }
 
         let qzeros = vb.get_with_hints_dtype(
-            (scale_and_zero_size, out_dim / pack_factor!(config.bits)),
+            (scale_and_zero_size, out_dim / pack_factor!(bits)),
             "qzeros",
             Default::default(),
             DType::I32,
@@ -466,7 +472,7 @@ pub fn gptq_linear(
 
         // Repack to marlin format
         let qweight = if marlin_compatible {
-            gptq_weight_repack(&qweight, &perm, in_dim, config.bits as i32)?
+            gptq_weight_repack(&qweight, &perm, in_dim, bits as i32)?
         } else {
             qweight
         };
@@ -474,10 +480,12 @@ pub fn gptq_linear(
         let scales = if marlin_compatible {
             marlin_permute_scales(
                 &scales,
-                in_dim / pack_factor!(config.bits),
+                in_dim / pack_factor!(bits),
                 out_dim,
-                config.group_size as i32,
-                config.bits as u32,
+                config
+                    .group_size
+                    .expect("GPTQ requires group size in config.") as i32,
+                bits as u32,
             )?
         } else {
             scales
@@ -489,7 +497,7 @@ pub fn gptq_linear(
         };
 
         QuantMethodConfig::Gptq {
-            bits: config.bits as i32,
+            bits: bits as i32,
             use_exllama: false,
             q_weight: qweight,
             gptq_qzeros: Some(qzeros),

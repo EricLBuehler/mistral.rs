@@ -13,7 +13,7 @@ use candle_core::{
 use candle_nn::Module;
 
 use crate::{
-    generate_isq,
+    generate_isq, generate_isq_imatrix,
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
@@ -38,7 +38,8 @@ impl QuantMethod for GgufMatMul {
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
-            | QuantMethodConfig::FP8 { .. } => unreachable!(),
+            | QuantMethodConfig::FP8 { .. }
+            | QuantMethodConfig::Bnb { .. } => unreachable!(),
         }
     }
 
@@ -109,6 +110,7 @@ impl QuantMethod for GgufMatMul {
         dtype: Option<IsqType>,
         device: Device,
         n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>> {
         if let Some(dtype) = dtype {
             let t = match &self.w {
@@ -116,7 +118,11 @@ impl QuantMethod for GgufMatMul {
                 QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
             };
             let dtype = dtype.try_into()?;
-            let res = generate_isq!(t, device, dtype, n_quantized);
+            let res = if let Some(imatrix_weight) = imatrix_weight {
+                generate_isq_imatrix!(t, imatrix_weight, device, dtype, n_quantized)
+            } else {
+                generate_isq!(t, device, dtype, n_quantized)
+            };
             Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                 q_weight: res,
                 b: self.b.clone(),

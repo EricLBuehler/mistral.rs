@@ -17,11 +17,11 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "8742354", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "6800496", optional = true }
 dirs = "5.0.1"
 hf-hub = { version = "0.3.3", package = "candle-hf-hub" }
 thiserror = "1.0.57"
-tokenizers = "0.20.3"
+tokenizers = "0.21.0"
 tqdm = "0.7.0"
 chrono = "0.4.34"
 minijinja = { version = "2.0.2", features = ["builtins", "json"] }
@@ -80,6 +80,9 @@ safetensors = "0.4.5"
 serde_plain = "1.0.2"
 as-any = "0.3.1"
 float8.workspace = true
+llguidance = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc", default-features = false, features = ["lark"] }
+toktrie_hf_tokenizers = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc" }
+
 
 [features]
 pyo3_macros = ["pyo3"]

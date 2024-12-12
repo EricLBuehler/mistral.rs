@@ -66,6 +66,16 @@ pub enum ModelSelected {
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
         from_uqff: Option<PathBuf>,
+
+        /// .imatrix file to enhance GGUF quantizations with.
+        /// Incompatible with `--calibration-file/-c`
+        #[arg(short, long)]
+        imatrix: Option<PathBuf>,
+
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
+        /// Incompatible with `--imatrix/-i`
+        #[arg(short, long)]
+        calibration_file: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -380,6 +390,10 @@ pub enum ModelSelected {
         /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
         #[arg(short = 'e', long)]
         max_edge: Option<u32>,
+
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
+        #[arg(short, long)]
+        calibration_file: Option<PathBuf>,
     },
 
     /// Select a diffusion plain model, without quantization or adapters

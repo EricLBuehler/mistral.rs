@@ -52,21 +52,16 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i vision-plain -m HuggingFaceTB/SmolVLM-Instruct -a idefics3
     ```
 
-- 🔥🧠 AnyMoE: Build a memory-efficient MoE model from anything, in seconds
-
-    ```
-    ./mistralrs-server -i toml -f toml-selectors/anymoe_lora.toml
-    ```
 - φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
 
     ```
     ./mistralrs-server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
     ```
 
-- 🌀 Run the Phi 3.5 MoE model with 128K context window: [documentation and guide here](docs/PHI3.5MOE.md)
+- 🧮 Enhance ISQ by collecting an imatrix from calibration data: [documentation](docs/IMATRIX.md)
 
     ```
-    ./mistralrs-server -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
+    ./mistralrs-server -i --isq Q4K plain -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
     ```
 
 - φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
@@ -94,8 +89,9 @@ Mistral.rs supports several model categories:
 **Easy**:
 - Lightweight OpenAI API compatible HTTP server
 - Python API
-- Grammar support with Regex and Yacc
+- Grammar support with JSON Schema, Regex, Lark, and Guidance via [LLGuidance library](https://github.com/microsoft/llguidance)
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
+    - Enhance performance with an [imatrix](docs/IMATRIX.md)!
 
 **Fast**:
 - Apple silicon support: ARM NEON, Accelerate, Metal
@@ -105,9 +101,11 @@ Mistral.rs supports several model categories:
 
 **Quantization**:
 - [Details](docs/QUANTS.md)
-- GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with ISQ support.
+- GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with imatrix support
 - GPTQ: 2-bit, 3-bit, 4-bit and 8-bit, with [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
 - HQQ: 4-bit and 8 bit, with ISQ support
+- FP8
+- BNB: bitsandbytes int8, fp4, nf4 support
 
 **Powerful**:
 - LoRA support with weight merging
@@ -214,8 +212,6 @@ Enabling features is done by passing `--features ...` to the build system. When 
 
 > Note: You can use our [Docker containers here](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs).
 > Learn more about running Docker containers: https://docs.docker.com/engine/reference/run/
-
-> Note: You can use pre-built `mistralrs-server` binaries [here](https://github.com/EricLBuehler/mistral.rs/releases/tag/v0.3.1)
 
 - Install the [Python package here](mistralrs-pyo3/_README.md).
 - The Python package has [wheels on PyPi](mistralrs-pyo3/_README.md#installation-from-pypi)!
@@ -608,6 +604,8 @@ If you want to add a new model, please contact us via an issue and we can coordi
     - Set the `CUDA_NVCC_FLAGS` environment variable to `-fPIE` during build: `CUDA_NVCC_FLAGS=-fPIE`
 - Error `CUDA_ERROR_NOT_FOUND` or symbol not found when using a normal or vison model:
     - For non-quantized models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device.
+- What is the minimum supported CUDA compute cap?
+    - The minimum CUDA compute cap is **5.3**.
 
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
