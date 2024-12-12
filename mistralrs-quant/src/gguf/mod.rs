@@ -43,6 +43,10 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
+    fn dequantize_w(&self) -> Result<Tensor> {
+        self.w.dequantize_f16()?.to_dtype(DType::F32)
+    }
+
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         let x = self.w.forward(a)?;
         if let Some(ref b) = self.b {

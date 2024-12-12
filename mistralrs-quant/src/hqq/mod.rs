@@ -560,6 +560,10 @@ impl QuantMethod for HqqLayer {
         }
     }
 
+    fn dequantize_w(&self) -> Result<Tensor> {
+        self.dequantize()
+    }
+
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         /*
         if self.cfg.force_dequantize {

@@ -268,6 +268,11 @@ impl QuantMethod for GptqLayer {
         }
     }
 
+    fn dequantize_w(&self) -> Result<Tensor> {
+        // TODO
+        candle_core::bail!("GptqLayer cannot be dequantized!");
+    }
+
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         // https://github.com/vllm-project/vllm/blob/ba991d5c84adbc0685075af88333c688ddb06011/vllm/model_executor/layers/quantization/gptq.py#L200
         let out_shape = Shape::from_dims(

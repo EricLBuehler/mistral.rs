@@ -27,6 +27,10 @@ impl QuantMethod for GptqLayer {
         }
     }
 
+    fn dequantize_w(&self) -> Result<Tensor> {
+        todo!()
+    }
+
     fn forward(&self, _a: &Tensor) -> Result<Tensor> {
         todo!()
     }
