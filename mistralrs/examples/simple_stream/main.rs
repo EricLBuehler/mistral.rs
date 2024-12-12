@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     let mut buf = std::io::BufWriter::new(lock);
     while let Some(chunk) = stream.next().await {
         if let Response::Chunk(chunk) = chunk {
-            buf.write(chunk.choices[0].delta.content.as_bytes())?;
+            buf.write_all(chunk.choices[0].delta.content.as_bytes())?;
         } else {
             // Handle errors
         }

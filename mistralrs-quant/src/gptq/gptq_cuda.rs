@@ -268,6 +268,11 @@ impl QuantMethod for GptqLayer {
         }
     }
 
+    fn dequantize_w(&self) -> Result<Tensor> {
+        // TODO
+        candle_core::bail!("GptqLayer cannot be dequantized!");
+    }
+
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         // https://github.com/vllm-project/vllm/blob/ba991d5c84adbc0685075af88333c688ddb06011/vllm/model_executor/layers/quantization/gptq.py#L200
         let out_shape = Shape::from_dims(
@@ -341,6 +346,10 @@ impl QuantMethod for GptqLayer {
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
+    }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
     }
 }
 

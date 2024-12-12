@@ -45,6 +45,10 @@ impl QuantMethod for UnquantLinear {
         }
     }
 
+    fn dequantize_w(&self) -> Result<Tensor> {
+        Ok(self.w.clone())
+    }
+
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper();
@@ -268,6 +272,10 @@ impl QuantMethod for UnquantLinear {
         } else {
             candle_core::bail!("`{}` does not support tracking stats.", self.name())
         }
+    }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
     }
 }
 
