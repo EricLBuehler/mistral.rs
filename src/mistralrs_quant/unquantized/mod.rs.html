@@ -346,7 +346,15 @@
 <a href="#345" id="345">345</a>
 <a href="#346" id="346">346</a>
 <a href="#347" id="347">347</a>
-<a href="#348" id="348">348</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
     num::NonZeroUsize,
@@ -391,6 +399,10 @@
                 stats: <span class="prelude-val">None</span>,
             }),
         }
+    }
+
+    <span class="kw">fn </span>dequantize_w(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.w.clone())
     }
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -616,6 +628,10 @@
         } <span class="kw">else </span>{
             <span class="macro">candle_core::bail!</span>(<span class="string">"`{}` does not support tracking stats."</span>, <span class="self">self</span>.name())
         }
+    }
+
+    <span class="kw">fn </span>maybe_to_gguf_quant(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.clone())
     }
 }
 

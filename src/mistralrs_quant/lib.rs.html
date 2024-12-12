@@ -355,7 +355,24 @@
 <a href="#354" id="354">354</a>
 <a href="#355" id="355">355</a>
 <a href="#356" id="356">356</a>
-<a href="#357" id="357">357</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
@@ -588,6 +605,20 @@
     <span class="kw">where
         </span><span class="self">Self</span>: Sized;
 
+    <span class="kw">fn </span>dequantize_w(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
+
+    <span class="doccomment">/// Compute matmul of `self` and `a`. `self` should contain the weights.
+    /// Automatically cast to required quantization actiation type and back
+    </span><span class="kw">fn </span>forward_autocast(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span>original_ty = a.dtype();
+        <span class="kw">let </span>a = <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.quantized_act_type() {
+            a.to_dtype(t)<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            a.clone()
+        };
+        <span class="self">self</span>.forward(<span class="kw-2">&amp;</span>a)<span class="question-mark">?</span>.to_dtype(original_ty)
+    }
+
     <span class="doccomment">/// Compute matmul of `self` and `a`. `self` should contain the weights.
     </span><span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
 
@@ -614,6 +645,9 @@
         n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
         imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
+
+    <span class="doccomment">/// Convert to an equivalent gguf quantization, if applicable.
+    </span><span class="kw">fn </span>maybe_to_gguf_quant(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
 
     <span class="doccomment">/// If the quant is backed by a qmatmul.
     </span><span class="kw">fn </span>get_bias_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>Tensor&gt;;
@@ -680,7 +714,7 @@
         <span class="kw">match </span>quant_conf.quant_method {
             QuantMethodType::Gptq =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
             QuantMethodType::Bitsandbytes =&gt; {
-                Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">false</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">true</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
             }
             QuantMethodType::Unreachable =&gt; <span class="macro">unreachable!</span>(),
         }

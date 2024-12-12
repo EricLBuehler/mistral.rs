@@ -311,7 +311,15 @@
 <a href="#310" id="310">310</a>
 <a href="#311" id="311">311</a>
 <a href="#312" id="312">312</a>
-<a href="#313" id="313">313</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::{Cursor, Read},
     num::NonZeroUsize,
@@ -354,6 +362,10 @@
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. } =&gt; <span class="macro">unreachable!</span>(),
         }
+    }
+
+    <span class="kw">fn </span>dequantize_w(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="self">self</span>.w.dequantize_f16()<span class="question-mark">?</span>.to_dtype(DType::F32)
     }
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -461,6 +473,10 @@
     <span class="kw">fn </span>get_max_isq_cpu_threads(<span class="kw-2">&amp;</span><span class="self">self</span>, _dtype: IsqType) -&gt; <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt; {
         <span class="prelude-val">None
     </span>}
+
+    <span class="kw">fn </span>maybe_to_gguf_quant(<span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.clone())
+    }
 }
 
 <span class="comment">// Serialization structure:
