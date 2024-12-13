@@ -302,7 +302,7 @@ impl Sdpa {
 
                     let context_layer = cublaslt.batch_matmul(
                         &v.t()?.contiguous()?,
-                        &attention_probs,
+                        &attention_scores,
                         // We save one allocation
                         Some(&q),
                         None,
