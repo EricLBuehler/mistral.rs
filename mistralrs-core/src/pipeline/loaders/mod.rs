@@ -377,7 +377,7 @@ impl ModelKind {
 ///     None,
 /// ).unwrap();
 /// ```
-pub trait Loader {
+pub trait Loader: Send + Sync {
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
     /// If model is not found on HF, will attempt to resolve locally.
