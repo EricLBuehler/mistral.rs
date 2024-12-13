@@ -58,7 +58,7 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any>;
 }
 
-pub trait VisionModelLoader: IsqModelLoader {
+pub trait VisionModelLoader: IsqModelLoader + Send + Sync {
     fn load(
         &self,
         config: &str,

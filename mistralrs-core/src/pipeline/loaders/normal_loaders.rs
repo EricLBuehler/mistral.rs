@@ -87,7 +87,7 @@ pub struct NormalLoadingMetadata {
     pub real_device: Device,
 }
 
-pub trait NormalModelLoader: IsqModelLoader {
+pub trait NormalModelLoader: IsqModelLoader + Send + Sync {
     fn load(
         &self,
         config: &str,

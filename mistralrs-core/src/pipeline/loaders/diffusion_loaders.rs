@@ -45,7 +45,7 @@ pub trait DiffusionModel {
     fn max_seq_len(&self) -> usize;
 }
 
-pub trait DiffusionModelLoader {
+pub trait DiffusionModelLoader: Send + Sync {
     /// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
     fn get_model_paths(&self, api: &ApiRepo, model_id: &Path) -> Result<Vec<PathBuf>>;
     /// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.

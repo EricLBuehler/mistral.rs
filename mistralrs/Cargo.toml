@@ -150,3 +150,7 @@ required-features = []
 [[example]]
 name = "imatrix"
 required-features = []
+
+[[example]]
+name = "async"
+required-features = []
