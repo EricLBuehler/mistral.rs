@@ -794,7 +794,7 @@
 ///     None,
 /// ).unwrap();
 /// ```
-</span><span class="kw">pub trait </span>Loader {
+</span><span class="kw">pub trait </span>Loader: Send + Sync {
     <span class="doccomment">/// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
     /// If model is not found on HF, will attempt to resolve locally.

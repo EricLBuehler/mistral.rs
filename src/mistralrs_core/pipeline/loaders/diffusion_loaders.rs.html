@@ -253,7 +253,7 @@
     <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
 }
 
-<span class="kw">pub trait </span>DiffusionModelLoader {
+<span class="kw">pub trait </span>DiffusionModelLoader: Send + Sync {
     <span class="doccomment">/// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
     </span><span class="kw">fn </span>get_model_paths(<span class="kw-2">&amp;</span><span class="self">self</span>, api: <span class="kw-2">&amp;</span>ApiRepo, model_id: <span class="kw-2">&amp;</span>Path) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;PathBuf&gt;&gt;;
     <span class="doccomment">/// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
