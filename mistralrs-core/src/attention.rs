@@ -180,6 +180,17 @@ fn naive_sdpa(
             1. / (head_dim as f32).sqrt(),
         )?;
         MatMul.matmul(&att, v)
+    } else if let Some(mask) = mask {
+        let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
+        if let Some(softcap) = sdpa_params.softcap {
+            att = (att / softcap as f64)?;
+            att = att.tanh()?;
+            att = (att * softcap as f64)?;
+        }
+
+        att = att.broadcast_add(mask)?;
+        candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
+        MatMul.matmul(&att, v)
     } else {
         let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
         if let Some(softcap) = sdpa_params.softcap {
@@ -188,10 +199,6 @@ fn naive_sdpa(
             att = (att * softcap as f64)?;
         }
 
-        att = match mask {
-            Some(m) => att.broadcast_add(m)?,
-            None => att,
-        };
         candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
         MatMul.matmul(&att, v)
     }
@@ -291,7 +298,7 @@ impl Sdpa {
                     if let Some(softcap) = sdpa_params.softcap {
                         attention_scores = (attention_scores.tanh()? * softcap as f64)?;
                     }
-                    let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+                    candle_nn::ops::inplace_softmax_last_dim(&mut attention_scores)?;
 
                     let context_layer = cublaslt.batch_matmul(
                         &v.t()?.contiguous()?,
