@@ -1353,7 +1353,7 @@
                         vb.pp(<span class="macro">format!</span>(<span class="string">"layers.{i}"</span>)),
                         <span class="kw-2">&amp;*</span>mapper,
                         i,
-                        normal_loading_metadata.loading_isq,
+                        <span class="bool-val">false</span>,
                     )<span class="question-mark">?</span>,
                 ))
             } <span class="kw">else </span>{
@@ -1468,15 +1468,15 @@
         <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
             <span class="kw">match </span>layer {
-                MLlamaDecoderLayer::CrossAttn(cross) =&gt; {
-                    tensors.push((<span class="kw-2">&amp;mut </span>cross.attn.q_proj, <span class="prelude-val">Some</span>(i)));
-                    tensors.push((<span class="kw-2">&amp;mut </span>cross.attn.k_proj, <span class="prelude-val">Some</span>(i)));
-                    tensors.push((<span class="kw-2">&amp;mut </span>cross.attn.v_proj, <span class="prelude-val">Some</span>(i)));
-                    tensors.push((<span class="kw-2">&amp;mut </span>cross.attn.o_proj, <span class="prelude-val">Some</span>(i)));
-                    tensors.push((<span class="kw-2">&amp;mut </span>cross.mlp.gate_proj, <span class="prelude-val">Some</span>(i)));
-                    tensors.push((<span class="kw-2">&amp;mut </span>cross.mlp.up_proj, <span class="prelude-val">Some</span>(i)));
-                    tensors.push((<span class="kw-2">&amp;mut </span>cross.mlp.down_proj, <span class="prelude-val">Some</span>(i)));
-                }
+                MLlamaDecoderLayer::CrossAttn(_cross) =&gt; {
+                    <span class="comment">// tensors.push((&amp;mut cross.attn.q_proj, Some(i)));
+                    // tensors.push((&amp;mut cross.attn.k_proj, Some(i)));
+                    // tensors.push((&amp;mut cross.attn.v_proj, Some(i)));
+                    // tensors.push((&amp;mut cross.attn.o_proj, Some(i)));
+                    // tensors.push((&amp;mut cross.mlp.gate_proj, Some(i)));
+                    // tensors.push((&amp;mut cross.mlp.up_proj, Some(i)));
+                    // tensors.push((&amp;mut cross.mlp.down_proj, Some(i)));
+                </span>}
                 MLlamaDecoderLayer::SelfAttn(self_attn) =&gt; {
                     tensors.push((<span class="kw-2">&amp;mut </span>self_attn.attn.q_proj, <span class="prelude-val">Some</span>(i)));
                     tensors.push((<span class="kw-2">&amp;mut </span>self_attn.attn.k_proj, <span class="prelude-val">Some</span>(i)));

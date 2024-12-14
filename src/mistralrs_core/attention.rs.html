@@ -320,7 +320,26 @@
 <a href="#319" id="319">319</a>
 <a href="#320" id="320">320</a>
 <a href="#321" id="321">321</a>
-<a href="#322" id="322">322</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -484,23 +503,46 @@
     </span><span class="kw">if </span>mask.is_some_and(|mask| mask.rank() == <span class="number">2 </span>|| (mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1</span>))
         &amp;&amp; supports_attn_softmax
     {
-        <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>n_attn_heads = q.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>bs = q.dim(<span class="number">0</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>attention_bias = <span class="kw">match </span>mask {
+            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1 </span>=&gt; {
+                mask.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.repeat((bs, n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?
+            </span>}
+            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>=&gt; mask.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>,
+            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">2 </span>=&gt; {
+                mask.unsqueeze(<span class="number">0</span>)<span class="question-mark">?
+                    </span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?
+                    </span>.repeat((bs, n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?
+            </span>}
+            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">4 </span>=&gt; mask.clone(),
+            <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"unsupported mask {mask:?}"</span>),
+        };
+        <span class="kw">let </span><span class="kw-2">mut </span>att = attention_bias;
+
+        q.matmul_with_alpha_beta(
+            <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;mut </span>att,
+            <span class="prelude-val">Some</span>((sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(<span class="number">1.0</span>)) <span class="kw">as </span>f64),
+        )<span class="question-mark">?</span>;
+
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
+            att = (att.tanh()<span class="question-mark">? </span>* softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
+        }
+
+        candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>att)<span class="question-mark">?</span>;
+
+        MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
+    } <span class="kw">else if let </span><span class="prelude-val">Some</span>(mask) = mask {
+        <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul_affine_div(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, (head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
             att = (att / softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
             att = att.tanh()<span class="question-mark">?</span>;
             att = (att * softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>mask = <span class="kw">match </span>mask {
-            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dim(<span class="number">0</span>)<span class="question-mark">? </span>== <span class="number">1 </span>=&gt; mask.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>,
-            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">2 </span>=&gt; mask.clone(),
-            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
-        };
-        candle_nn::ops::inplace_attn_softmax_last_dim(
-            <span class="kw-2">&amp;mut </span>att,
-            <span class="kw-2">&amp;</span>mask,
-            <span class="number">1. </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
-        )<span class="question-mark">?</span>;
+        att = att.broadcast_add(mask)<span class="question-mark">?</span>;
+        candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>att)<span class="question-mark">?</span>;
         MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
     } <span class="kw">else </span>{
         <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul_affine_div(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, (head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
@@ -510,10 +552,6 @@
             att = (att * softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
         }
 
-        att = <span class="kw">match </span>mask {
-            <span class="prelude-val">Some</span>(m) =&gt; att.broadcast_add(m)<span class="question-mark">?</span>,
-            <span class="prelude-val">None </span>=&gt; att,
-        };
         candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>att)<span class="question-mark">?</span>;
         MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
     }
@@ -613,11 +651,11 @@
                     <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
                         attention_scores = (attention_scores.tanh()<span class="question-mark">? </span>* softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
                     }
-                    <span class="kw">let </span>attention_probs = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attention_scores)<span class="question-mark">?</span>;
+                    candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>attention_scores)<span class="question-mark">?</span>;
 
                     <span class="kw">let </span>context_layer = cublaslt.batch_matmul(
                         <span class="kw-2">&amp;</span>v.t()<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
-                        <span class="kw-2">&amp;</span>attention_probs,
+                        <span class="kw-2">&amp;</span>attention_scores,
                         <span class="comment">// We save one allocation
                         </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>q),
                         <span class="prelude-val">None</span>,

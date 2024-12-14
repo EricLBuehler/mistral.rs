@@ -685,7 +685,58 @@
 <a href="#684" id="684">684</a>
 <a href="#685" id="685">685</a>
 <a href="#686" id="686">686</a>
-<a href="#687" id="687">687</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#687" id="687">687</a>
+<a href="#688" id="688">688</a>
+<a href="#689" id="689">689</a>
+<a href="#690" id="690">690</a>
+<a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -1196,21 +1247,72 @@
 }
 
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>VLlamaLoader {
-    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
-            <span class="comment">// Attention
-            </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-            <span class="comment">// MLP text
-            </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+        <span class="kw">let </span>config: MLlamaConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cross_attn_layers = <span class="kw-2">&amp;</span>config.text_config.cross_attention_layers;
+        <span class="kw">let </span>transformer_layers =
+            (<span class="number">0</span>..config.text_config.num_hidden_layers).filter(|i| !cross_attn_layers.contains(i));
+        <span class="kw">let </span><span class="kw-2">mut </span>text_regexes = Vec::new();
+        <span class="kw">for </span>layer <span class="kw">in </span>transformer_layers {
+            text_regexes.extend(<span class="macro">vec!</span>[
+                <span class="comment">// Attention text
+                </span>Regex::new(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+                    <span class="string">r"language_model.model.layers\.{layer}\.self_attn\.q_proj\.(weight|bias)$"
+                </span>))<span class="question-mark">?</span>,
+                Regex::new(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+                    <span class="string">r"language_model.model.layers\.{layer}\.self_attn\.k_proj\.(weight|bias)$"
+                </span>))<span class="question-mark">?</span>,
+                Regex::new(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+                    <span class="string">r"language_model.model.layers\.{layer}\.self_attn\.v_proj\.(weight|bias)$"
+                </span>))<span class="question-mark">?</span>,
+                Regex::new(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+                    <span class="string">r"language_model.model.layers\.{layer}\.self_attn\.o_proj\.(weight|bias)$"
+                </span>))<span class="question-mark">?</span>,
+                <span class="comment">// MLP text
+                </span>Regex::new(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+                    <span class="string">r"language_model.model.layers\.{layer}\.mlp\.gate_proj\.(weight|bias)$"
+                </span>))<span class="question-mark">?</span>,
+                Regex::new(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+                    <span class="string">r"language_model.model.layers\.{layer}\.mlp\.up_proj\.(weight|bias)$"
+                </span>))<span class="question-mark">?</span>,
+                Regex::new(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+                    <span class="string">r"language_model.model.layers\.{layer}\.mlp\.down_proj\.(weight|bias)$"
+                </span>))<span class="question-mark">?</span>,
+            ]);
+        }
+        <span class="kw">let </span>vision_regexes = <span class="macro">vec!</span>[
+            <span class="comment">// Vision attention (transformer)
+            </span>Regex::new(
+                <span class="string">r"vision_model.transformer.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>,
+            )<span class="question-mark">?</span>,
+            Regex::new(
+                <span class="string">r"vision_model.transformer.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>,
+            )<span class="question-mark">?</span>,
+            Regex::new(
+                <span class="string">r"vision_model.transformer.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>,
+            )<span class="question-mark">?</span>,
+            Regex::new(
+                <span class="string">r"vision_model.transformer.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>,
+            )<span class="question-mark">?</span>,
+            <span class="comment">// Vision attention (global transforemr)
+            </span>Regex::new(
+                <span class="string">r"vision_model.global_transformer.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>,
+            )<span class="question-mark">?</span>,
+            Regex::new(
+                <span class="string">r"vision_model.global_transformer.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>,
+            )<span class="question-mark">?</span>,
+            Regex::new(
+                <span class="string">r"vision_model.global_transformer.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>,
+            )<span class="question-mark">?</span>,
+            Regex::new(
+                <span class="string">r"vision_model.global_transformer.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>,
+            )<span class="question-mark">?</span>,
             <span class="comment">// MLP vision
             </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.fc2\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
-        ])
+        ];
+
+        <span class="prelude-val">Ok</span>([text_regexes, vision_regexes].concat())
     }
 }
 
