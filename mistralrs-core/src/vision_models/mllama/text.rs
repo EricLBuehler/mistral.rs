@@ -583,7 +583,7 @@ impl MLlamaTextModel {
                         vb.pp(format!("layers.{i}")),
                         &*mapper,
                         i,
-                        normal_loading_metadata.loading_isq,
+                        false,
                     )?,
                 ))
             } else {
@@ -698,14 +698,14 @@ impl IsqModel for MLlamaTextModel {
         let mut tensors = Vec::new();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             match layer {
-                MLlamaDecoderLayer::CrossAttn(cross) => {
-                    tensors.push((&mut cross.attn.q_proj, Some(i)));
-                    tensors.push((&mut cross.attn.k_proj, Some(i)));
-                    tensors.push((&mut cross.attn.v_proj, Some(i)));
-                    tensors.push((&mut cross.attn.o_proj, Some(i)));
-                    tensors.push((&mut cross.mlp.gate_proj, Some(i)));
-                    tensors.push((&mut cross.mlp.up_proj, Some(i)));
-                    tensors.push((&mut cross.mlp.down_proj, Some(i)));
+                MLlamaDecoderLayer::CrossAttn(_cross) => {
+                    // tensors.push((&mut cross.attn.q_proj, Some(i)));
+                    // tensors.push((&mut cross.attn.k_proj, Some(i)));
+                    // tensors.push((&mut cross.attn.v_proj, Some(i)));
+                    // tensors.push((&mut cross.attn.o_proj, Some(i)));
+                    // tensors.push((&mut cross.mlp.gate_proj, Some(i)));
+                    // tensors.push((&mut cross.mlp.up_proj, Some(i)));
+                    // tensors.push((&mut cross.mlp.down_proj, Some(i)));
                 }
                 MLlamaDecoderLayer::SelfAttn(self_attn) => {
                     tensors.push((&mut self_attn.attn.q_proj, Some(i)));
