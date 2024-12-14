@@ -387,6 +387,7 @@ impl MLlamaVisionEncoder {
                 hidden_states.push(hidden_state.clone());
             }
             hidden_state = layer.forward(&hidden_state, attention_mask)?;
+            hidden_state.device().synchronize()?;
         }
         Ok((hidden_state, hidden_states))
     }
