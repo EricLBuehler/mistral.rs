@@ -387,7 +387,9 @@ impl MLlamaVisionEncoder {
                 hidden_states.push(hidden_state.clone());
             }
             hidden_state = layer.forward(&hidden_state, attention_mask)?;
-            hidden_state.device().synchronize()?;
+            if hidden_state.device().is_metal() {
+                hidden_state.device().synchronize()?;
+            }
         }
         Ok((hidden_state, hidden_states))
     }
@@ -611,6 +613,11 @@ impl MLlamaVisionModel {
             hidden_state.dtype(),
             self.num_attn_heads,
         )?;
+        if attention_mask.device().is_cuda() {
+            attention_mask = attention_mask
+                .unsqueeze(1)?
+                .repeat((1, self.num_attn_heads, 1, 1))?;
+        }
 
         // Apply encoder
         hidden_state = hidden_state.reshape((bs * num_concurrent_media, (), dim))?;
