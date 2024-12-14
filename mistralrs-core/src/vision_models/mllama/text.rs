@@ -583,7 +583,7 @@ impl MLlamaTextModel {
                         vb.pp(format!("layers.{i}")),
                         &*mapper,
                         i,
-                        false
+                        false,
                     )?,
                 ))
             } else {
