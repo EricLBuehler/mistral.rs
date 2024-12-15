@@ -1,6 +1,6 @@
 # In situ quantization
 
-In situ quantization works by quantizing non GGUF or GGML models in-place. This allows you to take advantage of flash attention, and reduces memory footprint when running the model. Currently, all layers which would be `Linear` are able to be quantized.
+In situ quantization works by quantizing models inplace, with the chief benefit being reduced memory footprint when running the model. This enables larger model to be run on devices which would not fit the full weights, and may increase model inference performance.
 
 An API is exposed on the Python and Rust APIs which provide the ability to dynamically re-ISQ models at runtime.
 
