@@ -4,7 +4,7 @@ use candle_core::{Result, Tensor, D};
 
 use crate::{get_mut_arcmutex, sequence::Sequence};
 
-use super::{CacheManagerMixin, MetadataMixin};
+use super::{quantized_cache::QuantizedCache, CacheManagerMixin, MetadataMixin};
 
 pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
     fn clone_in_cache(
@@ -28,6 +28,7 @@ pub type LayerCaches = Vec<Option<(Tensor, Tensor)>>;
 #[derive(Debug, Clone)]
 pub enum EitherCache {
     Normal(Arc<Mutex<NormalCache>>),
+    Quantized(Arc<Mutex<QuantizedCache>>),
     Full(Cache),
 }
 
@@ -37,6 +38,7 @@ impl EitherCache {
         match self {
             Self::Full(full) => full,
             Self::Normal(_) => panic!("Got normal cache, expected full cache."),
+            Self::Quantized(_) => panic!("Got quantized cache, expected full cache."),
         }
     }
     /// Panics otherwise!
@@ -44,6 +46,15 @@ impl EitherCache {
         match self {
             Self::Normal(normal) => normal.lock().unwrap(),
             Self::Full(_) => panic!("Got full cache, expected normal cache."),
+            Self::Quantized(_) => panic!("Got quantized cache, expected normal cache."),
+        }
+    }
+    /// Panics otherwise!
+    pub fn quantized(&self) -> MutexGuard<'_, QuantizedCache> {
+        match self {
+            Self::Quantized(quantized) => quantized.lock().unwrap(),
+            Self::Full(_) => panic!("Got full cache, expected quantized cache."),
+            Self::Normal(_) => panic!("Got normal cache, expected quantized cache."),
         }
     }
 }

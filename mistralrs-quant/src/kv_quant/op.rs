@@ -345,7 +345,6 @@ pub fn dequantize_4bit(qs: &Tensor, out_ty: DType) -> Result<Tensor> {
 mod metal_tests {
     use candle_core::{DType, Device, Tensor};
 
-    /// Calculates the root mean square error between two vectors
     fn rmse(a: &[f32], b: &[f32]) -> f32 {
         assert_eq!(a.len(), b.len());
         let sum = a
