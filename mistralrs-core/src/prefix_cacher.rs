@@ -1,11 +1,15 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::{hash_map, HashMap},
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{Device, Result, Tensor};
 use radix_trie::{Trie, TrieCommon, TrieKey};
 
 use crate::{get_mut_arcmutex, pipeline::LayerCaches, sequence::Sequence};
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 struct Tokens(Vec<u32>);
 
 impl TrieKey for Tokens {
@@ -51,6 +55,192 @@ impl PrefixCacheManager {
             no_prefix_cache,
             eviction_cache_ptrs: Vec::new(),
         }
+    }
+
+    fn save_layer_caches<'a>(
+        file: impl AsRef<Path>,
+        caches: impl Iterator<Item = (&'a Tokens, &'a Arc<Mutex<LayerCaches>>)>,
+    ) -> Result<()> {
+        let mut tensor_map = HashMap::new();
+        for (toks, kvs) in caches {
+            let mut ks = Vec::new();
+            let mut vs = Vec::new();
+            // Really, we only have Some variants. This is just for the type system.
+            let kvs = get_mut_arcmutex!(kvs)
+                .iter()
+                .filter_map(|x| x.clone())
+                .collect::<Vec<_>>();
+            for (k, v) in kvs {
+                ks.push(k.to_device(&Device::Cpu)?);
+                vs.push(v.to_device(&Device::Cpu)?);
+            }
+
+            let k = Tensor::stack(&ks, 0)?;
+            let v = Tensor::stack(&vs, 0)?;
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            let repr = toks
+                .0
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(";");
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            tensor_map.insert(format!("K:{repr}"), k);
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            tensor_map.insert(format!("V:{repr}"), v);
+        }
+        candle_core::safetensors::save(&tensor_map, file)
+    }
+
+    /// Save the prefix cache to the specified file (including X-LoRA if applicable)
+    /// Example of file: `prefix_cache.safetensors`
+    /// This function will save the content at the paths:
+    /// - `prefix_cache.safetensors.{model_id}`
+    /// - If X-LoRA: `prefix_cache.safetensors.{model_id}.xlora`
+    pub fn save_to_file(&self, file: impl AsRef<Path>, model_id: String) -> Result<()> {
+        let file = file.as_ref().to_string_lossy().to_string();
+        // NOTE(EricLBuehler): changing this format is a *breaking change*
+        let formatted_file = format!("{file}.{model_id}");
+        Self::save_layer_caches(formatted_file.clone(), self.caches.iter())?;
+
+        if self.xlora_caches.is_some() {
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            let formatted_file_xlora = format!("{formatted_file}.xlora");
+            Self::save_layer_caches(
+                formatted_file_xlora,
+                self.xlora_caches.as_ref().unwrap().iter(),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn load_layer_caches(
+        file: impl AsRef<Path>,
+        device: Device,
+        n_on_device: usize,
+    ) -> Result<(
+        Trie<Tokens, Arc<Mutex<LayerCaches>>>,
+        Vec<EvictionCacheGroup>,
+    )> {
+        let map = candle_core::safetensors::load(file, &Device::Cpu)?;
+        // Contains (k,v) tensors which are stacked along dim0 on the layer length.
+        let mut shards = HashMap::new();
+        for (name, tensor) in map {
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            let parts = name.splitn(2, ':').collect::<Vec<_>>();
+            let ty = parts[0];
+            let toks = parts[1]
+                .split(':')
+                .map(|x| x.parse::<u32>().expect("Failed to parse token"))
+                .collect::<Vec<_>>();
+            if shards
+                .get(&toks)
+                .is_some_and(|x: &(Option<Tensor>, Option<Tensor>)| x.0.is_some())
+            {
+                // NOTE(EricLBuehler): changing this format is a *breaking change*
+                // Add V
+                assert_eq!(ty, "V");
+                shards.get_mut(&toks).unwrap().1 = Some(tensor);
+            } else if shards
+                .get(&toks)
+                .is_some_and(|x: &(Option<Tensor>, Option<Tensor>)| x.0.is_some())
+            {
+                // NOTE(EricLBuehler): changing this format is a *breaking change*
+                // Add K
+                assert_eq!(ty, "K");
+                shards.get_mut(&toks).unwrap().0 = Some(tensor);
+            } else if let hash_map::Entry::Vacant(e) = shards.entry(toks) {
+                // NOTE(EricLBuehler): changing this format is a *breaking change*
+                if ty == "K" {
+                    e.insert((Some(tensor), None));
+                } else if ty == "V" {
+                    e.insert((None, Some(tensor)));
+                } else {
+                    panic!("Got unexpected KV shard type {ty}");
+                }
+            } else {
+                unreachable!()
+            }
+        }
+        let mut trie = Trie::new();
+        let mut eviction_cache_ptrs = Vec::new();
+        let mut n_prefixes = 0;
+        for (toks, (k, v)) in shards {
+            n_prefixes += 1;
+            let dev = if n_prefixes <= n_on_device {
+                device.clone()
+            } else {
+                Device::Cpu
+            };
+            let k = k.unwrap();
+            let v = v.unwrap();
+            let ks = k
+                .chunk(k.dim(0)?, 0)?
+                .iter()
+                .map(|x| x.squeeze(0))
+                .collect::<Result<Vec<_>>>()?;
+            let vs = v
+                .chunk(k.dim(0)?, 0)?
+                .iter()
+                .map(|x| x.squeeze(0))
+                .collect::<Result<Vec<_>>>()?;
+            let mut layer_caches = Vec::new();
+            for (k, v) in ks.into_iter().zip(vs) {
+                layer_caches.push(Some((k.to_device(&dev)?, v.to_device(&dev)?)));
+            }
+            let layer_caches = Arc::new(Mutex::new(layer_caches));
+            trie.insert(Tokens(toks), layer_caches.clone());
+            eviction_cache_ptrs.push((layer_caches, None));
+        }
+        Ok((trie, eviction_cache_ptrs))
+    }
+
+    /// Create a prefix cache manager from prefixes in a .safetensor file, extending the current state.
+    ///
+    /// The file must have been
+    /// - Saved with `PrefixCacheManager::save_to_file`.
+    /// - Saved with a version of `mistral.rs` to which the current version is backwards compatible
+    ///
+    /// For example, if you save pass `save_to_file` the file `prefix_cache.safetensors`, you should also pass
+    /// this function `prefix_cache.safetensors.`
+    /// This function expects content at the paths:
+    /// - `prefix_cache.safetensors.{model_id}`
+    /// - If X-LoRA: `prefix_cache.safetensors.{model_id}.xlora`
+    pub fn load_from_file(
+        mut self,
+        file: impl AsRef<Path>,
+        device: Device,
+        n_on_device: usize,
+        model_id: String,
+    ) -> Result<Self> {
+        // NOTE(EricLBuehler): changing this format is a *breaking change*
+        let file = file.as_ref().to_string_lossy().to_string();
+        let formatted_file = format!("{file}.{model_id}");
+        let (trie, ptrs) =
+            Self::load_layer_caches(formatted_file.clone(), device.clone(), n_on_device)?;
+        // NOTE: Don't like the copy...
+        for (k, v) in trie.iter() {
+            self.caches.insert(k.clone(), v.clone());
+        }
+        self.eviction_cache_ptrs.extend(ptrs);
+
+        if self.xlora_caches.is_some() {
+            // NOTE(EricLBuehler): changing this format is a *breaking change*
+            let formatted_file_xlora = format!("{formatted_file}.xlora");
+            let (trie, ptrs) = Self::load_layer_caches(formatted_file_xlora, device, n_on_device)?;
+
+            // NOTE: Don't like the copy...
+            for (k, v) in trie.iter() {
+                self.xlora_caches
+                    .as_mut()
+                    .unwrap()
+                    .insert(k.clone(), v.clone());
+            }
+            self.eviction_cache_ptrs.extend(ptrs);
+        }
+        Ok(self)
     }
 
     /// This always keeps the cache on the device. If later on, a new seq cannot be allocated due to memory shortage,
