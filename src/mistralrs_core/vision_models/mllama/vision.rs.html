@@ -761,10 +761,7 @@
 <a href="#760" id="760">760</a>
 <a href="#761" id="761">761</a>
 <a href="#762" id="762">762</a>
-<a href="#763" id="763">763</a>
-<a href="#764" id="764">764</a>
-<a href="#765" id="765">765</a>
-<a href="#766" id="766">766</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#763" id="763">763</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{ops::Mul, sync::Arc};
 
@@ -1153,9 +1150,6 @@
                 hidden_states.push(hidden_state.clone());
             }
             hidden_state = layer.forward(<span class="kw-2">&amp;</span>hidden_state, attention_mask)<span class="question-mark">?</span>;
-            <span class="kw">if </span>hidden_state.device().is_metal() {
-                hidden_state.device().synchronize()<span class="question-mark">?</span>;
-            }
         }
         <span class="prelude-val">Ok</span>((hidden_state, hidden_states))
     }
