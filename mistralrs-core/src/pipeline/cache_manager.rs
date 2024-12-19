@@ -195,10 +195,6 @@ impl KvCache {
                 if let Some(mut mask) = mask.cloned() {
                     let mask_len = mask.dim(1)?;
                     mask = mask.narrow(1, mask_len - (sliding_window - 1), sliding_window - 1)?;
-                    mask = Tensor::cat(
-                        &[&mask, &mask.narrow(1, mask_len - 1, 1)?.ones_like()?],
-                        D::Minus1,
-                    )?;
                     return Ok((k, v, Some(mask)));
                 }
             }
