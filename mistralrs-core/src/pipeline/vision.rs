@@ -625,6 +625,21 @@ impl Pipeline for VisionPipeline {
             }
             (None, None) => None,
         };
+        #[cfg(feature = "metal")]
+        let logits = objc::rc::autoreleasepool(|| {
+            self.model.forward(
+                &input_ids,
+                pixel_values,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+                position_ids,
+                model_specific_args,
+                paged_attn_meta,
+                &flash_meta,
+            )
+        })?;
+        #[cfg(not(feature = "metal"))]
         let logits = self.model.forward(
             &input_ids,
             pixel_values,
