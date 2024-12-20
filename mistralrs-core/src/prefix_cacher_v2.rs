@@ -61,32 +61,30 @@ impl PrefixCacheManagerV2 {
     }
 
     fn cache_to(cache: &mut [Option<KvCache>], device: &Device) -> Result<()> {
-        for layer in cache {
-            if let Some(layer) = layer {
-                *layer = KvCache {
-                    k: SingleCache {
-                        all_data: layer
-                            .k
-                            .all_data
-                            .as_ref()
-                            .map(|x| x.to_device(device).unwrap()),
-                        dim: layer.k.dim,
-                        current_seq_len: layer.k.current_seq_len,
-                        max_seq_len: layer.k.max_seq_len,
-                        capacity_seq_len: layer.k.capacity_seq_len,
-                    },
-                    v: SingleCache {
-                        all_data: layer
-                            .v
-                            .all_data
-                            .as_ref()
-                            .map(|x| x.to_device(device).unwrap()),
-                        dim: layer.v.dim,
-                        current_seq_len: layer.v.current_seq_len,
-                        max_seq_len: layer.v.max_seq_len,
-                        capacity_seq_len: layer.v.capacity_seq_len,
-                    },
-                }
+        for layer in cache.iter_mut().flatten() {
+            *layer = KvCache {
+                k: SingleCache {
+                    all_data: layer
+                        .k
+                        .all_data
+                        .as_ref()
+                        .map(|x| x.to_device(device).unwrap()),
+                    dim: layer.k.dim,
+                    current_seq_len: layer.k.current_seq_len,
+                    max_seq_len: layer.k.max_seq_len,
+                    capacity_seq_len: layer.k.capacity_seq_len,
+                },
+                v: SingleCache {
+                    all_data: layer
+                        .v
+                        .all_data
+                        .as_ref()
+                        .map(|x| x.to_device(device).unwrap()),
+                    dim: layer.v.dim,
+                    current_seq_len: layer.v.current_seq_len,
+                    max_seq_len: layer.v.max_seq_len,
+                    capacity_seq_len: layer.v.capacity_seq_len,
+                },
             }
         }
         Ok(())
@@ -179,7 +177,7 @@ impl PrefixCacheManagerV2 {
         let mut latest_match = None;
         let mut longest_match = 0;
         for (k, v) in self.caches.iter() {
-            if k.0.len() > longest_match && &toks.0[0..k.0.len()] == &k.0 {
+            if k.0.len() > longest_match && toks.0[0..k.0.len()] == k.0 {
                 latest_match = Some(v);
                 longest_match = k.0.len();
             }
@@ -187,11 +185,11 @@ impl PrefixCacheManagerV2 {
         if let Some(latest_match) = latest_match {
             let mut cache = latest_match.clone();
             Self::cache_to(&mut cache, &self.device)?;
-            return Ok(Some(MatchingCache {
+            Ok(Some(MatchingCache {
                 normal: cache,
                 toks: toks.0[longest_match..].to_vec(),
                 offset: longest_match,
-            }));
+            }))
         } else {
             Ok(None)
         }
