@@ -8,7 +8,6 @@ use super::{
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
-use crate::prefix_cacher::PrefixCacheManager;
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;

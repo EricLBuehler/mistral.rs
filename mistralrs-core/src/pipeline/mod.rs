@@ -20,7 +20,6 @@ mod vision;
 pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
-use crate::prefix_cacher::PrefixCacheManager;
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 use chat_template::ChatTemplate;
@@ -61,7 +60,7 @@ use candle_core::{DType, Device, IndexOp, Tensor, Var};
 use crate::sequence::Sequence;
 
 pub use self::cache_manager::{
-    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache,
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, SingleCache,
 };
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,

@@ -21,7 +21,6 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, Gener
 use crate::pipeline::get_chat_template;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
-use crate::prefix_cacher::PrefixCacheManager;
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;

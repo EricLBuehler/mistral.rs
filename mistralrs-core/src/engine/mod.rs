@@ -79,7 +79,6 @@ impl Engine {
         throughput_logging_enabled: bool,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
-        let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
         let has_no_kv_cache = get_mut_arcmutex!(pipeline).get_metadata().has_no_kv_cache;
         if no_kv_cache {
             // Diffusion models...
@@ -903,6 +902,7 @@ impl Engine {
                 seq.prefill_v2(
                     prefill_cache.normal,
                     prefill_cache.toks,
+                    prefill_cache.offset,
                 )
             } else {
                 seq

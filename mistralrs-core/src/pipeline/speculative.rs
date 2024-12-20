@@ -20,7 +20,6 @@ use crate::{
         },
         AdapterInstruction,
     },
-    prefix_cacher::PrefixCacheManager,
     prefix_cacher_v2::PrefixCacheManagerV2,
     sequence::{Sequence, SequenceRecognizer},
     DeviceMapMetadata, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource,

@@ -165,6 +165,7 @@ pub struct Sequence {
     prompt: String,
     sequence_stepping_type: SeqStepType,
     pub(crate) return_raw_logits: bool,
+    token_offset: usize,
 
     // Image generation
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
@@ -348,6 +349,7 @@ impl Sequence {
             cached_img_thw: None,
             cached_vid_thw: None,
             return_raw_logits,
+            token_offset: 0,
         }
     }
 
@@ -386,10 +388,12 @@ impl Sequence {
         mut self,
         cache: Vec<Option<KvCache>>,
         toks: Vec<u32>,
+        offset: usize,
     ) -> Self {
         self.normal_cache = cache;
         self.prefill_prompt_toks = Some(toks);
         self.set_state(SequenceState::RunningPrefillPrompt);
+        self.token_offset = offset;
         self
     }
 
@@ -423,9 +427,7 @@ impl Sequence {
     pub fn is_running(&self) -> bool {
         matches!(
             *self.state.read().unwrap(),
-            SequenceState::RunningCompletion
-                | SequenceState::RunningPrompt
-                // | SequenceState::RunningPrefillPrompt
+            SequenceState::RunningCompletion | SequenceState::RunningPrompt // | SequenceState::RunningPrefillPrompt
         )
     }
 
@@ -469,6 +471,10 @@ impl Sequence {
 
     pub fn set_initial_prompt(&mut self, new: String) {
         self.prompt = new;
+    }
+
+    pub fn token_offset(&self) -> usize {
+        self.token_offset
     }
 
     /// This will also set prompt_len
@@ -577,7 +583,7 @@ impl Sequence {
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
-        self.prefill_prompt_toks = None;
+        self.reset_prefill_toks();
     }
 
     pub fn responder(&self) -> Sender<Response> {
