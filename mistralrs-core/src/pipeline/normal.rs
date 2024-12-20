@@ -24,7 +24,7 @@ use crate::pipeline::isq::UqffFullSer;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
-use crate::prefix_cacher::PrefixCacheManager;
+use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
 use crate::utils::tokenizer::get_tokenizer;
@@ -732,6 +732,33 @@ impl Pipeline for NormalPipeline {
             }
             (None, None) => None,
         };
+        #[cfg(feature = "metal")]
+        let logits = objc::rc::autoreleasepool(|| match self.model.is_xlora() {
+            false => self.model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+                position_ids,
+                paged_attn_meta,
+                &flash_meta,
+            ),
+            true => self.model.xlora_forward(
+                &input_ids,
+                input_ids_full.as_ref().unwrap_or(&input_ids),
+                &seqlen_offsets,
+                seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
+                seqlen_offsets_kernel.clone(),
+                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
+                self.no_kv_cache,
+                &self.non_granular_state,
+                context_lens,
+                position_ids,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
+            ),
+        })?;
+        #[cfg(not(feature = "metal"))]
         let logits = match self.model.is_xlora() {
             false => self.model.forward(
                 &input_ids,
@@ -767,7 +794,7 @@ impl Pipeline for NormalPipeline {
         &self,
         seqs: &mut [&mut Sequence],
         logits: Vec<Tensor>,
-        prefix_cacher: &mut PrefixCacheManager,
+        prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {

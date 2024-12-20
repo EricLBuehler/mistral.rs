@@ -533,9 +533,15 @@ pub mod text_models_inputs_processor {
                     "PagedAttention does not yet support prompt batching.",
                 ))));
             }
+            let offset = input_seqs[0].token_offset();
+            if offset != 0 && paged_attn_metadata.is_some() {
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    "PagedAttention does not yet support sequences with an offset != 0.",
+                ))));
+            }
             Box::new(std::iter::once(
                 make_prompt_chunk(
-                    0,
+                    offset,
                     toks,
                     &input_seqs.iter().map(|s| *s.id()).collect::<Vec<_>>(),
                     device,

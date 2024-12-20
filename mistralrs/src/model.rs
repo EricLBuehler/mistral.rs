@@ -3,7 +3,7 @@ use candle_core::{Device, Result, Tensor};
 use either::Either;
 use mistralrs_core::*;
 use std::sync::Arc;
-use tokio::sync::mpsc::channel;
+use tokio::sync::mpsc::{channel, Receiver};
 
 use crate::{RequestLike, TextMessages};
 
@@ -47,9 +47,55 @@ pub struct Model {
     runner: Arc<MistralRs>,
 }
 
+pub struct Stream<'a> {
+    _server: &'a Model,
+    rx: Receiver<Response>,
+}
+
+impl<'a> Stream<'a> {
+    pub async fn next(&mut self) -> Option<Response> {
+        self.rx.recv().await
+    }
+}
+
 impl Model {
     pub fn new(runner: Arc<MistralRs>) -> Self {
         Self { runner }
+    }
+
+    /// Generate with the model.
+    pub async fn stream_chat_request<R: RequestLike>(
+        &self,
+        mut request: R,
+    ) -> anyhow::Result<Stream> {
+        let (tx, rx) = channel(1);
+
+        let (tools, tool_choice) = if let Some((a, b)) = request.take_tools() {
+            (Some(a), Some(b))
+        } else {
+            (None, None)
+        };
+        let request = Request::Normal(NormalRequest {
+            messages: request.take_messages(),
+            sampling_params: request.take_sampling_params(),
+            response: tx,
+            return_logprobs: request.return_logprobs(),
+            is_streaming: true,
+            id: 0,
+            constraint: request.take_constraint(),
+            suffix: None,
+            adapters: request.take_adapters(),
+            tools,
+            tool_choice,
+            logits_processors: request.take_logits_processors(),
+            return_raw_logits: false,
+        });
+
+        self.runner.get_sender()?.send(request).await?;
+
+        let stream = Stream { _server: self, rx };
+
+        Ok(stream)
     }
 
     /// Generate with the model.

@@ -18,6 +18,7 @@ use crate::{
         text_models_inputs_processor::PagedAttentionMeta,
         AdapterInstruction, CacheBackendMetadata, CacheInstruction, EitherCache, NormalCache,
     },
+    prefix_cacher_v2::PrefixCacheManagerV2,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
@@ -32,7 +33,6 @@ use tracing::{info, warn};
 use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error,
     pipeline::Pipeline,
-    prefix_cacher::PrefixCacheManager,
     request::Request,
     response::{ChatCompletionResponse, Choice, ResponseMessage},
     sampler::Sampler,
@@ -59,7 +59,7 @@ pub struct Engine {
     id: usize,
     truncate_sequence: bool,
     no_kv_cache: bool,
-    prefix_cacher: PrefixCacheManager,
+    prefix_cacher: PrefixCacheManagerV2,
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
@@ -79,7 +79,6 @@ impl Engine {
         throughput_logging_enabled: bool,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
-        let is_xlora = get_mut_arcmutex!(pipeline).get_metadata().is_xlora;
         let has_no_kv_cache = get_mut_arcmutex!(pipeline).get_metadata().has_no_kv_cache;
         if no_kv_cache {
             // Diffusion models...
@@ -97,12 +96,7 @@ impl Engine {
             id: 0,
             truncate_sequence,
             no_kv_cache: no_kv_cache & !has_no_kv_cache,
-            prefix_cacher: PrefixCacheManager::new(
-                device,
-                prefix_cache_n,
-                is_xlora,
-                no_prefix_cache,
-            ),
+            prefix_cacher: PrefixCacheManagerV2::new(device, prefix_cache_n, no_prefix_cache),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
@@ -905,10 +899,10 @@ impl Engine {
                 request.return_raw_logits,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
-                seq.prefill(
+                seq.prefill_v2(
                     prefill_cache.normal,
-                    prefill_cache.xlora,
                     prefill_cache.toks,
+                    prefill_cache.offset,
                 )
             } else {
                 seq

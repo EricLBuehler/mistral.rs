@@ -8,7 +8,7 @@ use super::{
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
-use crate::prefix_cacher::PrefixCacheManager;
+use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -329,7 +329,7 @@ impl Pipeline for DiffusionPipeline {
         &self,
         _seqs: &mut [&mut Sequence],
         _logits: Vec<Tensor>,
-        _prefix_cacher: &mut PrefixCacheManager,
+        _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
         _srng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {

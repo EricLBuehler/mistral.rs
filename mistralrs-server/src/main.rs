@@ -273,16 +273,16 @@ async fn main() -> Result<()> {
     let mut args = Args::parse();
     initialize_logging();
 
-    let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
+    let setting_server = if !args.interactive_mode {
+        let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
+        let ip = args.serve_ip.unwrap_or_else(|| "0.0.0.0".to_string());
 
-    let ip = if let Some(ref ip) = args.serve_ip {
-        ip.to_string()
+        // Create listener early to validate address before model loading
+        let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
+        Some((listener, ip, port))
     } else {
-        "0.0.0.0".to_string()
+        None
     };
-
-    // Create the TcpListener early to check if the address is available before loading the model
-    let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", port)).await?;
 
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
@@ -479,9 +479,10 @@ async fn main() -> Result<()> {
     let mistralrs = builder.build();
 
     let app = get_router(mistralrs);
-
-    info!("Serving on http://{ip}:{}.", port);
-    axum::serve(listener, app).await?;
+    if let Some((listener, ip, port)) = setting_server {
+        info!("Serving on http://{ip}:{}.", port);
+        axum::serve(listener, app).await?;
+    };
 
     Ok(())
 }
