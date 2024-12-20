@@ -382,6 +382,17 @@ impl Sequence {
         self
     }
 
+    pub fn prefill_v2(
+        mut self,
+        cache: Vec<Option<KvCache>>,
+        toks: Vec<u32>,
+    ) -> Self {
+        self.normal_cache = cache;
+        self.prefill_prompt_toks = Some(toks);
+        self.set_state(SequenceState::RunningPrefillPrompt);
+        self
+    }
+
     /// This is the number of tokens. If the KV cache is Some, then it will use that.
     pub fn len(&self) -> usize {
         if let Some(toks) = &self.prefill_prompt_toks {
@@ -414,7 +425,7 @@ impl Sequence {
             *self.state.read().unwrap(),
             SequenceState::RunningCompletion
                 | SequenceState::RunningPrompt
-                | SequenceState::RunningPrefillPrompt
+                // | SequenceState::RunningPrefillPrompt
         )
     }
 

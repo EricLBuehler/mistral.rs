@@ -147,6 +147,7 @@ pub mod text_models_inputs_processor {
         let mut seqlens_k = vec![0];
         for (seq_id, mut ctxt) in seq_ids.iter().zip(toks) {
             let prompt_len = ctxt.len();
+            dbg!(&prompt_len);
             let offset = last_n_context_len.unwrap_or_default();
             seqlen_offsets.push(offset.1 + chunk_offset_toks);
 

@@ -5,6 +5,7 @@ use rand_isaac::Isaac64Rng;
 
 use crate::{
     prefix_cacher::PrefixCacheManager,
+    prefix_cacher_v2::PrefixCacheManagerV2,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer},
 };
@@ -13,7 +14,7 @@ use super::Pipeline;
 
 pub(crate) async fn finish_or_add_toks_to_seq(
     this: &dyn Pipeline,
-    prefix_cacher: &mut PrefixCacheManager,
+    prefix_cacher: &mut PrefixCacheManagerV2,
     seq: &mut Sequence,
     logprobs: Logprobs,
     eos_tok: Option<&[u32]>,
@@ -84,7 +85,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 if let Some(reason) = is_done {
                     if use_prefix_cacher {
                         prefix_cacher.add_sequence(seq);
-                        prefix_cacher.evict_to_cpu()?;
+                        // prefix_cacher.evict_to_cpu()?;
                     }
                     seq.set_state(crate::sequence::SequenceState::Done(reason));
                     this.reset_non_granular_state();
@@ -197,7 +198,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
             if use_prefix_cacher {
                 prefix_cacher.add_sequence(seq);
-                prefix_cacher.evict_to_cpu()?;
+                // prefix_cacher.evict_to_cpu()?;
             }
 
             let group = seq.get_mut_group();
@@ -245,7 +246,7 @@ pub async fn sample_and_add_toks(
     this: &dyn Pipeline,
     seqs: &mut [&mut Sequence],
     logits_seq: Vec<Tensor>,
-    prefix_cacher: &mut PrefixCacheManager,
+    prefix_cacher: &mut PrefixCacheManagerV2,
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<()> {
