@@ -55,6 +55,7 @@ mod attention;
 mod diffusion_models;
 mod pipeline;
 mod prefix_cacher;
+mod prefix_cacher_v2;
 mod request;
 mod response;
 mod sampler;

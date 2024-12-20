@@ -1,3 +1,5 @@
+#![allow(dead_code, deprecated)]
+
 use std::sync::{Arc, Mutex};
 
 use candle_core::{Device, Result, Tensor};
@@ -25,6 +27,7 @@ impl From<Vec<u32>> for Tokens {
 
 type EvictionCacheGroup = (Arc<Mutex<LayerCaches>>, Option<Arc<Mutex<LayerCaches>>>);
 
+#[deprecated(note = "use PrefixCacheManagerV2 instead!")]
 pub struct PrefixCacheManager {
     caches: Trie<Tokens, Arc<Mutex<LayerCaches>>>,
     xlora_caches: Option<Trie<Tokens, Arc<Mutex<LayerCaches>>>>,
