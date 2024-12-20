@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use candle_core::{Device, Result};
 use itertools::Itertools;
-// use radix_trie::{Trie, TrieCommon, TrieKey};
 
 use crate::{
     pipeline::{KvCache, SingleCache},
@@ -12,14 +11,18 @@ use crate::{
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
 
-// impl TrieKey for Tokens {
-//     fn encode_bytes(&self) -> Vec<u8> {
-//         self.0
-//             .iter()
-//             .flat_map(|x| bytemuck::bytes_of(x).to_vec())
-//             .collect::<Vec<u8>>()
-//     }
-// }
+impl Tokens {
+    /// Maximum index to where the two sets of tokens match
+    fn find_max_index(&self, x: &Self) -> Option<usize> {
+        self.0
+            .iter()
+            .zip(x.0.iter())
+            .enumerate()
+            .take_while(|(_, (a, b))| a == b)
+            .map(|(index, _)| index)
+            .last()
+    }
+}
 
 impl From<Vec<u32>> for Tokens {
     fn from(value: Vec<u32>) -> Self {
@@ -174,21 +177,25 @@ impl PrefixCacheManagerV2 {
 
         let toks = Tokens(toks.to_vec());
 
-        let mut latest_match = None;
-        let mut longest_match = 0;
+        let mut longest_match = (0, None);
         for (k, v) in self.caches.iter() {
-            if k.0.len() > longest_match && toks.0[0..k.0.len()] == k.0 {
-                latest_match = Some(v);
-                longest_match = k.0.len();
+            let match_len = toks.find_max_index(k);
+            if let Some(match_len) = match_len {
+                if match_len > longest_match.0 {
+                    longest_match = (match_len, Some(v));
+                }
             }
         }
-        if let Some(latest_match) = latest_match {
-            let mut cache = latest_match.clone();
+        if let (match_len, Some(longest_match)) = longest_match {
+            let mut cache = longest_match.clone();
             Self::cache_to(&mut cache, &self.device)?;
+            for layer in cache.iter_mut().flatten() {
+                layer.set_len(match_len);
+            }
             Ok(Some(MatchingCache {
                 normal: cache,
-                toks: toks.0[longest_match..].to_vec(),
-                offset: longest_match,
+                toks: toks.0[match_len..].to_vec(),
+                offset: match_len,
             }))
         } else {
             Ok(None)
