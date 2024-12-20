@@ -351,7 +351,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::AttentionImplementation;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
-<span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
+<span class="kw">use </span><span class="kw">crate</span>::prefix_cacher_v2::PrefixCacheManagerV2;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -672,7 +672,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         _logits: Vec&lt;Tensor&gt;,
-        _prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+        _prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
         _disable_eos_stop: bool,
         _srng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {

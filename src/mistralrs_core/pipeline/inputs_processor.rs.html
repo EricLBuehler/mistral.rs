@@ -839,7 +839,13 @@
 <a href="#838" id="838">838</a>
 <a href="#839" id="839">839</a>
 <a href="#840" id="840">840</a>
-<a href="#841" id="841">841</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a>
+<a href="#844" id="844">844</a>
+<a href="#845" id="845">845</a>
+<a href="#846" id="846">846</a>
+<a href="#847" id="847">847</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -1374,9 +1380,15 @@
                     <span class="string">"PagedAttention does not yet support prompt batching."</span>,
                 ))));
             }
+            <span class="kw">let </span>offset = input_seqs[<span class="number">0</span>].token_offset();
+            <span class="kw">if </span>offset != <span class="number">0 </span>&amp;&amp; paged_attn_metadata.is_some() {
+                <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
+                    <span class="string">"PagedAttention does not yet support sequences with an offset != 0."</span>,
+                ))));
+            }
             Box::new(std::iter::once(
                 make_prompt_chunk(
-                    <span class="number">0</span>,
+                    offset,
                     toks,
                     <span class="kw-2">&amp;</span>input_seqs.iter().map(|s| <span class="kw-2">*</span>s.id()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                     device,

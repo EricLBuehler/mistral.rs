@@ -330,7 +330,11 @@
 <a href="#329" id="329">329</a>
 <a href="#330" id="330">330</a>
 <a href="#331" id="331">331</a>
-<a href="#332" id="332">332</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{HashMap, VecDeque},
     num::NonZeroUsize,
     sync::atomic::Ordering,
@@ -400,9 +404,9 @@
     ) -&gt; BucketedSeqs&lt;Backer&gt;;
 }
 
-<span class="comment">// (adapters, cache length, (has_imgs &amp;&amp; is_prompt))
-// Buckey by that metric for images because if we are not a prompt, then this doesn't apply
-</span><span class="kw">type </span>BucketKey = (<span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;, usize, bool);
+<span class="comment">// (adapters, cache length, (has_imgs &amp;&amp; is_prompt), sequence offset)
+// Bucket by that metric for images because if we are not a prompt, then this doesn't apply
+</span><span class="kw">type </span>BucketKey = (<span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;, usize, bool, usize);
 
 <span class="kw">struct </span>FixedBucketingManager;
 
@@ -425,6 +429,7 @@
                 seq.get_adapters(),
                 len,
                 seq.images().is_some() &amp;&amp; seq.is_prompt(),
+                seq.token_offset(),
             )) {
                 <span class="prelude-val">Some</span>(bucket) =&gt; {
                     <span class="kw">if </span>!discrete {
@@ -433,6 +438,7 @@
                                 seq.get_adapters(),
                                 len,
                                 seq.images().is_some() &amp;&amp; seq.is_prompt(),
+                                seq.token_offset(),
                             ))
                             .unwrap() += seq.compute_priority();
                     }
@@ -445,6 +451,7 @@
                                 seq.get_adapters(),
                                 len,
                                 seq.images().is_some() &amp;&amp; seq.is_prompt(),
+                                seq.token_offset(),
                             ),
                             seq.compute_priority(),
                         );
@@ -454,6 +461,7 @@
                             seq.get_adapters(),
                             len,
                             seq.images().is_some() &amp;&amp; seq.is_prompt(),
+                            seq.token_offset(),
                         ),
                         <span class="macro">vec!</span>[seq],
                     );
@@ -472,7 +480,7 @@
             // Allow the min seqs to catch up.
             </span><span class="kw">let </span>min = seq_buckets
                 .keys()
-                .min_by_key(|(<span class="kw">_</span>, x, <span class="kw">_</span>)| <span class="kw-2">*</span>x)
+                .min_by_key(|(<span class="kw">_</span>, x, <span class="kw">_</span>, <span class="kw">_</span>)| <span class="kw-2">*</span>x)
                 .expect(<span class="string">"No sequence buckets."</span>)
                 .clone();
             <span class="kw">let </span>len = <span class="kw">if </span>!discrete {

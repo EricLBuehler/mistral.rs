@@ -944,7 +944,7 @@
 <span class="kw">pub use </span><span class="kw">super</span>::diffusion_models::DiffusionGenerationParams;
 <span class="kw">use </span><span class="kw">crate</span>::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
-<span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
+<span class="kw">use </span><span class="kw">crate</span>::prefix_cacher_v2::PrefixCacheManagerV2;
 <span class="kw">pub use </span>amoe::{AnyMoeLoader, AnyMoePipeline};
 <span class="kw">use </span>chat_template::ChatTemplate;
 <span class="kw">pub use </span>diffusion::{DiffusionLoader, DiffusionLoaderBuilder, DiffusionSpecificConfig};
@@ -984,7 +984,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 
 <span class="kw">pub use </span><span class="self">self</span>::cache_manager::{
-    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache,
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, SingleCache,
 };
 <span class="kw">pub use </span><span class="self">self</span>::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
@@ -1231,7 +1231,7 @@
         input_seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         is_prompt: bool,
         return_raw_logits: bool,
-        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
         backend_metadata: CacheBackendMetadata&lt;<span class="lifetime">'_</span>&gt;,
@@ -1581,7 +1581,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         logits: Vec&lt;Tensor&gt;,
-        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt;;

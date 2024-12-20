@@ -1012,13 +1012,7 @@
 <a href="#1011" id="1011">1011</a>
 <a href="#1012" id="1012">1012</a>
 <a href="#1013" id="1013">1013</a>
-<a href="#1014" id="1014">1014</a>
-<a href="#1015" id="1015">1015</a>
-<a href="#1016" id="1016">1016</a>
-<a href="#1017" id="1017">1017</a>
-<a href="#1018" id="1018">1018</a>
-<a href="#1019" id="1019">1019</a>
-<a href="#1020" id="1020">1020</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
+<a href="#1014" id="1014">1014</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>llguidance::toktrie::TokEnv;
 <span class="kw">use </span>once_cell::sync::Lazy;
@@ -1038,6 +1032,7 @@
         text_models_inputs_processor::PagedAttentionMeta,
         AdapterInstruction, CacheBackendMetadata, CacheInstruction, EitherCache, NormalCache,
     },
+    prefix_cacher_v2::PrefixCacheManagerV2,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
@@ -1052,7 +1047,6 @@
 <span class="kw">use crate</span>::{
     get_mut_arcmutex, handle_pipeline_forward_error, handle_seq_error,
     pipeline::Pipeline,
-    prefix_cacher::PrefixCacheManager,
     request::Request,
     response::{ChatCompletionResponse, Choice, ResponseMessage},
     sampler::Sampler,
@@ -1079,7 +1073,7 @@
     id: usize,
     truncate_sequence: bool,
     no_kv_cache: bool,
-    prefix_cacher: PrefixCacheManager,
+    prefix_cacher: PrefixCacheManagerV2,
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
@@ -1099,7 +1093,6 @@
         throughput_logging_enabled: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
-        <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().is_xlora;
         <span class="kw">let </span>has_no_kv_cache = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().has_no_kv_cache;
         <span class="kw">if </span>no_kv_cache {
             <span class="comment">// Diffusion models...
@@ -1117,12 +1110,7 @@
             id: <span class="number">0</span>,
             truncate_sequence,
             no_kv_cache: no_kv_cache &amp; !has_no_kv_cache,
-            prefix_cacher: PrefixCacheManager::new(
-                device,
-                prefix_cache_n,
-                is_xlora,
-                no_prefix_cache,
-            ),
+            prefix_cacher: PrefixCacheManagerV2::new(device, prefix_cache_n, no_prefix_cache),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
@@ -1925,10 +1913,10 @@
                 request.return_raw_logits,
             );
             <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
-                seq.prefill(
+                seq.prefill_v2(
                     prefill_cache.normal,
-                    prefill_cache.xlora,
                     prefill_cache.toks,
+                    prefill_cache.offset,
                 )
             } <span class="kw">else </span>{
                 seq

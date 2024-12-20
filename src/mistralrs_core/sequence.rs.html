@@ -952,7 +952,24 @@
 <a href="#951" id="951">951</a>
 <a href="#952" id="952">952</a>
 <a href="#953" id="953">953</a>
-<a href="#954" id="954">954</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
     get_mut_group,
     pipeline::LayerCaches,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
@@ -1119,6 +1136,7 @@
     prompt: String,
     sequence_stepping_type: SeqStepType,
     <span class="kw">pub</span>(<span class="kw">crate</span>) return_raw_logits: bool,
+    token_offset: usize,
 
     <span class="comment">// Image generation
     </span>image_gen_response_format: <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt;,
@@ -1302,6 +1320,7 @@
             cached_img_thw: <span class="prelude-val">None</span>,
             cached_vid_thw: <span class="prelude-val">None</span>,
             return_raw_logits,
+            token_offset: <span class="number">0</span>,
         }
     }
 
@@ -1336,6 +1355,19 @@
         <span class="self">self
     </span>}
 
+    <span class="kw">pub fn </span>prefill_v2(
+        <span class="kw-2">mut </span><span class="self">self</span>,
+        cache: Vec&lt;<span class="prelude-ty">Option</span>&lt;KvCache&gt;&gt;,
+        toks: Vec&lt;u32&gt;,
+        offset: usize,
+    ) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.normal_cache = cache;
+        <span class="self">self</span>.prefill_prompt_toks = <span class="prelude-val">Some</span>(toks);
+        <span class="self">self</span>.set_state(SequenceState::RunningPrefillPrompt);
+        <span class="self">self</span>.token_offset = offset;
+        <span class="self">self
+    </span>}
+
     <span class="doccomment">/// This is the number of tokens. If the KV cache is Some, then it will use that.
     </span><span class="kw">pub fn </span>len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(toks) = <span class="kw-2">&amp;</span><span class="self">self</span>.prefill_prompt_toks {
@@ -1366,10 +1398,8 @@
     <span class="kw">pub fn </span>is_running(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="macro">matches!</span>(
             <span class="kw-2">*</span><span class="self">self</span>.state.read().unwrap(),
-            SequenceState::RunningCompletion
-                | SequenceState::RunningPrompt
-                | SequenceState::RunningPrefillPrompt
-        )
+            SequenceState::RunningCompletion | SequenceState::RunningPrompt <span class="comment">// | SequenceState::RunningPrefillPrompt
+        </span>)
     }
 
     <span class="kw">pub fn </span>is_completion(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
@@ -1412,6 +1442,10 @@
 
     <span class="kw">pub fn </span>set_initial_prompt(<span class="kw-2">&amp;mut </span><span class="self">self</span>, new: String) {
         <span class="self">self</span>.prompt = new;
+    }
+
+    <span class="kw">pub fn </span>token_offset(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.token_offset
     }
 
     <span class="doccomment">/// This will also set prompt_len
@@ -1520,7 +1554,7 @@
         <span class="self">self</span>.cumulative_logprob += tok.logprob;
         <span class="self">self</span>.tokens.push(tok.token);
         <span class="self">self</span>.logprobs.push(tok);
-        <span class="self">self</span>.prefill_prompt_toks = <span class="prelude-val">None</span>;
+        <span class="self">self</span>.reset_prefill_toks();
     }
 
     <span class="kw">pub fn </span>responder(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Sender&lt;Response&gt; {

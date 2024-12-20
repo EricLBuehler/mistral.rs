@@ -26,7 +26,7 @@ q_i(x) and p_i(x) for each token</p>
     &amp;'life0 self,
     _seqs: &amp;'life1 mut [&amp;'life2 mut Sequence],
     _logits: <a class="struct" href="https://doc.rust-lang.org/1.83.0/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="struct" href="struct.Tensor.html" title="struct mistralrs::Tensor">Tensor</a>&gt;,
-    _prefix_cacher: &amp;'life3 mut PrefixCacheManager,
+    _prefix_cacher: &amp;'life3 mut PrefixCacheManagerV2,
     _disable_eos_stop: <a class="primitive" href="https://doc.rust-lang.org/1.83.0/std/primitive.bool.html">bool</a>,
     _rng: <a class="struct" href="https://doc.rust-lang.org/1.83.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.83.0/std/sync/mutex/struct.Mutex.html" title="struct std::sync::mutex::Mutex">Mutex</a>&lt;<a class="struct" href="https://docs.rs/rand_isaac/0.3.0/rand_isaac/isaac64/struct.Isaac64Rng.html" title="struct rand_isaac::isaac64::Isaac64Rng">Isaac64Rng</a>&gt;&gt;,
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.83.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.83.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.83.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="enum" href="https://doc.rust-lang.org/1.83.0/core/result/enum.Result.html" title="enum core::result::Result">Result</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.83.0/std/primitive.unit.html">()</a>, Error&gt;&gt; + <a class="trait" href="https://doc.rust-lang.org/1.83.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
@@ -39,7 +39,7 @@ q_i(x) and p_i(x) for each token</p>
     input_seqs: &amp;'life1 mut [&amp;'life2 mut Sequence],
     is_prompt: <a class="primitive" href="https://doc.rust-lang.org/1.83.0/std/primitive.bool.html">bool</a>,
     _return_raw_logits: <a class="primitive" href="https://doc.rust-lang.org/1.83.0/std/primitive.bool.html">bool</a>,
-    prefix_cacher: &amp;'life3 mut PrefixCacheManager,
+    prefix_cacher: &amp;'life3 mut PrefixCacheManagerV2,
     disable_eos_stop: <a class="primitive" href="https://doc.rust-lang.org/1.83.0/std/primitive.bool.html">bool</a>,
     rng: <a class="struct" href="https://doc.rust-lang.org/1.83.0/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.83.0/std/sync/mutex/struct.Mutex.html" title="struct std::sync::mutex::Mutex">Mutex</a>&lt;<a class="struct" href="https://docs.rs/rand_isaac/0.3.0/rand_isaac/isaac64/struct.Isaac64Rng.html" title="struct rand_isaac::isaac64::Isaac64Rng">Isaac64Rng</a>&gt;&gt;,
     backend_metadata: CacheBackendMetadata&lt;'life4&gt;,

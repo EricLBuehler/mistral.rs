@@ -809,7 +809,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::get_chat_template;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
-<span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManager;
+<span class="kw">use </span><span class="kw">crate</span>::prefix_cacher_v2::PrefixCacheManagerV2;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
@@ -1561,7 +1561,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         logits: Vec&lt;Tensor&gt;,
-        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {

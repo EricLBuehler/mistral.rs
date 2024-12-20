@@ -611,7 +611,7 @@
 <span class="kw">use crate</span>::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     get_mut_arcmutex,
-    prefix_cacher::PrefixCacheManager,
+    prefix_cacher_v2::PrefixCacheManagerV2,
     sampler::Sampler,
     sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
@@ -851,7 +851,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         logits: Vec&lt;Tensor&gt;,
-        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManager,
+        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
