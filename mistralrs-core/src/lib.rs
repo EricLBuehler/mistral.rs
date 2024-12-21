@@ -40,16 +40,16 @@ pub use toml_selector::get_toml_selected_model_dtype;
 
 mod amoe;
 mod cublaslt;
-#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 mod dummy_paged_attention;
 mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
 mod models;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 mod paged_attention;
-#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 use dummy_paged_attention as paged_attention;
 mod attention;
 mod diffusion_models;
