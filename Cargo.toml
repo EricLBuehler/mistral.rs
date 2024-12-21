@@ -7,9 +7,7 @@ members = [
     "mistralrs-bench",
     "mistralrs-vision",
     "mistralrs-quant",
-]
-exclude = [
-    "mistralrs-paged_attn",
+    "mistralrs-paged-attn",
 ]
 resolver = "2"
 
