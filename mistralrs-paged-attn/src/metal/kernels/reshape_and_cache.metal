@@ -116,7 +116,7 @@ struct _MLX_BFloat16 {
   template <
       typename T,
       typename = typename enable_if<can_convert_from_bfloat<T>>::type>
-  constexpr METAL_FUNC operator T() const constant {
+  constexpr METAL_FUNC operator T() constant {
     return static_cast<T>(bfloat_bits_to_float(bits_));
   }
 };
@@ -265,13 +265,13 @@ template<typename T>
     const device T* __restrict__ value [[buffer(1)]],         // [num_tokens, num_heads, head_size]
     device T* __restrict__ key_cache [[buffer(2)]],           // [num_blocks, num_heads, head_size/x, block_size, x]
     device T* __restrict__ value_cache [[buffer(3)]],         // [num_blocks, num_heads, head_size, block_size]
-    device const int64_t* __restrict__ slot_mapping [[buffer(4)]],   // [num_tokens]
+    const device int64_t* __restrict__ slot_mapping [[buffer(4)]],   // [num_tokens]
     device const int& key_stride,
-    device const const int& value_stride,
-    device const const int& num_heads,
-    device const const int& head_size,
-    device const const int& block_size,
-    device const const int& x,
+    device const int& value_stride,
+    device const int& num_heads,
+    device const int& head_size,
+    device const int& block_size,
+    device const int& x,
     uint gid [[thread_position_in_grid]],
     uint tid [[thread_position_in_threadgroup]],
     uint threads_per_threadgroup [[threads_per_threadgroup]]
@@ -317,13 +317,13 @@ template<typename T>
     const device T* __restrict__ value [[buffer(1)]],                  \
     device T* __restrict__ key_cache [[buffer(2)]],                  \
     device T* __restrict__ value_cache [[buffer(3)]],                  \
-    device const int64_t* __restrict__ slot_mapping [[buffer(4)]],                  \
+    const device int64_t* __restrict__ slot_mapping [[buffer(4)]],                  \
     device const int& key_stride,                  \
-    device const const int& value_stride,                  \
-    device const const int& num_heads,                  \
-    device const const int& head_size,                  \
-    device const const int& block_size,                  \
-    device const const int& x,                  \
+    device const int& value_stride,                  \
+    device const int& num_heads,                  \
+    device const int& head_size,                  \
+    device const int& block_size,                  \
+    device const int& x,                  \
     uint gid [[thread_position_in_grid]],                  \
     uint tid [[thread_position_in_threadgroup]],                  \
     uint threads_per_threadgroup [[threads_per_threadgroup]]);

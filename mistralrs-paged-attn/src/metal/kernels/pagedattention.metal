@@ -257,14 +257,21 @@ typedef struct _MLX_BFloat16 bfloat16_t;
 
 #endif
 
+
+
+
+
+
 // ============ "mlx/backend/metal/kernels/scaled_dot_product_attention_params.sdpa_vector"
 
 template <typename T, int D>
 [[kernel]] void sdpa_vector(
-    const device T* queries [[buffer(0)]],
-    const device T* keys [[buffer(1)]],
-    const device T* values [[buffer(2)]],
-    device T* out [[buffer(3)]],
+    const device T* queries [[buffer(0)]],               // [num_seqs, num_heads, head_size]
+    const device T* k_cache [[buffer(1)]],               // [num_blocks, num_kv_heads, head_size/x, block_size, x]
+    const device T* v_cache [[buffer(2)]],               // [num_blocks, num_kv_heads, head_size, block_size]
+    const device uint32_t* block_tables [[buffer(3)]],   // [num_seqs, max_num_blocks_per_seq]
+    const device uint32_t* context_lens [[buffer(4)]],   // [num_seqs, max_num_blocks_per_seq]
+    device T* out [[buffer(5)]],
     const constant int& gqa_factor,
     const constant int& N,
     const constant size_t& k_stride,
