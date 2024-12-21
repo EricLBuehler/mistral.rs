@@ -24,7 +24,7 @@ rayon.workspace = true
 byteorder = "1.5.0"
 float8.workspace = true
 once_cell.workspace = true
-metal = { version = "0.27.0", features = ["mps"], optional = true }
+metal = { workspace = true, optional = true }
 thiserror = "1"
 
 [features]

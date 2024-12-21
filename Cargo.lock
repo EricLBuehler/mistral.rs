@@ -2491,6 +2491,8 @@ dependencies = [
  "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=521e33c)",
  "float8",
  "half",
+ "metal 0.27.0",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
