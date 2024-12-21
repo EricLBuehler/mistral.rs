@@ -59,7 +59,10 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
     println!("cargo:rustc-link-lib=mistralrspagedattention");
     println!("cargo:rustc-link-lib=dylib=cudart");
 
-    let mut file = OpenOptions::new().write(true).open("src/cuda/mod.rs").unwrap();
+    let mut file = OpenOptions::new()
+        .write(true)
+        .open("src/cuda/mod.rs")
+        .unwrap();
 
     // Add the other stuff back
     if let Err(e) = writeln!(file, "{}", OTHER_CONTENT.trim()) {
