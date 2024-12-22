@@ -1,6 +1,6 @@
 use candle_core::{DType, Device, Result, Storage, Tensor};
 
-use crate::metal::kernels::{self, ReshapeAndCacheDType};
+use crate::metal::kernels::{self, PagedAttentionDType};
 
 /// PagedAttention layer.
 ///
@@ -57,9 +57,9 @@ pub fn reshape_and_cache(
     let dtype = key.dtype();
 
     let internal_type = match dtype {
-        DType::F16 => ReshapeAndCacheDType::F16,
-        DType::BF16 => ReshapeAndCacheDType::BF16,
-        DType::F32 => ReshapeAndCacheDType::F32,
+        DType::F16 => PagedAttentionDType::F16,
+        DType::BF16 => PagedAttentionDType::BF16,
+        DType::F32 => PagedAttentionDType::F32,
         dtype => candle_core::bail!("dtype {dtype:?} is not supported"),
     };
 

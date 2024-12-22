@@ -295,7 +295,7 @@ inline float dot(const threadgroup float* x, device T* y) {
 // Utility function for attention softmax.
 template<int NUM_WARPS, int NUM_SIMD_LANES>
 inline float block_sum(threadgroup float* red_smem, float sum, uint simd_tid, uint simd_lid) {
-  // Compute the sum per warp.
+  // Compute the sum per simdgroup.
 #pragma unroll
   for (int mask = NUM_SIMD_LANES / 2; mask >= 1; mask /= 2) {
     sum += simd_shuffle_xor(sum, mask);
@@ -331,24 +331,27 @@ inline float block_sum(threadgroup float* red_smem, float sum, uint simd_tid, ui
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define DIVIDE_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
 
+constant bool use_partitioning [[function_constant(10)]];
+constant bool use_alibi [[function_constant(20)]];
+
 template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SIMD_LANES, int PARTITION_SIZE = 0>
 [[kernel]] void paged_attention(
-    device float* exp_sums [[buffer(0)]],         // [num_seqs, num_heads, max_num_partitions]
-    device float* max_logits [[buffer(1)]],       // [num_seqs, num_heads, max_num_partitions]
+    device float* exp_sums [[buffer(0), function_constant(use_partitioning)]],         // [num_seqs, num_heads, max_num_partitions]
+    device float* max_logits [[buffer(1), function_constant(use_partitioning)]],       // [num_seqs, num_heads, max_num_partitions]
     device T* out [[buffer(2)]],              // [num_seqs, num_heads, max_num_partitions, head_size]
     device const T* q [[buffer(3)]],          // [num_seqs, num_heads, head_size]
     device const T* k_cache [[buffer(4)]],    // [num_blocks, num_kv_heads, head_size/x, block_size, x]
     device const T* v_cache [[buffer(5)]],    // [num_blocks, num_kv_heads, head_size, block_size]
-    const constant int& num_kv_heads,     // [num_heads]
-    const constant float& scale,
-    const constant float& softcapping,
-    device const uint32_t* block_tables [[buffer(6)]],   // [num_seqs, max_num_blocks_per_seq]
-    device const uint32_t* context_lens [[buffer(7)]],  // [num_seqs]
-    const constant int& max_num_blocks_per_seq,
-    device const float* alibi_slopes [[buffer(8)]],     // [num_heads]
-    const constant int& q_stride,
-    const constant int& kv_block_stride,
-    const constant int& kv_head_stride,
+    const constant int& num_kv_heads [[buffer(6)]],     // [num_heads]
+    const constant float& scale [[buffer(7)]],
+    const constant float& softcapping [[buffer(8)]],
+    device const uint32_t* block_tables [[buffer(9)]],   // [num_seqs, max_num_blocks_per_seq]
+    device const uint32_t* context_lens [[buffer(10)]],  // [num_seqs]
+    const constant int& max_num_blocks_per_seq [[buffer(11)]],
+    device const float* alibi_slopes [[buffer(12), function_constant(use_alibi)]],     // [num_heads]
+    const constant int& q_stride [[buffer(13)]],
+    const constant int& kv_block_stride [[buffer(14)]],
+    const constant int& kv_head_stride [[buffer(15)]],
     threadgroup char* shared_mem [[threadgroup(0)]],
     uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],
     uint3 threadgroups_per_grid [[threadgroups_per_grid]],
@@ -361,6 +364,7 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   const int max_num_partitions = threadgroups_per_grid.z;
   const int thread_idx = thread_position_in_threadgroup.x;
   constexpr bool USE_PARTITIONING = PARTITION_SIZE > 0;
+  static_assert(!USE_PARTITIONING);
   const uint32_t context_len = context_lens[seq_idx];
   if (USE_PARTITIONING && partition_idx * PARTITION_SIZE >= context_len) {
     // No work to do. Terminate the thread block.
@@ -392,7 +396,7 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   const int num_heads = threadgroups_per_grid.x;
   const int num_queries_per_kv = num_heads / num_kv_heads;
   const int kv_head_idx = head_idx / num_queries_per_kv;
-  const float alibi_slope = alibi_slopes == nullptr ? 0.f : alibi_slopes[head_idx];
+  const float alibi_slope = use_alibi ? 0.f : alibi_slopes[head_idx];
 
   // A vector type to store a part of a key or a query.
   // The vector size is configured in such a way that the threads in a thread group
@@ -524,7 +528,7 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   threadgroup_barrier(mem_flags::mem_threadgroup);
 
   // If partitioning is enabled, store the max logit and exp_sum.
-  if (USE_PARTITIONING && thread_idx == 0) {
+  if (USE_PARTITIONING && thread_idx == 0 && use_partitioning) {
     device float* max_logits_ptr = max_logits + seq_idx * num_heads * max_num_partitions
                                        + head_idx * max_num_partitions
                                        + partition_idx;
@@ -646,22 +650,22 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
 #define instantiate_paged_attention_inner(type, head_size, block_size, num_threads, num_simd_lanes, partition_size)                                               \
   template [[host_name("paged_attention_" #type "_hs" #head_size "_bs" #block_size "_nt" #num_threads "_nsl" #num_simd_lanes "_ps" #partition_size)]]  \
   [[kernel]] void paged_attention<type, head_size, block_size, num_threads, num_simd_lanes, partition_size>(                                            \
-      device float* exp_sums [[buffer(0)]],                                            \
-      device float* max_logits [[buffer(1)]],                                            \
+      device float* exp_sums [[buffer(0), function_constant(use_partitioning)]],                                             \
+      device float* max_logits [[buffer(1), function_constant(use_partitioning)]],                                            \
       device type* out [[buffer(2)]],                                            \
       device const type* q [[buffer(3)]],                                            \
       device const type* k_cache [[buffer(4)]],                                            \
       device const type* v_cache [[buffer(5)]],                                            \
-      const constant int& num_kv_heads,                                            \
-      const constant float& scale,                                            \
-      const constant float& softcapping,                                            \
-      device const uint32_t* block_tables [[buffer(6)]],                                            \
-      device const uint32_t* context_lens [[buffer(7)]],                                            \
-      const constant int& max_num_blocks_per_seq,                                            \
-      device const float* alibi_slopes [[buffer(8)]],                                            \
-      const constant int& q_stride,                                            \
-      const constant int& kv_block_stride,                                            \
-      const constant int& kv_head_stride,                                            \
+      const constant int& num_kv_heads [[buffer(6)]],                                          \
+      const constant float& scale [[buffer(7)]],                                            \
+      const constant float& softcapping [[buffer(8)]],                                            \
+      device const uint32_t* block_tables [[buffer(9)]],                                            \
+      device const uint32_t* context_lens [[buffer(10)]],                                            \
+      const constant int& max_num_blocks_per_seq [[buffer(11)]],                                            \
+      device const float* alibi_slopes [[buffer(12), function_constant(use_alibi)]],                                            \
+      const constant int& q_stride [[buffer(13)]],                                            \
+      const constant int& kv_block_stride [[buffer(14)]],                                            \
+      const constant int& kv_head_stride [[buffer(15)]],                                            \
       threadgroup char* shared_mem [[threadgroup(0)]],                                            \
       uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],                                            \
       uint3 threadgroups_per_grid [[threadgroups_per_grid]],                                            \
