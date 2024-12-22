@@ -293,11 +293,11 @@ template<typename T>
 #define instantiate_copy_blocks(type)                           \
   template [[host_name("copy_blocks_" #type)]]                  \
   [[kernel]] void copy_blocks<type>(                  \
-    device T* key_cache_ptrs [[buffer(0)]],                  \
-    device T * value_cache_ptrs [[buffer(1)]],                  \
+    device type* key_cache_ptrs [[buffer(0)]],                  \
+    device type * value_cache_ptrs [[buffer(1)]],                  \
     const device int64_t* block_mapping [[buffer(2)]],                  \
     device const int& numel_per_block,                  \
-    uint2 gid [[thread_position_in_grid]],                  \
+    uint gid [[thread_position_in_grid]],                  \
     uint tid [[thread_position_in_threadgroup]],                  \
     uint threads_per_threadgroup [[threads_per_threadgroup]]);
 

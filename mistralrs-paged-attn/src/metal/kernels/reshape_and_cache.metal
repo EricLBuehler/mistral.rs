@@ -260,7 +260,7 @@ typedef struct _MLX_BFloat16 bfloat16_t;
 
 
 template<typename T>
-[[kernel]] void reshape_and_cache_kernel(
+[[kernel]] void reshape_and_cache(
     const device T* __restrict__ key [[buffer(0)]],           // [num_tokens, num_heads, head_size]
     const device T* __restrict__ value [[buffer(1)]],         // [num_tokens, num_heads, head_size]
     device T* __restrict__ key_cache [[buffer(2)]],           // [num_blocks, num_heads, head_size/x, block_size, x]
@@ -312,11 +312,11 @@ template<typename T>
 
 #define instantiate_reshape_and_cache(type)                           \
   template [[host_name("reshape_and_cache_" #type)]]                  \
-  [[kernel]] void copy_blocks<type>(                  \
-    const device T* __restrict__ key [[buffer(0)]],                  \
-    const device T* __restrict__ value [[buffer(1)]],                  \
-    device T* __restrict__ key_cache [[buffer(2)]],                  \
-    device T* __restrict__ value_cache [[buffer(3)]],                  \
+  [[kernel]] void reshape_and_cache<type>(                  \
+    const device type* __restrict__ key [[buffer(0)]],                  \
+    const device type* __restrict__ value [[buffer(1)]],                  \
+    device type* __restrict__ key_cache [[buffer(2)]],                  \
+    device type* __restrict__ value_cache [[buffer(3)]],                  \
     const device int64_t* __restrict__ slot_mapping [[buffer(4)]],                  \
     device const int& key_stride,                  \
     device const int& value_stride,                  \
