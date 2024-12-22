@@ -1,4 +1,5 @@
-use crate::cuda::ffi::{paged_attention_v1, paged_attention_v2, reshape_and_cache};
+use crate::cuda::ffi;
+use crate::cuda::ffi::{paged_attention_v1, paged_attention_v2};
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::cuda_backend::WrapErr;
@@ -438,7 +439,7 @@ fn update_cache<
     let s_ptr = *s.device_ptr() as *const core::ffi::c_long;
 
     unsafe {
-        reshape_and_cache(
+        ffi::reshape_and_cache(
             k_ptr,
             v_ptr,
             kc_ptr,
