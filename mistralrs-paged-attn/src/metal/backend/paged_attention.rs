@@ -152,7 +152,7 @@ impl candle_core::CustomOp1 for PagedAttention {
         let kv_head_stride = kc_l.stride()[1];
 
         let partition_size = 512;
-        let max_num_partitions = (self.max_context_len + partition_size - 1) / partition_size;
+        let max_num_partitions = self.max_context_len.div_ceil(partition_size);
         let use_v1 = (max_num_partitions == 1 || num_seqs * num_heads > 512)
             && partition_size % block_size == 0;
 

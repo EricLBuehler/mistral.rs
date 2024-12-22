@@ -58,22 +58,12 @@ pub fn copy_blocks(
         key_cache.to_device(cache_dev)?;
         value_cache.to_device(cache_dev)?;
 
-        let key_offset: usize = key_cache
-            .storage_and_layout()
-            .1
-            .start_offset()
-            .try_into()
-            .unwrap();
+        let key_offset = key_cache.storage_and_layout().1.start_offset();
         let Storage::Metal(key_storage) = &*key_cache.storage_and_layout().0 else {
             unreachable!()
         };
 
-        let value_offset: usize = value_cache
-            .storage_and_layout()
-            .1
-            .start_offset()
-            .try_into()
-            .unwrap();
+        let value_offset = value_cache.storage_and_layout().1.start_offset();
         let Storage::Metal(value_storage) = &*value_cache.storage_and_layout().0 else {
             unreachable!()
         };
@@ -144,7 +134,7 @@ pub unsafe fn swap_blocks(
                 let length = (src_layout.shape().elem_count() * src_storage.dtype().size_in_bytes())
                     as NSUInteger;
                 blit.copy_from_buffer(
-                    &src_storage.buffer(),
+                    src_storage.buffer(),
                     src_offset as u64,
                     dst_storage.buffer(),
                     dst_offset as u64,
@@ -204,7 +194,7 @@ pub unsafe fn swap_blocks(
 
             match src_storage {
                 CpuStorage::BF16(s) => swap_thunk(
-                    &s,
+                    s,
                     src_layout,
                     dst_storage,
                     dst_layout,
@@ -213,7 +203,7 @@ pub unsafe fn swap_blocks(
                     block_mapping,
                 )?,
                 CpuStorage::F16(s) => swap_thunk(
-                    &s,
+                    s,
                     src_layout,
                     dst_storage,
                     dst_layout,
@@ -222,7 +212,7 @@ pub unsafe fn swap_blocks(
                     block_mapping,
                 )?,
                 CpuStorage::F32(s) => swap_thunk(
-                    &s,
+                    s,
                     src_layout,
                     dst_storage,
                     dst_layout,

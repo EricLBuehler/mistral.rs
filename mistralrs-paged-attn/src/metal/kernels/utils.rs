@@ -1,27 +1,5 @@
-use metal::{Buffer, ComputeCommandEncoderRef, ComputePipelineState, MTLSize};
+use metal::{Buffer, ComputeCommandEncoderRef};
 use std::ffi::c_void;
-
-/// Most kernels apply similarly across the tensors
-/// This creates a strategy that uses the maximum amount of threads per threadgroup (capped at the
-/// actual total buffer length).
-/// Then kernels can just do their op on their single point in the buffer.
-pub(crate) fn linear_split(pipeline: &ComputePipelineState, length: usize) -> (MTLSize, MTLSize) {
-    let size = length as u64;
-    let width = std::cmp::min(pipeline.max_total_threads_per_threadgroup(), size);
-    let count = size.div_ceil(width);
-    let thread_group_count = MTLSize {
-        width: count,
-        height: 1,
-        depth: 1,
-    };
-
-    let thread_group_size = MTLSize {
-        width,
-        height: 1,
-        depth: 1,
-    };
-    (thread_group_count, thread_group_size)
-}
 
 pub fn set_param<P: EncoderParam>(encoder: &ComputeCommandEncoderRef, position: u64, data: P) {
     <P as EncoderParam>::set_param(encoder, position, data)

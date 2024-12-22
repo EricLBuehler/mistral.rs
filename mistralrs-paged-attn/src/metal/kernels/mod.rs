@@ -34,11 +34,6 @@ pub enum MetalKernelError {
     FailedToCreatePipeline(String),
     #[error("dtype mismatch, got {got:?}, expected {expected:?}")]
     DTypeMismatch { expected: Vec<DType>, got: DType },
-    #[error("reshape and cache dtype mismatch, got {got:?}, expected {expected:?}")]
-    PagedAttentionDTypeMismatch {
-        expected: Vec<PagedAttentionDType>,
-        got: PagedAttentionDType,
-    },
 }
 
 impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
@@ -291,18 +286,12 @@ pub fn call_reshape_and_cache(
 
 #[derive(Debug, PartialEq)]
 pub enum Value {
-    USize(usize),
     Bool(bool),
-    F32(f32),
-    U16(u16),
 }
 
 impl std::hash::Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
-            Value::F32(v) => v.to_bits().hash(state),
-            Value::USize(v) => v.hash(state),
-            Value::U16(v) => v.hash(state),
             Value::Bool(v) => v.hash(state),
         }
     }
@@ -311,9 +300,6 @@ impl std::hash::Hash for Value {
 impl Value {
     fn data_type(&self) -> MTLDataType {
         match self {
-            Value::USize(_) => MTLDataType::UInt,
-            Value::F32(_) => MTLDataType::Float,
-            Value::U16(_) => MTLDataType::UShort,
             Value::Bool(_) => MTLDataType::Bool,
         }
     }
@@ -335,27 +321,6 @@ impl ConstantValues {
         for (index, value) in &self.0 {
             let ty = value.data_type();
             match value {
-                Value::USize(v) => {
-                    f.set_constant_value_at_index(
-                        v as *const usize as *const c_void,
-                        ty,
-                        *index as u64,
-                    );
-                }
-                Value::F32(v) => {
-                    f.set_constant_value_at_index(
-                        v as *const f32 as *const c_void,
-                        ty,
-                        *index as u64,
-                    );
-                }
-                Value::U16(v) => {
-                    f.set_constant_value_at_index(
-                        v as *const u16 as *const c_void,
-                        ty,
-                        *index as u64,
-                    );
-                }
                 Value::Bool(v) => {
                     f.set_constant_value_at_index(
                         v as *const bool as *const c_void,
@@ -436,8 +401,7 @@ pub fn call_paged_attention_v1(
     assert_eq!(pipeline.thread_execution_width(), NUM_SIMD_LANES);
 
     let num_simds = NUM_THREADS / NUM_SIMD_LANES;
-    let padded_max_context_len =
-        ((max_context_len + block_size - 1) / block_size) * block_size;
+    let padded_max_context_len = ((max_context_len + block_size - 1) / block_size) * block_size;
     let logits_size = padded_max_context_len * std::mem::size_of::<f32>() as i32;
     let outputs_size = (num_simds as i32 / 2) * head_size * std::mem::size_of::<f32>() as i32;
     let shared_mem_size = logits_size.max(outputs_size);
