@@ -364,7 +364,6 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   const int max_num_partitions = threadgroups_per_grid.z;
   const int thread_idx = thread_position_in_threadgroup.x;
   constexpr bool USE_PARTITIONING = PARTITION_SIZE > 0;
-  static_assert(!USE_PARTITIONING);
   const uint32_t context_len = context_lens[seq_idx];
   if (USE_PARTITIONING && partition_idx * PARTITION_SIZE >= context_len) {
     // No work to do. Terminate the thread block.
@@ -641,9 +640,109 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
     for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
       const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
       if (row_idx < HEAD_SIZE && lane % NUM_V_VECS_PER_ROW == 0) {
-        *(out_ptr + row_idx) = float(accs[i]);
+        *(out_ptr + row_idx) = T(accs[i]);
       }
     }
+  }
+}
+
+template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES, int PARTITION_SIZE = 0>
+[[kernel]] void paged_attention_v2_reduce(
+    device T* out [[buffer(0)]],
+    const device float* exp_sums [[buffer(1)]],
+    const device float* max_logits [[buffer(2)]],
+    const device T* tmp_out [[buffer(3)]],
+    device uint32_t* context_lens [[buffer(4)]],
+    const constant int& max_num_partitions [[buffer(5)]],
+    threadgroup char* shared_mem [[threadgroup(0)]],
+    uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],
+    uint3 threadgroups_per_grid [[threadgroups_per_grid]],
+    uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]],
+    uint3 threads_per_threadgroup [[threads_per_threadgroup]],
+    uint simd_tid [[simdgroup_index_in_threadgroup]],
+    uint simd_lid [[thread_index_in_simdgroup]]
+) {
+  const int num_heads = threadgroups_per_grid.x;
+  const int head_idx = threadgroup_position_in_grid.x;
+  const int seq_idx = threadgroup_position_in_grid.y;
+  const uint32_t context_len = context_lens[seq_idx];
+  const int num_partitions = DIVIDE_ROUND_UP(context_len, PARTITION_SIZE);
+  if (num_partitions == 1) {
+    // No need to reduce. Only copy tmp_out to out.
+    device T* out_ptr = out + seq_idx * num_heads * HEAD_SIZE + head_idx * HEAD_SIZE;
+    const device T* tmp_out_ptr = tmp_out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE
+                                          + head_idx * max_num_partitions * HEAD_SIZE;
+    for (int i = thread_position_in_threadgroup.x; i < HEAD_SIZE; i += threads_per_threadgroup.x) {
+      out_ptr[i] = tmp_out_ptr[i];
+    }
+    // Terminate the thread block.
+    return;
+  }
+
+  constexpr int NUM_WARPS = NUM_THREADS / NUM_SIMD_LANES;
+  const int warp_idx = simd_tid;
+  const int lane = simd_lid;
+
+  // Workspace for reduction.
+  threadgroup float red_smem[2 * NUM_WARPS];
+
+  // Load max logits to shared memory.
+  threadgroup float* shared_max_logits = reinterpret_cast<threadgroup float*>(shared_mem);
+  const device float* max_logits_ptr = max_logits + seq_idx * num_heads * max_num_partitions
+                                           + head_idx * max_num_partitions;
+  float max_logit = -FLT_MAX;
+  for (int i = thread_position_in_threadgroup.x; i < num_partitions; i += threads_per_threadgroup.x) {
+    const float l = max_logits_ptr[i];
+    shared_max_logits[i] = l;
+    max_logit = max(max_logit, l);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  // Get the global max logit.
+  // Reduce within the warp.
+#pragma unroll
+  for (int mask = NUM_SIMD_LANES / 2; mask >= 1; mask /= 2) {
+    max_logit = max(max_logit, simd_shuffle_xor(max_logit, mask));
+  }
+  if (lane == 0) {
+    red_smem[warp_idx] = max_logit;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  // Reduce across warps.
+  max_logit = lane < NUM_WARPS ? red_smem[lane] : -FLT_MAX;
+#pragma unroll
+  for (int mask = NUM_WARPS / 2; mask >= 1; mask /= 2) {
+    max_logit = max(max_logit, simd_shuffle_xor(max_logit, mask));
+  }
+  // Broadcast the max value to all threads.
+  max_logit = simd_shuffle(max_logit, 0);
+
+  // Load rescaled exp sums to shared memory.
+  threadgroup float* shared_exp_sums = reinterpret_cast<threadgroup float*>(shared_mem + sizeof(float) * num_partitions);
+  const device float* exp_sums_ptr = exp_sums + seq_idx * num_heads * max_num_partitions
+                                       + head_idx * max_num_partitions;
+  float global_exp_sum = 0.0f;
+  for (int i = thread_position_in_threadgroup.x; i < num_partitions; i += threads_per_threadgroup.x) {
+    float l = shared_max_logits[i];
+    float rescaled_exp_sum = exp_sums_ptr[i] * exp(l - max_logit);
+    global_exp_sum += rescaled_exp_sum;
+    shared_exp_sums[i] = rescaled_exp_sum;
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  global_exp_sum = block_sum<NUM_WARPS, NUM_SIMD_LANES>(&red_smem[NUM_WARPS], global_exp_sum, simd_tid, simd_lid);
+  const float inv_global_exp_sum = divide(1.0f, global_exp_sum + 1e-6f);
+
+  // Aggregate tmp_out to out.
+  const device T* tmp_out_ptr = tmp_out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE
+                                        + head_idx * max_num_partitions * HEAD_SIZE;
+  device T* out_ptr = out + seq_idx * num_heads * HEAD_SIZE + head_idx * HEAD_SIZE;
+#pragma unroll
+  for (int i = thread_position_in_threadgroup.x; i < HEAD_SIZE; i += NUM_THREADS) {
+    float acc = 0.0f;
+    for (int j = 0; j < num_partitions; ++j) {
+      acc += float(tmp_out_ptr[j * HEAD_SIZE + i]) * shared_exp_sums[j] * inv_global_exp_sum;
+    }
+    out_ptr[i] = T(acc);
   }
 }
 
@@ -673,6 +772,23 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
       uint simd_tid [[simdgroup_index_in_threadgroup]],                                            \
       uint simd_lid [[thread_index_in_simdgroup]]);                                            \
 
+#define instantiate_paged_attention_v2_reduce_inner(type, head_size, num_threads, num_simd_lanes, partition_size)                                               \
+  template [[host_name("paged_attention_v2_reduce_" #type "_hs" #head_size "_nt" #num_threads "_nsl" #num_simd_lanes "_ps" #partition_size)]]  \
+  [[kernel]] void paged_attention_v2_reduce<type, head_size, num_threads, num_simd_lanes, partition_size>(             \
+      device type* out [[buffer(0)]],             \
+      const device float* exp_sums [[buffer(1)]],             \
+      const device float* max_logits [[buffer(2)]],             \
+      const device type* tmp_out [[buffer(3)]],             \
+      device uint32_t* context_lens [[buffer(4)]],             \
+      const constant int& max_num_partitions [[buffer(5)]],             \
+      threadgroup char* shared_mem [[threadgroup(0)]],             \
+      uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],             \
+      uint3 threadgroups_per_grid [[threadgroups_per_grid]],             \
+      uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]],             \
+      uint3 threads_per_threadgroup [[threads_per_threadgroup]],             \
+      uint simd_tid [[simdgroup_index_in_threadgroup]],             \
+      uint simd_lid [[thread_index_in_simdgroup]]);             \
+
 
 #define instantiate_paged_attention_heads(type, block_size, num_threads, num_simd_lanes, partition_size) \
   instantiate_paged_attention_inner(type, 64, block_size, num_threads, num_simd_lanes, partition_size)         \
@@ -682,6 +798,14 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   instantiate_paged_attention_inner(type, 128, block_size, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_inner(type, 256, block_size, num_threads, num_simd_lanes, partition_size)
 
+#define instantiate_paged_attention_v2_reduce_heads(type, num_threads, num_simd_lanes, partition_size) \
+  instantiate_paged_attention_v2_reduce_inner(type, 64, num_threads, num_simd_lanes, partition_size)         \
+  instantiate_paged_attention_v2_reduce_inner(type, 80, num_threads, num_simd_lanes, partition_size)         \
+  instantiate_paged_attention_v2_reduce_inner(type, 96, num_threads, num_simd_lanes, partition_size)         \
+  instantiate_paged_attention_v2_reduce_inner(type, 112, num_threads, num_simd_lanes, partition_size)         \
+  instantiate_paged_attention_v2_reduce_inner(type, 128, num_threads, num_simd_lanes, partition_size)         \
+  instantiate_paged_attention_v2_reduce_inner(type, 256, num_threads, num_simd_lanes, partition_size)
+
 #define instantiate_paged_attention_block_size(type, num_threads, num_simd_lanes, partition_size) \
   instantiate_paged_attention_heads(type, 8, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_heads(type, 16, num_threads, num_simd_lanes, partition_size)         \
@@ -689,9 +813,19 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
 
 // TODO: tune num_threads = 128
 // NOTE: partition_size = 0
-#define instantiate_paged_attention_no_partitioning(type, num_simd_lanes) \
+#define instantiate_paged_attention_v1(type, num_simd_lanes) \
   instantiate_paged_attention_block_size(type, 128, num_simd_lanes, 0)
 
-instantiate_paged_attention_no_partitioning(float, 32)
-instantiate_paged_attention_no_partitioning(bfloat16_t, 32)
-instantiate_paged_attention_no_partitioning(half, 32)
+// TODO: tune num_threads = 128
+// NOTE: partition_size = 512
+#define instantiate_paged_attention_v2(type, num_simd_lanes) \
+  instantiate_paged_attention_block_size(type, 128, num_simd_lanes, 512) \
+  instantiate_paged_attention_v2_reduce_heads(type, 128, num_simd_lanes, 512)
+
+instantiate_paged_attention_v1(float, 32)
+instantiate_paged_attention_v1(bfloat16_t, 32)
+instantiate_paged_attention_v1(half, 32)
+
+instantiate_paged_attention_v2(float, 32)
+instantiate_paged_attention_v2(bfloat16_t, 32)
+instantiate_paged_attention_v2(half, 32)

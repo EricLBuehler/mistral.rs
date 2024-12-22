@@ -437,7 +437,7 @@ pub fn call_paged_attention_v1(
 
     let num_simds = NUM_THREADS / NUM_SIMD_LANES;
     let padded_max_context_len =
-        ((max_context_len + block_size as i32 - 1) / block_size) * block_size;
+        ((max_context_len + block_size - 1) / block_size) * block_size;
     let logits_size = padded_max_context_len * std::mem::size_of::<f32>() as i32;
     let outputs_size = (num_simds as i32 / 2) * head_size * std::mem::size_of::<f32>() as i32;
     let shared_mem_size = logits_size.max(outputs_size);
@@ -499,10 +499,211 @@ pub fn call_paged_attention_v1(
         depth: 1,
     };
     let thread_group_size = MTLSize {
-        width: NUM_THREADS as u64,
+        width: NUM_THREADS,
         height: 1,
         depth: 1,
     };
     encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_paged_attention_v2(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: PagedAttentionDType,
+    exp_sums: &Buffer,
+    max_logits: &Buffer,
+    q: &Buffer,
+    q_offset: usize,
+    k_cache: &Buffer,
+    k_cache_offset: usize,
+    v_cache: &Buffer,
+    v_cache_offset: usize,
+    block_tables: &Buffer,
+    block_tables_offset: usize,
+    context_lens: &Buffer,
+    context_lens_offset: usize,
+    alibi_storage_and_offset: Option<(MetalStorage, usize)>,
+    tmp_out: &Buffer,
+    output: &Buffer,
+    num_kv_heads: i32,
+    scale: f32,
+    softcapping: f32,
+    block_size: i32,
+    max_context_len: i32,
+    num_seqs: i32,
+    num_heads: i32,
+    head_size: i32,
+    max_num_blocks_per_seq: i32,
+    q_stride: i32,
+    kv_block_stride: i32,
+    kv_head_stride: i32,
+) -> Result<(), MetalKernelError> {
+    const NUM_THREADS: u64 = 128;
+    const PARTITION_SIZE: u64 = 512;
+    const NUM_SIMD_LANES: u64 = 32;
+
+    // Initial paged attention kernel
+    {
+        let name = match ty {
+            PagedAttentionDType::F32 => "paged_attention_float",
+            PagedAttentionDType::BF16 => "paged_attention_float_bfloat16_t",
+            PagedAttentionDType::F16 => "paged_attention_float_half",
+        };
+        let mut name = name.to_string();
+        name.push_str(&format!("_hs{head_size}"));
+        name.push_str(&format!("_bs{block_size}"));
+        name.push_str(&format!("_nt{NUM_THREADS}"));
+        name.push_str(&format!("_nsl{}", NUM_SIMD_LANES));
+        // v2 has partition.
+        name.push_str(&format!("_ps{}", PARTITION_SIZE));
+
+        // v2 has partition.
+        // Handle alibi
+        let constants = Some(ConstantValues::new(vec![
+            (10, Value::Bool(/* use_partitioning */ true)),
+            (
+                20,
+                Value::Bool(/* use_alibi */ alibi_storage_and_offset.is_some()),
+            ),
+        ]));
+
+        let pipeline = kernels.load_pipeline_with_constants(
+            device,
+            Source::PagedAttention,
+            name,
+            constants,
+        )?;
+
+        let encoder = ep.encoder();
+        let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+        encoder.set_compute_pipeline_state(&pipeline);
+
+        assert_eq!(pipeline.thread_execution_width(), NUM_SIMD_LANES);
+
+        let num_simds = NUM_THREADS / NUM_SIMD_LANES;
+        let max_num_partitions =
+            (max_context_len + PARTITION_SIZE as i32 - 1) / PARTITION_SIZE as i32;
+        let logits_size = PARTITION_SIZE as i32 * std::mem::size_of::<f32>() as i32;
+        let outputs_size = (num_simds as i32 / 2) * head_size * std::mem::size_of::<f32>() as i32;
+        let shared_mem_size = logits_size.max(outputs_size);
+        encoder.set_threadgroup_memory_length(0, shared_mem_size as u64);
+
+        encoder.set_buffer(0, Some(exp_sums), 0 as NSUInteger);
+        encoder.set_buffer(1, Some(max_logits), 0 as NSUInteger);
+        encoder.set_buffer(2, Some(tmp_out), 0 as NSUInteger);
+        encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
+        encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
+        encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
+        encoder.set_bytes(
+            6,
+            core::mem::size_of_val(&num_kv_heads) as u64,
+            &num_kv_heads as *const _ as *const c_void,
+        );
+        encoder.set_bytes(
+            6,
+            core::mem::size_of_val(&num_kv_heads) as u64,
+            &num_kv_heads as *const _ as *const c_void,
+        );
+        encoder.set_bytes(
+            7,
+            core::mem::size_of_val(&scale) as u64,
+            &scale as *const _ as *const c_void,
+        );
+        encoder.set_bytes(
+            8,
+            core::mem::size_of_val(&softcapping) as u64,
+            &softcapping as *const _ as *const c_void,
+        );
+        encoder.set_buffer(9, Some(block_tables), block_tables_offset as NSUInteger);
+        encoder.set_buffer(10, Some(context_lens), context_lens_offset as NSUInteger);
+        encoder.set_bytes(
+            11,
+            core::mem::size_of_val(&max_num_blocks_per_seq) as u64,
+            &max_num_blocks_per_seq as *const _ as *const c_void,
+        );
+        if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
+            encoder.set_buffer(12, Some(alibi.buffer()), alibi_offset as NSUInteger);
+        }
+        encoder.set_bytes(
+            13,
+            core::mem::size_of_val(&q_stride) as u64,
+            &q_stride as *const _ as *const c_void,
+        );
+        encoder.set_bytes(
+            14,
+            core::mem::size_of_val(&kv_block_stride) as u64,
+            &kv_block_stride as *const _ as *const c_void,
+        );
+        encoder.set_bytes(
+            15,
+            core::mem::size_of_val(&kv_head_stride) as u64,
+            &kv_head_stride as *const _ as *const c_void,
+        );
+
+        let thread_groups_count = MTLSize {
+            width: num_heads as u64,
+            height: num_seqs as u64,
+            depth: max_num_partitions as u64,
+        };
+        let thread_group_size = MTLSize {
+            width: NUM_THREADS,
+            height: 1,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
+    }
+
+    // Paged attention reduce kernel
+    {
+        let name = match ty {
+            PagedAttentionDType::F32 => "paged_attention_v2_reduce_float",
+            PagedAttentionDType::BF16 => "paged_attention_v2_reduce_bfloat16_t",
+            PagedAttentionDType::F16 => "paged_attention_v2_reduce_float_half",
+        };
+        let mut name = name.to_string();
+        name.push_str(&format!("_hs{head_size}"));
+        name.push_str(&format!("_nt{NUM_THREADS}"));
+        name.push_str(&format!("_nsl{}", NUM_SIMD_LANES));
+        name.push_str(&format!("_ps{}", PARTITION_SIZE));
+
+        let pipeline = kernels.load_pipeline(device, Source::PagedAttention, name)?;
+
+        let encoder = ep.encoder();
+        let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+        encoder.set_compute_pipeline_state(&pipeline);
+
+        assert_eq!(pipeline.thread_execution_width(), NUM_SIMD_LANES);
+
+        let max_num_partitions =
+            (max_context_len + PARTITION_SIZE as i32 - 1) / PARTITION_SIZE as i32;
+        let reduce_shared_mem_size = 2 * max_num_partitions * std::mem::size_of::<f32>() as i32;
+        encoder.set_threadgroup_memory_length(0, reduce_shared_mem_size as u64);
+
+        encoder.set_buffer(0, Some(output), 0 as NSUInteger);
+        encoder.set_buffer(1, Some(exp_sums), 0 as NSUInteger);
+        encoder.set_buffer(2, Some(max_logits), 0 as NSUInteger);
+        encoder.set_buffer(3, Some(tmp_out), 0 as NSUInteger);
+        encoder.set_buffer(4, Some(context_lens), context_lens_offset as NSUInteger);
+        encoder.set_bytes(
+            5,
+            core::mem::size_of_val(&max_num_partitions) as u64,
+            &max_num_partitions as *const _ as *const c_void,
+        );
+
+        let thread_groups_count = MTLSize {
+            width: num_heads as u64,
+            height: num_seqs as u64,
+            depth: 1,
+        };
+        let thread_group_size = MTLSize {
+            width: NUM_THREADS,
+            height: 1,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
+    }
     Ok(())
 }

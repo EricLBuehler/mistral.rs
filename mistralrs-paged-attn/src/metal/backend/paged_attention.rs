@@ -210,7 +210,41 @@ impl candle_core::CustomOp1 for PagedAttention {
                 DType::F32,
                 "paged-attention-maxlogits",
             )?;
-            todo!()
+
+            kernels::call_paged_attention_v2(
+                dev.device(),
+                &command_buffer,
+                &kernels::Kernels::new(),
+                internal_type,
+                &exp_sums,
+                &max_logits,
+                q.buffer(),
+                q_l.start_offset() * q.dtype().size_in_bytes(),
+                kc.buffer(),
+                kc_l.start_offset() * kc.dtype().size_in_bytes(),
+                vc.buffer(),
+                vc_l.start_offset() * vc.dtype().size_in_bytes(),
+                bt.buffer(),
+                bt_l.start_offset() * bt.dtype().size_in_bytes(),
+                cl.buffer(),
+                cl_l.start_offset() * cl.dtype().size_in_bytes(),
+                alibi_storage_and_offset,
+                &tmp_out,
+                &out,
+                num_kv_heads as i32,
+                self.softmax_scale,
+                self.softcapping,
+                block_size as i32,
+                self.max_context_len as i32,
+                num_seqs as i32,
+                num_heads as i32,
+                head_size as i32,
+                max_num_blocks_per_seq as i32,
+                q_stride as i32,
+                kv_block_stride as i32,
+                kv_head_stride as i32,
+            )
+            .map_err(candle_core::Error::wrap)?;
         }
 
         let newstorage =
