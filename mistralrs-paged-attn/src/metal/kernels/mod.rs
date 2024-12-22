@@ -275,12 +275,12 @@ pub fn call_reshape_and_cache(
         height: 1,
         depth: 1,
     };
-    let thread_group_size = MTLSize {
-        width: (num_heads * head_size).min(1024) as u64,
+    let threads_per_threadgroup = MTLSize {
+        width: (num_heads * head_size).min(512) as u64,
         height: 1,
         depth: 1,
     };
-    encoder.dispatch_thread_groups(thread_groups_count, thread_group_size);
+    encoder.dispatch_thread_groups(thread_groups_count, threads_per_threadgroup);
     Ok(())
 }
 
@@ -411,11 +411,6 @@ pub fn call_paged_attention_v1(
     encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
     encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
     encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
-    encoder.set_bytes(
-        6,
-        core::mem::size_of_val(&num_kv_heads) as u64,
-        &num_kv_heads as *const _ as *const c_void,
-    );
     encoder.set_bytes(
         6,
         core::mem::size_of_val(&num_kv_heads) as u64,
@@ -561,11 +556,6 @@ pub fn call_paged_attention_v2(
         encoder.set_buffer(3, Some(q), q_offset as NSUInteger);
         encoder.set_buffer(4, Some(k_cache), k_cache_offset as NSUInteger);
         encoder.set_buffer(5, Some(v_cache), v_cache_offset as NSUInteger);
-        encoder.set_bytes(
-            6,
-            core::mem::size_of_val(&num_kv_heads) as u64,
-            &num_kv_heads as *const _ as *const c_void,
-        );
         encoder.set_bytes(
             6,
             core::mem::size_of_val(&num_kv_heads) as u64,

@@ -440,7 +440,7 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   // dot product with the query.
   const device uint32_t* block_table = block_tables + seq_idx * max_num_blocks_per_seq;
   for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx; block_idx += NUM_WARPS) {
-    // NOTE(woosuk): The block number is stored in int32. However, we cast it to int64
+    // NOTE: The block number is stored in int32. However, we cast it to int64
     // because int32 can lead to overflow when this variable is multiplied by large numbers
     // (e.g., kv_block_stride).
     const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
@@ -480,7 +480,7 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
 
       if (thread_group_offset == 0) {
         // Store the partial reductions to shared memory.
-        // NOTE(woosuk): It is required to zero out the masked logits.
+        // NOTE: It is required to zero out the masked logits.
         const bool mask = token_idx >= context_len;
         logits[token_idx - start_token_idx] = mask ? 0.f : qk;
         // Update the max value.

@@ -272,7 +272,7 @@ template<typename T>
     device const int& head_size,
     device const int& block_size,
     device const int& x,
-    uint gid [[thread_position_in_grid]],
+    uint gid [[threadgroup_position_in_grid]],
     uint tid [[thread_position_in_threadgroup]],
     uint threads_per_threadgroup [[threads_per_threadgroup]]
 ) {
@@ -324,12 +324,10 @@ template<typename T>
     device const int& head_size,                  \
     device const int& block_size,                  \
     device const int& x,                  \
-    uint gid [[thread_position_in_grid]],                  \
+    uint gid [[threadgroup_position_in_grid]],                  \
     uint tid [[thread_position_in_threadgroup]],                  \
     uint threads_per_threadgroup [[threads_per_threadgroup]]);
 
 instantiate_reshape_and_cache(float)
-#if defined(__HAVE_BFLOAT__)
 instantiate_reshape_and_cache(bfloat16_t)
-#endif
 instantiate_reshape_and_cache(half)

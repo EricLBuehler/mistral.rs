@@ -302,7 +302,5 @@ template<typename T>
     uint threads_per_threadgroup [[threads_per_threadgroup]]);
 
 instantiate_copy_blocks(float)
-#if defined(__HAVE_BFLOAT__)
 instantiate_copy_blocks(bfloat16_t)
-#endif
 instantiate_copy_blocks(half)
