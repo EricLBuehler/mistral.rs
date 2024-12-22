@@ -1,6 +1,6 @@
 use std::{collections::HashMap, iter::zip, ptr::NonNull};
 
-use crate::backend::get_or_load_func;
+use crate::cuda::backend::get_or_load_func;
 
 use candle_core::cuda::cudarc::driver::LaunchAsync;
 use candle_core::cuda::WrapErr;

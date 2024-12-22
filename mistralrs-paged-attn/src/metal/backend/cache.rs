@@ -13,7 +13,6 @@ pub fn copy_blocks(
     value_caches: Vec<&mut Tensor>,
     block_mapping: HashMap<usize, Vec<usize>>,
 ) -> Result<()> {
-    panic!("copy");
     let cache_dev = key_caches.first().unwrap().device();
     let Device::Metal(dev) = cache_dev else {
         panic!("Expected the key caches to be on a Metal device.")
@@ -100,7 +99,6 @@ pub unsafe fn swap_blocks(
     dst: &Tensor,
     block_mapping: HashMap<usize, usize>,
 ) -> Result<()> {
-    panic!("swap");
     let block_size_in_bytes = src.dtype().size_in_bytes() * src.dims()[0];
     if src.device().location() != dst.device().location() {
         candle_core::bail!(
