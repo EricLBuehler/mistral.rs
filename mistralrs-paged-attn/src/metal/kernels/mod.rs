@@ -1,4 +1,4 @@
-use candle_core::DType;
+use candle_core::{DType, MetalStorage};
 use metal::{
     Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
     FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
@@ -385,7 +385,7 @@ pub fn call_paged_attention_v1(
     block_tables_offset: usize,
     context_lens: &Buffer,
     context_lens_offset: usize,
-    alibi_buffer_and_offset: Option<(&Buffer, usize)>,
+    alibi_storage_and_offset: Option<(MetalStorage, usize)>,
     output: &Buffer,
     num_kv_heads: i32,
     scale: f32,
@@ -422,7 +422,7 @@ pub fn call_paged_attention_v1(
         (10, Value::Bool(/* use_partitioning */ false)),
         (
             20,
-            Value::Bool(/* use_alibi */ alibi_buffer_and_offset.is_some()),
+            Value::Bool(/* use_alibi */ alibi_storage_and_offset.is_some()),
         ),
     ]));
 
@@ -474,8 +474,8 @@ pub fn call_paged_attention_v1(
         core::mem::size_of_val(&max_num_blocks_per_seq) as u64,
         &max_num_blocks_per_seq as *const _ as *const c_void,
     );
-    if let Some((alibi, alibi_offset)) = alibi_buffer_and_offset {
-        encoder.set_buffer(12, Some(alibi), alibi_offset as NSUInteger);
+    if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
+        encoder.set_buffer(12, Some(alibi.buffer()), alibi_offset as NSUInteger);
     }
     encoder.set_bytes(
         13,

@@ -675,9 +675,10 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
 
 
 #define instantiate_paged_attention_heads(type, block_size, num_threads, num_simd_lanes, partition_size) \
-  instantiate_paged_attention_inner(type, 32, block_size, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_inner(type, 64, block_size, num_threads, num_simd_lanes, partition_size)         \
+  instantiate_paged_attention_inner(type, 80, block_size, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_inner(type, 96, block_size, num_threads, num_simd_lanes, partition_size)         \
+  instantiate_paged_attention_inner(type, 112, block_size, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_inner(type, 128, block_size, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_inner(type, 256, block_size, num_threads, num_simd_lanes, partition_size)
 
