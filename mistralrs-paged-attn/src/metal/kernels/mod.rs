@@ -370,8 +370,8 @@ pub fn call_paged_attention_v1(
 
     let name = match ty {
         PagedAttentionDType::F32 => "paged_attention_float",
-        PagedAttentionDType::BF16 => "paged_attention_float_bfloat16_t",
-        PagedAttentionDType::F16 => "paged_attention_float_half",
+        PagedAttentionDType::BF16 => "paged_attention_bfloat16_t",
+        PagedAttentionDType::F16 => "paged_attention_half",
     };
     let mut name = name.to_string();
     name.push_str(&format!("_hs{head_size}"));
@@ -513,8 +513,8 @@ pub fn call_paged_attention_v2(
     {
         let name = match ty {
             PagedAttentionDType::F32 => "paged_attention_float",
-            PagedAttentionDType::BF16 => "paged_attention_float_bfloat16_t",
-            PagedAttentionDType::F16 => "paged_attention_float_half",
+            PagedAttentionDType::BF16 => "paged_attention_bfloat16_t",
+            PagedAttentionDType::F16 => "paged_attention_half",
         };
         let mut name = name.to_string();
         name.push_str(&format!("_hs{head_size}"));
@@ -625,7 +625,7 @@ pub fn call_paged_attention_v2(
         let name = match ty {
             PagedAttentionDType::F32 => "paged_attention_v2_reduce_float",
             PagedAttentionDType::BF16 => "paged_attention_v2_reduce_bfloat16_t",
-            PagedAttentionDType::F16 => "paged_attention_v2_reduce_float_half",
+            PagedAttentionDType::F16 => "paged_attention_v2_reduce_half",
         };
         let mut name = name.to_string();
         name.push_str(&format!("_hs{head_size}"));

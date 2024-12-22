@@ -83,7 +83,6 @@ llguidance = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97
 toktrie_hf_tokenizers = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc" }
 objc = { version = "0.2.7", optional = true }
 
-
 [features]
 pyo3_macros = ["pyo3"]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "mistralrs-quant/cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda", "float8/cuda"]
