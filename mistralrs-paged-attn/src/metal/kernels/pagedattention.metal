@@ -265,8 +265,7 @@ inline float qk_dot(device T* q[N], device T* k[N]) {
   // Compute the parallel products then sum for Q*K^T (treat vector lanes separately).
   float qk = 0;
 #pragma unroll
-  for (int ii = 1; ii < N; ++ii) {
-#pragma unroll
+  for (int ii = 0; ii < N; ++ii) {
     for (int vi = 0; vi < VEC_SIZE; ++vi) {
       qk = fma(float(q[ii][vi]), float(k[ii][vi]), qk);
     }

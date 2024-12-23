@@ -1,6 +1,6 @@
 use candle_core::{
-    backend::BackendStorage, CpuStorage, DType, Device, Layout, MetalStorage, Result, Shape,
-    Storage, Tensor,
+    backend::BackendStorage, CpuStorage, DType, Layout, MetalStorage, Result, Shape, Storage,
+    Tensor,
 };
 
 use crate::metal::kernels::{self, PagedAttentionDType};
@@ -412,9 +412,7 @@ pub fn reshape_and_cache(
     let key_stride = k_l.stride()[0] as i32;
     let value_stride = v_l.stride()[0] as i32;
 
-    let Device::Metal(dev) = key.device() else {
-        panic!("Expected the key to be on a Metal device.")
-    };
+    let dev = key.device().as_metal_device()?;
 
     let command_buffer = dev.command_buffer()?;
     command_buffer.set_label("reshape-and-cache");
