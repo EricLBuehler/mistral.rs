@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
@@ -131,6 +131,12 @@ impl PagedAttention {
             // Return result in prefill
             return Ok(att);
         }
+
+        #[cfg(feature = "cuda")]
+        let p = 'c';
+        #[cfg(feature = "metal")]
+        let p = 'm';
+        key_cache.as_ref().unwrap().to_dtype(DType::F32)?.write_npy(&format!("{p}-key-cache.npy"))?;
         //  Args:
         //  output: shape = [num_generation_tokens, num_heads, head_size]
         //
@@ -146,7 +152,7 @@ impl PagedAttention {
         //
         //  alibi_slopes: shape = [num_heads]
         #[allow(clippy::cast_possible_truncation)]
-        paged_attention(
+        let res = paged_attention(
             &query,
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
@@ -156,6 +162,10 @@ impl PagedAttention {
             input_metadata.max_context_len.unwrap(),
             self.scale,
             softcapping.unwrap_or(1.0f64) as f32,
-        )
+        )?;
+
+        res.to_dtype(DType::F32)?.write_npy(&format!("{p}-res.npy"))?;
+
+        panic!();
     }
 }
