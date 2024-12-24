@@ -249,6 +249,10 @@ impl Sdpa {
         sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
+        // Move q to the same device as k,v,mask
+        let q = q.to_device(k.device())?;
+        let q = q.contiguous()?;
+        
         if sdpa_params.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
@@ -259,7 +263,7 @@ impl Sdpa {
 
         if q.device().is_metal() && seq_len == 1 {
             return candle_nn::ops::sdpa(
-                q,
+                &q,
                 k,
                 v,
                 sdpa_params.softmax_scale,
@@ -332,10 +336,10 @@ impl Sdpa {
                 }
             } else {
                 // Use the f16 kernels here if quantized (ISQ or GGML), and a large enough prompt
-                naive_sdpa(q, &k, &v, mask, head_dim, sdpa_params)
+                naive_sdpa(&q, &k, &v, mask, head_dim, sdpa_params)
             }
         } else {
-            naive_sdpa(q, &k, &v, mask, head_dim, sdpa_params)
+            naive_sdpa(&q, &k, &v, mask, head_dim, sdpa_params)
         }
     }
 }
