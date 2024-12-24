@@ -252,7 +252,6 @@ impl Sdpa {
         // Move q to the same device as k,v,mask
         let q = q.to_device(k.device())?;
         let q = q.contiguous()?;
-        
         if sdpa_params.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
