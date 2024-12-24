@@ -486,7 +486,16 @@
 <a href="#485" id="485">485</a>
 <a href="#486" id="486">486</a>
 <a href="#487" id="487">487</a>
-<a href="#488" id="488">488</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
@@ -637,6 +646,10 @@
     <span class="doccomment">/// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     </span><span class="attr">#[arg(long = <span class="string">"prompt-batchsize"</span>)]
     </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+
+    <span class="doccomment">/// Use CPU only
+    </span><span class="attr">#[arg(long)]
+    </span>cpu: bool,
 }
 
 <span class="attr">#[utoipa::path(
@@ -802,7 +815,12 @@
     <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
     </span><span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>)<span class="question-mark">?</span>;
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
-    </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
+    </span><span class="kw">let </span>device = <span class="kw">if </span>args.cpu {
+        args.no_paged_attn = <span class="bool-val">true</span>;
+        Device::Cpu
+    } <span class="kw">else </span>{
+        Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?
+    </span>};
 
     <span class="kw">if let </span><span class="prelude-val">Some</span>(seed) = args.seed {
         device.set_seed(seed)<span class="question-mark">?</span>;

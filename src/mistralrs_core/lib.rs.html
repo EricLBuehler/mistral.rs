@@ -552,7 +552,8 @@
 <a href="#551" id="551">551</a>
 <a href="#552" id="552">552</a>
 <a href="#553" id="553">553</a>
-<a href="#554" id="554">554</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
@@ -781,7 +782,8 @@
         <span class="self">self</span>.disable_eos_stop = <span class="prelude-val">Some</span>(disable_eos_stop);
         <span class="self">self
     </span>}
-    <span class="kw">pub fn </span>with_gemm_full_precision_f16(<span class="kw-2">mut </span><span class="self">self</span>, gemm_full_precision: bool) -&gt; <span class="self">Self </span>{
+    <span class="doccomment">/// This setting is only applicable on CUDA. If set to false or not specified, this setting enables f16/bf16 reduced precision matmul for GPUs which support it. If set to true, this setting has no effect.
+    </span><span class="kw">pub fn </span>with_gemm_full_precision_f16(<span class="kw-2">mut </span><span class="self">self</span>, gemm_full_precision: bool) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.gemm_full_precision_f16 = <span class="prelude-val">Some</span>(gemm_full_precision);
         <span class="self">self
     </span>}
