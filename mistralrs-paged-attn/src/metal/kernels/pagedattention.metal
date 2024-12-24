@@ -257,20 +257,511 @@ typedef struct _MLX_BFloat16 bfloat16_t;
 
 #endif
 
+// ========================================== Generic vector types
+
+// A vector type to store Q, K, V elements.
+template<typename T, int VEC_SIZE>
+struct Vec {};
+
+// A vector type to store FP32 accumulators.
+template<typename T>
+struct FloatVec {};
+
+// Template vector operations.
+template<typename Acc, typename A, typename B>
+inline Acc mul(A a, B b);
+
+template<typename T>
+inline float sum(T v);
+
+template<typename T>
+inline float dot(T a, T b) {
+  return sum(mul<T, T, T>(a, b));
+}
+
+template<typename A, typename T>
+inline float dot(T a, T b) {
+  return sum(mul<A, T, T>(a, b));
+}
+
+
+
+// FP32 vector data types.
+struct Float8_ {
+  float4 x;
+  float4 y;
+};
+
+template<>
+struct Vec<float, 1> {
+  using Type = float;
+};
+template<>
+struct Vec<float, 2> {
+  using Type = float2;
+};
+template<>
+struct Vec<float, 4> {
+  using Type = float4;
+};
+template<>
+struct Vec<float, 8> {
+  using Type = Float8_;
+};
+
+template<>
+struct FloatVec<float> {
+  using Type = float;
+};
+template<>
+struct FloatVec<float2> {
+  using Type = float2;
+};
+template<>
+struct FloatVec<float4> {
+  using Type = float4;
+};
+template<>
+struct FloatVec<Float8_> {
+  using Type = Float8_;
+};
+
+template<>
+inline float mul(float a, float b) {
+  return a*b;
+}
+
+template<>
+inline float2 mul(float2 a, float2 b) {
+  return a*b;
+}
+
+template<>
+inline float4 mul(float4 a, float4 b) {
+  return a*b;
+}
+
+template<>
+inline Float8_ mul(Float8_ a, Float8_ b) {
+  Float8_ c;
+  c.x = a.x * b.x;
+  c.y = a.y * b.y;
+  return c;
+}
+
+template<>
+inline float sum(float a) {
+  return a;
+}
+
+template<>
+inline float sum(float2 a) {
+  return a.x + a.y;
+}
+
+template<>
+inline float sum(float4 a) {
+  return a.x + a.y + a.z + a.w;
+}
+
+template<>
+inline float sum(Float8_ a) {
+  return sum(a.x) + sum(a.y);
+}
+
+inline Float8_ fma(Float8_ a, Float8_ b, Float8_ c) {
+  Float8_ res;
+  res.x = fma(a.x, b.x, c.x);
+  res.y = fma(a.y, b.y, c.y);
+  return res;
+}
+
+inline void from_float(thread float& dst, float src) {
+  dst = src;
+}
+inline void from_float(thread float2& dst, float2 src) {
+  dst = src;
+}
+inline void from_float(thread float4& dst, float4 src) {
+  dst = src;
+}
+inline void from_float(thread Float8_& dst, Float8_ src) {
+  dst = src;
+}
+
+
+
+
+// BF16 vector data types.
+struct Bfloat2_ {
+  bfloat16_t x;
+  bfloat16_t y;
+};
+
+struct Bfloat4_ {
+  Bfloat2_ x;
+  Bfloat2_ y;
+};
+
+struct Bfloat8_ {
+  Bfloat4_ x;
+  Bfloat4_ y;
+};
+
+template<>
+struct Vec<bfloat16_t, 1> {
+  using Type = bfloat16_t;
+};
+template<>
+struct Vec<bfloat16_t, 2> {
+  using Type = Bfloat2_;
+};
+template<>
+struct Vec<bfloat16_t, 4> {
+  using Type = Bfloat4_;
+};
+template<>
+struct Vec<bfloat16_t, 8> {
+  using Type = Bfloat8_;
+};
+
+template<>
+struct FloatVec<bfloat16_t> {
+  using Type = float;
+};
+template<>
+struct FloatVec<Bfloat2_> {
+  using Type = float2;
+};
+template<>
+struct FloatVec<Bfloat4_> {
+  using Type = float4;
+};
+template<>
+struct FloatVec<Bfloat8_> {
+  using Type = Float8_;
+};
+
+template<>
+inline float mul(bfloat16_t a, bfloat16_t b) {
+  return (float)a * (float)b;
+}
+template<>
+inline bfloat16_t mul(bfloat16_t a, bfloat16_t b) {
+  return a*b;
+}
+
+template<>
+inline float2 mul(Bfloat2_ a, Bfloat2_ b) {
+  float2 a_f((float)a.x, (float)a.y);
+  float2 b_f((float)b.x, (float)b.y);
+  return a_f * b_f;
+}
+template<>
+inline Bfloat2_ mul(Bfloat2_ a, Bfloat2_ b) {
+  Bfloat2_ c;
+  c.x = a.x * b.x;
+  c.y = a.y * b.y;
+  return c;
+}
+
+template<>
+inline float4 mul(Bfloat4_ a, Bfloat4_ b) {
+  float2 x = mul<float2, Bfloat2_, Bfloat2_>(a.x, b.x);
+  float2 y = mul<float2, Bfloat2_, Bfloat2_>(a.y, b.y);
+  float4 c;
+  c.x = x.x;
+  c.y = x.y;
+  c.z = y.x;
+  c.w = y.y;
+  return c;
+}
+template<>
+inline Bfloat4_ mul(Bfloat4_ a, Bfloat4_ b) {
+  Bfloat4_ c;
+  c.x = mul<Bfloat2_, Bfloat2_, Bfloat2_>(a.x, b.x);
+  c.y = mul<Bfloat2_, Bfloat2_, Bfloat2_>(a.y, b.y);
+  return c;
+}
+
+template<>
+inline Float8_ mul(Bfloat8_ a, Bfloat8_ b) {
+  Float8_ c;
+  c.x = mul<float4, Bfloat4_, Bfloat4_>(a.x, b.x);
+  c.y = mul<float4, Bfloat4_, Bfloat4_>(a.y, b.y);
+  return c;
+}
+template<>
+inline Bfloat8_ mul(Bfloat8_ a, Bfloat8_ b) {
+  Bfloat8_ c;
+  c.x = mul<Bfloat4_, Bfloat4_, Bfloat4_>(a.x, b.x);
+  c.y = mul<Bfloat4_, Bfloat4_, Bfloat4_>(a.y, b.y);
+  return c;
+}
+
+template<>
+inline float sum(bfloat16_t a) {
+  return (float)a;
+}
+
+template<>
+inline float sum(Bfloat2_ a) {
+  return (float)a.x + (float)a.y;
+}
+
+template<>
+inline float sum(Bfloat4_ a) {
+  return sum(a.x) + sum(a.y);
+}
+
+template<>
+inline float sum(Bfloat8_ a) {
+  return sum(a.x) + sum(a.y);
+}
+
+inline float fma(bfloat16_t a, bfloat16_t b, float c) {
+  return (float)a * (float)b + c;
+}
+inline bfloat16_t fma(bfloat16_t a, bfloat16_t b, bfloat16_t c) {
+  return a*b+c;
+}
+
+inline float2 fma(Bfloat2_ a, Bfloat2_ b, float2 c) {
+  float2 a_f((float)a.x, (float)a.y);
+  float2 b_f((float)b.x, (float)b.y);
+  return a_f * b_f + c;
+}
+inline Bfloat2_ fma(Bfloat2_ a, Bfloat2_ b, Bfloat2_ c) {
+  Bfloat2_ res;
+  res.x = a.x * b.x + c.x;
+  res.y = a.y * b.y + c.y;
+  return res;
+}
+
+inline float4 fma(Bfloat4_ a, Bfloat4_ b, float4 c) {
+  float4 res;
+  res.x = fma(a.x.x, b.x.x, c.x);
+  res.y = fma(a.x.y, b.x.y, c.y);
+  res.z = fma(a.y.x, b.y.x, c.z);
+  res.w = fma(a.y.y, b.y.y, c.w);
+  return res;
+}
+inline Bfloat4_ fma(Bfloat4_ a, Bfloat4_ b, Bfloat4_ c) {
+  Bfloat4_ res;
+  res.x = fma(a.x, b.x, c.x);
+  res.y = fma(a.y, b.y, c.y);
+  return res;
+}
+
+inline Float8_ fma(Bfloat8_ a, Bfloat8_ b, Float8_ c) {
+  float4 x = fma(a.x, b.x, c.x);
+  float4 y = fma(a.y, b.y, c.y);
+  Float8_ res;
+  res.x = x;
+  res.y = y;
+  return res;
+}
+inline Bfloat8_ fma(Bfloat8_ a, Bfloat8_ b, Bfloat8_ c) {
+  Bfloat8_ res;
+  res.x = fma(a.x, b.x, c.x);
+  res.y = fma(a.y, b.x, c.y);
+  return c;
+}
+
+inline void from_float(thread bfloat16_t& dst, float src) {
+  dst = static_cast<bfloat16_t>(src);
+}
+inline void from_float(thread Bfloat2_& dst, float2 src) {
+  dst.x = static_cast<bfloat16_t>(src.x);
+  dst.y = static_cast<bfloat16_t>(src.y);
+}
+inline void from_float(thread Bfloat4_& dst, float4 src) {
+  dst.x.x = static_cast<bfloat16_t>(src.x);
+  dst.x.y = static_cast<bfloat16_t>(src.y);
+  dst.y.x = static_cast<bfloat16_t>(src.z);
+  dst.y.y = static_cast<bfloat16_t>(src.w);
+}
+inline void from_float(thread Bfloat8_& dst, Float8_ src) {
+  Bfloat4_ x;
+  Bfloat4_ y;
+  from_float(x, src.x);
+  from_float(y, src.y);
+  dst.x = x;
+  dst.y = y;
+}
+
+
+
+
+
+// FP16 vector data types.
+struct Half8_ {
+  half4 x;
+  half4 y;
+};
+
+template<>
+struct Vec<half, 1> {
+  using Type = half;
+};
+template<>
+struct Vec<half, 2> {
+  using Type = half2;
+};
+template<>
+struct Vec<half, 4> {
+  using Type = half4;
+};
+template<>
+struct Vec<half, 8> {
+  using Type = Half8_;
+};
+
+template<>
+struct FloatVec<half> {
+  using Type = float;
+};
+template<>
+struct FloatVec<half2> {
+  using Type = float2;
+};
+template<>
+struct FloatVec<half4> {
+  using Type = float4;
+};
+template<>
+struct FloatVec<Half8_> {
+  using Type = Float8_;
+};
+
+template<>
+inline float mul(half a, half b) {
+  return (float)a * (float)b;
+}
+template<>
+inline half mul(half a, half b) {
+  return a*b;
+}
+
+template<>
+inline float2 mul(half2 a, half2 b) {
+  return (float2)a * (float2)b;
+}
+template<>
+inline half2 mul(half2 a, half2 b) {
+  return a * b;
+}
+
+template<>
+inline float4 mul(half4 a, half4 b) {
+  return (float4)a * (float4)b;
+}
+template<>
+inline half4 mul(half4 a, half4 b) {
+  return a * b;
+}
+
+template<>
+inline Float8_ mul(Half8_ a, Half8_ b) {
+  float4 x = mul<float4, half4, half4>(a.x, b.x);
+  float4 y = mul<float4, half4, half4>(a.y, b.y);
+  Float8_ c;
+  c.x = x;
+  c.y = y;
+  return c;
+}
+template<>
+inline Half8_ mul(Half8_ a, Half8_ b) {
+  Half8_ c;
+  c.x = mul<half4, half4, half4>(a.x, b.x);
+  c.y = mul<half4, half4, half4>(a.y, b.y);
+  return c;
+}
+
+template<>
+inline float sum(half a) {
+  return (float)a;
+}
+
+template<>
+inline float sum(half2 a) {
+  return (float)a.x + (float)a.y;
+}
+
+template<>
+inline float sum(half4 a) {
+  return sum(a.x) + sum(a.y);
+}
+
+template<>
+inline float sum(Half8_ a) {
+  return sum(a.x) + sum(a.y);
+}
+
+inline float fma(half a, half b, float c) {
+  return (float)a * (float)b + c;
+}
+
+inline float2 fma(half2 a, half2 b, float2 c) {
+  return (float2)a * (float2)b + c;
+}
+
+inline float4 fma(half4 a, half4 b, float4 c) {
+  return (float4)a * (float4)b + c;
+}
+
+inline Float8_ fma(Half8_ a, Half8_ b, Float8_ c) {
+  float4 x = fma(a.x, b.x, c.x);
+  float4 y = fma(a.y, b.y, c.y);
+  Float8_ res;
+  res.x = x + c.x;
+  res.y = y + x.y;
+  return res;
+}
+inline Half8_ fma(Half8_ a, Half8_ b, Half8_ c) {
+  Half8_ res;
+  res.x = fma(a.x, b.x, c.x);
+  res.y = fma(a.y, b.x, c.y);
+  return c;
+}
+
+inline void from_float(thread half& dst, float src) {
+  dst = static_cast<half>(src);
+}
+inline void from_float(thread half2& dst, float2 src) {
+  dst.x = static_cast<half>(src.x);
+  dst.y = static_cast<half>(src.y);
+}
+inline void from_float(thread half4& dst, float4 src) {
+  dst.x = static_cast<half>(src.x);
+  dst.y = static_cast<half>(src.y);
+  dst.z = static_cast<half>(src.z);
+  dst.w = static_cast<half>(src.w);
+}
+inline void from_float(thread Half8_& dst, Float8_ src) {
+  half4 x;
+  half4 y;
+  from_float(x, src.x);
+  from_float(y, src.y);
+  dst.x = x;
+  dst.y = y;
+}
+
 // ========================================== Dot product utilities
 
 // TODO(EricLBuehler): optimize with vectorization
-template<int THREAD_GROUP_SIZE, int VEC_SIZE, typename T, int N>
-inline float qk_dot(threadgroup T q[N][VEC_SIZE], device T* k[N]) {
-  // Compute the parallel products then sum for Q*K^T (treat vector lanes separately).
-  float qk = 0;
+template<int THREAD_GROUP_SIZE, typename Vec, int N>
+inline float qk_dot_(const threadgroup Vec (&q)[N], const thread Vec (&k)[N]) {
+  // Compute the parallel products for Q*K^T (treat vector lanes separately).
+  using A_vec = typename FloatVec<Vec>::Type;
+  A_vec qk_vec = mul<A_vec, Vec, Vec>(q[0], k[0]);
 #pragma unroll
-  for (int ii = 0; ii < N; ++ii) {
-    for (int vi = 0; vi < VEC_SIZE; ++vi) {
-      qk = fma(float(q[ii][vi]), float(k[ii][vi]), qk);
-    }
+  for (int ii = 1; ii < N; ++ii) {
+    qk_vec = fma(q[ii], k[ii], qk_vec);
   }
+
   // Finalize the reduction across lanes.
+  float qk = sum(qk_vec);
 #pragma unroll
   for (int mask = THREAD_GROUP_SIZE / 2; mask >= 1; mask /= 2) {
     qk += simd_shuffle_xor(qk, mask);
@@ -278,16 +769,13 @@ inline float qk_dot(threadgroup T q[N][VEC_SIZE], device T* k[N]) {
   return qk;
 }
 
-template<int VEC_SIZE, typename T>
-inline float dot(const threadgroup float* x, device T* y) {
-  // Compute the parallel products then sum for Q*K^T (treat vector lanes separately).
-  float res = 0;
-#pragma unroll
-  for (int vi = 0; vi < VEC_SIZE; ++vi) {
-    res = fma(x[vi], float(y[vi]), res);
+template<typename T, int THREAD_GROUP_SIZE>
+struct Qk_dot {
+  template<typename Vec, int N>
+  static inline float dot(const threadgroup Vec (&q)[N], const thread Vec (&k)[N]) {
+    return qk_dot_<THREAD_GROUP_SIZE>(q, k);
   }
-  return res;
-}
+};
 
 // ========================================== Block sum utility
 
@@ -402,6 +890,8 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   // For example, if the size of a thread group is 4 and the data type is half,
   // then the vector size is 16 / (4 * sizeof(half)) == 2.
   constexpr int VEC_SIZE = MAX(16 / (THREAD_GROUP_SIZE * sizeof(T)), 1);
+  using K_vec = typename Vec<T, VEC_SIZE>::Type;
+  using Q_vec = typename Vec<T, VEC_SIZE>::Type;
 
   constexpr int NUM_ELEMS_PER_THREAD = HEAD_SIZE / THREAD_GROUP_SIZE;
   constexpr int NUM_VECS_PER_THREAD = NUM_ELEMS_PER_THREAD / VEC_SIZE;
@@ -415,21 +905,11 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   // has 0, 4, 8, ... th vectors of the query, and the second thread has 1, 5, 9, ...
   // th vectors of the query, and so on.
   const device T* q_ptr = q + seq_idx * q_stride + head_idx * HEAD_SIZE;
-  threadgroup T q_vecs[THREAD_GROUP_SIZE][NUM_VECS_PER_THREAD][VEC_SIZE];
-  // for (int i = 0; i < THREAD_GROUP_SIZE; ++i) {
-  //   for (int j = 0; j < NUM_VECS_PER_THREAD; ++j) {
-  //     for (int k = 0; k < VEC_SIZE; ++k) {
-  //       q_vecs[i][j][k] = T(-1000.f);
-  //     }
-  //   }
-  // }
+  threadgroup Q_vec q_vecs[THREAD_GROUP_SIZE][NUM_VECS_PER_THREAD];
 #pragma unroll
   for (int i = thread_group_idx; i < NUM_VECS_PER_THREAD; i += NUM_THREAD_GROUPS) {
     const int vec_idx = thread_group_offset + i * THREAD_GROUP_SIZE;
-    const device T* q_vec_ptr = q_ptr + vec_idx * VEC_SIZE;
-    for (int vi = 0; vi < VEC_SIZE; ++vi) {
-      q_vecs[thread_group_offset][i][vi] = q_vec_ptr[vi];
-    }
+    q_vecs[thread_group_offset][i] = *reinterpret_cast<const device Q_vec*>(q_ptr + vec_idx * VEC_SIZE);
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -462,7 +942,7 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
     for (int i = 0; i < NUM_TOKENS_PER_THREAD_GROUP; i++) {
       const int physical_block_offset = (thread_group_idx + i * NUM_SIMD_LANES) % BLOCK_SIZE;
       const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
-      device T* k_vecs[NUM_VECS_PER_THREAD];
+      K_vec k_vecs[NUM_VECS_PER_THREAD];
 
 #pragma unroll
       for (int j = 0; j < NUM_VECS_PER_THREAD; j++) {
@@ -472,12 +952,12 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
         const int vec_idx = thread_group_offset + j * THREAD_GROUP_SIZE;
         const int offset1 = (vec_idx * VEC_SIZE) / x;
         const int offset2 = (vec_idx * VEC_SIZE) % x;
-        k_vecs[j] = const_cast<device T*>(k_ptr) + offset1 * BLOCK_SIZE * x + offset2;
+        k_vecs[j] = *reinterpret_cast<const device K_vec*>(k_ptr + offset1 * BLOCK_SIZE * x + offset2);
       }
 
       // Compute dot product.
       // This includes a reduction across the threads in the same thread group.
-      float qk = scale * qk_dot<THREAD_GROUP_SIZE, VEC_SIZE, T, NUM_VECS_PER_THREAD>(q_vecs[thread_group_offset], k_vecs);
+      float qk = scale * Qk_dot<T, THREAD_GROUP_SIZE>::dot(q_vecs[thread_group_offset], k_vecs);
       
       // Apply softcapping
       if (softcapping != 1.0) {
@@ -549,6 +1029,9 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
 
   // Each thread will fetch 16 bytes from the value cache at a time.
   constexpr int V_VEC_SIZE = MIN(16 / sizeof(T), BLOCK_SIZE);
+  using V_vec = typename Vec<T, V_VEC_SIZE>::Type;
+  using L_vec = typename Vec<T, V_VEC_SIZE>::Type;
+  using Float_L_vec = typename FloatVec<L_vec>::Type;
 
   constexpr int NUM_V_VECS_PER_ROW = BLOCK_SIZE / V_VEC_SIZE;
   constexpr int NUM_ROWS_PER_ITER = NUM_SIMD_LANES / NUM_V_VECS_PER_ROW;
@@ -569,7 +1052,9 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
     const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
     const int physical_block_offset = (lane % NUM_V_VECS_PER_ROW) * V_VEC_SIZE;
     const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
-    threadgroup float* logits_vec = logits + token_idx - start_token_idx;
+    L_vec logits_vec;
+    Float_L_vec logits_float_vec = *reinterpret_cast<threadgroup Float_L_vec*>(logits + token_idx - start_token_idx);
+    from_float(logits_vec, logits_float_vec);
 
     const device T* v_ptr = v_cache + physical_block_number * kv_block_stride
                                     + kv_head_idx * kv_head_stride;
@@ -581,14 +1066,15 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
         // NOTE: When v_vec contains the tokens that are out of the context,
         // we should explicitly zero out the values since they may contain NaNs.
         // See https://github.com/vllm-project/vllm/issues/641#issuecomment-1682544472
-        device T* v_vec = const_cast<device T*>(v_ptr) + offset;
+        V_vec v_vec = *reinterpret_cast<const device V_vec*>(v_ptr + offset);
         if (block_idx == num_context_blocks - 1) {
+          thread T* v_vec_ptr = reinterpret_cast<thread T*>(&v_vec);
 #pragma unroll
           for (int j = 0; j < V_VEC_SIZE; j++) {
-            v_vec[j] = token_idx + j < context_len ? v_vec[j] : zero_value;
+            v_vec_ptr[j] = token_idx + j < context_len ? v_vec_ptr[j] : zero_value;
           }
         }
-        accs[i] += dot<V_VEC_SIZE, T>(logits_vec, v_vec);
+        accs[i] += dot(logits_vec, v_vec);
       }
     }
   }
