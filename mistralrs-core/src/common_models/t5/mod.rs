@@ -71,7 +71,7 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Config {
+pub struct T5Config {
     pub vocab_size: usize,
     pub d_model: usize,
     pub d_kv: usize,
@@ -97,36 +97,6 @@ pub struct Config {
     pub pad_token_id: usize,
     pub eos_token_id: usize,
     pub decoder_start_token_id: Option<usize>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            vocab_size: 32128,
-            d_model: 512,
-            d_kv: 64,
-            d_ff: 2048,
-            num_layers: 6,
-            num_decoder_layers: None,
-            num_heads: 8,
-            relative_attention_num_buckets: 32,
-            relative_attention_max_distance: 128,
-            dropout_rate: 0.1,
-            layer_norm_epsilon: 1e-6,
-            initializer_factor: 1.0,
-            feed_forward_proj: ActivationWithOptionalGating {
-                gated: false,
-                activation: Activation::Relu,
-            },
-            tie_word_embeddings: true,
-            is_decoder: false,
-            is_encoder_decoder: true,
-            use_cache: true,
-            pad_token_id: 0,
-            eos_token_id: 1,
-            decoder_start_token_id: Some(0),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -166,7 +136,7 @@ struct T5DenseActDense {
 }
 
 impl T5DenseActDense {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &T5Config) -> Result<Self> {
         let wi = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi"))?;
         let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
         Ok(Self {
@@ -195,7 +165,7 @@ struct T5DenseGatedActDense {
 }
 
 impl T5DenseGatedActDense {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &T5Config) -> Result<Self> {
         let wi_0 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_0"))?;
         let wi_1 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_1"))?;
         let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
@@ -226,7 +196,7 @@ struct T5LayerFF {
 }
 
 impl T5LayerFF {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: VarBuilder, cfg: &T5Config) -> Result<Self> {
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
         let (dense_act, gated_dense_act) = if cfg.feed_forward_proj.gated {
@@ -312,7 +282,7 @@ impl T5Attention {
         has_relative_attention_bias: bool,
         decoder: bool,
         vb: VarBuilder,
-        cfg: &Config,
+        cfg: &T5Config,
     ) -> Result<Self> {
         let inner_dim = cfg.num_heads * cfg.d_kv;
         let q = linear_no_bias(cfg.d_model, inner_dim, vb.pp("q"))?;
@@ -465,7 +435,7 @@ struct T5LayerSelfAttention {
 }
 
 impl T5LayerSelfAttention {
-    fn load(h: bool, d: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(h: bool, d: bool, vb: VarBuilder, cfg: &T5Config) -> Result<Self> {
         let self_attention = T5Attention::load(h, d, vb.pp("SelfAttention"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
@@ -536,7 +506,7 @@ struct T5LayerCrossAttention {
 }
 
 impl T5LayerCrossAttention {
-    fn load(decoder: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(decoder: bool, vb: VarBuilder, cfg: &T5Config) -> Result<Self> {
         let cross_attention = T5Attention::load(false, decoder, vb.pp("EncDecAttention"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
@@ -663,7 +633,7 @@ impl T5Block {
         has_relative_attention_bias: bool,
         decoder: bool,
         vb: VarBuilder,
-        cfg: &Config,
+        cfg: &T5Config,
     ) -> Result<Self> {
         let vb = vb.pp("layer");
         let self_attn =
@@ -746,7 +716,7 @@ impl T5Stack {
         decoder: bool,
         vb: VarBuilder,
         shared: &Arc<Embedding>,
-        cfg: &Config,
+        cfg: &T5Config,
         device: &Device,
         offloaded: bool,
     ) -> Result<Self> {
@@ -798,7 +768,7 @@ pub struct T5EncoderModel {
 }
 
 impl T5EncoderModel {
-    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device, offloaded: bool) -> Result<Self> {
+    pub fn load(vb: VarBuilder, cfg: &T5Config, device: &Device, offloaded: bool) -> Result<Self> {
         let shared_vb = if vb.contains_tensor("shared.weight") {
             vb.pp("shared")
         } else if vb.contains_tensor("decoder.embed_tokens") {
@@ -818,5 +788,125 @@ impl T5EncoderModel {
 
     pub fn forward(&mut self, input_ids: &Tensor) -> Result<Tensor> {
         self.encoder.forward(input_ids, None)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct T5ForConditionalGeneration {
+    encoder: T5Stack,
+    decoder: T5Stack,
+    d_model: usize,
+    tie_word_embeddings: bool,
+    lm_head: Option<Linear>,
+    shared: Arc<Embedding>,
+    device: Device,
+    span_decode: tracing::Span,
+    span_decode_head: tracing::Span,
+}
+
+impl T5ForConditionalGeneration {
+    pub fn load(vb: VarBuilder, cfg: &T5Config) -> Result<Self> {
+        assert!(cfg.is_encoder_decoder);
+        let d_model = cfg.d_model;
+        let shared_vb = if vb.contains_tensor("shared.weight") {
+            vb.pp("shared")
+        } else {
+            vb.pp("decoder").pp("embed_tokens")
+        };
+        let shared = embedding(cfg.vocab_size, cfg.d_model, shared_vb)?;
+        let shared = Arc::new(shared);
+
+        let mut encoder_cfg = cfg.clone();
+        encoder_cfg.is_decoder = false;
+        encoder_cfg.use_cache = false;
+        encoder_cfg.is_encoder_decoder = false;
+        let encoder = T5Stack::load(
+            false,
+            vb.pp("encoder"),
+            &shared,
+            &encoder_cfg,
+            vb.device(),
+            false,
+        )?;
+
+        let mut decoder_cfg = cfg.clone();
+        decoder_cfg.is_decoder = true;
+        decoder_cfg.is_encoder_decoder = false;
+        decoder_cfg.num_layers = cfg.num_decoder_layers.unwrap_or(cfg.num_layers);
+        let decoder = T5Stack::load(
+            true,
+            vb.pp("decoder"),
+            &shared,
+            &decoder_cfg,
+            vb.device(),
+            false,
+        )?;
+
+        let tie_word_embeddings = cfg.tie_word_embeddings;
+        let lm_head = if tie_word_embeddings {
+            None
+        } else {
+            Some(linear_no_bias(
+                cfg.d_model,
+                cfg.vocab_size,
+                vb.pp("lm_head"),
+            )?)
+        };
+
+        Ok(Self {
+            encoder,
+            decoder,
+            d_model,
+            tie_word_embeddings,
+            lm_head,
+            shared,
+            device: vb.device().clone(),
+            span_decode: tracing::span!(tracing::Level::TRACE, "decode"),
+            span_decode_head: tracing::span!(tracing::Level::TRACE, "decode-head"),
+        })
+    }
+
+    pub fn encode(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        self.encoder.forward(input_ids, None)
+    }
+
+    pub fn decode(
+        &mut self,
+        decoder_input_ids: &Tensor,
+        encoder_output: &Tensor,
+    ) -> Result<Tensor> {
+        let _enter = self.span_decode.enter();
+        let decoder_output = self
+            .decoder
+            .forward(decoder_input_ids, Some(encoder_output))?;
+
+        let scaling_factor = if self.tie_word_embeddings {
+            // Rescale output before projecting on vocab
+            // See https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/transformer/transformer.py#L586
+            (self.d_model as f64).sqrt()
+        } else {
+            1.0
+        };
+        let sequence_output = ((decoder_output
+            .narrow(1, decoder_output.dim(1)? - 1, 1)?
+            .squeeze(1)?)
+            * scaling_factor)?;
+        let output = {
+            let _enter = self.span_decode_head.enter();
+            match self.lm_head {
+                None => sequence_output.matmul(&self.shared.embeddings().t()?)?,
+                Some(ref lm_head) => lm_head.forward(&sequence_output)?,
+            }
+        };
+        Ok(output)
+    }
+
+    pub fn forward(&mut self, input_ids: &Tensor, decoder_input_ids: &Tensor) -> Result<Tensor> {
+        let encoder_output = self.encode(input_ids)?;
+        self.decode(decoder_input_ids, &encoder_output)
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
     }
 }
