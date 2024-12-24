@@ -206,8 +206,8 @@ impl KvCache {
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
-        self.k.append(&k)?;
-        self.v.append(&v)?;
+        self.k.append(k)?;
+        self.v.append(v)?;
         let out_k = self.k.current_data()?;
         let out_v = self.v.current_data()?;
 
