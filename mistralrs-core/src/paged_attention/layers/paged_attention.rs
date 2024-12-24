@@ -131,6 +131,7 @@ impl PagedAttention {
             // Return result in prefill
             return Ok(att);
         }
+
         //  Args:
         //  output: shape = [num_generation_tokens, num_heads, head_size]
         //
@@ -146,7 +147,7 @@ impl PagedAttention {
         //
         //  alibi_slopes: shape = [num_heads]
         #[allow(clippy::cast_possible_truncation)]
-        paged_attention(
+        let res = paged_attention(
             &query,
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
@@ -156,6 +157,8 @@ impl PagedAttention {
             input_metadata.max_context_len.unwrap(),
             self.scale,
             softcapping.unwrap_or(1.0f64) as f32,
-        )
+        )?;
+
+        Ok(res)
     }
 }
