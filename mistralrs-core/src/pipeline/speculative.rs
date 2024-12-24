@@ -482,6 +482,9 @@ impl Pipeline for SpeculativePipeline {
                         .map(|(k, _)| k.dims()[2])
                         .unwrap_or(0),
                     EitherCache::Normal(normal) => normal.lock().unwrap().0[0].current_seq_len(),
+                    EitherCache::Quantized(quantized) => {
+                        quantized.lock().unwrap().0[0].current_seq_len()
+                    }
                 };
 
                 // ========= Run the model ============
@@ -557,6 +560,11 @@ impl Pipeline for SpeculativePipeline {
                             cache.set_len(cache.current_seq_len() - n_not_accepted);
                         }
                     }
+                    EitherCache::Quantized(quantized) => {
+                        for cache in &mut *quantized.lock().unwrap().0 {
+                            cache.set_len(cache.current_seq_len() - n_not_accepted);
+                        }
+                    }
                 }
                 if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
                     match get_mut_arcmutex!(self.draft).cache() {
@@ -566,7 +574,7 @@ impl Pipeline for SpeculativePipeline {
                                 *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
                             }
                         }
-                        EitherCache::Normal(_) => {
+                        EitherCache::Normal(_) | EitherCache::Quantized(_) => {
                             unreachable!()
                         }
                     }
@@ -583,6 +591,11 @@ impl Pipeline for SpeculativePipeline {
                             cache.set_len(cache.current_seq_len() - n_not_accepted);
                         }
                     }
+                    EitherCache::Quantized(quantized) => {
+                        for cache in &mut *quantized.lock().unwrap().0 {
+                            cache.set_len(cache.current_seq_len() - n_not_accepted);
+                        }
+                    }
                 }
                 if get_mut_arcmutex!(self.draft).get_metadata().is_xlora {
                     match get_mut_arcmutex!(self.target).cache() {
@@ -592,7 +605,7 @@ impl Pipeline for SpeculativePipeline {
                                 *v = v.i((.., .., ..v.dims()[2] - n_not_accepted, ..))?;
                             }
                         }
-                        EitherCache::Normal(_) => {
+                        EitherCache::Normal(_) | EitherCache::Quantized(_) => {
                             unreachable!()
                         }
                     }
