@@ -129,12 +129,14 @@ impl SingleCache {
             }
             let mut shape = src.dims().to_vec();
             shape[self.dim] = self.capacity_seq_len;
-            let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
+            let ad = Tensor::zeros(shape, src.dtype(), self.all_data.as_ref().unwrap().device())?;
             ad.slice_set(self.all_data.as_ref().unwrap(), self.dim, 0)?;
             self.all_data = Some(ad);
         }
         let ad = self.all_data.as_mut().unwrap();
-        ad.slice_set(src, self.dim, self.current_seq_len)?;
+        let src = src.to_device(ad.device())?;
+        let src = src.contiguous()?;
+        ad.slice_set(&src, self.dim, self.current_seq_len)?;
         self.current_seq_len += seq_len;
         Ok(())
     }
@@ -195,6 +197,7 @@ impl KvCache {
                 if let Some(mut mask) = mask.cloned() {
                     let mask_len = mask.dim(1)?;
                     mask = mask.narrow(1, mask_len - (sliding_window - 1), sliding_window - 1)?;
+                    mask = mask.to_device(k.device())?;
                     return Ok((k, v, Some(mask)));
                 }
             }
@@ -203,25 +206,21 @@ impl KvCache {
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
-        let k = k.contiguous()?;
-        let v = v.contiguous()?;
         self.k.append(&k)?;
         self.v.append(&v)?;
         let out_k = self.k.current_data()?;
         let out_v = self.v.current_data()?;
+
+        // out_k/v should always be Some because SingleCache::append has `if self.all_data.is_none()` logic to create a Tensor if it is empty
         let k = match out_k {
             None => {
-                let mut shape = k.dims().to_vec();
-                shape[self.k.dim] = 0;
-                Tensor::zeros(shape, k.dtype(), k.device())?
+                unreachable!()
             }
             Some(k) => k,
         };
         let v = match out_v {
             None => {
-                let mut shape = v.dims().to_vec();
-                shape[self.k.dim] = 0;
-                Tensor::zeros(shape, v.dtype(), v.device())?
+                unreachable!()
             }
             Some(v) => v,
         };
