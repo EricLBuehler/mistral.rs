@@ -227,6 +227,7 @@ impl MistralRsBuilder {
         self.disable_eos_stop = Some(disable_eos_stop);
         self
     }
+    /// This setting is only applicable on CUDA. If set to false or not specified, this setting enables f16/bf16 reduced precision matmul for GPUs which support it. If set to true, this setting has no effect.
     pub fn with_gemm_full_precision_f16(mut self, gemm_full_precision: bool) -> Self {
         self.gemm_full_precision_f16 = Some(gemm_full_precision);
         self
