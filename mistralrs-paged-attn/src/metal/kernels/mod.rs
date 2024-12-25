@@ -3,7 +3,8 @@ use metal::{
     Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
     FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
 };
-use std::sync::{Once, RwLock};
+use once_cell::sync::OnceCell;
+use std::sync::RwLock;
 use std::{collections::HashMap, ffi::c_void};
 
 pub mod utils;
@@ -51,17 +52,11 @@ pub struct Kernels {
     pipelines: RwLock<Pipelines>,
 }
 
-static INIT: Once = Once::new();
-pub(crate) static mut G_KERNEL: Option<Kernels> = None;
+pub(crate) static G_KERNEL: OnceCell<Kernels> = OnceCell::new();
 
 impl Kernels {
-    pub fn default() -> &'static Option<Self> {
-        unsafe {
-            INIT.call_once(|| {
-                G_KERNEL = Some(Self::new());
-            });
-            &G_KERNEL
-        }
+    pub fn default() -> &'static Kernels {
+        G_KERNEL.get_or_init(|| Kernels::new())
     }
 
     pub fn new() -> Self {
@@ -165,7 +160,7 @@ impl Kernels {
 pub fn call_copy_blocks(
     device: &Device,
     ep: impl EncoderProvider,
-    kernels: &Option<Kernels>,
+    kernels: &Kernels,
     ty: DType,
     key_cache: &Buffer,
     key_cache_offset: usize,
@@ -187,10 +182,7 @@ pub fn call_copy_blocks(
             })
         }
     };
-    let pipeline = match kernels {
-        Some(knl) => knl.load_pipeline(device, Source::CopyBlocks, name.to_string())?,
-        _ => panic!("Unable to load metal kernels!"),
-    };
+    let pipeline = kernels.load_pipeline(device, Source::CopyBlocks, name.to_string())?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -230,7 +222,7 @@ pub enum PagedAttentionDType {
 pub fn call_reshape_and_cache(
     device: &Device,
     ep: impl EncoderProvider,
-    kernels: &Option<Kernels>,
+    kernels: &Kernels,
     ty: PagedAttentionDType,
     key: &Buffer,
     key_offset: usize,
@@ -255,10 +247,7 @@ pub fn call_reshape_and_cache(
         PagedAttentionDType::BF16 => "reshape_and_cache_bfloat16_t",
         PagedAttentionDType::F16 => "reshape_and_cache_half",
     };
-    let pipeline = match kernels {
-        Some(knl) => knl.load_pipeline(device, Source::ReshapeAndCache, name.to_string())?,
-        _ => panic!("Unable to load metal kernels!"),
-    };
+    let pipeline = kernels.load_pipeline(device, Source::ReshapeAndCache, name.to_string())?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -348,7 +337,7 @@ impl ConstantValues {
 pub fn call_paged_attention_v1(
     device: &Device,
     ep: impl EncoderProvider,
-    kernels: &Option<Kernels>,
+    kernels: &Kernels,
     ty: PagedAttentionDType,
     q: &Buffer,
     q_offset: usize,
@@ -401,12 +390,8 @@ pub fn call_paged_attention_v1(
         ),
     ]));
 
-    let pipeline = match kernels {
-        Some(knl) => {
-            knl.load_pipeline_with_constants(device, Source::PagedAttention, name, constants)?
-        }
-        _ => panic!("Unable to load metal kernels!"),
-    };
+    let pipeline =
+        kernels.load_pipeline_with_constants(device, Source::PagedAttention, name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -483,7 +468,7 @@ pub fn call_paged_attention_v1(
 pub fn call_paged_attention_v2(
     device: &Device,
     ep: impl EncoderProvider,
-    kernels: &Option<Kernels>,
+    kernels: &Kernels,
     ty: PagedAttentionDType,
     exp_sums: &Buffer,
     max_logits: &Buffer,
@@ -542,12 +527,12 @@ pub fn call_paged_attention_v2(
             ),
         ]));
 
-        let pipeline = match kernels {
-            Some(knl) => {
-                knl.load_pipeline_with_constants(device, Source::PagedAttention, name, constants)?
-            }
-            _ => panic!("Unable to load metal kernels!"),
-        };
+        let pipeline = kernels.load_pipeline_with_constants(
+            device,
+            Source::PagedAttention,
+            name,
+            constants,
+        )?;
 
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -636,10 +621,7 @@ pub fn call_paged_attention_v2(
         name.push_str(&format!("_nsl{}", NUM_SIMD_LANES));
         name.push_str(&format!("_ps{}", PARTITION_SIZE));
 
-        let pipeline = match kernels {
-            Some(knl) => knl.load_pipeline(device, Source::PagedAttention, name)?,
-            _ => panic!("Unable to load metal kernels!"),
-        };
+        let pipeline = kernels.load_pipeline(device, Source::PagedAttention, name)?;
 
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
