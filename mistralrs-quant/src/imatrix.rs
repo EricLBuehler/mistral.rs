@@ -1,6 +1,12 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashMap,
+    fs,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 use candle_core::{Context, DType, Device, Result, Tensor, D};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
 struct ImatrixLayerStats_ {
@@ -42,5 +48,29 @@ impl ImatrixLayerStats {
         let mut handle = self.0.write().unwrap();
         *handle = None;
         Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct CollectedImatrixData(pub HashMap<usize, Option<Vec<f32>>>);
+
+impl CollectedImatrixData {
+    pub fn save_imatrix<P: AsRef<Path>>(&self, fname: P) -> Result<()> {
+        if let Some(ext) = fname.as_ref().extension() {
+            if ext != "cimatrix" {
+                candle_core::bail!(
+                    "Expected a .cimatrix file to save collectd imatrix data to, got {:?}",
+                    ext
+                );
+            }
+        }
+        let ser = serde_json::to_string(&self.0).map_err(candle_core::Error::msg)?;
+        fs::write(fname, ser)?;
+        Ok(())
+    }
+
+    pub fn load_imatrix<P: AsRef<Path>>(fname: P) -> Result<Self> {
+        let ser = fs::read_to_string(fname)?;
+        Ok(serde_json::from_str(&ser).map_err(candle_core::Error::msg)?)
     }
 }
