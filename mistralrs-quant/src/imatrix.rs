@@ -71,6 +71,6 @@ impl CollectedImatrixData {
 
     pub fn load_imatrix<P: AsRef<Path>>(fname: P) -> Result<Self> {
         let ser = fs::read_to_string(fname)?;
-        Ok(serde_json::from_str(&ser).map_err(candle_core::Error::msg)?)
+        serde_json::from_str(&ser).map_err(candle_core::Error::msg)
     }
 }
