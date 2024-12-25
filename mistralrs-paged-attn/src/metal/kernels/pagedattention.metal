@@ -393,6 +393,158 @@ inline void from_float(thread Float8_& dst, Float8_ src) {
 
 
 // BF16 vector data types.
+// #if defined(__HAVE_BFLOAT__)
+
+// struct Bfloat8_ {
+//   bfloat4 x;
+//   bfloat4 y;
+// };
+
+// template<>
+// struct Vec<bfloat, 1> {
+//   using Type = bfloat;
+// };
+// template<>
+// struct Vec<bfloat, 2> {
+//   using Type = bfloat2;
+// };
+// template<>
+// struct Vec<bfloat, 4> {
+//   using Type = bfloat4;
+// };
+// template<>
+// struct Vec<bfloat, 8> {
+//   using Type = Bfloat8_;
+// };
+
+// template<>
+// struct FloatVec<bfloat> {
+//   using Type = float;
+// };
+// template<>
+// struct FloatVec<bfloat2> {
+//   using Type = float2;
+// };
+// template<>
+// struct FloatVec<bfloat4> {
+//   using Type = float4;
+// };
+// template<>
+// struct FloatVec<Bfloat8_> {
+//   using Type = Float8_;
+// };
+
+// template<>
+// inline float mul(bfloat a, bfloat b) {
+//   return (float)a * (float)b;
+// }
+// template<>
+// inline bfloat mul(bfloat a, bfloat b) {
+//   return a*b;
+// }
+
+// template<>
+// inline float2 mul(bfloat2 a, bfloat2 b) {
+//   return (float2)a * (float2)b;
+// }
+// template<>
+// inline bfloat2 mul(bfloat2 a, bfloat2 b) {
+//   return a * b;
+// }
+
+// template<>
+// inline float4 mul(bfloat4 a, bfloat4 b) {
+//   return (float4)a * (float4)b;
+// }
+// template<>
+// inline bfloat4 mul(bfloat4 a, bfloat4 b) {
+//   return a * b;
+// }
+
+// template<>
+// inline Float8_ mul(Bfloat8_ a, Bfloat8_ b) {
+//   Float8_ c;
+//   c.x = mul<float4, bfloat4, bfloat4>(a.x, b.x);
+//   c.y = mul<float4, bfloat4, bfloat4>(a.y, b.y);
+//   return c;
+// }
+// template<>
+// inline Bfloat8_ mul(Bfloat8_ a, Bfloat8_ b) {
+//   Bfloat8_ c;
+//   c.x = mul<bfloat4, bfloat4, bfloat4>(a.x, b.x);
+//   c.y = mul<bfloat4, bfloat4, bfloat4>(a.y, b.y);
+//   return c;
+// }
+
+// template<>
+// inline float sum(bfloat a) {
+//   return (float)a;
+// }
+
+// template<>
+// inline float sum(bfloat2 a) {
+//   return (float)a.x + (float)a.y;
+// }
+
+// template<>
+// inline float sum(bfloat4 a) {
+//   return sum(a.x) + sum(a.y);
+// }
+
+// template<>
+// inline float sum(Bfloat8_ a) {
+//   return sum(a.x) + sum(a.y);
+// }
+
+// inline float fma(bfloat a, bfloat b, float c) {
+//   return (float)a * (float)b + c;
+// }
+
+// inline float2 fma(bfloat2 a, bfloat2 b, float2 c) {
+//   return (float2)a * (float2)b + c;
+// }
+
+// inline float4 fma(bfloat4 a, bfloat4 b, float4 c) {
+//   return (float4)a * (float4)b + c;
+// }
+
+// inline Float8_ fma(Bfloat8_ a, Bfloat8_ b, Float8_ c) {
+//   Float8_ res;
+//   res.x = fma((float4)a.x, (float4)b.x, (float4)c.x);
+//   res.y = fma((float4)a.y, (float4)b.y, (float4)c.y);
+//   return res;
+// }
+// inline Bfloat8_ fma(Bfloat8_ a, Bfloat8_ b, Bfloat8_ c) {
+//   Bfloat8_ res;
+//   res.x = (bfloat4)fma((float4)a.x, (float4)b.x, (float4)c.x);
+//   res.y = (bfloat4)fma((float4)a.y, (float4)b.x, (float4)c.y);
+//   return c;
+// }
+
+// inline void from_float(thread bfloat& dst, float src) {
+//   dst = static_cast<bfloat>(src);
+// }
+// inline void from_float(thread bfloat2& dst, float2 src) {
+//   dst.x = static_cast<bfloat>(src.x);
+//   dst.y = static_cast<bfloat>(src.y);
+// }
+// inline void from_float(thread bfloat4& dst, float4 src) {
+//   dst.x = static_cast<bfloat>(src.x);
+//   dst.y = static_cast<bfloat>(src.y);
+//   dst.z = static_cast<bfloat>(src.z);
+//   dst.w = static_cast<bfloat>(src.w);
+// }
+// inline void from_float(thread Bfloat8_& dst, Float8_ src) {
+//   bfloat4 x;
+//   bfloat4 y;
+//   from_float(x, src.x);
+//   from_float(y, src.y);
+//   dst.x = x;
+//   dst.y = y;
+// }
+
+// #else
+
 struct Bfloat2_ {
   bfloat16_t x;
   bfloat16_t y;
@@ -590,6 +742,8 @@ inline void from_float(thread Bfloat8_& dst, Float8_ src) {
   dst.y = y;
 }
 
+// #endif
+
 
 
 
@@ -714,8 +868,8 @@ inline Float8_ fma(Half8_ a, Half8_ b, Float8_ c) {
   float4 x = fma(a.x, b.x, c.x);
   float4 y = fma(a.y, b.y, c.y);
   Float8_ res;
-  res.x = x + c.x;
-  res.y = y + x.y;
+  res.x = x;
+  res.y = y;
   return res;
 }
 inline Half8_ fma(Half8_ a, Half8_ b, Half8_ c) {
