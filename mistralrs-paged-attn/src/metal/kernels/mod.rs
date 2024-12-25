@@ -3,6 +3,7 @@ use metal::{
     Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
     FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
 };
+use once_cell::sync::OnceCell;
 use std::sync::RwLock;
 use std::{collections::HashMap, ffi::c_void};
 
@@ -51,13 +52,13 @@ pub struct Kernels {
     pipelines: RwLock<Pipelines>,
 }
 
-impl Default for Kernels {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub(crate) static G_KERNEL: OnceCell<Kernels> = OnceCell::new();
 
 impl Kernels {
+    pub fn default() -> &'static Kernels {
+        G_KERNEL.get_or_init(|| Kernels::new())
+    }
+
     pub fn new() -> Self {
         let libraries = RwLock::new(Libraries::new());
         let pipelines = RwLock::new(Pipelines::new());
@@ -182,7 +183,6 @@ pub fn call_copy_blocks(
         }
     };
     let pipeline = kernels.load_pipeline(device, Source::CopyBlocks, name.to_string())?;
-
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -248,7 +248,6 @@ pub fn call_reshape_and_cache(
         PagedAttentionDType::F16 => "reshape_and_cache_half",
     };
     let pipeline = kernels.load_pipeline(device, Source::ReshapeAndCache, name.to_string())?;
-
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -393,7 +392,6 @@ pub fn call_paged_attention_v1(
 
     let pipeline =
         kernels.load_pipeline_with_constants(device, Source::PagedAttention, name, constants)?;
-
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);

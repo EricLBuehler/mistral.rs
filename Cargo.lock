@@ -2492,6 +2492,7 @@ dependencies = [
  "float8",
  "half",
  "metal 0.27.0",
+ "once_cell",
  "thiserror 1.0.69",
 ]
 

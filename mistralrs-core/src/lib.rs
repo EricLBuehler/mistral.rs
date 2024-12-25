@@ -1,5 +1,4 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-
 use candle_core::Device;
 use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
