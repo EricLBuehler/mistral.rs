@@ -1460,16 +1460,16 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES, int PA
   instantiate_paged_attention_heads(type, 16, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_heads(type, 32, num_threads, num_simd_lanes, partition_size)
 
-// TODO: tune num_threads = 128
+// TODO: tune num_threads = 256
 // NOTE: partition_size = 0
 #define instantiate_paged_attention_v1(type, num_simd_lanes) \
-  instantiate_paged_attention_block_size(type, 128, num_simd_lanes, 0)
+  instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 0)
 
-// TODO: tune num_threads = 128
+// TODO: tune num_threads = 256
 // NOTE: partition_size = 512
 #define instantiate_paged_attention_v2(type, num_simd_lanes) \
-  instantiate_paged_attention_block_size(type, 128, num_simd_lanes, 512) \
-  instantiate_paged_attention_v2_reduce_heads(type, 128, num_simd_lanes, 512)
+  instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 512) \
+  instantiate_paged_attention_v2_reduce_heads(type, 256, num_simd_lanes, 512)
 
 instantiate_paged_attention_v1(float, 32)
 instantiate_paged_attention_v1(bfloat16_t, 32)

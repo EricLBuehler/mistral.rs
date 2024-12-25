@@ -364,7 +364,7 @@ pub fn call_paged_attention_v1(
     kv_block_stride: i32,
     kv_head_stride: i32,
 ) -> Result<(), MetalKernelError> {
-    const NUM_THREADS: u64 = 128;
+    const NUM_THREADS: u64 = 256;
     const NUM_SIMD_LANES: u64 = 32;
 
     let name = match ty {
@@ -498,7 +498,7 @@ pub fn call_paged_attention_v2(
     kv_block_stride: i32,
     kv_head_stride: i32,
 ) -> Result<(), MetalKernelError> {
-    const NUM_THREADS: u64 = 128;
+    const NUM_THREADS: u64 = 256;
     const PARTITION_SIZE: u64 = 512;
     const NUM_SIMD_LANES: u64 = 32;
 
