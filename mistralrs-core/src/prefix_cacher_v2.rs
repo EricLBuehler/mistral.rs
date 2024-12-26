@@ -102,12 +102,10 @@ impl PrefixCacheManagerV2 {
         let mut n_on_device = 0;
         for cache in self.caches.values() {
             let first_non_none = cache.iter().find_or_first(|x| x.is_some());
-            let Some(first_non_none) = first_non_none else {
+            let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
             let cache_device = first_non_none
-                .as_ref()
-                .unwrap()
                 .k
                 .all_data()
                 .as_ref()
@@ -124,12 +122,10 @@ impl PrefixCacheManagerV2 {
                 break;
             }
             let first_non_none = cache.iter().find_or_first(|x| x.is_some());
-            let Some(first_non_none) = first_non_none else {
+            let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
             let cache_device = first_non_none
-                .as_ref()
-                .unwrap()
                 .k
                 .all_data()
                 .as_ref()
@@ -151,12 +147,10 @@ impl PrefixCacheManagerV2 {
         // Intentionally evict the first ones first, as they are the oldest
         for cache in self.caches.values_mut() {
             let first_non_none = cache.iter().find_or_first(|x| x.is_some());
-            let Some(first_non_none) = first_non_none else {
+            let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
             let cache_device = first_non_none
-                .as_ref()
-                .unwrap()
                 .k
                 .all_data()
                 .as_ref()
