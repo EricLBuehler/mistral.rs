@@ -104,7 +104,7 @@ impl LayerWeights {
             let v = v
                 .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
                 .transpose(1, 2)?;
-            (q, k, v)
+            (q, k, v.contiguous()?)
         } else {
             let q = q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
             let k = k.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
