@@ -116,7 +116,7 @@ Mistral.rs supports several model categories:
 - Prompt chunking: process large prompts in a more manageable way
 
 **Advanced features**:
-- [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching
+- [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching (CUDA and Metal support)
 - Prefix caching
 - [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
 - [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
