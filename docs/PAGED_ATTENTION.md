@@ -12,6 +12,8 @@ Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and bl
 
 > Note: Paged Attention is not enabled on Windows platforms, only Unix-based platforms.
 
+> Note: In the CLI and Python API, Paged Attention is disabled by default for Metal. It can be enabled with the `--paged-attn`/`paged_attn` flags.
+
 **There are more features being added to this:**
 - GGML model support 
 - Adapter model support
