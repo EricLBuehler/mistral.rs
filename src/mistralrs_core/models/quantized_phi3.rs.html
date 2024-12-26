@@ -511,7 +511,7 @@
             <span class="kw">let </span>v = v
                 .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-            (q, k, v)
+            (q, k, v.contiguous()<span class="question-mark">?</span>)
         } <span class="kw">else </span>{
             <span class="kw">let </span>q = q.reshape((b_sz, <span class="self">self</span>.n_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
             <span class="kw">let </span>k = k.reshape((b_sz, <span class="self">self</span>.n_kv_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;

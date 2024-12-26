@@ -495,7 +495,19 @@
 <a href="#494" id="494">494</a>
 <a href="#495" id="495">495</a>
 <a href="#496" id="496">496</a>
-<a href="#497" id="497">497</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#497" id="497">497</a>
+<a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
@@ -612,32 +624,36 @@
     </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
 
     <span class="doccomment">/// GPU memory to allocate for KV cache with PagedAttention in MBs.
-    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) &gt; `pa-ctxt-len` &gt; `pa-gpu-mem`.
     </span><span class="attr">#[arg(long = <span class="string">"pa-gpu-mem"</span>)]
     </span>paged_attn_gpu_mem: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
     <span class="doccomment">/// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
     /// If this is not set and the device is CUDA, it will default to `0.9`.
-    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) &gt; `pa-ctxt-len` &gt; `pa-gpu-mem`.
     </span><span class="attr">#[arg(long = <span class="string">"pa-gpu-mem-usage"</span>)]
     </span>paged_attn_gpu_mem_usage: <span class="prelude-ty">Option</span>&lt;f32&gt;,
 
-    <span class="doccomment">/// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold)
-    /// when using PagedAttention, which is only supported on CUDA and is always automatically activated.
+    <span class="doccomment">/// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) &gt; `pa-ctxt-len` &gt; `pa-gpu-mem`.
     </span><span class="attr">#[arg(long = <span class="string">"pa-ctxt-len"</span>)]
     </span>paged_ctxt_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
     <span class="doccomment">/// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
-    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     </span><span class="attr">#[arg(long = <span class="string">"pa-blk-size"</span>)]
     </span>paged_attn_block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
-    <span class="doccomment">/// Disable PagedAttention on CUDA.
+    <span class="doccomment">/// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
     </span><span class="attr">#[arg(long = <span class="string">"no-paged-attn"</span>, default_value_t = <span class="bool-val">false</span>)]
     </span>no_paged_attn: bool,
+
+    <span class="doccomment">/// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
+    </span><span class="attr">#[arg(long = <span class="string">"no-paged-attn"</span>, default_value_t = <span class="bool-val">false</span>)]
+    </span>paged_attn: bool,
 
     <span class="doccomment">/// Enable server throughput logging, supported in the server and with interactive mode
     </span><span class="attr">#[arg(long = <span class="string">"throughput"</span>, default_value_t = <span class="bool-val">false</span>)]
@@ -879,6 +895,14 @@
         DeviceMapMetadata::dummy()
     };
 
+    <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() {
+        args.no_paged_attn
+    } <span class="kw">else if </span>device.is_metal() {
+        !args.paged_attn
+    } <span class="kw">else </span>{
+        <span class="bool-val">true
+    </span>};
+
     <span class="comment">// Allocate 0.5 GB of CPU memory just as a placeholder.
     // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
     </span><span class="kw">let </span>cache_config = <span class="kw">match </span>(
@@ -887,7 +911,7 @@
         args.paged_attn_gpu_mem_usage,
         args.paged_ctxt_len,
         paged_attn_supported(),
-        args.no_paged_attn,
+        no_paged_attn,
     ) {
         (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
             block_size,
