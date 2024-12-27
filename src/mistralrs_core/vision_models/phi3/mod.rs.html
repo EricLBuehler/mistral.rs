@@ -1334,10 +1334,7 @@
 <a href="#1333" id="1333">1333</a>
 <a href="#1334" id="1334">1334</a>
 <a href="#1335" id="1335">1335</a>
-<a href="#1336" id="1336">1336</a>
-<a href="#1337" id="1337">1337</a>
-<a href="#1338" id="1338">1338</a>
-<a href="#1339" id="1339">1339</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1336" id="1336">1336</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3_inputs_processor;
 
@@ -1366,7 +1363,7 @@
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, VisionModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -1557,7 +1554,7 @@
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         position_ids: <span class="kw-2">&amp;</span>[usize],
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1635,14 +1632,8 @@
                 </span>}
             },
             <span class="prelude-val">None </span>=&gt; {
-                <span class="kw">let </span>(k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
-                    kv_cache,
-                    k,
-                    v,
-                    attention_mask,
-                    <span class="self">self</span>.sliding_window,
-                    <span class="bool-val">true</span>,
-                )<span class="question-mark">?</span>;
+                <span class="kw">let </span>(k, v, attn_mask) =
+                    kv_cache.append_sliding_window(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, attention_mask, <span class="self">self</span>.sliding_window)<span class="question-mark">?</span>;
 
                 Sdpa.run_attention(
                     <span class="kw-2">&amp;</span>q,
@@ -1813,7 +1804,7 @@
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         position_ids: <span class="kw-2">&amp;</span>[usize],
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -2393,7 +2384,10 @@
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>)),
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             sliding_window: cfg.sliding_window,
@@ -2427,7 +2421,7 @@
         </span>} <span class="kw">else </span>{
             <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?
         </span>};
-        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.full().lock();
+        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
         <span class="kw">let </span>attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata

@@ -466,7 +466,10 @@
 <a href="#465" id="465">465</a>
 <a href="#466" id="466">466</a>
 <a href="#467" id="467">467</a>
-<a href="#468" id="468">468</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
+<a href="#470" id="470">470</a>
+<a href="#471" id="471">471</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Embedding, Module, VarBuilder};
@@ -478,8 +481,8 @@
     layers::{Activation, F32RmsNorm, Qwen2VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits, text_models_inputs_processor::FlashParams, Cache, EitherCache, IsqModel,
-        NormalLoadingMetadata,
+        extract_logits, text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
+        NormalCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -604,7 +607,7 @@
         xs: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         cos_sin: <span class="kw-2">&amp;</span>(Tensor, Tensor),
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
@@ -644,7 +647,7 @@
         <span class="self">self</span>.rotary_emb.forward(cos_sin, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = {
-            <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>(k, v) = kv_cache.append(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
 
             Sdpa.run_attention(
                 <span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>,
@@ -721,7 +724,7 @@
         xs: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         cos_sin: <span class="kw-2">&amp;</span>(Tensor, Tensor),
-        kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>residual = xs;
@@ -839,7 +842,10 @@
             norm,
             layers,
             lm_head,
-            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>)),
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             cfg: ModelConfigMetadata {
@@ -867,7 +873,7 @@
         context_lens: Vec&lt;(usize, usize)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="self">self</span>.cache.full().lock();
+        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
         <span class="kw">let </span>cos_sin = <span class="self">self</span>.layers[<span class="number">0</span>]
             .self_attn
             .rotary_emb
