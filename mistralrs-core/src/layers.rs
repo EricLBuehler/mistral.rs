@@ -139,6 +139,10 @@ pub enum ScaledRopeType {
     Su,
     #[serde(alias = "yarn")]
     Yarn,
+    #[serde(alias = "dynamic")]
+    Dynamic,
+    #[serde(alias = "linear")]
+    Linear,
 }
 
 impl FromStr for ScaledRopeType {
@@ -147,6 +151,8 @@ impl FromStr for ScaledRopeType {
         match s {
             "su" | "longrope" => Ok(Self::Su),
             "yarn" => Ok(Self::Yarn),
+            "linear" => Ok(Self::Linear),
+            "dynamic" => Ok(Self::Dynamic),
             _ => Err(candle_core::Error::Msg(
                 "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
             )),
@@ -204,6 +210,7 @@ impl PhiRotaryEmbedding {
                     (1.0 + scale.ln() / (cfg.original_max_position_embeddings as f64).ln()).sqrt()
                 }
                 ScaledRopeType::Yarn => 0.1 * scale.ln() + 1.0,
+                _ => candle_core::bail!("Expected either `su` or `yarn` RoPE"),
             }
         };
 
@@ -726,6 +733,202 @@ impl Qwen2VLRotaryEmbedding {
         *q = candle_nn::rotary_emb::rope(&q.contiguous()?, cos, sin)?;
         *k = candle_nn::rotary_emb::rope(&k.contiguous()?, cos, sin)?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DeepSeekV2RotaryEmbedding {
+    sin: Tensor,
+    cos: Tensor,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum DeepSeekV2RopeScaling {
+    LinearOrDynamic {
+        #[serde(rename = "type")]
+        scaling_type: ScaledRopeType,
+        factor: f64,
+    },
+    Yarn {
+        original_max_position_embeddings: usize,
+        beta_fast: f32,
+        beta_slow: f32,
+        mscale: f32,
+        mscale_all_dim: f32,
+        factor: f32,
+        #[serde(rename = "type")]
+        scaling_type: ScaledRopeType,
+    },
+}
+
+pub struct DeepSeekV2RopeConfig {
+    pub rope_scaling: Option<DeepSeekV2RopeScaling>,
+    pub max_position_embeddings: usize,
+    pub rope_theta: f32,
+    pub qk_rope_head_dim: usize,
+}
+
+impl DeepSeekV2RotaryEmbedding {
+    fn new_unscaled(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
+        let max_seq_len = cfg.max_position_embeddings;
+        let dim = cfg.qk_rope_head_dim;
+
+        let inv_freq: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / dim as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((max_seq_len, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let sin = freqs.sin()?.to_dtype(dtype)?;
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+
+        Ok(Self { sin, cos })
+    }
+
+    fn yarn_find_correction_dim(
+        num_rot: f32,
+        dim: usize,
+        base: f32,
+        max_position_embeddings: usize,
+    ) -> f32 {
+        (dim as f32 * (max_position_embeddings as f32 / (num_rot * 2. * PI)).ln())
+            / (2. * base.ln())
+    }
+
+    fn yarn_find_correction_range(
+        low_rot: f32,
+        high_rot: f32,
+        dim: usize,
+        base: f32,
+        max_position_embeddings: usize,
+    ) -> (f32, f32) {
+        let low =
+            Self::yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings).floor();
+        let high =
+            Self::yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings).floor();
+        (low.max(0.), high.min(dim as f32 - 1.))
+    }
+
+    fn yarn_linear_ramp_mask(min: f32, mut max: f32, dim: usize, dev: &Device) -> Result<Tensor> {
+        if min == max {
+            // https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite/blob/604d5664dddd88a0433dbae533b7fe9472482de0/modeling_deepseek.py#L255
+            max += 0.001;
+        }
+        let linear_func =
+            ((Tensor::arange(0f32, dim as f32, dev)? - min as f64)? / (max as f64 - min as f64))?;
+        linear_func.clamp(0., 1)
+    }
+
+    pub(crate) fn yarn_get_mscale(scale: f32, mscale: f32) -> f32 {
+        if scale <= 1. {
+            return 1.;
+        }
+        return 0.1 * mscale * scale.ln() + 1.;
+    }
+
+    fn new_yarn(
+        cfg: &DeepSeekV2RopeConfig,
+        dtype: DType,
+        dev: &Device,
+        original_max_position_embeddings: usize,
+        beta_fast: f32,
+        beta_slow: f32,
+        factor: f32,
+        mscale: f32,
+        mscale_all_dim: f32,
+    ) -> Result<Self> {
+        let freq_extra: Vec<_> = (0..cfg.qk_rope_head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / cfg.qk_rope_head_dim as f32))
+            .collect();
+        let freq_extra_len = freq_extra.len();
+        let freq_extra = Tensor::from_vec(freq_extra, freq_extra_len, dev)?;
+        let freq_inter: Vec<_> = (0..cfg.qk_rope_head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / factor * cfg.rope_theta.powf(i as f32 / cfg.qk_rope_head_dim as f32))
+            .collect();
+        let freq_inter_len = freq_inter.len();
+        let freq_inter = Tensor::from_vec(freq_inter, freq_inter_len, dev)?;
+
+        let (low, high) = Self::yarn_find_correction_range(
+            beta_fast,
+            beta_slow,
+            cfg.qk_rope_head_dim,
+            cfg.rope_theta,
+            original_max_position_embeddings,
+        );
+        let inv_freq_mask =
+            (1. - Self::yarn_linear_ramp_mask(low, high, cfg.qk_rope_head_dim / 2, dev)?)?;
+        let inv_freq =
+            (freq_inter.mul(&(1. - &inv_freq_mask)?)? + freq_extra.mul(&inv_freq_mask)?)?;
+
+        let t = Tensor::arange(0u32, cfg.max_position_embeddings as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((cfg.max_position_embeddings, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+
+        let mscale =
+            Self::yarn_get_mscale(factor, mscale) / Self::yarn_get_mscale(factor, mscale_all_dim);
+        let sin = (freqs.sin()? * mscale as f64)?.to_dtype(dtype)?;
+        let cos = (freqs.cos()? * mscale as f64)?.to_dtype(dtype)?;
+
+        Ok(Self { sin, cos })
+    }
+
+    pub fn new(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
+        match &cfg.rope_scaling {
+            Some(DeepSeekV2RopeScaling::LinearOrDynamic {
+                scaling_type: _,
+                factor: _,
+            }) => candle_core::bail!("linear and dynamic rope are not implemented yet!"),
+            Some(DeepSeekV2RopeScaling::Yarn {
+                original_max_position_embeddings,
+                beta_fast,
+                beta_slow,
+                factor,
+                mscale,
+                mscale_all_dim,
+                scaling_type: _,
+            }) => Self::new_yarn(
+                cfg,
+                dtype,
+                dev,
+                *original_max_position_embeddings,
+                *beta_fast,
+                *beta_slow,
+                *factor,
+                *mscale,
+                *mscale_all_dim,
+            ),
+            None => Self::new_unscaled(&cfg, dtype, dev),
+        }
+    }
+
+    pub fn forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+        let mut q_embeds = Vec::new();
+        let mut k_embeds = Vec::new();
+        for (i, offset) in seqlen_offsets.iter().enumerate() {
+            let cos = self.sin.narrow(0, *offset, seq_len)?;
+            let sin = self.cos.narrow(0, *offset, seq_len)?;
+            let q_embed =
+                candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            let k_embed =
+                candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            q_embeds.push(q_embed);
+            k_embeds.push(k_embed);
+        }
+        Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
     }
 }
 
