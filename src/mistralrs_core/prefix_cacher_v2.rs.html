@@ -196,13 +196,7 @@
 <a href="#195" id="195">195</a>
 <a href="#196" id="196">196</a>
 <a href="#197" id="197">197</a>
-<a href="#198" id="198">198</a>
-<a href="#199" id="199">199</a>
-<a href="#200" id="200">200</a>
-<a href="#201" id="201">201</a>
-<a href="#202" id="202">202</a>
-<a href="#203" id="203">203</a>
-<a href="#204" id="204">204</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#198" id="198">198</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>itertools::Itertools;
@@ -306,12 +300,10 @@
         <span class="kw">let </span><span class="kw-2">mut </span>n_on_device = <span class="number">0</span>;
         <span class="kw">for </span>cache <span class="kw">in </span><span class="self">self</span>.caches.values() {
             <span class="kw">let </span>first_non_none = cache.iter().find_or_first(|x| x.is_some());
-            <span class="kw">let </span><span class="prelude-val">Some</span>(first_non_none) = first_non_none <span class="kw">else </span>{
+            <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
                 <span class="kw">continue</span>;
             };
             <span class="kw">let </span>cache_device = first_non_none
-                .as_ref()
-                .unwrap()
                 .k
                 .all_data()
                 .as_ref()
@@ -328,12 +320,10 @@
                 <span class="kw">break</span>;
             }
             <span class="kw">let </span>first_non_none = cache.iter().find_or_first(|x| x.is_some());
-            <span class="kw">let </span><span class="prelude-val">Some</span>(first_non_none) = first_non_none <span class="kw">else </span>{
+            <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
                 <span class="kw">continue</span>;
             };
             <span class="kw">let </span>cache_device = first_non_none
-                .as_ref()
-                .unwrap()
                 .k
                 .all_data()
                 .as_ref()
@@ -355,12 +345,10 @@
         <span class="comment">// Intentionally evict the first ones first, as they are the oldest
         </span><span class="kw">for </span>cache <span class="kw">in </span><span class="self">self</span>.caches.values_mut() {
             <span class="kw">let </span>first_non_none = cache.iter().find_or_first(|x| x.is_some());
-            <span class="kw">let </span><span class="prelude-val">Some</span>(first_non_none) = first_non_none <span class="kw">else </span>{
+            <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
                 <span class="kw">continue</span>;
             };
             <span class="kw">let </span>cache_device = first_non_none
-                .as_ref()
-                .unwrap()
                 .k
                 .all_data()
                 .as_ref()
