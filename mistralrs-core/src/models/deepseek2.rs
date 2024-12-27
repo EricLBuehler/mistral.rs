@@ -265,6 +265,38 @@ impl Attention {
     }
 }
 
+struct MLP {
+    gate: Linear,
+    up: Linear,
+    down: Linear,
+    act: Activation,
+}
+
+impl MLP {
+    fn new(
+        cfg: &DeepSeekV2Config,
+        vb: VarBuilder,
+        hidden_size: Option<usize>,
+        intermediate_size: Option<usize>,
+    ) -> Result<Self> {
+        let hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
+        let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
+
+        Ok(Self {
+            gate: candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?,
+            up: candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?,
+            down: candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("down_proj"))?,
+            act: cfg.hidden_act,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let lhs = self.gate.forward(xs)?.apply(&self.act)?;
+        let rhs = self.up.forward(xs)?;
+        self.down.forward(&(&lhs * &rhs)?)
+    }
+}
+
 struct DecoderLayer {
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
