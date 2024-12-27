@@ -387,9 +387,9 @@ pub(crate) fn get_chat_template(
             // In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
             info!("Using literal chat template.");
             let mut template = ChatTemplate::default();
-            if chat_template.find("<|end|>").is_some() {
+            if chat_template.contains("<|end|>") {
                 template.eos_token = Some(BeginEndUnkTok(Either::Left("<|end|>".to_string())));
-            } else if chat_template.find("<|endoftext|>").is_some() {
+            } else if chat_template.contains("<|endoftext|>") {
                 template.eos_token =
                     Some(BeginEndUnkTok(Either::Left("<|endoftext|>".to_string())));
             }

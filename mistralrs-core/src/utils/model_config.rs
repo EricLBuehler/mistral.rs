@@ -177,6 +177,7 @@ pub trait FromGGUF {
 
 // Extended variants:
 pub trait FromAdapterGGML {
+    #[allow(clippy::too_many_arguments)]
     fn from_ggml(
         ct: ggml_file::Content,
         gqa: usize,
