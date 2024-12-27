@@ -138,6 +138,8 @@ pub enum NormalLoaderType {
     Starcoder2,
     #[serde(rename = "phi3.5moe")]
     Phi3_5MoE,
+    #[serde(rename = "deepseekv2")]
+    DeepSeekV2,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -155,6 +157,7 @@ impl NormalLoaderType {
             "Qwen2ForCausalLM" => Ok(Self::Qwen2),
             "Starcoder2ForCausalLM" => Ok(Self::Starcoder2),
             "PhiMoEForCausalLM" => Ok(Self::Phi3_5MoE),
+            "DeepseekV2ForCausalLM" => Ok(Self::DeepSeekV2),
             other => anyhow::bail!(
                 "Unsupported Huggging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -176,6 +179,7 @@ impl FromStr for NormalLoaderType {
             "gemma2" => Ok(Self::Gemma2),
             "starcoder2" => Ok(Self::Starcoder2),
             "phi3.5moe" => Ok(Self::Phi3_5MoE),
+            "deepseekv2" => Ok(Self::DeepSeekV2),
             a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`.")),
         }
     }
@@ -194,6 +198,7 @@ impl Display for NormalLoaderType {
             Self::Phi3_5MoE => write!(f, "phi3.5moe"),
             Self::Qwen2 => write!(f, "qwen2"),
             Self::Starcoder2 => write!(f, "starcoder2"),
+            Self::DeepSeekV2 => write!(f, "deepseekv2"),
         }
     }
 }
@@ -230,6 +235,7 @@ impl AutoLoader {
             NormalLoaderType::Gemma2 => Ok(Box::new(Gemma2Loader)),
             NormalLoaderType::Starcoder2 => Ok(Box::new(Starcoder2Loader)),
             NormalLoaderType::Phi3_5MoE => Ok(Box::new(Phi3_5MoELoader)),
+            NormalLoaderType::DeepSeekV2 => Ok(Box::new(DeepSeekV2Loader)),
         }
     }
 }
@@ -1511,5 +1517,64 @@ impl IsqModelLoader for Phi3_5MoELoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
         ])
+    }
+}
+
+/// [`NormalLoader`] for a DeepSeekV2 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+pub struct DeepSeekV2Loader;
+
+impl NormalModelLoader for DeepSeekV2Loader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        Ok(Box::new(models::deepseek2::DeepSeekV2::new(
+            &serde_json::from_str(config)?,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _use_flash_attn: bool,
+        _vb: VarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(Phi3_5MoEBasicConfig::deserialize(
+            config,
+            use_flash_attn,
+        )?))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(Phi3_5MoEBasicConfig::deserialize(config, false)?.num_hidden_layers)
+    }
+}
+
+impl IsqModelLoader for DeepSeekV2Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        todo!()
+    }
+
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        todo!()
     }
 }

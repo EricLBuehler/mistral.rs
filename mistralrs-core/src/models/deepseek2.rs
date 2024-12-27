@@ -1,17 +1,25 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Result, Tensor, D};
+use candle_core::{Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Linear, Module, VarBuilder};
+use mistralrs_quant::QuantMethod;
 use serde::Deserialize;
 
 use crate::{
-    attention::SdpaParams,
+    amoe::AnyMoeBaseModelMixin,
+    device_map::DeviceMapper,
     layers::{
-        Activation, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling, DeepSeekV2RotaryEmbedding, RmsNorm,
+        Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
+        DeepSeekV2RotaryEmbedding, RmsNorm,
     },
-    ops::SplitOp,
-    paged_attention::AttentionImplementation,
-    pipeline::{KvCache, NormalLoadingMetadata},
+    layers_masker::PastKvLenCache,
+    ops::{SplitOp, TopKLastDimOp, TopKOutput},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    pipeline::{
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+    },
     serde_default_fn,
     utils::progress::NiceProgressBar,
 };
@@ -77,6 +85,8 @@ pub struct DeepSeekV2Config {
     kv_lora_rank: usize,
     v_head_dim: usize,
     qk_nope_head_dim: usize,
+    n_group: Option<usize>,
+    topk_group: Option<usize>,
 }
 
 enum QProj {
@@ -265,14 +275,14 @@ impl Attention {
     }
 }
 
-struct MLP {
+struct Mlp {
     gate: Linear,
     up: Linear,
     down: Linear,
     act: Activation,
 }
 
-impl MLP {
+impl Mlp {
     fn new(
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
@@ -297,10 +307,165 @@ impl MLP {
     }
 }
 
+struct MoeGate {
+    weight: Tensor,
+    cfg: DeepSeekV2Config,
+    top_k: usize,
+    n_group: usize,
+    topk_group: usize,
+}
+
+impl MoeGate {
+    fn new(cfg: &DeepSeekV2Config, vb: VarBuilder, n_routed_experts: usize) -> Result<Self> {
+        let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
+        Ok(Self {
+            weight,
+            cfg: cfg.clone(),
+            top_k: cfg.num_experts_per_tok.unwrap(),
+            n_group: cfg.n_group.unwrap(),
+            topk_group: cfg.topk_group.unwrap(),
+        })
+    }
+
+    /// (topk_idx, topk_weight)
+    fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
+        let (_bs, _seq_len, h) = xs.dims3()?;
+        // Compute gating score
+        let xs = xs.reshape(((), h))?;
+        let logits = xs.broadcast_matmul(&self.weight.t()?)?;
+        let scores = match self.cfg.scoring_func {
+            ScoringFunc::Softmax => candle_nn::ops::softmax_last_dim(&logits)?,
+        };
+
+        // Select top-k experts
+        let (mut topk_weight, topk_idx) = match self.cfg.topk_method {
+            TopkMethod::Greedy => {
+                let TopKOutput { values, indices } = scores.topk(self.top_k)?;
+                (values, indices)
+            }
+            TopkMethod::GroupLimitedGreedy => {
+                candle_core::bail!("GroupLimitedGreedy is not yet implemented!")
+            }
+        };
+
+        if self.top_k > 1 && self.cfg.norm_topk_prob {
+            let denmoninator = (topk_weight.sum_keepdim(D::Minus1)? + 1e-20)?;
+            topk_weight = (topk_weight / denmoninator)?;
+        } else {
+            topk_weight = (topk_weight * self.cfg.routed_scaling_factor)?;
+        }
+        Ok((topk_idx, topk_weight))
+    }
+}
+
+struct Moe {
+    experts: Vec<Mlp>,
+    shared_experts: Option<Mlp>,
+    gate: MoeGate,
+}
+
+impl Moe {
+    fn new(
+        cfg: &DeepSeekV2Config,
+        vb: VarBuilder,
+        n_shared_experts: Option<usize>,
+        n_routed_experts: usize,
+    ) -> Result<Self> {
+        let mut experts = Vec::with_capacity(n_routed_experts);
+        for i in 0..n_routed_experts {
+            let vb_e = vb.pp("experts").pp(i);
+            experts.push(Mlp::new(cfg, vb_e, None, Some(cfg.moe_intermediate_size))?);
+        }
+        let shared_experts = if let Some(n_shared_experts) = n_shared_experts {
+            let intermediate_size = cfg.moe_intermediate_size * n_shared_experts;
+            Some(Mlp::new(
+                cfg,
+                vb.pp("shared_experts"),
+                None,
+                Some(intermediate_size),
+            )?)
+        } else {
+            None
+        };
+        let gate = MoeGate::new(cfg, vb.pp("gate"), n_routed_experts)?;
+        Ok(Self {
+            experts,
+            shared_experts,
+            gate,
+        })
+    }
+
+    fn moe_infer(&self, xs: &Tensor, topk_ids: &Tensor, topk_weight: &Tensor) -> Result<Tensor> {
+        let mut cnts = topk_ids
+            .zeros_like()?
+            .reshape((topk_ids.dim(0)?, self.experts.len()))?;
+        cnts = cnts.scatter_add(topk_ids, &cnts.ones_like()?, 1)?;
+        let tokens_per_expert = cnts.sum(0)?.to_vec1::<u32>()?;
+        let idxs = topk_ids.flatten_all()?.arg_sort_last_dim(true)?;
+        let sorted_tokens = xs.gather(&(&idxs / topk_ids.dim(1)? as f64)?, 0)?;
+
+        let mut outputs = Vec::with_capacity(tokens_per_expert.len());
+        let mut start_idx = 0;
+        for (i, num_tokens) in tokens_per_expert.into_iter().enumerate() {
+            let end_idx = start_idx + num_tokens;
+            if num_tokens == 0 {
+                continue;
+            }
+            let expert = &self.experts[i];
+            let tokens_for_this_expert = sorted_tokens.i(start_idx as usize..end_idx as usize)?;
+            let expert_out = expert.forward(&tokens_for_this_expert)?;
+            outputs.push(expert_out);
+            start_idx = end_idx;
+        }
+
+        let outs = Tensor::cat(&outputs, 0)?;
+
+        let new_x = outs.zeros_like()?;
+        new_x.scatter_add(&idxs, &outs, 0)?;
+
+        let hole = new_x.elem_count() / topk_ids.elem_count();
+
+        new_x
+            .reshape([topk_ids.dims().to_vec(), vec![hole]].concat())?
+            .mul(&topk_weight.unsqueeze(D::Minus1)?)?
+            .sum(1)
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let identity = xs.clone();
+        let orig_shape = xs.shape();
+        let (topk_idx, topk_weight) = self.gate.forward(xs)?;
+        let xs = xs.reshape(((), xs.dim(D::Minus1)?))?;
+
+        let mut y = self
+            .moe_infer(&xs, &topk_idx, &topk_weight)?
+            .reshape(orig_shape)?;
+        if let Some(ref shared_experts) = self.shared_experts {
+            y = (y + shared_experts.forward(&identity)?)?;
+        }
+        Ok(y)
+    }
+}
+
+enum MoeOrMlp {
+    Moe(Moe),
+    Mlp(Mlp),
+}
+
+impl MoeOrMlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Mlp(mlp) => mlp.forward(xs),
+            Self::Moe(moe) => moe.forward(xs),
+        }
+    }
+}
+
 struct DecoderLayer {
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
     attn: Attention,
+    moe_or_mlp: MoeOrMlp,
 }
 
 impl DecoderLayer {
@@ -308,6 +473,7 @@ impl DecoderLayer {
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
+        layer_idx: usize,
     ) -> Result<Self> {
         let attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
         let input_layernorm =
@@ -317,7 +483,46 @@ impl DecoderLayer {
             cfg.rms_norm_eps,
             vb.pp("post_attention_layernorm"),
         )?;
-        todo!()
+        let moe_or_mlp = if cfg.n_routed_experts.is_some()
+            && layer_idx >= cfg.first_k_dense_replace
+            && layer_idx % cfg.moe_layer_freq == 0
+        {
+            MoeOrMlp::Moe(Moe::new(
+                cfg,
+                vb.pp("mlp"),
+                cfg.n_shared_experts,
+                cfg.n_routed_experts.unwrap(),
+            )?)
+        } else {
+            MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None)?)
+        };
+
+        Ok(Self {
+            input_layernorm,
+            post_attention_layernorm,
+            attn,
+            moe_or_mlp,
+        })
+    }
+
+    fn forward(
+        &self,
+        xs: &Tensor,
+        attention_mask: Option<&Tensor>,
+        seqlen_offsets: &[usize],
+        kv_cache: &mut KvCache,
+    ) -> Result<Tensor> {
+        let residual = xs;
+        let xs = self.input_layernorm.forward(xs)?;
+        let xs = self
+            .attn
+            .forward(&xs, attention_mask, seqlen_offsets, kv_cache)?;
+        let xs = (xs + residual)?;
+        let residual = &xs;
+        let xs = self
+            .moe_or_mlp
+            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        residual + xs
     }
 }
 
@@ -326,6 +531,10 @@ pub struct DeepSeekV2 {
     embed_tokens: Embedding,
     norm: RmsNorm,
     layers: Vec<DecoderLayer>,
+    cache: EitherCache,
+    device: Device,
+    max_seq_len: usize,
+    cfg: ModelConfigMetadata,
 }
 
 impl DeepSeekV2 {
@@ -374,7 +583,7 @@ impl DeepSeekV2 {
                 .get(&device.location())
                 .expect("No RoPE for device location!")
                 .clone();
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx))?;
+            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), layer_idx)?;
             layers.push(layer)
         }
 
@@ -383,6 +592,121 @@ impl DeepSeekV2 {
             embed_tokens,
             norm,
             layers,
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
+            device: normal_loading_metadata.real_device.clone(),
+            max_seq_len: cfg.max_position_embeddings,
+            cfg: ModelConfigMetadata {
+                num_layers: cfg.num_hidden_layers,
+                hidden_size: cfg.hidden_size,
+                num_kv_heads: cfg.num_attention_heads,
+                num_attn_heads: cfg.num_attention_heads,
+                sliding_window: None,
+                head_dim: None,
+            },
         })
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+    ) -> Result<Tensor> {
+        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let cache = &mut self.cache.normal().0;
+        let attention_mask = CausalMasker.make_causal_mask_matrix(
+            input_ids,
+            &seqlen_offsets as &dyn PastKvLenCache,
+            xs.dtype(),
+            self.cfg.num_attn_heads,
+        )?;
+        for (i, layer) in self.layers.iter().enumerate() {
+            xs = layer.forward(
+                &xs,
+                attention_mask
+                    .as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
+                seqlen_offsets,
+                &mut cache[i],
+            )?;
+        }
+        let xs = xs.apply(&self.norm)?;
+        extract_logits(&self.lm_head.forward(&xs)?, context_lens)
+    }
 }
+
+impl IsqModel for DeepSeekV2 {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        todo!()
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        todo!()
+    }
+
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        todo!()
+    }
+}
+
+impl NormalModel for DeepSeekV2 {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        _start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        self.forward(input_ids, seqlen_offsets, context_lens)
+    }
+    fn xlora_forward(
+        &self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _start_offsets_kernel: Tensor,
+        _start_offsets_kernel_full: Tensor,
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
+    fn cache(&self) -> &EitherCache {
+        &self.cache
+    }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
+    }
+}
+
+impl AnyMoeBaseModelMixin for DeepSeekV2 {}
