@@ -14,6 +14,7 @@ use regex_automata::meta::Regex;
 use serde_json::Value;
 use tracing::{info, warn};
 
+use super::chat_template::BeginEndUnkTok;
 use crate::{
     api_dir_list, api_get_file,
     lora::LoraConfig,
@@ -381,12 +382,17 @@ pub(crate) fn get_chat_template(
     } else {
         panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there. If you are running a GGUF model, it probably does not contain a chat template.");
     };
-
     let mut template: ChatTemplate = match chat_template_ovrd {
         Some(chat_template) => {
             // In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
             info!("Using literal chat template.");
             let mut template = ChatTemplate::default();
+            if chat_template.find("<|end|>").is_some() {
+                template.eos_token = Some(BeginEndUnkTok(Either::Left("<|end|>".to_string())));
+            } else if chat_template.find("<|endoftext|>").is_some() {
+                template.eos_token =
+                    Some(BeginEndUnkTok(Either::Left("<|endoftext|>".to_string())));
+            }
             template.chat_template = Some(ChatTemplateValue(Either::Left(chat_template)));
             template
         }

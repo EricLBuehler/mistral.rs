@@ -85,10 +85,10 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::Lora { dtype, .. }
         | ModelSelected::XLora { dtype, .. }
         | ModelSelected::VisionPlain { dtype, .. }
-        | ModelSelected::DiffusionPlain { dtype, .. } => Ok(*dtype),
-        ModelSelected::GGUF { .. }
-        | ModelSelected::LoraGGUF { .. }
-        | ModelSelected::GGML { .. }
+        | ModelSelected::DiffusionPlain { dtype, .. }
+        | ModelSelected::GGML { dtype, .. }
+        | ModelSelected::GGUF { dtype, .. } => Ok(*dtype),
+        ModelSelected::LoraGGUF { .. }
         | ModelSelected::LoraGGML { .. }
         | ModelSelected::XLoraGGUF { .. }
         | ModelSelected::XLoraGGML { .. } => Ok(ModelDType::Auto),
@@ -222,6 +222,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -304,6 +305,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_filename,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,

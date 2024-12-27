@@ -134,6 +134,10 @@ pub enum TomlModelSelected {
         /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         quantized_filename: String,
 
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
+
         /// Path to a topology YAML file.
         topology: Option<String>,
     },
@@ -208,6 +212,10 @@ pub enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
 
         /// Path to a topology YAML file.
         topology: Option<String>,
@@ -366,10 +374,10 @@ pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
         TomlModelSelected::Plain { dtype, .. }
         | TomlModelSelected::Lora { dtype, .. }
         | TomlModelSelected::XLora { dtype, .. }
-        | TomlModelSelected::VisionPlain { dtype, .. } => dtype,
-        TomlModelSelected::GGUF { .. }
-        | TomlModelSelected::LoraGGUF { .. }
-        | TomlModelSelected::GGML { .. }
+        | TomlModelSelected::VisionPlain { dtype, .. }
+        | TomlModelSelected::GGUF { dtype, .. }
+        | TomlModelSelected::GGML { dtype, .. } => dtype,
+        TomlModelSelected::LoraGGUF { .. }
         | TomlModelSelected::LoraGGML { .. }
         | TomlModelSelected::XLoraGGUF { .. }
         | TomlModelSelected::XLoraGGML { .. } => ModelDType::Auto,
@@ -480,6 +488,7 @@ fn loader_from_selected(
             quantized_model_id,
             quantized_filename,
             topology,
+            dtype: _,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             Some(tok_model_id),
@@ -559,6 +568,7 @@ fn loader_from_selected(
             quantized_filename,
             gqa,
             topology,
+            dtype: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,

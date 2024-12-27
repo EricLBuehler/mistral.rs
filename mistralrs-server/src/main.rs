@@ -143,7 +143,7 @@ struct Args {
     no_paged_attn: bool,
 
     /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
-    #[arg(long = "no-paged-attn", default_value_t = false)]
+    #[arg(long = "paged-attn", default_value_t = false)]
     paged_attn: bool,
 
     /// Enable server throughput logging, supported in the server and with interactive mode
