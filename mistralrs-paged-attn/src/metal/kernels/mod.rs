@@ -56,7 +56,7 @@ pub(crate) static G_KERNEL: OnceCell<Kernels> = OnceCell::new();
 
 impl Kernels {
     pub fn default() -> &'static Kernels {
-        G_KERNEL.get_or_init(|| Kernels::new())
+        G_KERNEL.get_or_init(Kernels::new)
     }
 
     pub fn new() -> Self {
