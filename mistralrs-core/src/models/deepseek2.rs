@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::Result;
-use candle_nn::{embedding, Embedding, Linear, VarBuilder};
+use candle_core::{Result, Tensor, D};
+use candle_nn::{embedding, Embedding, Linear, Module, VarBuilder};
 use serde::Deserialize;
 
 use crate::{
@@ -9,8 +9,9 @@ use crate::{
     layers::{
         Activation, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling, DeepSeekV2RotaryEmbedding, RmsNorm,
     },
+    ops::SplitOp,
     paged_attention::AttentionImplementation,
-    pipeline::NormalLoadingMetadata,
+    pipeline::{KvCache, NormalLoadingMetadata},
     serde_default_fn,
     utils::progress::NiceProgressBar,
 };
@@ -24,7 +25,7 @@ serde_default_fn!(ScoringFunc, scoring_func, ScoringFunc::Softmax);
 serde_default_fn!(Activation, hidden_act, Activation::Silu);
 serde_default_fn!(bool, tie_word_embeddings, false);
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 enum TopkMethod {
     #[serde(rename = "greedy")]
     Greedy,
@@ -32,13 +33,13 @@ enum TopkMethod {
     GroupLimitedGreedy,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 enum ScoringFunc {
     #[serde(rename = "softmax")]
     Softmax,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct DeepSeekV2Config {
     vocab_size: usize,
     hidden_size: usize,
@@ -83,6 +84,15 @@ enum QProj {
     Lora { a: Linear, norm: RmsNorm, b: Linear },
 }
 
+impl QProj {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Lora { a, norm, b } => b.forward(&norm.forward(&a.forward(xs)?)?),
+            Self::Plain(lin) => lin.forward(xs),
+        }
+    }
+}
+
 struct Attention {
     q: QProj,
     kv_a_proj_with_mqa: Linear,
@@ -91,6 +101,8 @@ struct Attention {
     o_proj: Linear,
     rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
     softmax_scale: f32,
+    cfg: DeepSeekV2Config,
+    q_head_dim: usize,
 }
 
 impl Attention {
@@ -163,7 +175,93 @@ impl Attention {
             o_proj,
             rotary_emb,
             softmax_scale,
+            cfg: cfg.clone(),
+            q_head_dim,
         })
+    }
+
+    fn forward(
+        &self,
+        xs: &Tensor,
+        attention_mask: Option<&Tensor>,
+        seqlen_offsets: &[usize],
+        kv_cache: &mut KvCache,
+    ) -> Result<Tensor> {
+        let (bs, seq_len, _) = xs.dims3()?;
+
+        let mut q = self.q.forward(xs)?;
+        q = q
+            .reshape((bs, seq_len, self.cfg.num_attention_heads, self.q_head_dim))?
+            .transpose(1, 2)?;
+        let q_split = q.split(
+            &[self.cfg.qk_nope_head_dim, self.cfg.qk_rope_head_dim],
+            D::Minus1,
+        )?;
+        let q_nope = q_split[0].clone();
+        let q_pe = q_split[1].clone();
+
+        let mut compressed_kv = self.kv_a_proj_with_mqa.forward(xs)?;
+        let ckv_split = compressed_kv.split(
+            &[self.cfg.kv_lora_rank, self.cfg.qk_rope_head_dim],
+            D::Minus1,
+        )?;
+        compressed_kv = ckv_split[0].clone();
+        let mut k_pe = ckv_split[1].clone();
+        k_pe = k_pe
+            .reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
+            .transpose(1, 2)?;
+        let mut kv = self
+            .kv_b_proj
+            .forward(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
+        kv = kv
+            .reshape((
+                bs,
+                seq_len,
+                self.cfg.num_attention_heads,
+                self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
+            ))?
+            .transpose(1, 2)?;
+
+        let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
+        let k_nope = kv_split[0].clone();
+        let mut v = kv_split[1].clone();
+
+        let (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
+
+        let mut q = Tensor::zeros(
+            (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
+            q_pe.dtype(),
+            q_pe.device(),
+        )?;
+        q = q.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &q_nope)?;
+        q = q.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
+
+        let mut k = Tensor::zeros(
+            (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
+            k_pe.dtype(),
+            k_pe.device(),
+        )?;
+        k = k.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &k_nope)?;
+        k = k.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &k_pe)?;
+
+        (k, v) = kv_cache.append(&k, &v)?;
+
+        let mut attn_out = {
+            let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.softmax_scale as f64)?;
+            attn_weights = match attention_mask {
+                Some(mask) => (attn_weights + mask)?,
+                None => attn_weights,
+            };
+            attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
+            attn_weights.matmul(&v)?
+        };
+        attn_out = if attention_mask.is_some() {
+            attn_out.transpose(1, 2)?.reshape((bs, seq_len, ()))?
+        } else {
+            attn_out.reshape((bs, seq_len, ()))?
+        };
+
+        self.o_proj.forward(&attn_out)
     }
 }
 
