@@ -828,7 +828,7 @@ impl DeepSeekV2RotaryEmbedding {
         if scale <= 1. {
             return 1.;
         }
-        return 0.1 * mscale * scale.ln() + 1.;
+        0.1 * mscale * scale.ln() + 1.
     }
 
     fn new_yarn(
@@ -906,7 +906,7 @@ impl DeepSeekV2RotaryEmbedding {
                 *mscale,
                 *mscale_all_dim,
             ),
-            None => Self::new_unscaled(&cfg, dtype, dev),
+            None => Self::new_unscaled(cfg, dtype, dev),
         }
     }
 

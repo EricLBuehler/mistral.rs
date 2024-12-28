@@ -18,7 +18,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+        Cache, EitherCache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::progress::NiceProgressBar,
