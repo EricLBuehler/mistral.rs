@@ -271,7 +271,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<IsqType>,
-        mut paged_attn_config: Option<PagedAttentionConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         // Otherwise, the device mapper will print it
