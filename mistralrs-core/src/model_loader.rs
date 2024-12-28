@@ -87,11 +87,10 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::VisionPlain { dtype, .. }
         | ModelSelected::DiffusionPlain { dtype, .. }
         | ModelSelected::GGML { dtype, .. }
-        | ModelSelected::GGUF { dtype, .. } => Ok(*dtype),
-        ModelSelected::LoraGGUF { .. }
-        | ModelSelected::LoraGGML { .. }
-        | ModelSelected::XLoraGGUF { .. }
-        | ModelSelected::XLoraGGML { .. } => Ok(ModelDType::Auto),
+        | ModelSelected::GGUF { dtype, .. }
+        | ModelSelected::XLoraGGUF { dtype, .. }
+        | ModelSelected::XLoraGGML { dtype, .. } => Ok(*dtype),
+        ModelSelected::LoraGGUF { .. } | ModelSelected::LoraGGML { .. } => Ok(ModelDType::Auto),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -245,6 +244,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             order,
             tgt_non_granular_index,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -330,6 +330,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tgt_non_granular_index,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,

@@ -167,6 +167,10 @@ pub enum TomlModelSelected {
         /// This makes the maximum running sequences 1.
         tgt_non_granular_index: Option<usize>,
 
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
+
         /// Path to a topology YAML file.
         topology: Option<String>,
     },
@@ -246,6 +250,10 @@ pub enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
 
         /// Path to a topology YAML file.
         topology: Option<String>,
@@ -376,11 +384,10 @@ pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
         | TomlModelSelected::XLora { dtype, .. }
         | TomlModelSelected::VisionPlain { dtype, .. }
         | TomlModelSelected::GGUF { dtype, .. }
-        | TomlModelSelected::GGML { dtype, .. } => dtype,
-        TomlModelSelected::LoraGGUF { .. }
-        | TomlModelSelected::LoraGGML { .. }
-        | TomlModelSelected::XLoraGGUF { .. }
-        | TomlModelSelected::XLoraGGML { .. } => ModelDType::Auto,
+        | TomlModelSelected::GGML { dtype, .. }
+        | TomlModelSelected::XLoraGGUF { dtype, .. }
+        | TomlModelSelected::XLoraGGML { dtype, .. } => dtype,
+        TomlModelSelected::LoraGGUF { .. } | TomlModelSelected::LoraGGML { .. } => ModelDType::Auto,
     }
 }
 
@@ -511,6 +518,7 @@ fn loader_from_selected(
             order,
             tgt_non_granular_index,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -591,6 +599,7 @@ fn loader_from_selected(
             tgt_non_granular_index,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
