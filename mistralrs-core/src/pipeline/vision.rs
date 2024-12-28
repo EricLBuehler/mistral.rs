@@ -235,6 +235,11 @@ impl Loader for VisionLoader {
             device,
             self.config.topology.as_ref(),
         )?;
+        let mut layer_devices = Vec::new();
+        for layer in 0..self.inner.get_total_device_mapping_num_layers(&config)? {
+            let device = mapper.device_for(layer, false).cloned();
+            layer_devices.push(device);
+        }
         let dtype = mapper.get_min_dtype(dtype)?;
 
         let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
@@ -435,7 +440,8 @@ impl Loader for VisionLoader {
                 model.config(),
                 device,
             )?;
-            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            let cache_engine =
+                CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
