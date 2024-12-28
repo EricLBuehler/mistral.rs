@@ -1559,10 +1559,15 @@ impl NormalModelLoader for DeepSeekV2Loader {
         Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(serde_json::from_str::<crate::models::deepseek2::DeepSeekV2Config>(config)?))
+        Ok(Box::new(serde_json::from_str::<
+            crate::models::deepseek2::DeepSeekV2Config,
+        >(config)?))
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(serde_json::from_str::<crate::models::deepseek2::DeepSeekV2Config>(config)?.num_hidden_layers)
+        Ok(
+            serde_json::from_str::<crate::models::deepseek2::DeepSeekV2Config>(config)?
+                .num_hidden_layers,
+        )
     }
 }
 

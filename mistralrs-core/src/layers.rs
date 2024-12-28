@@ -864,7 +864,9 @@ impl DeepSeekV2RotaryEmbedding {
         );
         let inv_freq_mask =
             (1. - Self::yarn_linear_ramp_mask(low, high, cfg.qk_rope_head_dim / 2, dev)?)?;
-        let inv_freq = freq_inter.broadcast_mul(&(1. - &inv_freq_mask)?)?.broadcast_add(&freq_extra.broadcast_mul(&inv_freq_mask)?)?;
+        let inv_freq = freq_inter
+            .broadcast_mul(&(1. - &inv_freq_mask)?)?
+            .broadcast_add(&freq_extra.broadcast_mul(&inv_freq_mask)?)?;
 
         let t = Tensor::arange(0u32, cfg.max_position_embeddings as u32, dev)?
             .to_dtype(DType::F32)?

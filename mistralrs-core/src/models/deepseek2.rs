@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{embedding, Embedding, Linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 use serde::Deserialize;
@@ -18,7 +18,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+        Cache, EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::progress::NiceProgressBar,
@@ -195,7 +195,8 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        kv_cache: &mut KvCache,
+        // kv_cache: &mut KvCache,
+        kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (bs, seq_len, _) = xs.dims3()?;
 
@@ -252,14 +253,16 @@ impl Attention {
             k_pe.device(),
         )?;
         k = k.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &k_nope)?;
+        let k_pe = k_pe.repeat((1, k.dim(1)?, 1, 1))?;
         k = k.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &k_pe)?;
 
-        (k, v) = kv_cache.append(&k, &v)?;
+        // (k, v) = kv_cache.append(&k, &v)?;
+        (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
         let mut attn_out = {
             let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.softmax_scale as f64)?;
             attn_weights = match attention_mask {
-                Some(mask) => (attn_weights + mask)?,
+                Some(mask) => attn_weights.broadcast_add(mask)?,
                 None => attn_weights,
             };
             attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
@@ -392,13 +395,17 @@ impl Moe {
     }
 
     fn moe_infer(&self, xs: &Tensor, topk_ids: &Tensor, topk_weight: &Tensor) -> Result<Tensor> {
-        let mut cnts = topk_ids
-            .zeros_like()?
-            .reshape((topk_ids.dim(0)?, self.experts.len()))?;
-        cnts = cnts.scatter_add(topk_ids, &cnts.ones_like()?, 1)?;
+        let mut cnts: Tensor = Tensor::zeros(
+            (topk_ids.dim(0)?, self.experts.len()),
+            DType::F32,
+            topk_ids.device(),
+        )?;
+        cnts = cnts
+            .scatter_add(topk_ids, &topk_ids.ones_like()?.to_dtype(DType::F32)?, 1)?
+            .to_dtype(topk_ids.dtype())?;
         let tokens_per_expert = cnts.sum(0)?.to_vec1::<u32>()?;
         let idxs = topk_ids.flatten_all()?.arg_sort_last_dim(true)?;
-        let sorted_tokens = xs.gather(&(&idxs / topk_ids.dim(1)? as f64)?, 0)?;
+        let sorted_tokens = xs.index_select(&(&idxs / topk_ids.dim(1)? as f64)?, 0)?;
 
         let mut outputs = Vec::with_capacity(tokens_per_expert.len());
         let mut start_idx = 0;
@@ -417,13 +424,13 @@ impl Moe {
         let outs = Tensor::cat(&outputs, 0)?;
 
         let new_x = outs.zeros_like()?;
-        new_x.scatter_add(&idxs, &outs, 0)?;
+        new_x.index_add(&idxs, &outs, 0)?;
 
         let hole = new_x.elem_count() / topk_ids.elem_count();
 
         new_x
             .reshape([topk_ids.dims().to_vec(), vec![hole]].concat())?
-            .mul(&topk_weight.unsqueeze(D::Minus1)?)?
+            .broadcast_mul(&topk_weight.unsqueeze(D::Minus1)?)?
             .sum(1)
     }
 
@@ -506,7 +513,8 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        kv_cache: &mut KvCache,
+        // kv_cache: &mut KvCache,
+        kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -588,10 +596,11 @@ impl DeepSeekV2 {
             embed_tokens,
             norm,
             layers,
-            cache: EitherCache::Normal(NormalCache::new(
-                cfg.num_hidden_layers,
-                cfg.max_position_embeddings,
-            )),
+            // cache: EitherCache::Normal(NormalCache::new(
+            //     cfg.num_hidden_layers,
+            //     cfg.max_position_embeddings,
+            // )),
+            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
             device: normal_loading_metadata.real_device.clone(),
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
@@ -600,7 +609,7 @@ impl DeepSeekV2 {
                 num_kv_heads: cfg.num_attention_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
-                head_dim: None,
+                head_dim: Some(cfg.qk_nope_head_dim + cfg.qk_rope_head_dim),
             },
         })
     }
@@ -613,7 +622,8 @@ impl DeepSeekV2 {
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
-        let cache = &mut self.cache.normal().0;
+        // let cache = &mut self.cache.normal().0;
+        let mut cache = self.cache.full().lock();
         let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
