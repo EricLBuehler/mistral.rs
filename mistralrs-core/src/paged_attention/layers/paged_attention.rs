@@ -70,6 +70,34 @@ impl PagedAttention {
             input_metadata.slot_mappings.clone()
         };
 
+        // When device mapping, these Tensors are fixed on the first device, and must be moved to the same device as q,k,v
+        // - slot_mapping
+        // - input_metadata.block_tables
+        // - input_metadata.context_lens
+        // - self.alibi_slopes
+        // - attention_mask
+        let slot_mapping = slot_mapping.to_device(query.device())?;
+        let block_tables = input_metadata
+            .block_tables
+            .as_ref()
+            .unwrap()
+            .to_device(query.device())?;
+        let context_lens = input_metadata
+            .context_lens
+            .as_ref()
+            .unwrap()
+            .to_device(query.device())?;
+        let alibi_slopes = if let Some(alibi_slopes) = self.alibi_slopes.as_ref() {
+            Some(alibi_slopes.to_device(query.device())?)
+        } else {
+            None
+        };
+        let attention_mask = if let Some(mask) = attention_mask {
+            Some(mask.to_device(query.device())?)
+        } else {
+            None
+        };
+
         let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
         let (_, key_value_heads, _, _) = key.shape().dims4()?;
 
@@ -80,7 +108,7 @@ impl PagedAttention {
                 query,
                 key,
                 value,
-                Some(mask),
+                Some(&mask),
                 None,
                 &SdpaParams {
                     n_kv_groups: self.n_kv_groups,
@@ -92,7 +120,7 @@ impl PagedAttention {
             )?),
         };
 
-        // // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
+        // paged-attn expects [batch_size, num_tokens, num_heads, head_size]
         let (query, key, value) = if seq_len > 1 {
             let q = query
                 .transpose(1, 2)?
@@ -105,7 +133,7 @@ impl PagedAttention {
                 .reshape(((), key_value_heads, head_size))?;
             (q, k, v)
         } else {
-            //avoid unnecessary transpose for decoding
+            // avoid unnecessary transpose for decoding
             let q = query.reshape(((), attention_heads, head_size))?;
             let k = key.reshape(((), key_value_heads, head_size))?;
             let v = value.reshape(((), key_value_heads, head_size))?;
@@ -131,7 +159,6 @@ impl PagedAttention {
             // Return result in prefill
             return Ok(att);
         }
-
         //  Args:
         //  output: shape = [num_generation_tokens, num_heads, head_size]
         //
@@ -147,18 +174,16 @@ impl PagedAttention {
         //
         //  alibi_slopes: shape = [num_heads]
         #[allow(clippy::cast_possible_truncation)]
-        let res = paged_attention(
+        paged_attention(
             &query,
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
-            input_metadata.block_tables.as_ref().unwrap(),
-            input_metadata.context_lens.as_ref().unwrap(),
-            self.alibi_slopes.as_ref(),
+            &block_tables,
+            &context_lens,
+            alibi_slopes.as_ref(),
             input_metadata.max_context_len.unwrap(),
             self.scale,
             softcapping.unwrap_or(1.0f64) as f32,
-        )?;
-
-        Ok(res)
+        )
     }
 }
