@@ -288,16 +288,17 @@ impl Loader for NormalLoader {
                 self.get_id(),
                 device.device_pretty_repr()
             );
-        } else if paged_attn_config.is_some() {
-            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
-            paged_attn_config = None;
         }
-
         let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
             self.config.topology.as_ref(),
         )?;
+        let mut layer_devices = Vec::new();
+        for layer in 0..self.inner.get_total_device_mapping_num_layers(&config)? {
+            let device = mapper.device_for(layer, false).cloned();
+            layer_devices.push(device);
+        }
         let dtype = mapper.get_min_dtype(dtype)?;
 
         info!(
@@ -523,7 +524,8 @@ impl Loader for NormalLoader {
                 model.config(),
                 device,
             )?;
-            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            let cache_engine =
+                CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
