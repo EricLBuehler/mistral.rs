@@ -163,6 +163,7 @@ impl LayerWeights {
             v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
         };
 
+        let start_offsets_kernel = start_offsets_kernel.to_device(q.device())?;
         self.rotary
             .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
 
