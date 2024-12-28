@@ -33,7 +33,7 @@ serde_default_fn!(ScoringFunc, scoring_func, ScoringFunc::Softmax);
 serde_default_fn!(Activation, hidden_act, Activation::Silu);
 serde_default_fn!(bool, tie_word_embeddings, false);
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 enum TopkMethod {
     #[serde(rename = "greedy")]
     Greedy,
@@ -41,19 +41,19 @@ enum TopkMethod {
     GroupLimitedGreedy,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 enum ScoringFunc {
     #[serde(rename = "softmax")]
     Softmax,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 pub struct DeepSeekV2Config {
     vocab_size: usize,
     hidden_size: usize,
     intermediate_size: usize,
     moe_intermediate_size: usize,
-    num_hidden_layers: usize,
+    pub(crate) num_hidden_layers: usize,
     num_attention_heads: usize,
     n_shared_experts: Option<usize>,
     n_routed_experts: Option<usize>,
@@ -295,7 +295,7 @@ impl Mlp {
         Ok(Self {
             gate: candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?,
             up: candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?,
-            down: candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("down_proj"))?,
+            down: candle_nn::linear_no_bias(intermediate_size, hidden_size, vb.pp("down_proj"))?,
             act: cfg.hidden_act,
         })
     }
@@ -311,8 +311,6 @@ struct MoeGate {
     weight: Tensor,
     cfg: DeepSeekV2Config,
     top_k: usize,
-    n_group: usize,
-    topk_group: usize,
 }
 
 impl MoeGate {
@@ -322,8 +320,6 @@ impl MoeGate {
             weight,
             cfg: cfg.clone(),
             top_k: cfg.num_experts_per_tok.unwrap(),
-            n_group: cfg.n_group.unwrap(),
-            topk_group: cfg.topk_group.unwrap(),
         })
     }
 

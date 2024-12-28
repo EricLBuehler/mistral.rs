@@ -745,11 +745,6 @@ pub struct DeepSeekV2RotaryEmbedding {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum DeepSeekV2RopeScaling {
-    LinearOrDynamic {
-        #[serde(rename = "type")]
-        scaling_type: ScaledRopeType,
-        factor: f64,
-    },
     Yarn {
         original_max_position_embeddings: usize,
         beta_fast: f32,
@@ -759,6 +754,11 @@ pub enum DeepSeekV2RopeScaling {
         factor: f32,
         #[serde(rename = "type")]
         scaling_type: ScaledRopeType,
+    },
+    LinearOrDynamic {
+        #[serde(rename = "type")]
+        scaling_type: ScaledRopeType,
+        factor: f64,
     },
 }
 
@@ -853,7 +853,7 @@ impl DeepSeekV2RotaryEmbedding {
             .map(|i| 1f32 / factor * cfg.rope_theta.powf(i as f32 / cfg.qk_rope_head_dim as f32))
             .collect();
         let freq_inter_len = freq_inter.len();
-        let freq_inter = Tensor::from_vec(freq_inter, freq_inter_len, dev)?;
+        let freq_inter = Tensor::from_vec(freq_inter, (1, freq_inter_len), dev)?;
 
         let (low, high) = Self::yarn_find_correction_range(
             beta_fast,
@@ -864,8 +864,7 @@ impl DeepSeekV2RotaryEmbedding {
         );
         let inv_freq_mask =
             (1. - Self::yarn_linear_ramp_mask(low, high, cfg.qk_rope_head_dim / 2, dev)?)?;
-        let inv_freq =
-            (freq_inter.mul(&(1. - &inv_freq_mask)?)? + freq_extra.mul(&inv_freq_mask)?)?;
+        let inv_freq = freq_inter.broadcast_mul(&(1. - &inv_freq_mask)?)?.broadcast_add(&freq_extra.broadcast_mul(&inv_freq_mask)?)?;
 
         let t = Tensor::arange(0u32, cfg.max_position_embeddings as u32, dev)?
             .to_dtype(DType::F32)?

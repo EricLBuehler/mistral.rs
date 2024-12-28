@@ -17,7 +17,7 @@ use crate::lora::Ordering;
 use crate::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
 };
-use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 use crate::pipeline::get_chat_template;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
@@ -505,13 +505,13 @@ impl Loader for GGUFLoader {
         };
 
         if chat_template.bos_token.is_none() && bos.is_some() {
-            chat_template.bos_token = Some(BeginEndUnkTok(Either::Left(bos.unwrap())));
+            chat_template.bos_token = Some(BeginEndUnkPadTok(Either::Left(bos.unwrap())));
         }
         if chat_template.eos_token.is_none() && eos.is_some() {
-            chat_template.eos_token = Some(BeginEndUnkTok(Either::Left(eos.unwrap())));
+            chat_template.eos_token = Some(BeginEndUnkPadTok(Either::Left(eos.unwrap())));
         }
         if chat_template.unk_token.is_none() && unk.is_some() {
-            chat_template.unk_token = Some(BeginEndUnkTok(Either::Left(unk.unwrap())));
+            chat_template.unk_token = Some(BeginEndUnkPadTok(Either::Left(unk.unwrap())));
         }
 
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
