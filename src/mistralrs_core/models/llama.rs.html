@@ -860,8 +860,7 @@
 <a href="#859" id="859">859</a>
 <a href="#860" id="860">860</a>
 <a href="#861" id="861">861</a>
-<a href="#862" id="862">862</a>
-<a href="#863" id="863">863</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#862" id="862">862</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{embedding, Embedding, Module, VarBuilder};
@@ -998,12 +997,11 @@
                     <span class="prelude-val">None</span>,
                 )<span class="question-mark">?</span>,
                 <span class="prelude-val">None </span>=&gt; {
-                    <span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata {
-                        block_tables: <span class="prelude-val">None</span>,
-                        context_lens: <span class="prelude-val">None</span>,
-                        max_context_len: <span class="prelude-val">None</span>,
-                        slot_mappings: Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], q.device())<span class="question-mark">?</span>,
-                    };
+                    <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
+                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
+                    </span><span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata::dummy(q.device())<span class="question-mark">?</span>;
+                    <span class="comment">// Sanity check.
+                    </span><span class="macro">assert!</span>(attention_mask.is_some());
                     paged_attn.forward(
                         <span class="kw-2">&amp;</span>q,
                         <span class="kw-2">&amp;</span>k,

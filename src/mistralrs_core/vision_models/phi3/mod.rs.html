@@ -1333,8 +1333,7 @@
 <a href="#1332" id="1332">1332</a>
 <a href="#1333" id="1333">1333</a>
 <a href="#1334" id="1334">1334</a>
-<a href="#1335" id="1335">1335</a>
-<a href="#1336" id="1336">1336</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1335" id="1335">1335</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3_inputs_processor;
 
@@ -1613,12 +1612,11 @@
                     <span class="prelude-val">None</span>,
                 )<span class="question-mark">?</span>,
                 <span class="prelude-val">None </span>=&gt; {
-                    <span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata {
-                        block_tables: <span class="prelude-val">None</span>,
-                        context_lens: <span class="prelude-val">None</span>,
-                        max_context_len: <span class="prelude-val">None</span>,
-                        slot_mappings: Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], q.device())<span class="question-mark">?</span>,
-                    };
+                    <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
+                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
+                    </span><span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata::dummy(q.device())<span class="question-mark">?</span>;
+                    <span class="comment">// Sanity check.
+                    </span><span class="macro">assert!</span>(attention_mask.is_some());
                     paged_attn.forward(
                         <span class="kw-2">&amp;</span>q,
                         <span class="kw-2">&amp;</span>k,

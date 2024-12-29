@@ -845,7 +845,20 @@
 <a href="#844" id="844">844</a>
 <a href="#845" id="845">845</a>
 <a href="#846" id="846">846</a>
-<a href="#847" id="847">847</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
+<a href="#847" id="847">847</a>
+<a href="#848" id="848">848</a>
+<a href="#849" id="849">849</a>
+<a href="#850" id="850">850</a>
+<a href="#851" id="851">851</a>
+<a href="#852" id="852">852</a>
+<a href="#853" id="853">853</a>
+<a href="#854" id="854">854</a>
+<a href="#855" id="855">855</a>
+<a href="#856" id="856">856</a>
+<a href="#857" id="857">857</a>
+<a href="#858" id="858">858</a>
+<a href="#859" id="859">859</a>
+<a href="#860" id="860">860</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -940,6 +953,19 @@
         <span class="kw">pub </span>context_lens: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         <span class="kw">pub </span>slot_mappings: Tensor,
         <span class="kw">pub </span>max_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    }
+
+    <span class="kw">impl </span>PagedAttentionInputMetadata {
+        <span class="doccomment">/// Create a dummy input metadata, assuming that this will NOT be used for decoding.
+        /// This is used for the case of imatrix generation.
+        </span><span class="kw">pub fn </span>dummy(dev: <span class="kw-2">&amp;</span>Device) -&gt; candle_core::Result&lt;<span class="self">Self</span>&gt; {
+            <span class="prelude-val">Ok</span>(PagedAttentionInputMetadata {
+                block_tables: <span class="prelude-val">None</span>,
+                context_lens: <span class="prelude-val">None</span>,
+                max_context_len: <span class="prelude-val">None</span>,
+                slot_mappings: Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], dev)<span class="question-mark">?</span>,
+            })
+        }
     }
 
     <span class="attr">#[derive(Clone, Debug)]
