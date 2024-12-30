@@ -217,10 +217,15 @@ async fn parse_request(
                             if image_messages[text_idx]["text"].is_right() {
                                 anyhow::bail!("Expected string value in `text`.");
                             }
-                            let content = image_messages[text_idx]["text"]
+                            let content_original = image_messages[text_idx]["text"]
                                 .as_ref()
                                 .unwrap_left()
                                 .clone();
+                            let content = if content_original.contains("<|image|>") {
+                                content_original
+                            } else {
+                                format!("<|image|> {}", content_original)
+                            };
                             if image_messages[url_idx]["image_url"].is_left()
                                 || !image_messages[url_idx]["image_url"]
                                     .as_ref()
