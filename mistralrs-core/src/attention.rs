@@ -162,23 +162,46 @@ fn naive_sdpa(
     if mask.is_some_and(|mask| mask.rank() == 2 || (mask.rank() == 3 && mask.dims()[0] == 1))
         && supports_attn_softmax
     {
-        let mut att = MatMul.matmul(q, &k.t()?)?;
+        let n_attn_heads = q.dim(1)?;
+        let bs = q.dim(0)?;
+        let attention_bias = match mask {
+            Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => {
+                mask.unsqueeze(0)?.repeat((bs, n_attn_heads, 1, 1))?
+            }
+            Some(mask) if mask.rank() == 3 => mask.unsqueeze(0)?,
+            Some(mask) if mask.rank() == 2 => {
+                mask.unsqueeze(0)?
+                    .unsqueeze(0)?
+                    .repeat((bs, n_attn_heads, 1, 1))?
+            }
+            Some(mask) if mask.rank() == 4 => mask.clone(),
+            _ => candle_core::bail!("unsupported mask {mask:?}"),
+        };
+        let mut att = attention_bias;
+
+        q.matmul_with_alpha_beta(
+            &k.t()?,
+            &mut att,
+            Some((sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)) as f64),
+        )?;
+
+        if let Some(softcap) = sdpa_params.softcap {
+            att = (att.tanh()? * softcap as f64)?;
+        }
+
+        candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
+
+        MatMul.matmul(&att, v)
+    } else if let Some(mask) = mask {
+        let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
             att = att.tanh()?;
             att = (att * softcap as f64)?;
         }
 
-        let mask = match mask {
-            Some(mask) if mask.rank() == 3 && mask.dim(0)? == 1 => mask.squeeze(0)?,
-            Some(mask) if mask.rank() == 2 => mask.clone(),
-            _ => unreachable!(),
-        };
-        candle_nn::ops::inplace_attn_softmax_last_dim(
-            &mut att,
-            &mask,
-            1. / (head_dim as f32).sqrt(),
-        )?;
+        att = att.broadcast_add(mask)?;
+        candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
         MatMul.matmul(&att, v)
     } else {
         let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
@@ -188,10 +211,6 @@ fn naive_sdpa(
             att = (att * softcap as f64)?;
         }
 
-        att = match mask {
-            Some(m) => att.broadcast_add(m)?,
-            None => att,
-        };
         candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
         MatMul.matmul(&att, v)
     }
@@ -291,11 +310,11 @@ impl Sdpa {
                     if let Some(softcap) = sdpa_params.softcap {
                         attention_scores = (attention_scores.tanh()? * softcap as f64)?;
                     }
-                    let attention_probs = candle_nn::ops::softmax_last_dim(&attention_scores)?;
+                    candle_nn::ops::inplace_softmax_last_dim(&mut attention_scores)?;
 
                     let context_layer = cublaslt.batch_matmul(
                         &v.t()?.contiguous()?,
-                        &attention_probs,
+                        &attention_scores,
                         // We save one allocation
                         Some(&q),
                         None,

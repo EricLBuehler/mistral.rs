@@ -68,9 +68,9 @@ pub trait BucketingManager<Backer: FcfsBacker> {
     ) -> BucketedSeqs<Backer>;
 }
 
-// (adapters, cache length, (has_imgs && is_prompt))
-// Buckey by that metric for images because if we are not a prompt, then this doesn't apply
-type BucketKey = (Option<Vec<String>>, usize, bool);
+// (adapters, cache length, (has_imgs && is_prompt), sequence offset)
+// Bucket by that metric for images because if we are not a prompt, then this doesn't apply
+type BucketKey = (Option<Vec<String>>, usize, bool, usize);
 
 struct FixedBucketingManager;
 
@@ -93,6 +93,7 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
                 seq.get_adapters(),
                 len,
                 seq.images().is_some() && seq.is_prompt(),
+                seq.token_offset(),
             )) {
                 Some(bucket) => {
                     if !discrete {
@@ -101,6 +102,7 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
                                 seq.get_adapters(),
                                 len,
                                 seq.images().is_some() && seq.is_prompt(),
+                                seq.token_offset(),
                             ))
                             .unwrap() += seq.compute_priority();
                     }
@@ -113,6 +115,7 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
                                 seq.get_adapters(),
                                 len,
                                 seq.images().is_some() && seq.is_prompt(),
+                                seq.token_offset(),
                             ),
                             seq.compute_priority(),
                         );
@@ -122,6 +125,7 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
                             seq.get_adapters(),
                             len,
                             seq.images().is_some() && seq.is_prompt(),
+                            seq.token_offset(),
                         ),
                         vec![seq],
                     );
@@ -140,7 +144,7 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
             // Allow the min seqs to catch up.
             let min = seq_buckets
                 .keys()
-                .min_by_key(|(_, x, _)| *x)
+                .min_by_key(|(_, x, _, _)| *x)
                 .expect("No sequence buckets.")
                 .clone();
             let len = if !discrete {

@@ -434,6 +434,7 @@ impl Runner {
         pa_ctxt_len = None,
         pa_blk_size = None,
         no_paged_attn = false,
+        paged_attn = false,
         prompt_batchsize = None,
         seed = None,
     ))]
@@ -454,6 +455,7 @@ impl Runner {
         pa_ctxt_len: Option<usize>,
         pa_blk_size: Option<usize>,
         no_paged_attn: bool,
+        paged_attn: bool,
         prompt_batchsize: Option<usize>,
         seed: Option<u64>,
     ) -> PyApiResult<Self> {
@@ -586,6 +588,14 @@ impl Runner {
                 }
             }
             None => DeviceMapMetadata::dummy(),
+        };
+
+        let no_paged_attn = if device.is_cuda() {
+            no_paged_attn
+        } else if device.is_metal() {
+            !paged_attn
+        } else {
+            true
         };
 
         // Allocate 0.5 GB of CPU memory just as a placeholder.

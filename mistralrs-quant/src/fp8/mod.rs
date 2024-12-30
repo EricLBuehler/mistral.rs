@@ -59,6 +59,9 @@ impl QuantMethod for FP8Linear {
             }
         }
     }
+    fn dequantize_w(&self) -> Result<candle_core::Tensor> {
+        Ok(self.dequantize(DType::F32)?.weight().clone())
+    }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
@@ -175,6 +178,10 @@ impl QuantMethod for FP8Linear {
             | IsqType::HQQ4
             | IsqType::HQQ8 => None,
         }
+    }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
     }
 }
 

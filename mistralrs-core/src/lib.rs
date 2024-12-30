@@ -1,5 +1,4 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-
 use candle_core::Device;
 use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
@@ -40,21 +39,22 @@ pub use toml_selector::get_toml_selected_model_dtype;
 
 mod amoe;
 mod cublaslt;
-#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 mod dummy_paged_attention;
 mod gguf;
 pub mod layers;
 mod layers_masker;
 mod layers_utils;
 mod models;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 mod paged_attention;
-#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 use dummy_paged_attention as paged_attention;
 mod attention;
 mod diffusion_models;
 mod pipeline;
 mod prefix_cacher;
+mod prefix_cacher_v2;
 mod request;
 mod response;
 mod sampler;
@@ -226,6 +226,7 @@ impl MistralRsBuilder {
         self.disable_eos_stop = Some(disable_eos_stop);
         self
     }
+    /// This setting is only applicable on CUDA. If set to false or not specified, this setting enables f16/bf16 reduced precision matmul for GPUs which support it. If set to true, this setting has no effect.
     pub fn with_gemm_full_precision_f16(mut self, gemm_full_precision: bool) -> Self {
         self.gemm_full_precision_f16 = Some(gemm_full_precision);
         self

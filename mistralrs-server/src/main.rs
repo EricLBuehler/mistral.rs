@@ -115,32 +115,36 @@ struct Args {
     in_situ_quant: Option<IsqType>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
-    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
     /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
     /// If this is not set and the device is CUDA, it will default to `0.9`.
-    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem-usage")]
     paged_attn_gpu_mem_usage: Option<f32>,
 
-    /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold)
-    /// when using PagedAttention, which is only supported on CUDA and is always automatically activated.
+    /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
     #[arg(long = "pa-ctxt-len")]
     paged_ctxt_len: Option<usize>,
 
     /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
-    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     #[arg(long = "pa-blk-size")]
     paged_attn_block_size: Option<usize>,
 
-    /// Disable PagedAttention on CUDA.
+    /// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
     #[arg(long = "no-paged-attn", default_value_t = false)]
     no_paged_attn: bool,
+
+    /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
+    #[arg(long = "no-paged-attn", default_value_t = false)]
+    paged_attn: bool,
 
     /// Enable server throughput logging, supported in the server and with interactive mode
     #[arg(long = "throughput", default_value_t = false)]
@@ -149,6 +153,10 @@ struct Args {
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
     prompt_batchsize: Option<usize>,
+
+    /// Use CPU only
+    #[arg(long)]
+    cpu: bool,
 }
 
 #[utoipa::path(
@@ -273,16 +281,16 @@ async fn main() -> Result<()> {
     let mut args = Args::parse();
     initialize_logging();
 
-    let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
+    let setting_server = if !args.interactive_mode {
+        let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
+        let ip = args.serve_ip.unwrap_or_else(|| "0.0.0.0".to_string());
 
-    let ip = if let Some(ref ip) = args.serve_ip {
-        ip.to_string()
+        // Create listener early to validate address before model loading
+        let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
+        Some((listener, ip, port))
     } else {
-        "0.0.0.0".to_string()
+        None
     };
-
-    // Create the TcpListener early to check if the address is available before loading the model
-    let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", port)).await?;
 
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
@@ -314,7 +322,12 @@ async fn main() -> Result<()> {
     #[cfg(feature = "metal")]
     let device = Device::new_metal(0)?;
     #[cfg(not(feature = "metal"))]
-    let device = Device::cuda_if_available(0)?;
+    let device = if args.cpu {
+        args.no_paged_attn = true;
+        Device::Cpu
+    } else {
+        Device::cuda_if_available(0)?
+    };
 
     if let Some(seed) = args.seed {
         device.set_seed(seed)?;
@@ -373,6 +386,14 @@ async fn main() -> Result<()> {
         DeviceMapMetadata::dummy()
     };
 
+    let no_paged_attn = if device.is_cuda() {
+        args.no_paged_attn
+    } else if device.is_metal() {
+        !args.paged_attn
+    } else {
+        true
+    };
+
     // Allocate 0.5 GB of CPU memory just as a placeholder.
     // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
     let cache_config = match (
@@ -381,7 +402,7 @@ async fn main() -> Result<()> {
         args.paged_attn_gpu_mem_usage,
         args.paged_ctxt_len,
         paged_attn_supported(),
-        args.no_paged_attn,
+        no_paged_attn,
     ) {
         (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
@@ -479,9 +500,10 @@ async fn main() -> Result<()> {
     let mistralrs = builder.build();
 
     let app = get_router(mistralrs);
-
-    info!("Serving on http://{ip}:{}.", port);
-    axum::serve(listener, app).await?;
+    if let Some((listener, ip, port)) = setting_server {
+        info!("Serving on http://{ip}:{}.", port);
+        axum::serve(listener, app).await?;
+    };
 
     Ok(())
 }

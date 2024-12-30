@@ -560,6 +560,10 @@ impl QuantMethod for HqqLayer {
         }
     }
 
+    fn dequantize_w(&self) -> Result<Tensor> {
+        self.dequantize()
+    }
+
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         /*
         if self.cfg.force_dequantize {
@@ -630,6 +634,10 @@ impl QuantMethod for HqqLayer {
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         // Use 1 because we quantize on the GPU
         Some(1.try_into().unwrap())
+    }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
     }
 }
 

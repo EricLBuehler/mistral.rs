@@ -95,6 +95,19 @@ pub mod text_models_inputs_processor {
         pub max_context_len: Option<usize>,
     }
 
+    impl PagedAttentionInputMetadata {
+        /// Create a dummy input metadata, assuming that this will NOT be used for decoding.
+        /// This is used for the case of imatrix generation.
+        pub fn dummy(dev: &Device) -> candle_core::Result<Self> {
+            Ok(PagedAttentionInputMetadata {
+                block_tables: None,
+                context_lens: None,
+                max_context_len: None,
+                slot_mappings: Tensor::new(&[0f32], dev)?,
+            })
+        }
+    }
+
     #[derive(Clone, Debug)]
     pub struct FlashParams {
         pub max_q: u32,
@@ -533,9 +546,15 @@ pub mod text_models_inputs_processor {
                     "PagedAttention does not yet support prompt batching.",
                 ))));
             }
+            let offset = input_seqs[0].token_offset();
+            if offset != 0 && paged_attn_metadata.is_some() {
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    "PagedAttention does not yet support sequences with an offset != 0.",
+                ))));
+            }
             Box::new(std::iter::once(
                 make_prompt_chunk(
-                    0,
+                    offset,
                     toks,
                     &input_seqs.iter().map(|s| *s.id()).collect::<Vec<_>>(),
                     device,

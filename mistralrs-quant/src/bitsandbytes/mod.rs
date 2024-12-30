@@ -4,11 +4,14 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{Context, DType, Device, Result, Shape, Tensor};
+use candle_core::{
+    quantized::{GgmlDType, QTensor},
+    Context, DType, Device, Result, Shape, Tensor, D,
+};
 use candle_nn::VarBuilder;
 use serde::Deserialize;
 
-use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
+use crate::{GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
 
 #[cfg(feature = "cuda")]
 mod ffi;
@@ -219,14 +222,18 @@ impl QuantMethod for BnbLinear {
             }),
         }
     }
+
+    fn dequantize_w(&self) -> Result<Tensor> {
+        Self::dequantize(&self.weight, &self.params, self.quant_ty)
+    }
+
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let w = Self::dequantize(&self.weight, &self.params, self.quant_ty)?
             .t()?
             .to_dtype(xs.dtype())?;
-        // dbg!(&w.mean_all());
         let res = xs.broadcast_matmul(&w)?;
         if let Some(bias) = &self.bias {
-            res + bias
+            res.broadcast_add(bias)
         } else {
             Ok(res)
         }
@@ -260,6 +267,29 @@ impl QuantMethod for BnbLinear {
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
+    }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        let weight = Self::dequantize(&self.weight, &self.params, self.quant_ty)?;
+        let bias = self.bias.clone();
+
+        let last_dim = weight.dim(D::Minus1)?;
+        let dtype = match self.quant_ty {
+            BnbQuantType::Fp4 | BnbQuantType::Nf4 if last_dim % 256 == 0 => GgmlDType::Q4K,
+            BnbQuantType::Fp4 | BnbQuantType::Nf4 if last_dim % 64 == 0 && last_dim % 256 != 0 => {
+                GgmlDType::Q4_0
+            }
+            BnbQuantType::Fp4 | BnbQuantType::Nf4 if last_dim % 64 != 0 && last_dim % 256 != 0 => {
+                GgmlDType::F32
+            }
+            BnbQuantType::Int8 => GgmlDType::Q8_0,
+            _ => unreachable!(),
+        };
+        let qmatmul = QTensor::quantize(&weight, dtype)?;
+        Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: Arc::new(qmatmul),
+            b: bias,
+        })?))
     }
 }
 

@@ -231,6 +231,20 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     where
         Self: Sized;
 
+    fn dequantize_w(&self) -> Result<Tensor>;
+
+    /// Compute matmul of `self` and `a`. `self` should contain the weights.
+    /// Automatically cast to required quantization actiation type and back
+    fn forward_autocast(&self, a: &Tensor) -> Result<Tensor> {
+        let original_ty = a.dtype();
+        let a = if let Some(t) = self.quantized_act_type() {
+            a.to_dtype(t)?
+        } else {
+            a.clone()
+        };
+        self.forward(&a)?.to_dtype(original_ty)
+    }
+
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     fn forward(&self, a: &Tensor) -> Result<Tensor>;
 
@@ -257,6 +271,9 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         n_quantized: &AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>>;
+
+    /// Convert to an equivalent gguf quantization, if applicable.
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>>;
 
     /// If the quant is backed by a qmatmul.
     fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
@@ -323,7 +340,7 @@ pub fn linear(
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
             QuantMethodType::Bitsandbytes => {
-                Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
             }
             QuantMethodType::Unreachable => unreachable!(),
         }

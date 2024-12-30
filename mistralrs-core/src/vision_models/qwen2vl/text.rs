@@ -10,8 +10,8 @@ use crate::{
     layers::{Activation, F32RmsNorm, Qwen2VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits, text_models_inputs_processor::FlashParams, Cache, EitherCache, IsqModel,
-        NormalLoadingMetadata,
+        extract_logits, text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
+        NormalCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -136,7 +136,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         cos_sin: &(Tensor, Tensor),
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
@@ -176,7 +176,7 @@ impl Attention {
         self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
 
         let mut attn_output = {
-            let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+            let (k, v) = kv_cache.append(&k, &v)?;
 
             Sdpa.run_attention(
                 &q.contiguous()?.to_dtype(DType::F32)?,
@@ -253,7 +253,7 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         cos_sin: &(Tensor, Tensor),
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
@@ -371,7 +371,10 @@ impl Qwen2VLTextModel {
             norm,
             layers,
             lm_head,
-            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             cfg: ModelConfigMetadata {
@@ -399,7 +402,7 @@ impl Qwen2VLTextModel {
         context_lens: Vec<(usize, usize)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut cache = self.cache.full().lock();
+        let cache = &mut self.cache.normal().0;
         let cos_sin = self.layers[0]
             .self_attn
             .rotary_emb

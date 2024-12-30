@@ -12,7 +12,9 @@ use crate::{
     layers::{CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
-    pipeline::{extract_logits, Cache, EitherCache, IsqModel, NormalLoadingMetadata},
+    pipeline::{
+        extract_logits, EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata,
+    },
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -134,7 +136,7 @@ impl MLlamaTextSelfAttention {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -172,7 +174,7 @@ impl MLlamaTextSelfAttention {
                 .contiguous()?;
         }
 
-        (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        (k, v) = kv_cache.append(&k, &v)?;
 
         let mut attn_output = Sdpa
             .run_attention(
@@ -246,7 +248,7 @@ impl MLlamaSelfAttentionDecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
@@ -342,7 +344,7 @@ impl MLlamaTextCrossAttention {
         hidden_states: &Tensor,
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -383,12 +385,10 @@ impl MLlamaTextCrossAttention {
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
 
-            (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+            (k, v) = kv_cache.append(&k, &v)?;
             (k, v)
-        } else if let Some((k_cache, v_cache)) = kv_cache {
-            (k_cache.clone(), v_cache.clone())
         } else {
-            candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
+            candle_core::bail!("Cross attn cannot find cross attn hidden states!")
         };
 
         let mut attn_output = Sdpa
@@ -473,7 +473,7 @@ impl MLlamaCrossAttentionDecoderLayer {
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
         full_text_row_masked_out_mask: Option<&Tensor>,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
@@ -583,7 +583,7 @@ impl MLlamaTextModel {
                         vb.pp(format!("layers.{i}")),
                         &*mapper,
                         i,
-                        normal_loading_metadata.loading_isq,
+                        false,
                     )?,
                 ))
             } else {
@@ -619,7 +619,10 @@ impl MLlamaTextModel {
                 sliding_window: None,
                 head_dim: None,
             },
-            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             device: normal_loading_metadata.real_device,
             max_position_embeddings: cfg.max_position_embeddings,
             mapper,
@@ -639,7 +642,7 @@ impl MLlamaTextModel {
     ) -> Result<Tensor> {
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
-        let mut cache = self.cache.full().lock();
+        let cache = &mut self.cache.normal().0;
         let self_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
@@ -698,14 +701,14 @@ impl IsqModel for MLlamaTextModel {
         let mut tensors = Vec::new();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             match layer {
-                MLlamaDecoderLayer::CrossAttn(cross) => {
-                    tensors.push((&mut cross.attn.q_proj, Some(i)));
-                    tensors.push((&mut cross.attn.k_proj, Some(i)));
-                    tensors.push((&mut cross.attn.v_proj, Some(i)));
-                    tensors.push((&mut cross.attn.o_proj, Some(i)));
-                    tensors.push((&mut cross.mlp.gate_proj, Some(i)));
-                    tensors.push((&mut cross.mlp.up_proj, Some(i)));
-                    tensors.push((&mut cross.mlp.down_proj, Some(i)));
+                MLlamaDecoderLayer::CrossAttn(_cross) => {
+                    // tensors.push((&mut cross.attn.q_proj, Some(i)));
+                    // tensors.push((&mut cross.attn.k_proj, Some(i)));
+                    // tensors.push((&mut cross.attn.v_proj, Some(i)));
+                    // tensors.push((&mut cross.attn.o_proj, Some(i)));
+                    // tensors.push((&mut cross.mlp.gate_proj, Some(i)));
+                    // tensors.push((&mut cross.mlp.up_proj, Some(i)));
+                    // tensors.push((&mut cross.mlp.down_proj, Some(i)));
                 }
                 MLlamaDecoderLayer::SelfAttn(self_attn) => {
                     tensors.push((&mut self_attn.attn.q_proj, Some(i)));
