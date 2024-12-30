@@ -196,6 +196,10 @@ pub enum TomlModelSelected {
         /// Ordering JSON file
         order: String,
 
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
+
         /// Path to a topology YAML file.
         topology: Option<String>,
     },
@@ -280,6 +284,10 @@ pub enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
 
         /// Path to a topology YAML file.
         topology: Option<String>,
@@ -386,8 +394,9 @@ pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
         | TomlModelSelected::GGUF { dtype, .. }
         | TomlModelSelected::GGML { dtype, .. }
         | TomlModelSelected::XLoraGGUF { dtype, .. }
-        | TomlModelSelected::XLoraGGML { dtype, .. } => dtype,
-        TomlModelSelected::LoraGGUF { .. } | TomlModelSelected::LoraGGML { .. } => ModelDType::Auto,
+        | TomlModelSelected::XLoraGGML { dtype, .. }
+        | TomlModelSelected::LoraGGUF { dtype, .. }
+        | TomlModelSelected::LoraGGML { dtype, .. } => dtype,
     }
 }
 
@@ -549,6 +558,7 @@ fn loader_from_selected(
             adapters_model_id,
             order,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -630,6 +640,7 @@ fn loader_from_selected(
             order,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,

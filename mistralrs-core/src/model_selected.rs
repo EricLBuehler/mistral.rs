@@ -254,6 +254,10 @@ pub enum ModelSelected {
         #[arg(short, long)]
         order: String,
 
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
+
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
@@ -366,6 +370,10 @@ pub enum ModelSelected {
         /// GQA value
         #[arg(short, long, default_value_t = 1)]
         gqa: usize,
+
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
 
         /// Path to a topology YAML file.
         #[arg(long)]
