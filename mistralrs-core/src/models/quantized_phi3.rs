@@ -57,6 +57,7 @@ struct LayerWeights {
     sliding_window: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+    dtype: DType,
 }
 
 impl LayerWeights {
@@ -84,7 +85,9 @@ impl LayerWeights {
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let qkv = MatMul.qmethod_matmul(x, &*self.attn_qkv)?;
+        let qkv = MatMul
+            .qmethod_matmul(x, &*self.attn_qkv)?
+            .to_dtype(self.dtype)?;
         let query_pos = self.n_head * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.n_kv_head * self.head_dim)?;
@@ -112,9 +115,8 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        let q = self.apply_rotary_emb(&q, seqlen_offsets)?.contiguous()?;
+        let q = self.apply_rotary_emb(&q, seqlen_offsets)?;
         let k = self.apply_rotary_emb(&k, seqlen_offsets)?;
-
         let y = match &self.paged_attn {
             Some(paged_attn) => {
                 let ((key_cache, value_cache), input_metadata) = metadata.unwrap();
@@ -142,7 +144,7 @@ impl LayerWeights {
         } else {
             y.reshape(&[b_sz, seq_len, n_embd])?
         };
-        let y = MatMul.qmethod_matmul(&y, &*self.attn_output)?;
+        let y = MatMul.qmethod_matmul(&y.to_dtype(x.dtype())?, &*self.attn_output)?;
         Ok(y)
     }
 }
@@ -156,6 +158,7 @@ pub struct ModelWeights {
     pub device: Device,
     pub cache: EitherCache,
     pub max_seq_len: usize,
+    dtype: DType,
 }
 
 fn precomput_freqs_cis(
@@ -163,6 +166,7 @@ fn precomput_freqs_cis(
     freq_base: f32,
     device: &Device,
     context_window: usize,
+    dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
@@ -173,8 +177,8 @@ fn precomput_freqs_cis(
         .to_dtype(DType::F32)?
         .reshape((context_window, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-    let cos = idx_theta.cos()?;
-    let sin = idx_theta.sin()?;
+    let cos = idx_theta.cos()?.to_dtype(dtype)?;
+    let sin = idx_theta.sin()?.to_dtype(dtype)?;
     Ok((cos, sin))
 }
 
@@ -234,6 +238,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         mapper: DeviceMapMetadata,
         topology: Option<&'_ Topology>,
         attention_mechanism: AttentionImplementation,
+        dtype: DType,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
@@ -251,7 +256,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             context_window,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window)?;
+        let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window, dtype)?;
 
         let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -342,6 +347,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: Some(context_window),
                 },
+                dtype,
             })
         }
         Ok(Self {
@@ -353,6 +359,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             device: device.clone(),
             cache: EitherCache::Normal(NormalCache::new(block_count, context_window)),
             max_seq_len: context_window,
+            dtype,
         })
     }
 }
@@ -374,7 +381,7 @@ impl ModelWeights {
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
             Some(self.max_seq_len),
-            DType::F32,
+            self.dtype,
             self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
@@ -400,7 +407,6 @@ impl ModelWeights {
             let ys = layer.mlp.forward(&ys)?;
             xs = (ys + residual)?
         }
-        let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
         MatMul.qmatmul(&xs, &self.output)
     }
