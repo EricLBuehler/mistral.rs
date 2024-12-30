@@ -602,7 +602,14 @@
 <a href="#601" id="601">601</a>
 <a href="#602" id="602">602</a>
 <a href="#603" id="603">603</a>
-<a href="#604" id="604">604</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 
@@ -699,6 +706,7 @@
     sin: Tensor,
     sliding_window: usize,
     sdpa_params: SdpaParams,
+    dtype: DType,
 }
 
 <span class="kw">impl </span>LayerWeights {
@@ -730,12 +738,10 @@
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, seq_len, n_embd) = x.dims3()<span class="question-mark">?</span>;
-        <span class="kw">let </span>qkv = <span class="self">self</span>.attn_qkv.lora_forward(
-            x,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>qkv = <span class="self">self
+            </span>.attn_qkv
+            .lora_forward(x, scalings.clone(), global_scaling_weight, is_scaling_pass)<span class="question-mark">?
+            </span>.to_dtype(<span class="self">self</span>.dtype)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>query_pos = <span class="self">self</span>.n_head * <span class="self">self</span>.head_dim;
         <span class="kw">let </span>q = qkv.narrow(D::Minus1, <span class="number">0</span>, query_pos)<span class="question-mark">?</span>;
@@ -786,9 +792,12 @@
         )<span class="question-mark">?</span>;
 
         <span class="kw">let </span>y = y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?</span>;
-        <span class="kw">let </span>y =
-            <span class="self">self</span>.attn_output
-                .lora_forward(<span class="kw-2">&amp;</span>y, scalings, global_scaling_weight, is_scaling_pass)<span class="question-mark">?</span>;
+        <span class="kw">let </span>y = <span class="self">self</span>.attn_output.lora_forward(
+            <span class="kw-2">&amp;</span>y.to_dtype(x.dtype())<span class="question-mark">?</span>,
+            scalings,
+            global_scaling_weight,
+            is_scaling_pass,
+        )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(y)
     }
 }
@@ -803,6 +812,7 @@
     <span class="kw">pub </span>cache: EitherCache,
     <span class="kw">pub </span>max_seq_len: usize,
     xlora_classifier: <span class="prelude-ty">Option</span>&lt;XLoraClassifier&gt;,
+    dtype: DType,
 }
 
 <span class="kw">fn </span>precomput_freqs_cis(
@@ -810,6 +820,7 @@
     freq_base: f32,
     device: <span class="kw-2">&amp;</span>Device,
     context_window: usize,
+    dtype: DType,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
     <span class="kw">let </span>theta: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..head_dim)
         .step_by(<span class="number">2</span>)
@@ -820,8 +831,8 @@
         </span>.to_dtype(DType::F32)<span class="question-mark">?
         </span>.reshape((context_window, <span class="number">1</span>))<span class="question-mark">?
         </span>.matmul(<span class="kw-2">&amp;</span>theta.reshape((<span class="number">1</span>, theta.elem_count()))<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-    <span class="kw">let </span>cos = idx_theta.cos()<span class="question-mark">?</span>;
-    <span class="kw">let </span>sin = idx_theta.sin()<span class="question-mark">?</span>;
+    <span class="kw">let </span>cos = idx_theta.cos()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+    <span class="kw">let </span>sin = idx_theta.sin()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>((cos, sin))
 }
 
@@ -837,6 +848,7 @@
         mapper: DeviceMapMetadata,
         topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'_ </span>Topology&gt;,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
+        dtype: DType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         verify_sanity_adapters(ordering, <span class="kw-2">&amp;</span>SUPPORTED_LAYERS)<span class="question-mark">?</span>;
 
@@ -856,7 +868,7 @@
             context_window,
         } = PropsGGUF::try_from(metadata).or_else(|err| <span class="macro">candle_core::bail!</span>(<span class="string">"{err}"</span>))<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, context_window)<span class="question-mark">?</span>;
+        <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, context_window, dtype)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>tok_embeddings = ct.tensor(<span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
@@ -947,6 +959,7 @@
                     softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
                     sliding_window: <span class="prelude-val">Some</span>(context_window),
                 },
+                dtype,
             })
         }
         <span class="kw">if </span>xlora_config.is_none() {
@@ -987,6 +1000,7 @@
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), <span class="bool-val">true</span>)
                     .unwrap()
             }),
+            dtype,
         })
     }
 }
@@ -1035,7 +1049,7 @@
             input_ids,
             <span class="kw-2">&amp;*</span>cache,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.max_seq_len),
-            DType::F32,
+            <span class="self">self</span>.dtype,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {

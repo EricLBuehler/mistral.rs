@@ -706,7 +706,20 @@
 <a href="#705" id="705">705</a>
 <a href="#706" id="706">706</a>
 <a href="#707" id="707">707</a>
-<a href="#708" id="708">708</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::sync::Arc;
@@ -843,6 +856,7 @@
     rotary: Arc&lt;RotaryEmbedding&gt;,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     sdpa_params: SdpaParams,
+    dtype: DType,
 }
 
 <span class="kw">impl </span>LayerWeights {
@@ -857,9 +871,15 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, seq_len, n_embd) = x.dims3()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>q = MatMul.qmethod_matmul(x, <span class="kw-2">&amp;*</span><span class="self">self</span>.attention_wq)<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = MatMul.qmethod_matmul(x, <span class="kw-2">&amp;*</span><span class="self">self</span>.attention_wk)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = MatMul.qmethod_matmul(x, <span class="kw-2">&amp;*</span><span class="self">self</span>.attention_wv)<span class="question-mark">?</span>;
+        <span class="kw">let </span>q = MatMul
+            .qmethod_matmul(x, <span class="kw-2">&amp;*</span><span class="self">self</span>.attention_wq)<span class="question-mark">?
+            </span>.to_dtype(<span class="self">self</span>.dtype)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = MatMul
+            .qmethod_matmul(x, <span class="kw-2">&amp;*</span><span class="self">self</span>.attention_wk)<span class="question-mark">?
+            </span>.to_dtype(<span class="self">self</span>.dtype)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = MatMul
+            .qmethod_matmul(x, <span class="kw-2">&amp;*</span><span class="self">self</span>.attention_wv)<span class="question-mark">?
+            </span>.to_dtype(<span class="self">self</span>.dtype)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
@@ -920,7 +940,7 @@
             y.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?
         </span>};
 
-        <span class="kw">let </span>y = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>y, <span class="kw-2">&amp;*</span><span class="self">self</span>.attention_wo)<span class="question-mark">?</span>;
+        <span class="kw">let </span>y = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>y.to_dtype(x.dtype())<span class="question-mark">?</span>, <span class="kw-2">&amp;*</span><span class="self">self</span>.attention_wo)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(y)
     }
 }
@@ -934,10 +954,11 @@
     <span class="kw">pub </span>cache: EitherCache,
     <span class="kw">pub </span>max_seq_len: usize,
     mapper: <span class="prelude-ty">Option</span>&lt;Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;&gt;,
+    dtype: DType,
 }
 
 <span class="kw">impl </span>ModelConfig::FromGGML <span class="kw">for </span>ModelWeights {
-    <span class="kw">fn </span>from_ggml(<span class="kw-2">mut </span>ct: ggml_file::Content, gqa: usize) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>from_ggml(<span class="kw-2">mut </span>ct: ggml_file::Content, gqa: usize, dtype: DType) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>head_dim = (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize;
         <span class="kw">let </span>rotary = RotaryEmbedding::new_partial(
             <span class="number">10000.</span>,
@@ -946,7 +967,7 @@
             MAX_SEQ_LEN <span class="kw">as </span>usize,
             <span class="kw-2">&amp;</span>ct.device,
             <span class="bool-val">false</span>,
-            DType::F32,
+            dtype,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = ct.remove(<span class="string">"tok_embeddings.weight"</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(<span class="kw-2">&amp;</span>ct.device)<span class="question-mark">?</span>;
@@ -1015,6 +1036,7 @@
                     softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
                     sliding_window: <span class="prelude-val">None</span>,
                 },
+                dtype,
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -1032,6 +1054,7 @@
             )),
             max_seq_len: MAX_SEQ_LEN <span class="kw">as </span>usize, <span class="comment">// Cannot determine from ggml.
             </span>mapper: <span class="prelude-val">None</span>,
+            dtype,
         })
     }
 }
@@ -1113,6 +1136,7 @@
         mapper: DeviceMapMetadata,
         topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'_ </span>Topology&gt;,
         attention_mechanism: AttentionImplementation,
+        dtype: DType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="comment">// Parameter extraction from metadata.
         </span><span class="kw">let </span>metadata = ContentMetadata {
@@ -1164,7 +1188,7 @@
                     max_seq_len,
                     device,
                     <span class="bool-val">false</span>,
-                    DType::F32,
+                    dtype,
                 )<span class="question-mark">?</span>),
             );
         }
@@ -1340,6 +1364,7 @@
                     softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
                     sliding_window: <span class="prelude-val">None</span>,
                 },
+                dtype,
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -1354,6 +1379,7 @@
             cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
             max_seq_len,
             mapper: <span class="prelude-val">Some</span>(mapper),
+            dtype,
         })
     }
 }
@@ -1375,7 +1401,7 @@
                 .as_ref()
                 .map(|(<span class="kw">_</span>, <span class="kw">_</span>)| <span class="kw-2">&amp;</span>start_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache)
                 .unwrap_or(cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
-            DType::F32,
+            <span class="self">self</span>.dtype,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {

@@ -383,7 +383,14 @@
 <a href="#382" id="382">382</a>
 <a href="#383" id="383">383</a>
 <a href="#384" id="384">384</a>
-<a href="#385" id="385">385</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
@@ -441,6 +448,7 @@
     rope_dim: usize,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     sdpa_params: SdpaParams,
+    dtype: DType,
 }
 
 <span class="kw">impl </span>LayerWeights {
@@ -468,10 +476,11 @@
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, seq_len, n_embd) = x.dims3()<span class="question-mark">?</span>;
-        <span class="kw">let </span>qkv =
-            <span class="self">self</span>.attn_qkv
-                .forward(x)<span class="question-mark">?
-                </span>.reshape((b_sz, seq_len, <span class="number">3</span>, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+        <span class="kw">let </span>qkv = <span class="self">self
+            </span>.attn_qkv
+            .forward(x)<span class="question-mark">?
+            </span>.reshape((b_sz, seq_len, <span class="number">3</span>, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+            </span>.to_dtype(<span class="self">self</span>.dtype)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>q = qkv.i((.., .., <span class="number">0</span>))<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>k = qkv.i((.., .., <span class="number">1</span>))<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
@@ -510,7 +519,7 @@
         </span>} <span class="kw">else </span>{
             y.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?
         </span>};
-        <span class="kw">let </span>y = <span class="self">self</span>.attn_output.forward(<span class="kw-2">&amp;</span>y)<span class="question-mark">?</span>;
+        <span class="kw">let </span>y = <span class="self">self</span>.attn_output.forward(<span class="kw-2">&amp;</span>y.to_dtype(x.dtype())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(y)
     }
 }
@@ -524,6 +533,7 @@
     <span class="kw">pub </span>cache: EitherCache,
     <span class="kw">pub </span>max_seq_len: usize,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
+    dtype: DType,
 }
 
 <span class="kw">fn </span>precomput_freqs_cis(
@@ -531,6 +541,7 @@
     freq_base: f32,
     device: <span class="kw-2">&amp;</span>Device,
     max_seq_len: usize,
+    dtype: DType,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
     <span class="kw">let </span>theta: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..head_dim)
         .step_by(<span class="number">2</span>)
@@ -541,8 +552,8 @@
         </span>.to_dtype(DType::F32)<span class="question-mark">?
         </span>.reshape((max_seq_len, <span class="number">1</span>))<span class="question-mark">?
         </span>.matmul(<span class="kw-2">&amp;</span>theta.reshape((<span class="number">1</span>, theta.elem_count()))<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-    <span class="kw">let </span>cos = idx_theta.cos()<span class="question-mark">?</span>;
-    <span class="kw">let </span>sin = idx_theta.sin()<span class="question-mark">?</span>;
+    <span class="kw">let </span>cos = idx_theta.cos()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+    <span class="kw">let </span>sin = idx_theta.sin()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>((cos, sin))
 }
 
@@ -609,6 +620,7 @@
         mapper: DeviceMapMetadata,
         topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'_ </span>Topology&gt;,
         attention_mechanism: AttentionImplementation,
+        dtype: DType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="comment">// Parameter extraction from metadata.
         </span><span class="kw">let </span>metadata = ContentMetadata {
@@ -625,7 +637,7 @@
             max_seq_len,
         } = PropsGGUF::try_from(metadata).or_else(|err| <span class="macro">candle_core::bail!</span>(<span class="string">"{err}"</span>))<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, max_seq_len)<span class="question-mark">?</span>;
+        <span class="kw">let </span>(cos, sin) = precomput_freqs_cis(rope_dim, <span class="number">10_000.</span>, device, max_seq_len, dtype)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>tok_embeddings = ct.tensor(<span class="string">"token_embd.weight"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>tok_embeddings = tok_embeddings.dequantize(device)<span class="question-mark">?</span>;
@@ -711,6 +723,7 @@
                     softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),
                     sliding_window: <span class="prelude-val">None</span>,
                 },
+                dtype,
             })
         }
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -722,6 +735,7 @@
             cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
             max_seq_len,
             mapper,
+            dtype,
         })
     }
 }
@@ -742,7 +756,7 @@
                 .as_ref()
                 .map(|(<span class="kw">_</span>, <span class="kw">_</span>)| <span class="kw-2">&amp;</span>seqlen_offsets <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache)
                 .unwrap_or(cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache),
-            DType::F32,
+            <span class="self">self</span>.dtype,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {

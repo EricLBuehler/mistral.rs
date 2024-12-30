@@ -786,7 +786,10 @@
 <a href="#785" id="785">785</a>
 <a href="#786" id="786">786</a>
 <a href="#787" id="787">787</a>
-<a href="#788" id="788">788</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -829,7 +832,7 @@
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 <span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
-<span class="kw">use </span>candle_core::{DType, Device, Tensor};
+<span class="kw">use </span>candle_core::{Device, Tensor};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_quant::IsqType;
@@ -1115,7 +1118,7 @@
     </span><span class="kw">fn </span>load_model_from_path(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
-        <span class="kw">_</span>: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
+        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -1191,6 +1194,7 @@
         };
 
         <span class="kw">let </span>model_config_metadata: ContentConfig = (<span class="kw-2">&amp;</span>model).into();
+        <span class="kw">let </span>internal_dtype = dtype.try_into_dtype(<span class="kw-2">&amp;</span>[device]).unwrap();
 
         <span class="kw">let </span>model_config = {
             <span class="comment">// Base config (quantization only):
@@ -1202,6 +1206,7 @@
                 } <span class="kw">else </span>{
                     AttentionImplementation::Eager
                 },
+                internal_dtype,
             );
 
             <span class="comment">// With optional adapter config:
@@ -1247,11 +1252,12 @@
                 paged_attn_config.mem_gpu,
                 paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
-                DType::F32,
+                internal_dtype,
                 model_config,
                 device,
             )<span class="question-mark">?</span>;
-            <span class="kw">let </span>cache_engine = CacheEngine::new(model_config, <span class="kw-2">&amp;</span>cache_config, DType::F32, device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache_engine =
+                CacheEngine::new(model_config, <span class="kw-2">&amp;</span>cache_config, internal_dtype, device)<span class="question-mark">?</span>;
             (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
         } <span class="kw">else </span>{
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
@@ -1326,7 +1332,7 @@
                 eos_tok: eos,
                 kind: <span class="self">self</span>.kind.clone(),
                 is_xlora,
-                activation_dtype: DType::F32,
+                activation_dtype: internal_dtype,
                 sliding_window: <span class="prelude-val">None</span>,
                 cache_config,
                 cache_engine,
