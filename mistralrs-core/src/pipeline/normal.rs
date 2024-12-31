@@ -341,10 +341,12 @@ impl Loader for NormalLoader {
             let num_parallel = 2;
             use nix::sys::signal::{kill, Signal};
             use nix::unistd::{fork, ForkResult};
+            let mut pids = Vec::new();
             for _ in 0..num_parallel {
                 match unsafe { fork() } {
                     Ok(ForkResult::Parent { child, .. }) => {
                         println!("created child {child}");
+                        pids.push(child);
                     }
                     Ok(ForkResult::Child) => {
                         println!("child executing!!");
@@ -352,6 +354,10 @@ impl Loader for NormalLoader {
                     }
                     Err(_) => println!("Fork failed"),
                 }
+            }
+            std::thread::sleep(std::time::Duration::from_secs_f32(5.));
+            for pid in pids {
+                kill(pid, Signal::SIGTERM)?;
             }
         }
 
