@@ -521,7 +521,7 @@ pub mod text_models_inputs_processor {
             },
         })
     }
-    
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
         toks: Vec<Vec<T>>,
