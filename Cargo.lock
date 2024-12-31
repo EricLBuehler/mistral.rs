@@ -2528,6 +2528,7 @@ dependencies = [
  "byteorder",
  "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=521e33c)",
  "candle-nn",
+ "cudarc",
  "float8",
  "half",
  "lazy_static",

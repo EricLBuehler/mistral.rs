@@ -26,9 +26,10 @@ float8.workspace = true
 once_cell.workspace = true
 metal = { workspace = true, optional = true }
 thiserror = "1"
+cudarc = { version = "0.12.1", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-linking"], default-features=false, optional = true}
 
 [features]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "dep:cudarc", "cudarc/nccl"]
 metal = ["candle-core/metal", "candle-nn/metal", "dep:metal"]
 
 [build-dependencies]
