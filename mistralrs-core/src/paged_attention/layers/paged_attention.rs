@@ -61,39 +61,32 @@ impl PagedAttention {
         input_metadata: &mut PagedAttentionInputMetadata,
         softcapping: Option<f64>,
     ) -> Result<Tensor> {
-        let dims = input_metadata.slot_mappings.dims();
+        let slot_mapping = input_metadata
+            .slot_mappings
+            .get(&query.device().location())
+            .unwrap();
+        let dims = slot_mapping.dims();
         let slot_mapping = if dims.len() > 1 {
-            input_metadata
-                .slot_mappings
-                .flatten(0, input_metadata.slot_mappings.dims().len())?
+            &slot_mapping.flatten(0, dims.len())?
         } else {
-            input_metadata.slot_mappings.clone()
+            slot_mapping
         };
 
-        // When device mapping, these Tensors are fixed on the first device, and must be moved to the same device as q,k,v
-        // - slot_mapping
-        // - input_metadata.block_tables
-        // - input_metadata.context_lens
-        // - self.alibi_slopes
-        // - attention_mask
-        let slot_mapping = slot_mapping.to_device(query.device())?;
         let block_tables = input_metadata
             .block_tables
             .as_ref()
             .unwrap()
-            .to_device(query.device())?;
+            .get(&query.device().location())
+            .unwrap();
         let context_lens = input_metadata
             .context_lens
             .as_ref()
             .unwrap()
-            .to_device(query.device())?;
+            .get(&query.device().location())
+            .unwrap();
+
         let alibi_slopes = if let Some(alibi_slopes) = self.alibi_slopes.as_ref() {
             Some(alibi_slopes.to_device(query.device())?)
-        } else {
-            None
-        };
-        let attention_mask = if let Some(mask) = attention_mask {
-            Some(mask.to_device(query.device())?)
         } else {
             None
         };
@@ -151,7 +144,7 @@ impl PagedAttention {
                 &value,
                 key_cache.as_mut().unwrap(),
                 value_cache.as_mut().unwrap(),
-                &slot_mapping,
+                slot_mapping,
             )?;
         }
 
@@ -178,8 +171,8 @@ impl PagedAttention {
             &query,
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
-            &block_tables,
-            &context_lens,
+            block_tables,
+            context_lens,
             alibi_slopes.as_ref(),
             input_metadata.max_context_len.unwrap(),
             self.scale,
