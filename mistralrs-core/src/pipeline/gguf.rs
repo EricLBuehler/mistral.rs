@@ -41,7 +41,7 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
@@ -327,7 +327,7 @@ impl Loader for GGUFLoader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _: &dyn TryIntoDType,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -404,6 +404,7 @@ impl Loader for GGUFLoader {
         };
 
         let model_config_metadata: ContentConfig = (&model).into();
+        let internal_dtype = dtype.try_into_dtype(&[device]).unwrap();
 
         let model_config = {
             // Base config (quantization only):
@@ -415,6 +416,7 @@ impl Loader for GGUFLoader {
                 } else {
                     AttentionImplementation::Eager
                 },
+                internal_dtype,
             );
 
             // With optional adapter config:
@@ -478,17 +480,20 @@ impl Loader for GGUFLoader {
                 paged_attn_config.mem_gpu,
                 paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
-                DType::F32,
+                internal_dtype,
                 model_config,
                 device,
             )?;
-            let cache_engine = CacheEngine::new(
+            let cache_config = calculate_cache_config(
+                paged_attn_config.mem_gpu,
+                paged_attn_config.mem_cpu,
+                paged_attn_config.block_size,
+                internal_dtype,
                 model_config,
-                &cache_config,
-                DType::F32,
                 device,
-                layer_devices,
             )?;
+            let cache_engine =
+                CacheEngine::new(model_config, &cache_config, internal_dtype, device)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -554,7 +559,7 @@ impl Loader for GGUFLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
-                activation_dtype: DType::F32,
+                activation_dtype: internal_dtype,
                 sliding_window: None,
                 cache_config,
                 cache_engine,

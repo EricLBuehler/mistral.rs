@@ -51,6 +51,7 @@ struct LayerWeights {
     rotary: Arc<RotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+    dtype: DType,
 }
 
 impl LayerWeights {
@@ -65,9 +66,15 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
-        let q = MatMul.qmethod_matmul(x, &*self.attention_wq)?;
-        let k = MatMul.qmethod_matmul(x, &*self.attention_wk)?;
-        let v = MatMul.qmethod_matmul(x, &*self.attention_wv)?;
+        let q = MatMul
+            .qmethod_matmul(x, &*self.attention_wq)?
+            .to_dtype(self.dtype)?;
+        let k = MatMul
+            .qmethod_matmul(x, &*self.attention_wk)?
+            .to_dtype(self.dtype)?;
+        let v = MatMul
+            .qmethod_matmul(x, &*self.attention_wv)?
+            .to_dtype(self.dtype)?;
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
@@ -129,7 +136,7 @@ impl LayerWeights {
             y.reshape(&[b_sz, seq_len, n_embd])?
         };
 
-        let y = MatMul.qmethod_matmul(&y, &*self.attention_wo)?;
+        let y = MatMul.qmethod_matmul(&y.to_dtype(x.dtype())?, &*self.attention_wo)?;
         Ok(y)
     }
 }
@@ -143,6 +150,7 @@ pub struct ModelWeights {
     pub cache: EitherCache,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
+    dtype: DType,
 }
 
 // qwen2 `llm` fields:
@@ -215,6 +223,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
         mapper: DeviceMapMetadata,
         topology: Option<&'_ Topology>,
         attention_mechanism: AttentionImplementation,
+        dtype: DType,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
@@ -263,7 +272,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     max_seq_len,
                     device,
                     false,
-                    DType::F32,
+                    dtype,
                 )?),
             );
         }
@@ -354,6 +363,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
                 },
+                dtype,
             })
         }
         Ok(Self {
@@ -368,6 +378,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
             max_seq_len,
             mapper: Some(mapper),
+            dtype,
         })
     }
 }
@@ -389,7 +400,7 @@ impl ModelWeights {
                 .as_ref()
                 .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
-            DType::F32,
+            self.dtype,
             self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
@@ -420,7 +431,6 @@ impl ModelWeights {
             let x = (x + residual)?;
             layer_in = x;
         }
-        let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
         extract_logits(
             &MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)?,
