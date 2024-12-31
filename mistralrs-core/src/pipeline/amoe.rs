@@ -19,6 +19,7 @@ use tracing::{info, warn};
 
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
+    device_map::DeviceMapper,
     get_mut_arcmutex,
     prefix_cacher_v2::PrefixCacheManagerV2,
     sampler::Sampler,
@@ -243,6 +244,9 @@ impl MetadataMixin for AnyMoePipeline {
     }
     fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
         get_mut_arcmutex!(self.target).tokenizer()
+    }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        None
     }
 }
 
@@ -469,6 +473,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         input_processor_cfg.clone(),
                         None, // TODO: get block tables/handle it for PagedAttention
                         None, // TODO: prompt chunking doesn't work.
+                        None,
                     )
                     .nth(0)
                     .unwrap();
