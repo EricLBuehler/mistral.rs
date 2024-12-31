@@ -137,6 +137,7 @@ pub mod text_models_inputs_processor {
 
     // chunk_offset_toks is the number of tokens by which the tokens are offset,
     // chunk_offset_toks / prompt_batchsize = number of batches
+    #[allow(clippy::too_many_arguments)]
     pub fn make_prompt_chunk<T: WithDType + Debug>(
         chunk_offset_toks: usize,
         toks: Vec<Vec<T>>,
@@ -520,7 +521,8 @@ pub mod text_models_inputs_processor {
             },
         })
     }
-
+    
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
         toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
