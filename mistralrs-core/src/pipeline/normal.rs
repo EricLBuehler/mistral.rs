@@ -336,6 +336,25 @@ impl Loader for NormalLoader {
             AttentionImplementation::Eager
         };
 
+        #[cfg(feature = "cuda")]
+        {
+            let num_parallel = 2;
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::{fork, ForkResult};
+            for _ in 0..num_parallel {
+                match unsafe { fork() } {
+                    Ok(ForkResult::Parent { child, .. }) => {
+                        println!("created child {child}");
+                    }
+                    Ok(ForkResult::Child) => {
+                        println!("child executing!!");
+                        break;
+                    }
+                    Err(_) => println!("Fork failed"),
+                }
+            }
+        }
+
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
                 paths,

@@ -2449,6 +2449,7 @@ dependencies = [
  "mistralrs-paged-attn",
  "mistralrs-quant",
  "mistralrs-vision",
+ "nix",
  "objc",
  "once_cell",
  "pyo3",
