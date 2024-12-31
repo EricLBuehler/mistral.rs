@@ -615,6 +615,9 @@ impl Llama3RotaryEmbedding {
         k: &mut Tensor,
         b_sz: usize,
     ) -> Result<()> {
+        // Needed for device mapping
+        let positions_kernel = positions_kernel.to_device(q.device())?;
+
         match self {
             Self::Llama3 { sin, cos, is_gptx } => {
                 let (b_sz_seq_len, h, n_embd) = q.dims3()?;
@@ -646,7 +649,7 @@ impl Llama3RotaryEmbedding {
                 *k = Tensor::cat(&k_embeds, 0)?;
                 Ok(())
             }
-            Self::Default(rope) => rope.forward(positions, positions_kernel, q, k, b_sz),
+            Self::Default(rope) => rope.forward(positions, &positions_kernel, q, k, b_sz),
         }
     }
 }
@@ -935,7 +938,10 @@ impl RotaryEmbedding {
         k: &mut Tensor,
         b_sz: usize,
     ) -> Result<()> {
-        self.0.forward(positions, positions_kernel, q, k, b_sz)
+        // Needed for device mapping
+        let positions_kernel = positions_kernel.to_device(q.device())?;
+
+        self.0.forward(positions, &positions_kernel, q, k, b_sz)
     }
 }
 
