@@ -275,7 +275,6 @@ impl Attention {
             v.reshape((b_size, self.num_kv_heads, seq_len, self.head_dim))?
         };
 
-        let start_offsets_kernel = start_offsets_kernel.to_device(q.device())?;
         self.rotary_emb.forward(
             seqlen_offsets,
             &start_offsets_kernel,
