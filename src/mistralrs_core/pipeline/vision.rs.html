@@ -807,7 +807,23 @@
 <a href="#806" id="806">806</a>
 <a href="#807" id="807">807</a>
 <a href="#808" id="808">808</a>
-<a href="#809" id="809">809</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -820,6 +836,7 @@
 <span class="kw">use super</span>::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
 };
+<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::llg::build_tok_env;
@@ -867,6 +884,7 @@
     topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
     silent: bool,
     prefixer: Arc&lt;<span class="kw">dyn </span>VisionPromptPrefixer&gt;,
+    mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
 
     <span class="comment">// For full UQFF serialization
     </span>template_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
@@ -1038,12 +1056,21 @@
             <span class="self">self</span>.inner
                 .get_config_repr(<span class="kw-2">&amp;</span>config, <span class="self">self</span>.config.use_flash_attn)<span class="question-mark">?
         </span>);
-
+        <span class="kw">let </span>pipeline_mapper = mapper.into_mapper(
+            <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
+            device,
+            <span class="self">self</span>.config.topology.as_ref(),
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>mapper = mapper.into_mapper(
             <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
             device,
             <span class="self">self</span>.config.topology.as_ref(),
         )<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>layer_devices = Vec::new();
+        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">? </span>{
+            <span class="kw">let </span>device = mapper.device_for(layer, <span class="bool-val">false</span>).cloned();
+            layer_devices.push(device);
+        }
         <span class="kw">let </span>dtype = mapper.get_min_dtype(dtype)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>loading_isq = in_situ_quant.is_some() || <span class="self">self</span>.config.from_uqff.is_some();
@@ -1158,7 +1185,7 @@
 
                 <span class="kw">let </span>start = Instant::now();
                 <span class="kw">let </span>inputs =
-                    make_prompt_chunk(<span class="number">0</span>, <span class="macro">vec!</span>[chunk], <span class="kw-2">&amp;</span>[<span class="number">0</span>], <span class="kw-2">&amp;</span>load_device, <span class="prelude-val">None</span>, <span class="bool-val">false</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
+                    make_prompt_chunk(<span class="number">0</span>, <span class="macro">vec!</span>[chunk], <span class="kw-2">&amp;</span>[<span class="number">0</span>], <span class="kw-2">&amp;</span>load_device, <span class="prelude-val">None</span>, <span class="bool-val">false</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
                 <span class="kw">let _ </span>= model.forward(
                     <span class="kw-2">&amp;</span>inputs.input,
                     <span class="prelude-val">None</span>, <span class="comment">// NOTE: We ONLY calibrate the text bits of these models!!
@@ -1244,7 +1271,8 @@
                 model.config(),
                 device,
             )<span class="question-mark">?</span>;
-            <span class="kw">let </span>cache_engine = CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache_engine =
+                CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device, layer_devices)<span class="question-mark">?</span>;
             (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
         } <span class="kw">else </span>{
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
@@ -1289,6 +1317,7 @@
             config,
             processor_filename: paths.get_processor_config().clone(),
             preprocessor_filename: paths.get_preprocessor_config().clone(),
+            mapper: pipeline_mapper,
         })))
     }
 
@@ -1398,6 +1427,9 @@
     <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
         <span class="prelude-val">Some</span>(<span class="self">self</span>.tokenizer.clone())
+    }
+    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
+        <span class="prelude-val">Some</span>(<span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
     }
 }
 

@@ -726,7 +726,11 @@
 <a href="#725" id="725">725</a>
 <a href="#726" id="726">726</a>
 <a href="#727" id="727">727</a>
-<a href="#728" id="728">728</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     num::NonZeroUsize,
     sync::{Arc, RwLock},
@@ -742,6 +746,7 @@
 <span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
+    device_map::DeviceMapper,
     pipeline::{
         text_models_inputs_processor::{
             <span class="self">self</span>, get_completion_input, get_prompt_input, PagedAttentionMeta,
@@ -861,6 +866,7 @@
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        _mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;&gt;&gt; {
         <span class="kw">if </span>is_xlora {
             <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
@@ -911,7 +917,8 @@
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
-            </span>)
+                </span><span class="prelude-val">None</span>,
+            )
             .nth(<span class="number">0</span>)
             .unwrap()
             .unwrap()
@@ -928,7 +935,8 @@
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
-            </span>)
+                </span><span class="prelude-val">None</span>,
+            )
             .nth(<span class="number">0</span>)
             .unwrap()
             .unwrap()

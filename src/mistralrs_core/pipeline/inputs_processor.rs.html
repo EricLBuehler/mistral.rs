@@ -858,7 +858,56 @@
 <a href="#857" id="857">857</a>
 <a href="#858" id="858">858</a>
 <a href="#859" id="859">859</a>
-<a href="#860" id="860">860</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
+<a href="#860" id="860">860</a>
+<a href="#861" id="861">861</a>
+<a href="#862" id="862">862</a>
+<a href="#863" id="863">863</a>
+<a href="#864" id="864">864</a>
+<a href="#865" id="865">865</a>
+<a href="#866" id="866">866</a>
+<a href="#867" id="867">867</a>
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
+<a href="#872" id="872">872</a>
+<a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a>
+<a href="#876" id="876">876</a>
+<a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a>
+<a href="#886" id="886">886</a>
+<a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
+<a href="#889" id="889">889</a>
+<a href="#890" id="890">890</a>
+<a href="#891" id="891">891</a>
+<a href="#892" id="892">892</a>
+<a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
+<a href="#899" id="899">899</a>
+<a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -867,7 +916,7 @@
 <span class="kw">use </span>text_models_inputs_processor::PagedAttentionMeta;
 <span class="kw">use </span>tokenizers::Tokenizer;
 
-<span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
+<span class="kw">use crate</span>::{device_map::DeviceMapper, sequence::Sequence};
 
 <span class="attr">#[derive(PartialEq)]
 </span><span class="kw">pub enum </span>InputsProcessorType {
@@ -900,6 +949,7 @@
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;&gt;&gt;;
 
     <span class="kw">fn </span>get_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; InputsProcessorType;
@@ -908,13 +958,16 @@
 <span class="comment">// ========================= Test models input processor
 
 </span><span class="kw">pub mod </span>text_models_inputs_processor {
-    <span class="kw">use </span>std::{any::Any, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc};
+    <span class="kw">use </span>std::{
+        any::Any, collections::HashMap, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc,
+    };
 
     <span class="kw">use </span>anyhow::Result;
-    <span class="kw">use </span>candle_core::{DType, Device, Tensor, WithDType};
+    <span class="kw">use </span>candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
     <span class="kw">use </span>tokenizers::Tokenizer;
 
     <span class="kw">use crate</span>::{
+        device_map::DeviceMapper,
         layers::set_use_matmul_via_f16,
         paged_attention::{BlockEngine, _PAD_SLOT_ID},
         sequence::Sequence,
@@ -949,9 +1002,9 @@
     <span class="attr">#[derive(Clone, Debug)]
     #[allow(dead_code)]
     </span><span class="kw">pub struct </span>PagedAttentionInputMetadata {
-        <span class="kw">pub </span>block_tables: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-        <span class="kw">pub </span>context_lens: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-        <span class="kw">pub </span>slot_mappings: Tensor,
+        <span class="kw">pub </span>block_tables: <span class="prelude-ty">Option</span>&lt;HashMap&lt;DeviceLocation, Tensor&gt;&gt;,
+        <span class="kw">pub </span>context_lens: <span class="prelude-ty">Option</span>&lt;HashMap&lt;DeviceLocation, Tensor&gt;&gt;,
+        <span class="kw">pub </span>slot_mappings: HashMap&lt;DeviceLocation, Tensor&gt;,
         <span class="kw">pub </span>max_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     }
 
@@ -963,7 +1016,7 @@
                 block_tables: <span class="prelude-val">None</span>,
                 context_lens: <span class="prelude-val">None</span>,
                 max_context_len: <span class="prelude-val">None</span>,
-                slot_mappings: Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], dev)<span class="question-mark">?</span>,
+                slot_mappings: HashMap::from([(dev.location(), Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], dev)<span class="question-mark">?</span>)]),
             })
         }
     }
@@ -993,6 +1046,7 @@
 
     <span class="comment">// chunk_offset_toks is the number of tokens by which the tokens are offset,
     // chunk_offset_toks / prompt_batchsize = number of batches
+    </span><span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>make_prompt_chunk&lt;T: WithDType + Debug&gt;(
         chunk_offset_toks: usize,
         toks: Vec&lt;Vec&lt;T&gt;&gt;,
@@ -1001,6 +1055,7 @@
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         return_raw_logits: bool,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
         <span class="kw">let </span>max_len = toks
             .iter()
@@ -1171,10 +1226,25 @@
             )<span class="question-mark">?
             </span>.reshape(((),))<span class="question-mark">?</span>;
 
+            <span class="comment">// For device mapping, make a copy of each tensor for each device
+            </span><span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
+            <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings_map = HashMap::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>block_tables_map = HashMap::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>context_lens_map = HashMap::new();
+
+            <span class="kw">for </span>device <span class="kw">in </span>devices {
+                slot_mappings_map
+                    .insert(device.location(), slot_mappings.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+                block_tables_map
+                    .insert(device.location(), block_tables.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+                context_lens_map
+                    .insert(device.location(), context_lens.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+            }
+
             <span class="prelude-val">Some</span>(PagedAttentionInputMetadata {
-                slot_mappings,
-                block_tables: <span class="prelude-val">Some</span>(block_tables),
-                context_lens: <span class="prelude-val">Some</span>(context_lens),
+                slot_mappings: slot_mappings_map,
+                block_tables: <span class="prelude-val">Some</span>(block_tables_map),
+                context_lens: <span class="prelude-val">Some</span>(context_lens_map),
                 max_context_len: <span class="prelude-val">Some</span>(max_context_len),
             })
         } <span class="kw">else </span>{
@@ -1202,6 +1272,7 @@
         input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
         device: <span class="kw-2">&amp;</span>Device,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
+        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;InputMetadata&gt; {
         <span class="comment">// Pad each sequence by the padding token to the max len.
         </span><span class="kw">let </span><span class="kw-2">mut </span>seqs_tensors = Vec::new();
@@ -1319,10 +1390,25 @@
                 device,
             )<span class="question-mark">?</span>;
 
+            <span class="comment">// For device mapping, make a copy of each tensor for each device
+            </span><span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
+            <span class="kw">let </span><span class="kw-2">mut </span>slot_mappings_map = HashMap::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>block_tables_map = HashMap::new();
+            <span class="kw">let </span><span class="kw-2">mut </span>context_lens_map = HashMap::new();
+
+            <span class="kw">for </span>device <span class="kw">in </span>devices {
+                slot_mappings_map
+                    .insert(device.location(), slot_mappings.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+                block_tables_map
+                    .insert(device.location(), block_tables.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+                context_lens_map
+                    .insert(device.location(), context_lens.clone().to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+            }
+
             <span class="prelude-val">Some</span>(PagedAttentionInputMetadata {
-                slot_mappings,
-                block_tables: <span class="prelude-val">Some</span>(block_tables),
-                context_lens: <span class="prelude-val">Some</span>(context_lens),
+                slot_mappings: slot_mappings_map,
+                block_tables: <span class="prelude-val">Some</span>(block_tables_map),
+                context_lens: <span class="prelude-val">Some</span>(context_lens_map),
                 max_context_len: <span class="prelude-val">Some</span>(<span class="kw-2">*</span>max_context_len),
             })
         } <span class="kw">else </span>{
@@ -1345,7 +1431,8 @@
         })
     }
 
-    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_prompt_input&lt;T: WithDType + std::fmt::Debug&gt;(
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_prompt_input&lt;T: WithDType + std::fmt::Debug&gt;(
         toks: Vec&lt;Vec&lt;T&gt;&gt;,
         input_seqs: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;mut </span>Sequence],
         device: <span class="kw-2">&amp;</span>Device,
@@ -1353,6 +1440,7 @@
         return_raw_logits: bool,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt;&gt;&gt; {
         <span class="kw">if let </span>(<span class="prelude-val">Some</span>(prompt_batchsize), <span class="bool-val">true</span>) = (prompt_batchsize, paged_attn_metadata.is_none()) {
             <span class="kw">let </span><span class="kw-2">mut </span>seq_chunks = Vec::new();
@@ -1391,6 +1479,7 @@
                         last_n_context_len,
                         return_raw_logits,
                         paged_attn_metadata.as_deref_mut(),
+                        mapper,
                     )
                     .map(|inputs| InnerInputProcessorOutput {
                         inputs,
@@ -1421,6 +1510,7 @@
                     last_n_context_len,
                     return_raw_logits,
                     paged_attn_metadata,
+                    mapper,
                 )
                 .map(|inputs| InnerInputProcessorOutput {
                     inputs,
@@ -1440,6 +1530,7 @@
         return_raw_logits: bool,
         paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt;&gt;&gt; {
         <span class="kw">if </span>no_kv_cache {
             <span class="kw">return </span>get_prompt_input(
@@ -1450,16 +1541,17 @@
                 return_raw_logits,
                 paged_attn_metadata,
                 prompt_batchsize,
+                mapper,
             );
         }
 
         Box::new(std::iter::once(
-            make_completion_chunk(toks, input_seqs, device, paged_attn_metadata).map(|inputs| {
-                InnerInputProcessorOutput {
+            make_completion_chunk(toks, input_seqs, device, paged_attn_metadata, mapper).map(
+                |inputs| InnerInputProcessorOutput {
                     inputs,
                     seq_indices: (<span class="number">0</span>..input_seqs.len()).collect(),
-                }
-            }),
+                },
+            ),
         ))
     }
 
@@ -1494,6 +1586,7 @@
             <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
             <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
             prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+            mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
         ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;&gt;&gt; {
             <span class="kw">if </span>is_xlora &amp;&amp; !is_prompt {
                 Box::new(
@@ -1508,6 +1601,7 @@
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
+                        mapper,
                     )
                     .zip(get_completion_input(
                         input_seqs
@@ -1521,6 +1615,7 @@
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
+                        mapper,
                     ))
                     .map(|(prompt, completion)| {
                         <span class="kw">let </span>InnerInputProcessorOutput {
@@ -1581,6 +1676,7 @@
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
+                        mapper,
                     )
                     .map(|metadata| {
                         <span class="kw">let </span>InnerInputProcessorOutput {
@@ -1628,6 +1724,7 @@
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
+                        mapper,
                     )
                     .map(|metadata| {
                         <span class="kw">let </span>InnerInputProcessorOutput {
@@ -1676,6 +1773,7 @@
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
+                        mapper,
                     )
                     .map(|metadata| {
                         <span class="kw">let </span>InnerInputProcessorOutput {

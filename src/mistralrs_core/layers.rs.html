@@ -1057,7 +1057,13 @@
 <a href="#1056" id="1056">1056</a>
 <a href="#1057" id="1057">1057</a>
 <a href="#1058" id="1058">1058</a>
-<a href="#1059" id="1059">1059</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1059" id="1059">1059</a>
+<a href="#1060" id="1060">1060</a>
+<a href="#1061" id="1061">1061</a>
+<a href="#1062" id="1062">1062</a>
+<a href="#1063" id="1063">1063</a>
+<a href="#1064" id="1064">1064</a>
+<a href="#1065" id="1065">1065</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
     f32::consts::PI,
@@ -1674,6 +1680,9 @@
         k: <span class="kw-2">&amp;mut </span>Tensor,
         b_sz: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="comment">// Needed for device mapping
+        </span><span class="kw">let </span>positions_kernel = positions_kernel.to_device(q.device())<span class="question-mark">?</span>;
+
         <span class="kw">match </span><span class="self">self </span>{
             <span class="self">Self</span>::Llama3 { sin, cos, is_gptx } =&gt; {
                 <span class="kw">let </span>(b_sz_seq_len, h, n_embd) = q.dims3()<span class="question-mark">?</span>;
@@ -1705,7 +1714,7 @@
                 <span class="kw-2">*</span>k = Tensor::cat(<span class="kw-2">&amp;</span>k_embeds, <span class="number">0</span>)<span class="question-mark">?</span>;
                 <span class="prelude-val">Ok</span>(())
             }
-            <span class="self">Self</span>::Default(rope) =&gt; rope.forward(positions, positions_kernel, q, k, b_sz),
+            <span class="self">Self</span>::Default(rope) =&gt; rope.forward(positions, <span class="kw-2">&amp;</span>positions_kernel, q, k, b_sz),
         }
     }
 }
@@ -1994,7 +2003,10 @@
         k: <span class="kw-2">&amp;mut </span>Tensor,
         b_sz: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="self">self</span>.<span class="number">0</span>.forward(positions, positions_kernel, q, k, b_sz)
+        <span class="comment">// Needed for device mapping
+        </span><span class="kw">let </span>positions_kernel = positions_kernel.to_device(q.device())<span class="question-mark">?</span>;
+
+        <span class="self">self</span>.<span class="number">0</span>.forward(positions, <span class="kw-2">&amp;</span>positions_kernel, q, k, b_sz)
     }
 }
 

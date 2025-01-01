@@ -443,13 +443,13 @@
 <span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding};
+<span class="kw">use </span>candle_nn::{Embedding, Module};
 <span class="kw">use </span>mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 <span class="kw">use </span><span class="kw">crate</span>::attention::SdpaParams;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::gguf::Content;
-<span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
+<span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, MatMul, QRmsNorm, RotaryEmbedding, Sdpa};
 <span class="kw">use </span><span class="kw">crate</span>::layers_masker::PastKvLenCache;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, PagedAttention};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;

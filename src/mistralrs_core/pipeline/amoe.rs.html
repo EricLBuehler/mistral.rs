@@ -589,7 +589,12 @@
 <a href="#588" id="588">588</a>
 <a href="#589" id="589">589</a>
 <a href="#590" id="590">590</a>
-<a href="#591" id="591">591</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
     io::Read,
@@ -610,6 +615,7 @@
 
 <span class="kw">use crate</span>::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
+    device_map::DeviceMapper,
     get_mut_arcmutex,
     prefix_cacher_v2::PrefixCacheManagerV2,
     sampler::Sampler,
@@ -835,6 +841,9 @@
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;tokenizers::Tokenizer&gt;&gt; {
         <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).tokenizer()
     }
+    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
+        <span class="prelude-val">None
+    </span>}
 }
 
 <span class="attr">#[async_trait::async_trait]
@@ -1060,7 +1069,8 @@
                         input_processor_cfg.clone(),
                         <span class="prelude-val">None</span>, <span class="comment">// TODO: get block tables/handle it for PagedAttention
                         </span><span class="prelude-val">None</span>, <span class="comment">// TODO: prompt chunking doesn't work.
-                    </span>)
+                        </span><span class="prelude-val">None</span>,
+                    )
                     .nth(<span class="number">0</span>)
                     .unwrap();
 

@@ -930,7 +930,28 @@
 <a href="#929" id="929">929</a>
 <a href="#930" id="930">930</a>
 <a href="#931" id="931">931</a>
-<a href="#932" id="932">932</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#932" id="932">932</a>
+<a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a>
+<a href="#942" id="942">942</a>
+<a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
@@ -948,6 +969,7 @@
     NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 <span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeExpertType;
+<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
@@ -1000,6 +1022,7 @@
     generation_config: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     config: String,
     imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
 }
 
 <span class="doccomment">/// A loader for a "normal" (non-quantized) model.
@@ -1203,7 +1226,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
-        <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
         <span class="comment">// Otherwise, the device mapper will print it
@@ -1220,16 +1243,22 @@
                 <span class="self">self</span>.get_id(),
                 device.device_pretty_repr()
             );
-        } <span class="kw">else if </span>paged_attn_config.is_some() {
-            <span class="macro">warn!</span>(<span class="string">"Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention."</span>);
-            paged_attn_config = <span class="prelude-val">None</span>;
         }
-
+        <span class="kw">let </span>pipeline_mapper = mapper.into_mapper(
+            <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
+            device,
+            <span class="self">self</span>.config.topology.as_ref(),
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>mapper = mapper.into_mapper(
             <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
             device,
             <span class="self">self</span>.config.topology.as_ref(),
         )<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>layer_devices = Vec::new();
+        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">? </span>{
+            <span class="kw">let </span>device = mapper.device_for(layer, <span class="bool-val">false</span>).cloned();
+            layer_devices.push(device);
+        }
         <span class="kw">let </span>dtype = mapper.get_min_dtype(dtype)<span class="question-mark">?</span>;
 
         <span class="macro">info!</span>(
@@ -1363,8 +1392,16 @@
                 <span class="kw">let </span>chunk_len = chunk.len();
 
                 <span class="kw">let </span>start = Instant::now();
-                <span class="kw">let </span>inputs =
-                    make_prompt_chunk(<span class="number">0</span>, <span class="macro">vec!</span>[chunk], <span class="kw-2">&amp;</span>[<span class="number">0</span>], <span class="kw-2">&amp;</span>load_device, <span class="prelude-val">None</span>, <span class="bool-val">false</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>inputs = make_prompt_chunk(
+                    <span class="number">0</span>,
+                    <span class="macro">vec!</span>[chunk],
+                    <span class="kw-2">&amp;</span>[<span class="number">0</span>],
+                    <span class="kw-2">&amp;</span>load_device,
+                    <span class="prelude-val">None</span>,
+                    <span class="bool-val">false</span>,
+                    <span class="prelude-val">None</span>,
+                    <span class="prelude-val">Some</span>(pipeline_mapper.as_ref()),
+                )<span class="question-mark">?</span>;
                 <span class="kw">let _ </span>= model.forward(
                     <span class="kw-2">&amp;</span>inputs.input,
                     <span class="kw-2">&amp;</span>inputs.positions,
@@ -1455,7 +1492,8 @@
                 model.config(),
                 device,
             )<span class="question-mark">?</span>;
-            <span class="kw">let </span>cache_engine = CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache_engine =
+                CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device, layer_devices)<span class="question-mark">?</span>;
             (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
         } <span class="kw">else </span>{
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
@@ -1504,6 +1542,7 @@
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
             imatrix: <span class="self">self</span>.config.imatrix.clone(),
+            mapper: pipeline_mapper,
         })))
     }
 
@@ -1620,6 +1659,9 @@
     }
     <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
         <span class="self">self</span>.metadata.clone()
+    }
+    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
+        <span class="prelude-val">Some</span>(<span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
     }
 }
 

@@ -341,13 +341,18 @@
 <a href="#340" id="340">340</a>
 <a href="#341" id="341">341</a>
 <a href="#342" id="342">342</a>
-<a href="#343" id="343">343</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 <span class="kw">use super</span>::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
     DiffusionModel, DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
+<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::AttentionImplementation;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
@@ -637,6 +642,9 @@
     }
     <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
+        <span class="prelude-val">None
+    </span>}
+    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
         <span class="prelude-val">None
     </span>}
 }

@@ -568,7 +568,12 @@
 <a href="#567" id="567">567</a>
 <a href="#568" id="568">568</a>
 <a href="#569" id="569">569</a>
-<a href="#570" id="570">570</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -581,6 +586,7 @@
 <span class="kw">use </span>tracing::warn;
 
 <span class="kw">use crate</span>::{
+    device_map::DeviceMapper,
     pipeline::{
         text_models_inputs_processor::{
             <span class="self">self</span>, get_completion_input, get_prompt_input, PagedAttentionMeta,
@@ -651,6 +657,7 @@
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
         prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        _mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = anyhow::Result&lt;InputProcessorOutput&gt;&gt;&gt; {
         <span class="kw">if </span>is_xlora {
             <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
@@ -739,7 +746,8 @@
                         other_config,
                         paged_attn_metadata,
                         <span class="prelude-val">None</span>, <span class="comment">// TODO
-                    </span>)
+                        </span><span class="prelude-val">None</span>,
+                    )
                     .map(|metadata| {
                         <span class="kw">let </span>InputProcessorOutput {
                             inputs,
@@ -890,7 +898,8 @@
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
-            </span>)
+                </span><span class="prelude-val">None</span>,
+            )
         } <span class="kw">else </span>{
             get_completion_input(
                 toks,
@@ -901,7 +910,8 @@
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
-            </span>)
+                </span><span class="prelude-val">None</span>,
+            )
         };
 
         Box::new(iter.into_iter().map(<span class="kw">move </span>|metadata| {

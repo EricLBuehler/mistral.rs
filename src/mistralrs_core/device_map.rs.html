@@ -254,7 +254,19 @@
 <a href="#253" id="253">253</a>
 <a href="#254" id="254">254</a>
 <a href="#255" id="255">255</a>
-<a href="#256" id="256">256</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">use crate</span>::{utils::debug::DeviceRepr, Topology, TryIntoDType};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
@@ -404,6 +416,7 @@
     ) -&gt; VarBuilder&lt;<span class="lifetime">'a</span>&gt;;
     <span class="doccomment">/// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
     </span><span class="kw">fn </span>device_for(<span class="kw-2">&amp;</span><span class="self">self</span>, layer: usize, loading_isq: bool) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Device&gt;;
+    <span class="kw">fn </span>get_unique_devices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Device&gt;;
     <span class="doccomment">/// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
     </span><span class="kw">fn </span>cast_nm_device(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, loading_isq: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
     <span class="doccomment">/// Set non mapped layer device. This is for ISQ + device mapping support
@@ -441,6 +454,14 @@
             <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device);
         }
         <span class="self">self</span>.mappings.get(layer)
+    }
+    <span class="kw">fn </span>get_unique_devices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Device&gt; {
+        <span class="self">self</span>.mappings.iter().fold(Vec::new(), |<span class="kw-2">mut </span>acc, device| {
+            <span class="kw">if </span>!acc.iter().any(|d| d.same_device(device)) {
+                acc.push(device.clone());
+            }
+            acc
+        })
     }
     <span class="kw">fn </span>cast_nm_device(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, loading_isq: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">if </span>loading_isq {
@@ -490,6 +511,9 @@
         }
         <span class="prelude-val">None
     </span>}
+    <span class="kw">fn </span>get_unique_devices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Device&gt; {
+        <span class="macro">vec!</span>[<span class="self">self</span>.nm_device.clone()]
+    }
     <span class="kw">fn </span>cast_nm_device(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, loading_isq: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">if </span>loading_isq {
             x.to_device(<span class="kw-2">&amp;</span>Device::Cpu)

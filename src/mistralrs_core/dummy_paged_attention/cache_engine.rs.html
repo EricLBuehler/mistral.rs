@@ -72,7 +72,8 @@
 <a href="#71" id="71">71</a>
 <a href="#72" id="72">72</a>
 <a href="#73" id="73">73</a>
-<a href="#74" id="74">74</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#74" id="74">74</a>
+<a href="#75" id="75">75</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     sync::{Arc, Mutex, MutexGuard},
 };
@@ -100,6 +101,7 @@
         _cache_config: <span class="kw-2">&amp;</span>CacheConfig,
         _dtype: DType,
         _device: <span class="kw-2">&amp;</span>Device,
+        _layer_devices: Vec&lt;<span class="prelude-ty">Option</span>&lt;Device&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             dummy_cache: Arc::new(Mutex::new(Vec::new())),

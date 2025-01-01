@@ -789,7 +789,33 @@
 <a href="#788" id="788">788</a>
 <a href="#789" id="789">789</a>
 <a href="#790" id="790">790</a>
-<a href="#791" id="791">791</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -800,6 +826,7 @@
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
     ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
+<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
@@ -865,6 +892,7 @@
     model_id: String,
     non_granular_state: <span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
     metadata: Arc&lt;GeneralMetadata&gt;,
+    mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
 }
 
 <span class="doccomment">/// Loader for a GGUF model.
@@ -1123,7 +1151,7 @@
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
-        <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">if </span>in_situ_quant.is_some() {
             <span class="macro">anyhow::bail!</span>(
@@ -1144,9 +1172,6 @@
                 <span class="self">self</span>.get_id(),
                 device.device_pretty_repr()
             );
-        } <span class="kw">else if </span>paged_attn_config.is_some() {
-            <span class="macro">warn!</span>(<span class="string">"Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention."</span>);
-            paged_attn_config = <span class="prelude-val">None</span>;
         }
 
         <span class="kw">let </span><span class="kw-2">mut </span>readers = Vec::new();
@@ -1200,7 +1225,7 @@
             <span class="comment">// Base config (quantization only):
             </span><span class="kw">let </span>quant = ModelConfig::ParamsGGUF(
                 model,
-                (device, mapper, <span class="self">self</span>.config.topology.as_ref()).into(),
+                (device, mapper.clone(), <span class="self">self</span>.config.topology.as_ref()).into(),
                 <span class="kw">if </span>paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention
                 } <span class="kw">else </span>{
@@ -1246,6 +1271,24 @@
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
         };
 
+        <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model {
+            Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
+            Model::Phi2(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
+            Model::XLoraLlama(<span class="kw-2">ref </span>model) =&gt; model.cache.full().lock().len(),
+            Model::Phi3(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
+            Model::XLoraPhi3(<span class="kw-2">ref </span>model) =&gt; model.cache.full().lock().len(),
+            Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
+            Model::Qwen2(<span class="kw-2">ref </span>model) =&gt; model.cache.normal().<span class="number">0</span>.len(),
+        };
+
+        <span class="kw">let </span>mapper =
+            mapper.into_mapper(num_hidden_layers, device, <span class="self">self</span>.config.topology.as_ref())<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>layer_devices = Vec::new();
+        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
+            <span class="kw">let </span>device = mapper.device_for(layer, <span class="bool-val">false</span>).cloned();
+            layer_devices.push(device);
+        }
+
         <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
             <span class="kw">let </span>model_config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike = <span class="kw-2">&amp;</span>model_config_metadata;
             <span class="kw">let </span>cache_config = calculate_cache_config(
@@ -1256,8 +1299,13 @@
                 model_config,
                 device,
             )<span class="question-mark">?</span>;
-            <span class="kw">let </span>cache_engine =
-                CacheEngine::new(model_config, <span class="kw-2">&amp;</span>cache_config, internal_dtype, device)<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache_engine = CacheEngine::new(
+                model_config,
+                <span class="kw-2">&amp;</span>cache_config,
+                internal_dtype,
+                device,
+                layer_devices,
+            )<span class="question-mark">?</span>;
             (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
         } <span class="kw">else </span>{
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
@@ -1339,6 +1387,7 @@
                 prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
                 model_metadata: <span class="prelude-val">Some</span>(Arc::new(model_config_metadata)),
             }),
+            mapper,
         })))
     }
 
@@ -1465,6 +1514,9 @@
     }
     <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
         <span class="self">self</span>.metadata.clone()
+    }
+    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
+        <span class="prelude-val">Some</span>(<span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
     }
 }
 
