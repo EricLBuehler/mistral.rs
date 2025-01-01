@@ -20,6 +20,7 @@ mod vision;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+use crate::device_map::DeviceMapper;
 use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
@@ -150,6 +151,7 @@ pub trait MetadataMixin {
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
     fn get_metadata(&self) -> Arc<GeneralMetadata>;
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper>;
 }
 
 /// Implemented by the base model of an AnyMoe.
@@ -328,6 +330,7 @@ pub trait Pipeline:
                     self.get_input_processor_config(),
                     None,
                     self.get_metadata().prompt_batchsize,
+                    self.device_mapper(),
                 );
 
                 let mut logits = vec![None; input_seqs.len()];
@@ -540,6 +543,7 @@ pub trait Pipeline:
                     self.get_input_processor_config(),
                     Some(metadata),
                     self.get_metadata().prompt_batchsize,
+                    self.device_mapper(),
                 );
 
                 let mut logits = vec![None; input_seqs.len()];

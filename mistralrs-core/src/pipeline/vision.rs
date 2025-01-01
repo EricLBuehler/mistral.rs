@@ -11,6 +11,7 @@ use super::{
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
 };
+use crate::device_map::DeviceMapper;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_tok_env;
@@ -58,6 +59,7 @@ pub struct VisionPipeline {
     topology: Option<Topology>,
     silent: bool,
     prefixer: Arc<dyn VisionPromptPrefixer>,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
@@ -229,12 +231,21 @@ impl Loader for VisionLoader {
             self.inner
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
-
+        let pipeline_mapper = mapper.into_mapper(
+            self.inner.get_total_device_mapping_num_layers(&config)?,
+            device,
+            self.config.topology.as_ref(),
+        )?;
         let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
             self.config.topology.as_ref(),
         )?;
+        let mut layer_devices = Vec::new();
+        for layer in 0..self.inner.get_total_device_mapping_num_layers(&config)? {
+            let device = mapper.device_for(layer, false).cloned();
+            layer_devices.push(device);
+        }
         let dtype = mapper.get_min_dtype(dtype)?;
 
         let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
@@ -349,7 +360,7 @@ impl Loader for VisionLoader {
 
                 let start = Instant::now();
                 let inputs =
-                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None)?;
+                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None, None)?;
                 let _ = model.forward(
                     &inputs.input,
                     None, // NOTE: We ONLY calibrate the text bits of these models!!
@@ -440,7 +451,8 @@ impl Loader for VisionLoader {
                 model.config(),
                 device,
             )?;
-            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            let cache_engine =
+                CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -486,6 +498,7 @@ impl Loader for VisionLoader {
             config,
             processor_filename: paths.get_processor_config().clone(),
             preprocessor_filename: paths.get_preprocessor_config().clone(),
+            mapper: pipeline_mapper,
         })))
     }
 
@@ -595,6 +608,9 @@ impl MetadataMixin for VisionPipeline {
     fn reset_non_granular_state(&self) {}
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         Some(self.tokenizer.clone())
+    }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        Some(&*self.mapper)
     }
 }
 

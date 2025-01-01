@@ -26,6 +26,7 @@ impl CacheEngine {
         _cache_config: &CacheConfig,
         _dtype: DType,
         _device: &Device,
+        _layer_devices: Vec<Option<Device>>,
     ) -> Result<Self> {
         Ok(Self {
             dummy_cache: Arc::new(Mutex::new(Vec::new())),

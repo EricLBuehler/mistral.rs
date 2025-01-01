@@ -9,6 +9,7 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
     ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
+use crate::device_map::DeviceMapper;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::get_chat_template;
@@ -30,7 +31,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::quantized::ggml_file;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -238,7 +239,7 @@ impl Loader for GGMLLoader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _: &dyn TryIntoDType,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapMetadata,
@@ -316,10 +317,11 @@ impl Loader for GGMLLoader {
 
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
+        let internal_dtype = dtype.try_into_dtype(&[device]).unwrap();
 
         let model_config = {
             // Base config (quantization only):
-            let quant = ModelConfig::ParamsGGML((model, self.config.gqa).into());
+            let quant = ModelConfig::ParamsGGML((model, self.config.gqa, internal_dtype).into());
 
             // With optional adapter config:
             let mut adapter = None;
@@ -391,7 +393,7 @@ impl Loader for GGMLLoader {
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
-                activation_dtype: DType::F32,
+                activation_dtype: internal_dtype,
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
@@ -527,6 +529,9 @@ impl MetadataMixin for GGMLPipeline {
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
+    }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        None
     }
 }
 

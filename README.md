@@ -116,7 +116,7 @@ Mistral.rs supports several model categories:
 - Prompt chunking: process large prompts in a more manageable way
 
 **Advanced features**:
-- [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching
+- [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching (CUDA and Metal support)
 - Prefix caching
 - [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
 - [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
@@ -393,7 +393,7 @@ Mistral.rs uses subcommands to control the model type. They are generally of for
 
 ### Architecture for plain models
 
-> Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`).
+> Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`). For quantized models (gguf/ggml), you may specify data type of `f32` or `bf16` (`f16` is not recommended due to its lower precision in quantized inference).
 
 If you do not specify the architecture, an attempt will be made to use the model's config. If this fails, please raise an issue.
 
@@ -453,6 +453,13 @@ And even diffusion models:
 
 ```bash
 ./mistralrs-server -i diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
+```
+
+On Apple Silicon (`Metal`), run with throughput log, settings of paged attention (maximum usage of 4GB for kv cache) and dtype (bf16 for kv cache and attention)
+
+```bash
+cargo build --release --features metal
+./target/release/mistralrs-server -i --throughput --paged-attn --pa-gpu-mem 4096 gguf --dtype bf16 -m /Users/Downloads/ -f Phi-3.5-mini-instruct-Q4_K_M.gguf
 ```
 
 ### OpenAI HTTP server
