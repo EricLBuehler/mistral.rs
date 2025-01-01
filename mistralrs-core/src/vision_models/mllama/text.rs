@@ -645,7 +645,7 @@ impl MLlamaTextModel {
         let cache = &mut self.cache.normal().0;
         let self_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
-            &seqlen_offsets as &dyn PastKvLenCache,
+            cache as &dyn PastKvLenCache,
             hidden_states.dtype(),
             self.cfg.num_attn_heads,
         )?;
