@@ -610,6 +610,9 @@ impl MLlamaVisionModel {
             hidden_state.dtype(),
             self.num_attn_heads,
         )?;
+        if attention_mask.dim(0)? != 1 {
+            attention_mask = attention_mask.unsqueeze(1)?;
+        }
 
         // Apply encoder
         hidden_state = hidden_state.reshape((bs * num_concurrent_media, (), dim))?;

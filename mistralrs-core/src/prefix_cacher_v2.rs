@@ -164,8 +164,12 @@ impl PrefixCacheManagerV2 {
     }
 
     /// Search for a matching cache given some toks
-    pub fn search_for_matching_cache(&mut self, toks: &[u32]) -> Result<Option<MatchingCache>> {
-        if self.no_prefix_cache || toks.is_empty() {
+    pub fn search_for_matching_cache(
+        &mut self,
+        toks: &[u32],
+        contains_images: bool,
+    ) -> Result<Option<MatchingCache>> {
+        if self.no_prefix_cache || toks.is_empty() || contains_images {
             return Ok(None);
         }
 

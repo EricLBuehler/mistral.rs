@@ -675,7 +675,10 @@ impl Engine {
             }
         }
         let prefill_cache = handle_seq_error!(
-            self.prefix_cacher.search_for_matching_cache(&prompt_tokens),
+            self.prefix_cacher.search_for_matching_cache(
+                &prompt_tokens,
+                images.as_ref().is_some_and(|x| !x.is_empty())
+            ),
             request.response
         );
 
