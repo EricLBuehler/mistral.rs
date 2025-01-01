@@ -14,6 +14,7 @@ use tracing::warn;
 
 use super::llava15::LLaVAVisionSpecificArgs;
 use super::utils::{expand2square, LLaVAImageProcessor};
+use crate::device_map::DeviceMapper;
 use crate::pipeline::text_models_inputs_processor::{
     get_completion_input, get_prompt_input, PagedAttentionMeta,
 };
@@ -87,6 +88,7 @@ impl InputsProcessor for LLaVAInputProcessor {
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
+        _mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
@@ -167,6 +169,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                         other_config,
                         paged_attn_metadata,
                         None, // TODO
+                        None,
                     )
                     .map(|metadata| {
                         let InputProcessorOutput {
@@ -283,6 +286,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
+                None,
             )
         } else {
             get_completion_input(
@@ -294,6 +298,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
+                None,
             )
         };
 

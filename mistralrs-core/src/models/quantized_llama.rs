@@ -6,13 +6,13 @@ use std::sync::Arc;
 use candle_core::quantized::ggml_file;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, RotaryEmbedding};
+use candle_nn::{Embedding, Module};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 use crate::attention::SdpaParams;
 use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
-use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
+use crate::layers::{CausalMasker, MatMul, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::extract_logits;

@@ -10,6 +10,7 @@ use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
+    device_map::DeviceMapper,
     pipeline::{
         apply_chat_template,
         text_models_inputs_processor::{
@@ -141,6 +142,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
+        _mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
@@ -181,6 +183,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
+                None,
             )
             .nth(0)
             .unwrap()
@@ -198,6 +201,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
+                None,
             )
             .nth(0)
             .unwrap()

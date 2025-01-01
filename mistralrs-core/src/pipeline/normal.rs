@@ -16,6 +16,7 @@ use super::{
     NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
+use crate::device_map::DeviceMapper;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
@@ -68,6 +69,7 @@ pub struct NormalPipeline {
     generation_config: Option<PathBuf>,
     config: String,
     imatrix: Option<PathBuf>,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -271,7 +273,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<IsqType>,
-        mut paged_attn_config: Option<PagedAttentionConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
         // Otherwise, the device mapper will print it
@@ -288,16 +290,22 @@ impl Loader for NormalLoader {
                 self.get_id(),
                 device.device_pretty_repr()
             );
-        } else if paged_attn_config.is_some() {
-            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
-            paged_attn_config = None;
         }
-
+        let pipeline_mapper = mapper.into_mapper(
+            self.inner.get_total_device_mapping_num_layers(&config)?,
+            device,
+            self.config.topology.as_ref(),
+        )?;
         let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
             self.config.topology.as_ref(),
         )?;
+        let mut layer_devices = Vec::new();
+        for layer in 0..self.inner.get_total_device_mapping_num_layers(&config)? {
+            let device = mapper.device_for(layer, false).cloned();
+            layer_devices.push(device);
+        }
         let dtype = mapper.get_min_dtype(dtype)?;
 
         info!(
@@ -431,8 +439,16 @@ impl Loader for NormalLoader {
                 let chunk_len = chunk.len();
 
                 let start = Instant::now();
-                let inputs =
-                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None)?;
+                let inputs = make_prompt_chunk(
+                    0,
+                    vec![chunk],
+                    &[0],
+                    &load_device,
+                    None,
+                    false,
+                    None,
+                    Some(pipeline_mapper.as_ref()),
+                )?;
                 let _ = model.forward(
                     &inputs.input,
                     &inputs.positions,
@@ -523,7 +539,8 @@ impl Loader for NormalLoader {
                 model.config(),
                 device,
             )?;
-            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            let cache_engine =
+                CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -572,6 +589,7 @@ impl Loader for NormalLoader {
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
             imatrix: self.config.imatrix.clone(),
+            mapper: pipeline_mapper,
         })))
     }
 
@@ -688,6 +706,9 @@ impl MetadataMixin for NormalPipeline {
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
+    }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        Some(&*self.mapper)
     }
 }
 

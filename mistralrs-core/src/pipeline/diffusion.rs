@@ -5,6 +5,7 @@ use super::{
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
+use crate::device_map::DeviceMapper;
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
@@ -294,6 +295,9 @@ impl MetadataMixin for DiffusionPipeline {
     }
     fn reset_non_granular_state(&self) {}
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
+        None
+    }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         None
     }
 }

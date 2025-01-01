@@ -9,6 +9,7 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
     ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
+use crate::device_map::DeviceMapper;
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
@@ -74,6 +75,7 @@ pub struct GGUFPipeline {
     model_id: String,
     non_granular_state: Option<NonGranularState>,
     metadata: Arc<GeneralMetadata>,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 /// Loader for a GGUF model.
@@ -332,7 +334,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mapper: DeviceMapMetadata,
         in_situ_quant: Option<IsqType>,
-        mut paged_attn_config: Option<PagedAttentionConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -353,9 +355,6 @@ impl Loader for GGUFLoader {
                 self.get_id(),
                 device.device_pretty_repr()
             );
-        } else if paged_attn_config.is_some() {
-            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
-            paged_attn_config = None;
         }
 
         let mut readers = Vec::new();
@@ -409,7 +408,7 @@ impl Loader for GGUFLoader {
             // Base config (quantization only):
             let quant = ModelConfig::ParamsGGUF(
                 model,
-                (device, mapper, self.config.topology.as_ref()).into(),
+                (device, mapper.clone(), self.config.topology.as_ref()).into(),
                 if paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention
                 } else {
@@ -455,6 +454,24 @@ impl Loader for GGUFLoader {
             _ => unreachable!(),
         };
 
+        let num_hidden_layers = match model {
+            Model::Llama(ref model) => model.cache.normal().0.len(),
+            Model::Phi2(ref model) => model.cache.normal().0.len(),
+            Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
+            Model::Phi3(ref model) => model.cache.normal().0.len(),
+            Model::XLoraPhi3(ref model) => model.cache.full().lock().len(),
+            Model::Starcoder2(ref model) => model.cache.normal().0.len(),
+            Model::Qwen2(ref model) => model.cache.normal().0.len(),
+        };
+
+        let mapper =
+            mapper.into_mapper(num_hidden_layers, device, self.config.topology.as_ref())?;
+        let mut layer_devices = Vec::new();
+        for layer in 0..num_hidden_layers {
+            let device = mapper.device_for(layer, false).cloned();
+            layer_devices.push(device);
+        }
+
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let model_config: &dyn ModelConfigLike = &model_config_metadata;
             let cache_config = calculate_cache_config(
@@ -465,8 +482,13 @@ impl Loader for GGUFLoader {
                 model_config,
                 device,
             )?;
-            let cache_engine =
-                CacheEngine::new(model_config, &cache_config, internal_dtype, device)?;
+            let cache_engine = CacheEngine::new(
+                model_config,
+                &cache_config,
+                internal_dtype,
+                device,
+                layer_devices,
+            )?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -548,6 +570,7 @@ impl Loader for GGUFLoader {
                 prompt_batchsize: self.config.prompt_batchsize,
                 model_metadata: Some(Arc::new(model_config_metadata)),
             }),
+            mapper,
         })))
     }
 
@@ -674,6 +697,9 @@ impl MetadataMixin for GGUFPipeline {
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
+    }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        Some(&*self.mapper)
     }
 }
 

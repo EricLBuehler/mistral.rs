@@ -148,6 +148,7 @@ pub trait DeviceMapper: Debug {
     ) -> VarBuilder<'a>;
     /// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
     fn device_for(&self, layer: usize, loading_isq: bool) -> Option<&Device>;
+    fn get_unique_devices(&self) -> Vec<Device>;
     /// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
     fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor>;
     /// Set non mapped layer device. This is for ISQ + device mapping support
@@ -185,6 +186,14 @@ impl DeviceMapper for LayerDeviceMapper {
             return Some(&self.nm_device);
         }
         self.mappings.get(layer)
+    }
+    fn get_unique_devices(&self) -> Vec<Device> {
+        self.mappings.iter().fold(Vec::new(), |mut acc, device| {
+            if !acc.iter().any(|d| d.same_device(device)) {
+                acc.push(device.clone());
+            }
+            acc
+        })
     }
     fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor> {
         if loading_isq {
@@ -233,6 +242,9 @@ impl DeviceMapper for DummyDeviceMapper {
             return Some(&self.nm_device);
         }
         None
+    }
+    fn get_unique_devices(&self) -> Vec<Device> {
+        vec![self.nm_device.clone()]
     }
     fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor> {
         if loading_isq {

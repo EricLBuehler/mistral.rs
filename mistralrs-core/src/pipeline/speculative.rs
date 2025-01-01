@@ -13,6 +13,7 @@ use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
+    device_map::DeviceMapper,
     get_mut_arcmutex,
     pipeline::{
         sampling::{
@@ -313,6 +314,9 @@ impl MetadataMixin for SpeculativePipeline {
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
     }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        None
+    }
 }
 
 #[async_trait::async_trait]
@@ -431,6 +435,7 @@ impl Pipeline for SpeculativePipeline {
                             None,
                             None, // TODO: get block tables/handle it
                             None, // TODO: do we support???
+                            None, // TODO: device mapping
                         )
                         .nth(0)
                         .unwrap()
@@ -505,6 +510,7 @@ impl Pipeline for SpeculativePipeline {
                         None,
                         None, // TODO: get block tables/handle it
                         None, // TODO: do we support???
+                        None, // TODO: device mapping
                     )
                     .nth(0)
                     .unwrap()

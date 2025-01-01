@@ -29,6 +29,7 @@ impl CacheEngine {
         cache_config: &CacheConfig,
         dtype: DType,
         device: &Device,
+        layer_devices: Vec<Option<Device>>,
     ) -> Result<Self> {
         Ok(Self {
             gpu_cache: Arc::new(Mutex::new(Self::allocate_gpu_cache(
@@ -36,6 +37,7 @@ impl CacheEngine {
                 cache_config,
                 dtype,
                 device,
+                layer_devices,
             )?)),
             cpu_cache: Self::allocate_cpu_cache(model_config, cache_config, dtype, device)?,
             num_layers: model_config.num_layers(),
@@ -55,13 +57,16 @@ impl CacheEngine {
         cache_config: &CacheConfig,
         dtype: DType,
         device: &Device,
+        layer_devices: Vec<Option<Device>>,
     ) -> Result<Vec<KVCache>> {
         let key_block_shape =
             Self::calculate_key_block_shape(model_config, dtype, cache_config.block_size);
         let value_block_shape =
             Self::calculate_value_block_shape(model_config, cache_config.block_size);
         let mut gpu_cache = Vec::new();
-        for _ in 0..model_config.num_layers() {
+
+        for i in 0..model_config.num_layers() {
+            let device = layer_devices[i].as_ref().unwrap_or(device);
             let key_blocks = Tensor::zeros(
                 (
                     cache_config.num_gpu_blocks,
