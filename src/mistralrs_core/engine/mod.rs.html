@@ -1012,7 +1012,10 @@
 <a href="#1011" id="1011">1011</a>
 <a href="#1012" id="1012">1012</a>
 <a href="#1013" id="1013">1013</a>
-<a href="#1014" id="1014">1014</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
+<a href="#1014" id="1014">1014</a>
+<a href="#1015" id="1015">1015</a>
+<a href="#1016" id="1016">1016</a>
+<a href="#1017" id="1017">1017</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>llguidance::toktrie::TokEnv;
 <span class="kw">use </span>once_cell::sync::Lazy;
@@ -1689,7 +1692,10 @@
             }
         }
         <span class="kw">let </span>prefill_cache = <span class="macro">handle_seq_error!</span>(
-            <span class="self">self</span>.prefix_cacher.search_for_matching_cache(<span class="kw-2">&amp;</span>prompt_tokens),
+            <span class="self">self</span>.prefix_cacher.search_for_matching_cache(
+                <span class="kw-2">&amp;</span>prompt_tokens,
+                images.as_ref().is_some_and(|x| !x.is_empty())
+            ),
             request.response
         );
 

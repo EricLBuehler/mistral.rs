@@ -761,7 +761,10 @@
 <a href="#760" id="760">760</a>
 <a href="#761" id="761">761</a>
 <a href="#762" id="762">762</a>
-<a href="#763" id="763">763</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{ops::Mul, sync::Arc};
 
@@ -1373,6 +1376,9 @@
             hidden_state.dtype(),
             <span class="self">self</span>.num_attn_heads,
         )<span class="question-mark">?</span>;
+        <span class="kw">if </span>attention_mask.dim(<span class="number">0</span>)<span class="question-mark">? </span>!= <span class="number">1 </span>{
+            attention_mask = attention_mask.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>;
+        }
 
         <span class="comment">// Apply encoder
         </span>hidden_state = hidden_state.reshape((bs * num_concurrent_media, (), dim))<span class="question-mark">?</span>;
