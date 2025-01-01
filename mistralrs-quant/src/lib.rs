@@ -33,6 +33,10 @@ use gptq::gptq_linear;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::ImatrixLayerStats;
+pub use kv_quant::{
+    dequantize_4bit, dequantize_8bit, quantize_inplace_4bit, quantize_inplace_8bit,
+    KvDequantizeOp4Bit, KvDequantizeOp8Bit, KvQuantizeOp4Bit, KvQuantizeOp8Bit,
+};
 pub use unquantized::UnquantLinear;
 
 use candle_nn::{Linear, Module, VarBuilder};

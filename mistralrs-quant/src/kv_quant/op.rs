@@ -11,14 +11,25 @@ pub struct KvQuantizeOp8Bit;
 impl KvQuantizeOp8Bit {
     /// Compute the element count for qs for a tensor divisible by blocksize.
     pub fn compute_qs_elem_count(xs: &Tensor) -> Result<usize> {
-        let x_el_count = xs.shape().elem_count();
-        if x_el_count % QK8_0 != 0 {
+        Self::compute_qs_elem_count_(xs.shape().elem_count())
+    }
+
+    /// Compute the element count for qs for a tensor of this element count divisible by blocksize.
+    pub fn compute_qs_elem_count_(numel: usize) -> Result<usize> {
+        if numel % QK8_0 != 0 {
             candle_core::bail!("xs elem count must be a multiple of the block size {QK8_0}");
         }
-        Ok(x_el_count / QK8_0 * Q8_0_TYPE_SIZE)
+        Ok(numel / QK8_0 * Q8_0_TYPE_SIZE)
     }
 
     pub fn narrow_qs(qs: &Tensor, start_block: usize, len_blocks: usize) -> Result<Tensor> {
+        qs.narrow(0, start_block * Q8_0_TYPE_SIZE, len_blocks * Q8_0_TYPE_SIZE)
+    }
+
+    /// Narrow qs starting at this index to including the end index
+    /// - start index must be at the start of a block
+    /// - end index may be in the middle of a block
+    pub fn narrow_qs_item(qs: &Tensor, start_idx: usize, len: usize) -> Result<Tensor> {
         qs.narrow(0, start_block * Q8_0_TYPE_SIZE, len_blocks * Q8_0_TYPE_SIZE)
     }
 
@@ -178,11 +189,15 @@ pub struct KvQuantizeOp4Bit;
 impl KvQuantizeOp4Bit {
     /// Compute the element count for qs for a tensor divisible by blocksize.
     pub fn compute_qs_elem_count(xs: &Tensor) -> Result<usize> {
-        let x_el_count = xs.shape().elem_count();
-        if x_el_count % QK4_0 != 0 {
+        Self::compute_qs_elem_count_(xs.shape().elem_count())
+    }
+    
+    /// Compute the element count for qs for a tensor of this element count divisible by blocksize.
+    pub fn compute_qs_elem_count_(numel: usize) -> Result<usize> {
+        if numel % QK4_0 != 0 {
             candle_core::bail!("xs elem count must be a multiple of the block size {QK4_0}");
         }
-        Ok(x_el_count / QK4_0 * Q4_0_TYPE_SIZE)
+        Ok(numel / QK4_0 * Q4_0_TYPE_SIZE)
     }
 
     pub fn narrow_qs(qs: &Tensor, start_block: usize, len_blocks: usize) -> Result<Tensor> {
