@@ -12,8 +12,9 @@ use super::{
     PreProcessingMixin,
 };
 use super::{
-    AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
-    NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
+    AutoLoader, DeepSeekV2Loader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader,
+    MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
+    Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::device_map::DeviceMapper;
@@ -202,6 +203,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::Gemma2) => Box::new(Gemma2Loader),
             Some(NormalLoaderType::Starcoder2) => Box::new(Starcoder2Loader),
             Some(NormalLoaderType::Phi3_5MoE) => Box::new(Phi3_5MoELoader),
+            Some(NormalLoaderType::DeepSeekV2) => Box::new(DeepSeekV2Loader),
             None => Box::new(AutoLoader),
         };
         Ok(Box::new(NormalLoader {

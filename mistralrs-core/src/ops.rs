@@ -559,6 +559,7 @@ pub struct TopKOutput {
 pub trait TopKLastDimOp {
     /// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
     /// This expects a contiguous tensor.
+    /// Note this implements torch.topk with sorted=True.
     fn topk(&self, topk: usize) -> Result<TopKOutput>;
 }
 

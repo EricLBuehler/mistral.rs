@@ -27,8 +27,8 @@ use crate::{
 };
 
 // Match files against these, avoids situations like `consolidated.safetensors`
-const SAFETENSOR_MATCH: &str = r"model-\d{5}-of-\d{5}.safetensors\b";
-const QUANT_SAFETENSOR_MATCH: &str = r"model.safetensors\b";
+const SAFETENSOR_MATCH: &str = r"model-\d+-of-\d+\.safetensors\b";
+const QUANT_SAFETENSOR_MATCH: &str = r"model\.safetensors\b";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 pub(crate) struct XLoraPaths {

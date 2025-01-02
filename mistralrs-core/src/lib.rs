@@ -364,48 +364,48 @@ impl MistralRs {
 
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
 
-        // Do a dummy run
-        if matches!(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
-            let clone_sender = sender.read().unwrap().clone();
-            tokio::task::block_in_place(|| {
-                let (tx, mut rx) = channel(1);
-                let req = Request::Normal(NormalRequest {
-                    id: 0,
-                    messages: RequestMessage::Completion {
-                        text: "dummy".to_string(),
-                        echo_prompt: false,
-                        best_of: None,
-                    },
-                    sampling_params: SamplingParams {
-                        max_len: Some(1),
-                        ..SamplingParams::deterministic()
-                    },
-                    response: tx,
-                    return_logprobs: false,
-                    is_streaming: true,
-                    constraint: Constraint::None,
-                    suffix: None,
-                    adapters: None,
-                    tool_choice: None,
-                    tools: None,
-                    logits_processors: None,
-                    return_raw_logits: false,
-                });
-                info!("Beginning dummy run.");
-                let start = Instant::now();
-                clone_sender.blocking_send(req).unwrap();
+        // // Do a dummy run
+        // if matches!(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
+        //     let clone_sender = sender.read().unwrap().clone();
+        //     tokio::task::block_in_place(|| {
+        //         let (tx, mut rx) = channel(1);
+        //         let req = Request::Normal(NormalRequest {
+        //             id: 0,
+        //             messages: RequestMessage::Completion {
+        //                 text: "dummy".to_string(),
+        //                 echo_prompt: false,
+        //                 best_of: None,
+        //             },
+        //             sampling_params: SamplingParams {
+        //                 max_len: Some(1),
+        //                 ..SamplingParams::deterministic()
+        //             },
+        //             response: tx,
+        //             return_logprobs: false,
+        //             is_streaming: true,
+        //             constraint: Constraint::None,
+        //             suffix: None,
+        //             adapters: None,
+        //             tool_choice: None,
+        //             tools: None,
+        //             logits_processors: None,
+        //             return_raw_logits: false,
+        //         });
+        //         info!("Beginning dummy run.");
+        //         let start = Instant::now();
+        //         clone_sender.blocking_send(req).unwrap();
 
-                if let Some(_resp) = rx.blocking_recv() {
-                    let end = Instant::now();
-                    info!(
-                        "Dummy run completed in {}s.",
-                        end.duration_since(start).as_secs_f64()
-                    );
-                } else {
-                    warn!("Dummy run failed!");
-                }
-            });
-        }
+        //         if let Some(_resp) = rx.blocking_recv() {
+        //             let end = Instant::now();
+        //             info!(
+        //                 "Dummy run completed in {}s.",
+        //                 end.duration_since(start).as_secs_f64()
+        //             );
+        //         } else {
+        //             warn!("Dummy run failed!");
+        //         }
+        //     });
+        // }
 
         Arc::new(Self {
             engine_id,
