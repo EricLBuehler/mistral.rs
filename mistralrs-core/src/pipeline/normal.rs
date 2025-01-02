@@ -570,7 +570,8 @@ impl Loader for NormalLoader {
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 tok_env: Some(tok_env),
-                has_no_kv_cache: self.no_kv_cache,
+                no_kv_cache: self.no_kv_cache,
+                no_prefix_cache: is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: self.kind.clone(),

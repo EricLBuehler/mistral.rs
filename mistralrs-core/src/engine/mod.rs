@@ -72,30 +72,26 @@ impl Engine {
         pipeline: Arc<Mutex<dyn Pipeline>>,
         config: SchedulerConfig,
         truncate_sequence: bool,
-        no_kv_cache: bool,
-        no_prefix_cache: bool,
+        mut no_kv_cache: bool,
+        mut no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
-        let has_no_kv_cache = get_mut_arcmutex!(pipeline).get_metadata().has_no_kv_cache;
-        if no_kv_cache {
-            // Diffusion models...
-            assert_eq!(has_no_kv_cache, no_kv_cache);
-        }
-        // Prefix caching is always disabled if using PagedAttention for now.
-        // TODO
+        no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
+        no_prefix_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache;
+        // TODO: Prefix caching is always disabled if using PagedAttention for now.
         let no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
             || no_prefix_cache
-            || has_no_kv_cache;
+            || no_kv_cache;
         Self {
             rx,
             pipeline,
             scheduler: config.into_scheduler(),
             id: 0,
             truncate_sequence,
-            no_kv_cache: no_kv_cache & !has_no_kv_cache,
+            no_kv_cache,
             prefix_cacher: PrefixCacheManagerV2::new(device, prefix_cache_n, no_prefix_cache),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
