@@ -2374,7 +2374,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=521e33c)",
@@ -2394,7 +2394,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-bench"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=521e33c)",
@@ -2409,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "accelerate-src",
  "akin",
@@ -2484,7 +2484,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
@@ -2498,7 +2498,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2522,7 +2522,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-quant"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "bindgen_cuda 0.1.5",
  "byteorder",
@@ -2543,7 +2543,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -2573,7 +2573,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=521e33c)",
  "image",
