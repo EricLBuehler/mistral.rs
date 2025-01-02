@@ -810,7 +810,7 @@ impl DeepSeekV2RotaryEmbedding {
         let low =
             Self::yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings).floor();
         let high =
-            Self::yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings).floor();
+            Self::yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings).ceil();
         (low.max(0.), high.min(dim as f32 - 1.))
     }
 
@@ -922,15 +922,41 @@ impl DeepSeekV2RotaryEmbedding {
         for (i, offset) in seqlen_offsets.iter().enumerate() {
             let cos = self.sin.narrow(0, *offset, seq_len)?;
             let sin = self.cos.narrow(0, *offset, seq_len)?;
+            // let q_embed =
+            //     candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            // let k_embed =
+            //     candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
             let q_embed =
-                candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                rope_slow(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
             let k_embed =
-                candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                rope_slow(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
             q_embeds.push(q_embed);
             k_embeds.push(k_embed);
         }
         Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
     }
+}
+
+fn rotate_half(xs: &Tensor) -> Result<Tensor> {
+    let last_dim = xs.dim(D::Minus1)?;
+    let xs1 = xs.narrow(D::Minus1, 0, last_dim / 2)?;
+    let xs2 = xs.narrow(D::Minus1, last_dim / 2, last_dim - last_dim / 2)?;
+    Tensor::cat(&[&xs2.neg()?, &xs1], D::Minus1)
+}
+
+pub fn rope_slow(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    let (b, h, seq_len, n_embd) = x.dims4()?;
+    let cos = Tensor::cat(&[cos, cos], D::Minus1)?;
+    let sin = Tensor::cat(&[sin, sin], D::Minus1)?;
+    // let cos = cos.narrow(0, 0, seq_len)?;
+    // let sin = sin.narrow(0, 0, seq_len)?;
+    let cos = cos.unsqueeze(0)?.unsqueeze(0)?;
+    let sin = sin.unsqueeze(0)?.unsqueeze(0)?;
+    let x = x
+        .reshape((b, h, seq_len, n_embd / 2, 2))?
+        .transpose(4, 3)?
+        .reshape((b, h, seq_len, n_embd))?.contiguous()?;
+    x.broadcast_mul(&cos)? + rotate_half(&x)?.broadcast_mul(&sin)?
 }
 
 /// Matrix multiplication, configurable to be via f16 (to use the faster GEMM kernels) optionally.
