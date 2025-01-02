@@ -1,6 +1,6 @@
 use crate::{
     get_mut_group,
-    pipeline::LayerCaches,
+    pipeline::{LayerCaches, QuantizedKvCache},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, Usage,
@@ -186,6 +186,7 @@ pub struct Sequence {
 
     // Cache
     normal_cache: Vec<Option<KvCache>>,
+    quantized_cache: Vec<Option<QuantizedKvCache>>,
     scaling_cache: Option<Tensor>,
     cache: LayerCaches,
     draft_cache: LayerCaches,
@@ -306,6 +307,7 @@ impl Sequence {
             timestamp,
             state: RwLock::new(SequenceState::Waiting),
             normal_cache: vec![None; layers],
+            quantized_cache: vec![None; layers],
             cache: vec![None; layers],
             draft_cache: vec![None; layers],
             xlora_cache: if is_xlora {
@@ -505,6 +507,10 @@ impl Sequence {
 
     pub fn normal_cache(&mut self) -> &mut Vec<Option<KvCache>> {
         &mut self.normal_cache
+    }
+
+    pub fn quantized_cache(&mut self) -> &mut Vec<Option<QuantizedKvCache>> {
+        &mut self.quantized_cache
     }
 
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
