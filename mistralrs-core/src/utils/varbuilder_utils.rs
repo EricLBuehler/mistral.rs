@@ -210,7 +210,6 @@ trait LoadTensors {
             .get_names()
             .into_iter()
             .filter(|x| predicate(x.to_string()));
-        dbg!(&names_only.clone().collect::<Vec<_>>());
         let iter = self.get_name_key_pairs(names_only).collect::<Vec<_>>();
 
         // Take the filtered list of tensors to load, store with derived lookup key:
