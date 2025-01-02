@@ -221,7 +221,7 @@ impl CausalMasker {
     }
 
     #[deprecated(
-        since = "0.3.4",
+        since = "0.3.5",
         note = "use `make_causal_mask_matrix_as_attn_bias` instead. This is incompatible with `Sdpa`."
     )]
     pub fn make_causal_mask_as_attn_bias(
@@ -272,7 +272,7 @@ impl CausalMasker {
     }
 
     #[deprecated(
-        since = "0.3.4",
+        since = "0.3.5",
         note = "use `make_causal_mask_matrix_with_sliding_window_as_attn_bias` instead. This is incompatible with `Sdpa`."
     )]
     pub fn make_causal_mask_with_sliding_window_as_attn_bias(
