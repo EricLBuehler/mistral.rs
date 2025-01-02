@@ -860,7 +860,9 @@
 <a href="#859" id="859">859</a>
 <a href="#860" id="860">860</a>
 <a href="#861" id="861">861</a>
-<a href="#862" id="862">862</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#862" id="862">862</a>
+<a href="#863" id="863">863</a>
+<a href="#864" id="864">864</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{embedding, Embedding, Module, VarBuilder};
@@ -1482,6 +1484,19 @@
         <span class="kw">let </span>xs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>x, <span class="kw-2">&amp;*</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>;
         extract_logits(<span class="kw-2">&amp;</span>xs, context_lens)
     }
+
+    <span class="kw">pub fn </span>residual_tensors_m(<span class="kw-2">&amp;</span><span class="self">self</span>, uvb_m: UnVarBuilder) -&gt; Vec&lt;(String, Tensor)&gt; {
+        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.wte);
+        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.ln_f);
+
+        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
+            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
+            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.rms_1);
+            uvb_l.pp(<span class="string">"post_attention_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.rms_2);
+        }
+
+        uvb_m.to_safetensors()
+    }
 }
 
 <span class="kw">impl </span>IsqModel <span class="kw">for </span>Llama {
@@ -1512,18 +1527,7 @@
 
     <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
         <span class="kw">let </span>uvb = UnVarBuilder::new();
-
-        <span class="kw">let </span>uvb_m = uvb.pp(<span class="string">"model"</span>);
-        uvb_m.pp(<span class="string">"embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.wte);
-        uvb_m.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.ln_f);
-
-        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
-            <span class="kw">let </span>uvb_l = uvb_m.pp(<span class="string">"layers"</span>).pp(layer_idx);
-            uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.rms_1);
-            uvb_l.pp(<span class="string">"post_attention_layernorm"</span>).add(<span class="kw-2">&amp;</span>layer.rms_2);
-        }
-
-        uvb.to_safetensors()
+        <span class="self">self</span>.residual_tensors_m(uvb.pp(<span class="string">"model"</span>))
     }
 
     <span class="kw">fn </span>imatrix_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; candle_core::Result&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;&gt; {

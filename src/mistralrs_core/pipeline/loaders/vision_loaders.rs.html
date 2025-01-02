@@ -738,7 +738,16 @@
 <a href="#737" id="737">737</a>
 <a href="#738" id="738">738</a>
 <a href="#739" id="739">739</a>
-<a href="#740" id="740">740</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -1472,10 +1481,19 @@
 }
 
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Idefics3Loader {
-    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
-        <span class="kw">let </span>config: Idefics3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="kw">let </span>text_cfg = serde_json::to_string(<span class="kw-2">&amp;</span>config.text_config)<span class="question-mark">?</span>;
-        <span class="kw">super</span>::LlamaLoader.isq_layer_regexes(<span class="kw-2">&amp;</span>text_cfg)
+    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// Attention
+            </span>Regex::new(<span class="string">r"model.text_model.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"model.text_model.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"model.text_model.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"model.text_model.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// MLP
+            </span>Regex::new(<span class="string">r"model.text_model.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"model.text_model.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"model.text_model.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+        ])
     }
 }
 </code></pre></div></section></main></body></html>
