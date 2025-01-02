@@ -474,7 +474,8 @@ impl Loader for VisionLoader {
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: self.kind.clone(),
-                has_no_kv_cache: false,
+                no_kv_cache: false,
+                no_prefix_cache: true, // TODO: evaluate. Do vision models need to not have prefix caching?
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,

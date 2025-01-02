@@ -676,7 +676,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
             seqs,
             SeqCache::Normal,
         );
-        if pipeline.get_metadata().is_xlora && !pipeline.get_metadata().has_no_kv_cache {
+        if pipeline.get_metadata().is_xlora && !pipeline.get_metadata().no_kv_cache {
             clone_in_cache(
                 pipeline.get_metadata().num_hidden_layers,
                 &mut pipeline.cache().full().xlora_lock(),
@@ -714,7 +714,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
             seqs,
             SeqCache::Normal,
         );
-        if pipeline.get_metadata().is_xlora && !pipeline.get_metadata().has_no_kv_cache {
+        if pipeline.get_metadata().is_xlora && !pipeline.get_metadata().no_kv_cache {
             clone_out_cache(
                 pipeline.get_metadata().num_hidden_layers,
                 &mut pipeline.cache().full().xlora_lock(),

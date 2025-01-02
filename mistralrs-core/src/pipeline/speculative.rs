@@ -418,8 +418,8 @@ impl Pipeline for SpeculativePipeline {
                 for i in 0..self.gamma {
                     let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
                     let device = get_mut_arcmutex!(self.draft).device();
-                    let has_no_kv_cache =
-                        get_mut_arcmutex!(self.draft).get_metadata().has_no_kv_cache;
+                    let no_kv_cache =
+                        get_mut_arcmutex!(self.draft).get_metadata().no_kv_cache;
                     let inputs = self
                         .get_processor()
                         .inputs_processor()
@@ -429,7 +429,7 @@ impl Pipeline for SpeculativePipeline {
                             is_prompt && i == 0, // Only prompt (no kv cache) if first
                             is_xlora,
                             &device,
-                            has_no_kv_cache,
+                            no_kv_cache,
                             None,
                             false,
                             None,
@@ -492,9 +492,9 @@ impl Pipeline for SpeculativePipeline {
                 // ========= Run the model ============
                 let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
                 let device = get_mut_arcmutex!(self.target).device();
-                let has_no_kv_cache = get_mut_arcmutex!(self.target)
+                let no_kv_cache = get_mut_arcmutex!(self.target)
                     .get_metadata()
-                    .has_no_kv_cache;
+                    .no_kv_cache;
                 let inputs = self
                     .get_processor()
                     .inputs_processor()
@@ -504,7 +504,7 @@ impl Pipeline for SpeculativePipeline {
                         true, // use the "prefill" tokens
                         is_xlora,
                         &device,
-                        has_no_kv_cache,
+                        no_kv_cache,
                         Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
                         false,
                         None,

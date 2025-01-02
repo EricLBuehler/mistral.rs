@@ -467,7 +467,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         true, // Always a prompt
                         metadata.is_xlora,
                         &device,
-                        metadata.has_no_kv_cache,
+                        metadata.no_kv_cache,
                         None,
                         false,
                         input_processor_cfg.clone(),
