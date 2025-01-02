@@ -732,7 +732,9 @@ impl VisionModelLoader for Idefics3Loader {
 }
 
 impl IsqModelLoader for Idefics3Loader {
-    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
-        todo!()
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let config: Idefics3Config = serde_json::from_str(config)?;
+        let text_cfg = serde_json::to_string(&config.text_config)?;
+        super::LlamaLoader.isq_layer_regexes(&text_cfg)
     }
 }
