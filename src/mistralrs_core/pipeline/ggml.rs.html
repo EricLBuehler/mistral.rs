@@ -600,7 +600,8 @@
 <a href="#599" id="599">599</a>
 <a href="#600" id="600">600</a>
 <a href="#601" id="601">601</a>
-<a href="#602" id="602">602</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -990,7 +991,8 @@
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 tok_env: <span class="prelude-val">Some</span>(tok_env),
-                has_no_kv_cache: <span class="self">self</span>.no_kv_cache,
+                no_kv_cache: <span class="self">self</span>.no_kv_cache,
+                no_prefix_cache: <span class="bool-val">false</span>,
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: <span class="self">self</span>.kind.clone(),

@@ -815,7 +815,8 @@
 <a href="#814" id="814">814</a>
 <a href="#815" id="815">815</a>
 <a href="#816" id="816">816</a>
-<a href="#817" id="817">817</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -1375,7 +1376,8 @@
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 tok_env: <span class="prelude-val">Some</span>(tok_env),
-                has_no_kv_cache: <span class="self">self</span>.no_kv_cache,
+                no_kv_cache: <span class="self">self</span>.no_kv_cache,
+                no_prefix_cache: <span class="bool-val">false</span>,
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: <span class="self">self</span>.kind.clone(),

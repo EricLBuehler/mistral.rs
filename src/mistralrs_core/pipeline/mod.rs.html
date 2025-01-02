@@ -926,7 +926,8 @@
 <a href="#925" id="925">925</a>
 <a href="#926" id="926">926</a>
 <a href="#927" id="927">927</a>
-<a href="#928" id="928">928</a></pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
+<a href="#928" id="928">928</a>
+<a href="#929" id="929">929</a></pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
 <span class="kw">mod </span>diffusion;
@@ -1000,7 +1001,8 @@
     <span class="kw">pub </span>max_seq_len: usize,
     <span class="doccomment">/// Only None if it doesnt make sense for the model
     </span><span class="kw">pub </span>tok_env: <span class="prelude-ty">Option</span>&lt;llguidance::toktrie::TokEnv&gt;,
-    <span class="kw">pub </span>has_no_kv_cache: bool,
+    <span class="kw">pub </span>no_kv_cache: bool,
+    <span class="kw">pub </span>no_prefix_cache: bool,
     <span class="kw">pub </span>num_hidden_layers: usize,
     <span class="kw">pub </span>eos_tok: Vec&lt;u32&gt;,
     <span class="kw">pub </span>kind: ModelKind,
@@ -1250,7 +1252,7 @@
                     is_prompt,
                     <span class="self">self</span>.get_metadata().is_xlora,
                     <span class="kw-2">&amp;</span><span class="self">self</span>.device(),
-                    <span class="self">self</span>.get_metadata().has_no_kv_cache,
+                    <span class="self">self</span>.get_metadata().no_kv_cache,
                     <span class="prelude-val">None</span>,
                     return_raw_logits,
                     <span class="self">self</span>.get_input_processor_config(),
@@ -1463,7 +1465,7 @@
                     is_prompt,
                     <span class="self">self</span>.get_metadata().is_xlora,
                     <span class="kw-2">&amp;</span><span class="self">self</span>.device(),
-                    <span class="self">self</span>.get_metadata().has_no_kv_cache,
+                    <span class="self">self</span>.get_metadata().no_kv_cache,
                     <span class="prelude-val">None</span>,
                     return_raw_logits,
                     <span class="self">self</span>.get_input_processor_config(),

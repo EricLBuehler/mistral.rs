@@ -767,11 +767,7 @@
 <a href="#766" id="766">766</a>
 <a href="#767" id="767">767</a>
 <a href="#768" id="768">768</a>
-<a href="#769" id="769">769</a>
-<a href="#770" id="770">770</a>
-<a href="#771" id="771">771</a>
-<a href="#772" id="772">772</a>
-<a href="#773" id="773">773</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#769" id="769">769</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1117,7 +1113,6 @@
         hidden_states: <span class="kw-2">&amp;</span>Tensor,
         cross_attn_states: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
-        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(bs, q_len, <span class="kw">_</span>) = hidden_states.dims3()<span class="question-mark">?</span>;
 
@@ -1158,10 +1153,9 @@
                 .reshape((bs, (), <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
                 </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
-            (k, v) = kv_cache.append(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
             (k, v)
         } <span class="kw">else </span>{
-            <span class="macro">candle_core::bail!</span>(<span class="string">"Cross attn cannot find cross attn hidden states!"</span>)
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Cross attn cannot find k,v cache or cross attn hidden states!"</span>)
         };
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = Sdpa
@@ -1246,15 +1240,14 @@
         cross_attn_states: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         full_text_row_masked_out_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
-        kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>residual = hidden_states;
 
         <span class="kw">let </span><span class="kw-2">mut </span>hidden_states = <span class="self">self</span>.input_layernorm.forward(hidden_states)<span class="question-mark">?</span>;
 
-        hidden_states =
-            <span class="self">self</span>.attn
-                .forward(<span class="kw-2">&amp;</span>hidden_states, cross_attn_states, attention_mask, kv_cache)<span class="question-mark">?</span>;
+        hidden_states = <span class="self">self
+            </span>.attn
+            .forward(<span class="kw-2">&amp;</span>hidden_states, cross_attn_states, attention_mask)<span class="question-mark">?</span>;
         hidden_states = (residual + hidden_states.broadcast_mul(<span class="kw-2">&amp;</span><span class="self">self</span>.attn_gate.tanh()<span class="question-mark">?</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>hidden_states;
@@ -1447,7 +1440,6 @@
                         cross_attn_states,
                         cross_attention_mask,
                         full_text_row_masked_out_mask,
-                        <span class="kw-2">&amp;mut </span>cache[i],
                     )<span class="question-mark">?</span>;
                 }
             }

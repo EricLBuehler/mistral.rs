@@ -1005,11 +1005,7 @@
 <a href="#1004" id="1004">1004</a>
 <a href="#1005" id="1005">1005</a>
 <a href="#1006" id="1006">1006</a>
-<a href="#1007" id="1007">1007</a>
-<a href="#1008" id="1008">1008</a>
-<a href="#1009" id="1009">1009</a>
-<a href="#1010" id="1010">1010</a>
-<a href="#1011" id="1011">1011</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
+<a href="#1007" id="1007">1007</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>llguidance::toktrie::TokEnv;
 <span class="kw">use </span>once_cell::sync::Lazy;
@@ -1083,30 +1079,26 @@
         pipeline: Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
         config: SchedulerConfig,
         truncate_sequence: bool,
-        no_kv_cache: bool,
-        no_prefix_cache: bool,
+        <span class="kw-2">mut </span>no_kv_cache: bool,
+        <span class="kw-2">mut </span>no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
-        <span class="kw">let </span>has_no_kv_cache = <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().has_no_kv_cache;
-        <span class="kw">if </span>no_kv_cache {
-            <span class="comment">// Diffusion models...
-            </span><span class="macro">assert_eq!</span>(has_no_kv_cache, no_kv_cache);
-        }
-        <span class="comment">// Prefix caching is always disabled if using PagedAttention for now.
-        // TODO
+        no_kv_cache |= <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().no_kv_cache;
+        no_prefix_cache |= <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().no_prefix_cache;
+        <span class="comment">// TODO: Prefix caching is always disabled if using PagedAttention for now.
         </span><span class="kw">let </span>no_prefix_cache = <span class="macro">matches!</span>(config, SchedulerConfig::PagedAttentionMeta { .. })
             || no_prefix_cache
-            || has_no_kv_cache;
+            || no_kv_cache;
         <span class="self">Self </span>{
             rx,
             pipeline,
             scheduler: config.into_scheduler(),
             id: <span class="number">0</span>,
             truncate_sequence,
-            no_kv_cache: no_kv_cache &amp; !has_no_kv_cache,
+            no_kv_cache,
             prefix_cacher: PrefixCacheManagerV2::new(device, prefix_cache_n, no_prefix_cache),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,

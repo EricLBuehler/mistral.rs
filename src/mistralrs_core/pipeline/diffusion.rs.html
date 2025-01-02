@@ -345,7 +345,8 @@
 <a href="#344" id="344">344</a>
 <a href="#345" id="345">345</a>
 <a href="#346" id="346">346</a>
-<a href="#347" id="347">347</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 <span class="kw">use super</span>::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
     DiffusionModel, DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult,
@@ -566,10 +567,11 @@
                 max_seq_len,
                 tok_env: <span class="prelude-val">None</span>,
                 is_xlora: <span class="bool-val">false</span>,
+                no_prefix_cache: <span class="bool-val">false</span>,
                 num_hidden_layers: <span class="number">1</span>, <span class="comment">// FIXME(EricLBuehler): we know this is only for caching, so its OK.
                 </span>eos_tok: <span class="macro">vec!</span>[],
                 kind: <span class="self">self</span>.kind.clone(),
-                has_no_kv_cache: <span class="bool-val">true</span>, <span class="comment">// NOTE(EricLBuehler): no cache for these.
+                no_kv_cache: <span class="bool-val">true</span>, <span class="comment">// NOTE(EricLBuehler): no cache for these.
                 </span>activation_dtype: dtype,
                 sliding_window: <span class="prelude-val">None</span>,
                 cache_config: <span class="prelude-val">None</span>,

@@ -692,10 +692,7 @@
 <a href="#691" id="691">691</a>
 <a href="#692" id="692">692</a>
 <a href="#693" id="693">693</a>
-<a href="#694" id="694">694</a>
-<a href="#695" id="695">695</a>
-<a href="#696" id="696">696</a>
-<a href="#697" id="697">697</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#694" id="694">694</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
     sync::{Arc, Mutex},
@@ -1115,8 +1112,7 @@
                 <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.gamma {
                     <span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).get_metadata().is_xlora;
                     <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).device();
-                    <span class="kw">let </span>has_no_kv_cache =
-                        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).get_metadata().has_no_kv_cache;
+                    <span class="kw">let </span>no_kv_cache = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).get_metadata().no_kv_cache;
                     <span class="kw">let </span>inputs = <span class="self">self
                         </span>.get_processor()
                         .inputs_processor()
@@ -1126,7 +1122,7 @@
                             is_prompt &amp;&amp; i == <span class="number">0</span>, <span class="comment">// Only prompt (no kv cache) if first
                             </span>is_xlora,
                             <span class="kw-2">&amp;</span>device,
-                            has_no_kv_cache,
+                            no_kv_cache,
                             <span class="prelude-val">None</span>,
                             <span class="bool-val">false</span>,
                             <span class="prelude-val">None</span>,
@@ -1189,9 +1185,7 @@
                 <span class="comment">// ========= Run the model ============
                 </span><span class="kw">let </span>is_xlora = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).get_metadata().is_xlora;
                 <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).device();
-                <span class="kw">let </span>has_no_kv_cache = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target)
-                    .get_metadata()
-                    .has_no_kv_cache;
+                <span class="kw">let </span>no_kv_cache = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).get_metadata().no_kv_cache;
                 <span class="kw">let </span>inputs = <span class="self">self
                     </span>.get_processor()
                     .inputs_processor()
@@ -1201,7 +1195,7 @@
                         <span class="bool-val">true</span>, <span class="comment">// use the "prefill" tokens
                         </span>is_xlora,
                         <span class="kw-2">&amp;</span>device,
-                        has_no_kv_cache,
+                        no_kv_cache,
                         <span class="prelude-val">Some</span>((<span class="self">self</span>.gamma, initial_cache_len)), <span class="comment">// Get the last gamma, see above
                         </span><span class="bool-val">false</span>,
                         <span class="prelude-val">None</span>,

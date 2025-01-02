@@ -1427,7 +1427,7 @@
             seqs,
             SeqCache::Normal,
         );
-        <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().has_no_kv_cache {
+        <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().no_kv_cache {
             clone_in_cache(
                 pipeline.get_metadata().num_hidden_layers,
                 <span class="kw-2">&amp;mut </span>pipeline.cache().full().xlora_lock(),
@@ -1465,7 +1465,7 @@
             seqs,
             SeqCache::Normal,
         );
-        <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().has_no_kv_cache {
+        <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().no_kv_cache {
             clone_out_cache(
                 pipeline.get_metadata().num_hidden_layers,
                 <span class="kw-2">&amp;mut </span>pipeline.cache().full().xlora_lock(),
