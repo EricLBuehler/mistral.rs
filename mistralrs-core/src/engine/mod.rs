@@ -238,8 +238,6 @@ impl Engine {
                                 "All sequences must either return raw logits, or not."
                             );
 
-                            // Reset non granular state because the old sequence must be dead.
-                            // Technically we don't need to do this but it is better to be safe.
                             pipeline
                                 .step(
                                     &mut scheduled.prompt,
@@ -249,11 +247,7 @@ impl Engine {
                                     self.disable_eos_stop,
                                     rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions {
-                                        pre_op: CacheInstruction::Reset {
-                                            load_preallocated_cache: true,
-                                            reset_non_granular: false,
-                                            adapter_inst,
-                                        },
+                                        pre_op: CacheInstruction::Nothing(adapter_inst),
                                         post_op,
                                     },
                                 )
