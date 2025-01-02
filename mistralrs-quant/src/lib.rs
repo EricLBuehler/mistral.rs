@@ -15,6 +15,7 @@ mod metal_kernels;
 
 mod bitsandbytes;
 mod cublaslt;
+mod distributed;
 mod dummy;
 mod fp8;
 mod gguf;
