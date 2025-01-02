@@ -344,7 +344,6 @@ impl MLlamaTextCrossAttention {
         hidden_states: &Tensor,
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
-        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -385,10 +384,9 @@ impl MLlamaTextCrossAttention {
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
 
-            (k, v) = kv_cache.append(&k, &v)?;
             (k, v)
         } else {
-            candle_core::bail!("Cross attn cannot find cross attn hidden states!")
+            candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
         };
 
         let mut attn_output = Sdpa
@@ -473,15 +471,14 @@ impl MLlamaCrossAttentionDecoderLayer {
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
         full_text_row_masked_out_mask: Option<&Tensor>,
-        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states =
-            self.attn
-                .forward(&hidden_states, cross_attn_states, attention_mask, kv_cache)?;
+        hidden_states = self
+            .attn
+            .forward(&hidden_states, cross_attn_states, attention_mask)?;
         hidden_states = (residual + hidden_states.broadcast_mul(&self.attn_gate.tanh()?)?)?;
 
         let residual = &hidden_states;
@@ -674,7 +671,6 @@ impl MLlamaTextModel {
                         cross_attn_states,
                         cross_attention_mask,
                         full_text_row_masked_out_mask,
-                        &mut cache[i],
                     )?;
                 }
             }

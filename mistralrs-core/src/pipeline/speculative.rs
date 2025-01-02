@@ -418,8 +418,7 @@ impl Pipeline for SpeculativePipeline {
                 for i in 0..self.gamma {
                     let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
                     let device = get_mut_arcmutex!(self.draft).device();
-                    let no_kv_cache =
-                        get_mut_arcmutex!(self.draft).get_metadata().no_kv_cache;
+                    let no_kv_cache = get_mut_arcmutex!(self.draft).get_metadata().no_kv_cache;
                     let inputs = self
                         .get_processor()
                         .inputs_processor()
@@ -492,9 +491,7 @@ impl Pipeline for SpeculativePipeline {
                 // ========= Run the model ============
                 let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
                 let device = get_mut_arcmutex!(self.target).device();
-                let no_kv_cache = get_mut_arcmutex!(self.target)
-                    .get_metadata()
-                    .no_kv_cache;
+                let no_kv_cache = get_mut_arcmutex!(self.target).get_metadata().no_kv_cache;
                 let inputs = self
                     .get_processor()
                     .inputs_processor()
