@@ -269,8 +269,7 @@
 <a href="#268" id="268">268</a>
 <a href="#269" id="269">269</a>
 <a href="#270" id="270">270</a>
-<a href="#271" id="271">271</a>
-<a href="#272" id="272">272</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
+<a href="#271" id="271">271</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
 </span><span class="kw">use </span>std::{
     collections::HashMap,
@@ -482,7 +481,6 @@
             .get_names()
             .into_iter()
             .filter(|x| predicate(x.to_string()));
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>names_only.clone().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;());
         <span class="kw">let </span>iter = <span class="self">self</span>.get_name_key_pairs(names_only).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
         <span class="comment">// Take the filtered list of tensors to load, store with derived lookup key:
