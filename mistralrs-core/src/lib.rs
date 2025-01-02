@@ -51,6 +51,7 @@ mod paged_attention;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 use dummy_paged_attention as paged_attention;
 mod attention;
+mod common_models;
 mod diffusion_models;
 mod pipeline;
 mod prefix_cacher;
@@ -63,6 +64,7 @@ mod sequence;
 mod toml_selector;
 mod tools;
 mod topology;
+mod tts_models;
 mod utils;
 mod vision_models;
 mod xlora_models;
