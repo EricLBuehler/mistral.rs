@@ -831,6 +831,7 @@ impl DeepSeekV2RotaryEmbedding {
         0.1 * mscale * scale.ln() + 1.
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_yarn(
         cfg: &DeepSeekV2RopeConfig,
         dtype: DType,

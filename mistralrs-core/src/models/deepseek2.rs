@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
@@ -18,7 +20,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, EitherCache, IsqModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::progress::NiceProgressBar,
@@ -87,6 +89,12 @@ pub struct DeepSeekV2Config {
     qk_nope_head_dim: usize,
 }
 
+impl DeepSeekV2Config {
+    fn q_head_dim(&self) -> usize {
+        self.qk_rope_head_dim + self.qk_nope_head_dim
+    }
+}
+
 enum QProj {
     Plain(Linear),
     Lora { a: Linear, norm: RmsNorm, b: Linear },
@@ -119,7 +127,7 @@ impl Attention {
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let q_head_dim = cfg.qk_nope_head_dim + cfg.qk_rope_head_dim;
+        let q_head_dim = cfg.q_head_dim();
         let q = match cfg.q_lora_rank {
             Some(lora_rank) => {
                 let a = candle_nn::linear_b(
@@ -193,8 +201,7 @@ impl Attention {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        // kv_cache: &mut KvCache,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (bs, seq_len, _) = xs.dims3()?;
 
@@ -254,8 +261,7 @@ impl Attention {
         let k_pe = k_pe.repeat((1, k.dim(1)?, 1, 1))?;
         k = k.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &k_pe)?;
 
-        // (k, v) = kv_cache.append(&k, &v)?;
-        (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        (k, v) = kv_cache.append(&k, &v)?;
 
         let mut attn_out = {
             let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.softmax_scale as f64)?;
@@ -513,8 +519,7 @@ impl DecoderLayer {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        // kv_cache: &mut KvCache,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
@@ -596,11 +601,10 @@ impl DeepSeekV2 {
             embed_tokens,
             norm,
             layers,
-            // cache: EitherCache::Normal(NormalCache::new(
-            //     cfg.num_hidden_layers,
-            //     cfg.max_position_embeddings,
-            // )),
-            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             device: normal_loading_metadata.real_device.clone(),
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
@@ -609,7 +613,8 @@ impl DeepSeekV2 {
                 num_kv_heads: cfg.num_attention_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
-                head_dim: Some(cfg.qk_nope_head_dim + cfg.qk_rope_head_dim),
+                k_head_dim: Some(cfg.q_head_dim()),
+                v_head_dim: Some(cfg.v_head_dim),
             },
         })
     }
@@ -622,11 +627,10 @@ impl DeepSeekV2 {
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
-        // let cache = &mut self.cache.normal().0;
-        let mut cache = self.cache.full().lock();
+        let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
-            &seqlen_offsets as &dyn PastKvLenCache,
+            cache as &dyn PastKvLenCache,
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
