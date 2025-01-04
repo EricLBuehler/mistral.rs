@@ -3,8 +3,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, Linear, Module, VarBuilder};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{embedding, Embedding, Module, VarBuilder};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 use serde::Deserialize;
 
 use crate::{
@@ -24,7 +24,7 @@ use crate::{
         EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(f64, routed_scaling_factor, 1.0);
@@ -91,6 +91,7 @@ pub struct DeepSeekV2Config {
     qk_nope_head_dim: usize,
     #[serde(default = "use_flash_attn_default")]
     pub(crate) use_flash_attn: bool,
+    quantization_config: Option<QuantizedConfig>,
 }
 
 impl DeepSeekV2Config {
@@ -114,25 +115,31 @@ impl DeepSeekV2Config {
 }
 
 enum QProj {
-    Plain(Linear),
-    Lora { a: Linear, norm: RmsNorm, b: Linear },
+    Plain(Arc<dyn QuantMethod>),
+    Lora {
+        a: Arc<dyn QuantMethod>,
+        norm: RmsNorm,
+        b: Arc<dyn QuantMethod>,
+    },
 }
 
 impl QProj {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
-            Self::Lora { a, norm, b } => b.forward(&norm.forward(&a.forward(xs)?)?),
-            Self::Plain(lin) => lin.forward(xs),
+            Self::Lora { a, norm, b } => {
+                b.forward_autocast(&norm.forward(&a.forward_autocast(xs)?)?)
+            }
+            Self::Plain(lin) => lin.forward_autocast(xs),
         }
     }
 }
 
 struct Attention {
     q: QProj,
-    kv_a_proj_with_mqa: Linear,
+    kv_a_proj_with_mqa: Arc<dyn QuantMethod>,
     kv_a_layernorm: RmsNorm,
-    kv_b_proj: Linear,
-    o_proj: Linear,
+    kv_b_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
     cfg: DeepSeekV2Config,
     q_head_dim: usize,
@@ -145,51 +152,67 @@ impl Attention {
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
         paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let q_head_dim = cfg.q_head_dim();
         let q = match cfg.q_lora_rank {
             Some(lora_rank) => {
-                let a = candle_nn::linear_b(
+                let a = mistralrs_quant::linear_b(
                     cfg.hidden_size,
                     lora_rank,
                     cfg.attention_bias,
-                    vb.pp("q_a_proj"),
+                    &cfg.quantization_config,
+                    mapper.set_device(layer_idx, vb.pp("q_a_proj"), loading_isq),
                 )?;
-                let norm = RmsNorm::new(lora_rank, cfg.rms_norm_eps, vb.pp("q_a_layernorm"))?;
-                let b = candle_nn::linear_no_bias(
+                let norm = RmsNorm::new(
+                    lora_rank,
+                    cfg.rms_norm_eps,
+                    mapper.set_device(layer_idx, vb.pp("q_a_layernorm"), false),
+                )?;
+                let b = mistralrs_quant::linear_no_bias(
                     lora_rank,
                     cfg.num_attention_heads * q_head_dim,
-                    vb.pp("q_b_proj"),
+                    &cfg.quantization_config,
+                    mapper.set_device(layer_idx, vb.pp("q_b_proj"), loading_isq),
                 )?;
                 QProj::Lora { a, norm, b }
             }
-            None => QProj::Plain(candle_nn::linear_no_bias(
+            None => QProj::Plain(mistralrs_quant::linear_no_bias(
                 cfg.hidden_size,
                 cfg.num_attention_heads * q_head_dim,
-                vb.pp("q_proj"),
+                &cfg.quantization_config,
+                mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
             )?),
         };
 
-        let kv_a_proj_with_mqa = candle_nn::linear_b(
+        let kv_a_proj_with_mqa = mistralrs_quant::linear_b(
             cfg.hidden_size,
             cfg.kv_lora_rank + cfg.qk_rope_head_dim,
             cfg.attention_bias,
-            vb.pp("kv_a_proj_with_mqa"),
+            &cfg.quantization_config,
+            mapper.set_device(layer_idx, vb.pp("kv_a_proj_with_mqa"), loading_isq),
         )?;
-        let kv_a_layernorm =
-            RmsNorm::new(cfg.kv_lora_rank, cfg.rms_norm_eps, vb.pp("kv_a_layernorm"))?;
-        let kv_b_proj = candle_nn::linear_no_bias(
+        let kv_a_layernorm = RmsNorm::new(
+            cfg.kv_lora_rank,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("kv_a_layernorm"), false),
+        )?;
+        let kv_b_proj = mistralrs_quant::linear_no_bias(
             cfg.kv_lora_rank,
             cfg.num_attention_heads * (q_head_dim - cfg.qk_rope_head_dim + cfg.v_head_dim),
-            vb.pp("kv_b_proj"),
+            &cfg.quantization_config,
+            mapper.set_device(layer_idx, vb.pp("kv_b_proj"), loading_isq),
         )?;
 
-        let o_proj = candle_nn::linear_b(
+        let o_proj = mistralrs_quant::linear_b(
             cfg.num_attention_heads * cfg.v_head_dim,
             cfg.hidden_size,
             cfg.attention_bias,
-            vb.pp("o_proj"),
+            &cfg.quantization_config,
+            mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
 
         Ok(Self {
@@ -234,7 +257,7 @@ impl Attention {
         let q_nope = q_split[0].clone();
         let mut q_pe = q_split[1].clone();
 
-        let mut compressed_kv = self.kv_a_proj_with_mqa.forward(xs)?;
+        let mut compressed_kv = self.kv_a_proj_with_mqa.forward_autocast(xs)?;
         let ckv_split = compressed_kv.split(
             &[self.cfg.kv_lora_rank, self.cfg.qk_rope_head_dim],
             D::Minus1,
@@ -246,7 +269,7 @@ impl Attention {
             .transpose(1, 2)?;
         let mut kv = self
             .kv_b_proj
-            .forward(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
+            .forward_autocast(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
         kv = kv
             .reshape((
                 bs,
@@ -329,14 +352,14 @@ impl Attention {
             attn_out.reshape((bs, seq_len, ()))?
         };
 
-        self.o_proj.forward(&attn_out)
+        self.o_proj.forward_autocast(&attn_out)
     }
 }
 
 struct Mlp {
-    gate: Linear,
-    up: Linear,
-    down: Linear,
+    gate: Arc<dyn QuantMethod>,
+    up: Arc<dyn QuantMethod>,
+    down: Arc<dyn QuantMethod>,
     act: Activation,
 }
 
@@ -351,17 +374,41 @@ impl Mlp {
         let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
 
         Ok(Self {
-            gate: candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?,
-            up: candle_nn::linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?,
-            down: candle_nn::linear_no_bias(intermediate_size, hidden_size, vb.pp("down_proj"))?,
+            gate: mistralrs_quant::linear_no_bias(
+                hidden_size,
+                intermediate_size,
+                &cfg.quantization_config,
+                vb.pp("gate_proj"),
+            )?,
+            up: mistralrs_quant::linear_no_bias(
+                hidden_size,
+                intermediate_size,
+                &cfg.quantization_config,
+                vb.pp("up_proj"),
+            )?,
+            down: mistralrs_quant::linear_no_bias(
+                intermediate_size,
+                hidden_size,
+                &cfg.quantization_config,
+                vb.pp("down_proj"),
+            )?,
             act: cfg.hidden_act,
         })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = self.gate.forward(xs)?.apply(&self.act)?;
-        let rhs = self.up.forward(xs)?;
-        self.down.forward(&(&lhs * &rhs)?)
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.gate.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let lhs = self.gate.forward(&xs)?.apply(&self.act)?;
+        let rhs = self.up.forward(&xs)?;
+        let mut res = self.down.forward(&(&lhs * &rhs)?)?;
+        if self.gate.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -422,26 +469,38 @@ impl Moe {
     fn new(
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
         n_shared_experts: Option<usize>,
         n_routed_experts: usize,
     ) -> Result<Self> {
         let mut experts = Vec::with_capacity(n_routed_experts);
         for i in 0..n_routed_experts {
             let vb_e = vb.pp("experts").pp(i);
-            experts.push(Mlp::new(cfg, vb_e, None, Some(cfg.moe_intermediate_size))?);
+            experts.push(Mlp::new(
+                cfg,
+                mapper.set_device(layer_idx, vb_e, loading_isq),
+                None,
+                Some(cfg.moe_intermediate_size),
+            )?);
         }
         let shared_experts = if let Some(n_shared_experts) = n_shared_experts {
             let intermediate_size = cfg.moe_intermediate_size * n_shared_experts;
             Some(Mlp::new(
                 cfg,
-                vb.pp("shared_experts"),
+                mapper.set_device(layer_idx, vb.pp("shared_experts"), loading_isq),
                 None,
                 Some(intermediate_size),
             )?)
         } else {
             None
         };
-        let gate = MoeGate::new(cfg, vb.pp("gate"), n_routed_experts)?;
+        let gate = MoeGate::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("gate"), false),
+            n_routed_experts,
+        )?;
         Ok(Self {
             experts,
             shared_experts,
@@ -533,16 +592,29 @@ impl DecoderLayer {
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
+        mapper: &dyn DeviceMapper,
         layer_idx: usize,
+        loading_isq: bool,
         paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
-        let attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), paged_attn)?;
-        let input_layernorm =
-            RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
+        let attn = Attention::new(
+            rotary_emb,
+            cfg,
+            vb.pp("self_attn"),
+            mapper,
+            layer_idx,
+            loading_isq,
+            paged_attn,
+        )?;
+        let input_layernorm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
+        )?;
         let post_attention_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
-            vb.pp("post_attention_layernorm"),
+            mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
         )?;
         let moe_or_mlp = if cfg.n_routed_experts.is_some()
             && layer_idx >= cfg.first_k_dense_replace
@@ -551,11 +623,19 @@ impl DecoderLayer {
             MoeOrMlp::Moe(Moe::new(
                 cfg,
                 vb.pp("mlp"),
+                mapper,
+                layer_idx,
+                loading_isq,
                 cfg.n_shared_experts,
                 cfg.n_routed_experts.unwrap(),
             )?)
         } else {
-            MoeOrMlp::Mlp(Mlp::new(cfg, vb.pp("mlp"), None, None)?)
+            MoeOrMlp::Mlp(Mlp::new(
+                cfg,
+                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                None,
+                None,
+            )?)
         };
 
         Ok(Self {
@@ -595,7 +675,7 @@ impl DecoderLayer {
 }
 
 pub struct DeepSeekV2 {
-    lm_head: Linear,
+    lm_head: Arc<dyn QuantMethod>,
     embed_tokens: Embedding,
     norm: RmsNorm,
     layers: Vec<DecoderLayer>,
@@ -603,6 +683,7 @@ pub struct DeepSeekV2 {
     device: Device,
     max_seq_len: usize,
     cfg: ModelConfigMetadata,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 impl DeepSeekV2 {
@@ -615,13 +696,36 @@ impl DeepSeekV2 {
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
 
-        let embed_tokens = embedding(cfg.vocab_size, cfg.hidden_size, vb_m.pp("embed_tokens"))?;
+        let mapper = normal_loading_metadata.mapper;
+
+        let embed_tokens = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+        )?;
         let lm_head = if !cfg.tie_word_embeddings {
-            candle_nn::linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?
+            mistralrs_quant::linear_no_bias(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &None,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
         } else {
-            candle_nn::Linear::new(embed_tokens.embeddings().clone(), None)
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+            ))?)
         };
-        let norm = RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb_m.pp("norm"))?;
+        let norm = RmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            mapper.set_nm_device(vb_m.pp("norm"), false),
+        )?;
 
         let mut ropes = HashMap::new();
         let rope_cfg = DeepSeekV2RopeConfig {
@@ -630,8 +734,10 @@ impl DeepSeekV2 {
             rope_theta: cfg.rope_theta,
             qk_rope_head_dim: cfg.qk_rope_head_dim,
         };
-        for _i in 0..cfg.num_hidden_layers {
-            let device = &normal_loading_metadata.real_device;
+        for i in 0..cfg.num_hidden_layers {
+            let device = mapper
+                .device_for(i, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
             ropes.insert(
                 device.location(),
                 Arc::new(DeepSeekV2RotaryEmbedding::new(
@@ -652,7 +758,9 @@ impl DeepSeekV2 {
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
-            let device = &normal_loading_metadata.real_device;
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
             let rotary_emb = ropes
                 .get(&device.location())
                 .expect("No RoPE for device location!")
@@ -676,7 +784,9 @@ impl DeepSeekV2 {
                 rotary_emb.clone(),
                 cfg,
                 vb_l.pp(layer_idx),
+                &*mapper,
                 layer_idx,
+                normal_loading_metadata.loading_isq,
                 paged_attn,
             )?;
             layers.push(layer)
@@ -702,6 +812,7 @@ impl DeepSeekV2 {
                 k_head_dim: Some(cfg.q_head_dim()),
                 v_head_dim: Some(cfg.v_head_dim),
             },
+            mapper,
         })
     }
 
@@ -718,15 +829,15 @@ impl DeepSeekV2 {
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
-            // metadata
-            //     .as_ref()
-            //     .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-            //     .unwrap_or(cache as &dyn PastKvLenCache),
-            cache as &dyn PastKvLenCache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache),
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
+            xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 attention_mask
@@ -741,8 +852,9 @@ impl DeepSeekV2 {
                 flash_params,
             )?;
         }
+        let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        extract_logits(&self.lm_head.forward(&xs)?, context_lens)
+        extract_logits(&self.lm_head.forward_autocast(&xs)?, context_lens)
     }
 }
 
@@ -753,11 +865,72 @@ impl IsqModel for DeepSeekV2 {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        todo!()
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            match &mut layer.attn.q {
+                QProj::Plain(q) => {
+                    tensors.push((q, Some(i)));
+                }
+                QProj::Lora { a, norm: _, b } => {
+                    tensors.push((a, Some(i)));
+                    tensors.push((b, Some(i)));
+                }
+            }
+            tensors.push((&mut layer.attn.kv_a_proj_with_mqa, Some(i)));
+            tensors.push((&mut layer.attn.kv_b_proj, Some(i)));
+            tensors.push((&mut layer.attn.o_proj, Some(i)));
+            match &mut layer.moe_or_mlp {
+                MoeOrMlp::Mlp(mlp) => {
+                    tensors.push((&mut mlp.gate, Some(i)));
+                    tensors.push((&mut mlp.up, Some(i)));
+                    tensors.push((&mut mlp.down, Some(i)));
+                }
+                MoeOrMlp::Moe(moe) => {
+                    for mlp in &mut moe.experts {
+                        tensors.push((&mut mlp.gate, Some(i)));
+                        tensors.push((&mut mlp.up, Some(i)));
+                        tensors.push((&mut mlp.down, Some(i)));
+                    }
+                    if let Some(mlp) = &mut moe.shared_experts {
+                        tensors.push((&mut mlp.gate, Some(i)));
+                        tensors.push((&mut mlp.up, Some(i)));
+                        tensors.push((&mut mlp.down, Some(i)));
+                    }
+                }
+            }
+        }
+        (tensors, &*self.mapper)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        todo!()
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+
+            uvb_l
+                .pp("self_attn")
+                .pp("kv_a_layernorm")
+                .add(&layer.attn.kv_a_layernorm);
+
+            match &layer.attn.q {
+                QProj::Plain(_) => (),
+                QProj::Lora { a: _, norm, b: _ } => {
+                    uvb_l.pp("self_attn").pp("q_a_layernorm").add(norm);
+                }
+            }
+        }
+
+        uvb.to_safetensors()
     }
 
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
