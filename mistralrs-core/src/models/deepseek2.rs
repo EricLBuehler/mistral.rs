@@ -85,8 +85,6 @@ pub struct DeepSeekV2Config {
     kv_lora_rank: usize,
     v_head_dim: usize,
     qk_nope_head_dim: usize,
-    n_group: Option<usize>,
-    topk_group: Option<usize>,
 }
 
 enum QProj {
@@ -198,11 +196,9 @@ impl Attention {
         // kv_cache: &mut KvCache,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
-        dbg!(&xs.to_dtype(DType::F32)?.mean_all()?);
         let (bs, seq_len, _) = xs.dims3()?;
 
         let mut q = self.q.forward(xs)?;
-        dbg!(&q.to_dtype(DType::F32)?.mean_all()?);
         q = q
             .reshape((bs, seq_len, self.cfg.num_attention_heads, self.q_head_dim))?
             .transpose(1, 2)?;
@@ -214,7 +210,6 @@ impl Attention {
         let mut q_pe = q_split[1].clone();
 
         let mut compressed_kv = self.kv_a_proj_with_mqa.forward(xs)?;
-        dbg!(&compressed_kv.to_dtype(DType::F32)?.mean_all()?);
         let ckv_split = compressed_kv.split(
             &[self.cfg.kv_lora_rank, self.cfg.qk_rope_head_dim],
             D::Minus1,
@@ -235,19 +230,12 @@ impl Attention {
                 self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
             ))?
             .transpose(1, 2)?;
-        dbg!(&kv.to_dtype(DType::F32)?.mean_all()?);
 
         let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
         let k_nope = kv_split[0].clone();
         let mut v = kv_split[1].clone();
 
-        dbg!(&q_pe.to_dtype(DType::F32)?.mean_all()?);
-        dbg!(&k_pe.to_dtype(DType::F32)?.mean_all()?);
-        
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
-
-        dbg!(&q_pe.to_dtype(DType::F32)?.mean_all()?);
-        dbg!(&k_pe.to_dtype(DType::F32)?.mean_all()?);
 
         let mut q = Tensor::zeros(
             (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
@@ -269,8 +257,6 @@ impl Attention {
         // (k, v) = kv_cache.append(&k, &v)?;
         (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
-        dbg!(&self.softmax_scale);
-
         let mut attn_out = {
             let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.softmax_scale as f64)?;
             attn_weights = match attention_mask {
@@ -285,9 +271,6 @@ impl Attention {
         } else {
             attn_out.reshape((bs, seq_len, ()))?
         };
-
-        dbg!(&attn_out.to_dtype(DType::F32)?.mean_all()?);
-        panic!();
 
         self.o_proj.forward(&attn_out)
     }
@@ -424,8 +407,6 @@ impl Moe {
 
         let mut outputs = Vec::with_capacity(tokens_per_expert.len());
         let mut start_idx = 0;
-        println!("{:?}", tokens_per_expert);
-        panic!();
         for (i, num_tokens) in tokens_per_expert.into_iter().enumerate() {
             let end_idx = start_idx + num_tokens;
             if num_tokens == 0 {
@@ -440,15 +421,17 @@ impl Moe {
 
         let outs = Tensor::cat(&outputs, 0)?;
 
-        let new_x = outs.zeros_like()?;
-        new_x.index_add(&idxs, &outs, 0)?;
+        let mut new_x = outs.zeros_like()?;
+        new_x = new_x.index_add(&idxs, &outs, 0)?;
 
         let hole = new_x.elem_count() / topk_ids.elem_count();
 
         new_x
             .reshape([topk_ids.dims().to_vec(), vec![hole]].concat())?
             .broadcast_mul(&topk_weight.unsqueeze(D::Minus1)?)?
-            .sum(1)
+            .to_dtype(DType::F32)?
+            .sum(1)?
+            .to_dtype(new_x.dtype())
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {

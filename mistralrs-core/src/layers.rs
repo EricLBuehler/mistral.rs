@@ -850,7 +850,7 @@ impl DeepSeekV2RotaryEmbedding {
         let freq_extra = Tensor::from_vec(freq_extra, freq_extra_len, dev)?;
         let freq_inter: Vec<_> = (0..cfg.qk_rope_head_dim)
             .step_by(2)
-            .map(|i| 1f32 / factor * cfg.rope_theta.powf(i as f32 / cfg.qk_rope_head_dim as f32))
+            .map(|i| 1f32 / (factor * cfg.rope_theta.powf(i as f32 / cfg.qk_rope_head_dim as f32)))
             .collect();
         let freq_inter_len = freq_inter.len();
         let freq_inter = Tensor::from_vec(freq_inter, (1, freq_inter_len), dev)?;
@@ -920,16 +920,15 @@ impl DeepSeekV2RotaryEmbedding {
         let mut q_embeds = Vec::new();
         let mut k_embeds = Vec::new();
         for (i, offset) in seqlen_offsets.iter().enumerate() {
-            let cos = self.sin.narrow(0, *offset, seq_len)?;
-            let sin = self.cos.narrow(0, *offset, seq_len)?;
+            let sin = self.sin.narrow(0, *offset, seq_len)?;
+            let cos = self.cos.narrow(0, *offset, seq_len)?;
+
             // let q_embed =
-            //     candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            //     candle_nn::rotary_emb::rope_i(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
             // let k_embed =
-            //     candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-            let q_embed =
-                rope_slow(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-            let k_embed =
-                rope_slow(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            //     candle_nn::rotary_emb::rope_i(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            let q_embed = rope_slow(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            let k_embed = rope_slow(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
             q_embeds.push(q_embed);
             k_embeds.push(k_embed);
         }
@@ -955,7 +954,8 @@ pub fn rope_slow(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     let x = x
         .reshape((b, h, seq_len, n_embd / 2, 2))?
         .transpose(4, 3)?
-        .reshape((b, h, seq_len, n_embd))?.contiguous()?;
+        .reshape((b, h, seq_len, n_embd))?
+        .contiguous()?;
     x.broadcast_mul(&cos)? + rotate_half(&x)?.broadcast_mul(&sin)?
 }
 
