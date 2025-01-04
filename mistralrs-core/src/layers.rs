@@ -965,8 +965,15 @@ impl MatMul {
     /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
     /// The result will be divided by the `scale` parameter in an affine division.
     pub fn matmul_affine_div(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
-        // TODO(EricLBuehler): Optimize this by using the gemm parameter
+        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
         self.matmul(a, b)? / scale
+    }
+
+    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    /// The result will be divided by the `scale` parameter in an affine multiplication.
+    pub fn matmul_affine_mul(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
+        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
+        self.matmul(a, b)? * scale
     }
 
     /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.

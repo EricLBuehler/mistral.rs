@@ -279,8 +279,6 @@ impl Attention {
         let k_pe = k_pe.repeat((1, k.dim(1)?, 1, 1))?;
         k = k.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &k_pe)?;
 
-        (k, v) = kv_cache.append(&k, &v)?;
-
         let mut attn_out = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -312,7 +310,7 @@ impl Attention {
                 }
             },
             None => {
-                let (k, v) = kv_cache.append(&k, &v)?;
+                (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(
                     &q,
@@ -643,6 +641,12 @@ impl DeepSeekV2 {
                 )?),
             );
         }
+        if cfg.q_head_dim() != cfg.v_head_dim
+            && matches!(attention_mechanism, AttentionImplementation::PagedAttention)
+        {
+            candle_core::bail!("Head sizes do not match (q/k: {}, v: {}), PagedAttention is incompatible with this model. Please disable PagedAttention.", cfg.q_head_dim(), cfg.v_head_dim);
+        }
+
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
         for layer_idx in
@@ -658,7 +662,7 @@ impl DeepSeekV2 {
                 AttentionImplementation::PagedAttention => Some(
                     PagedAttention::new(
                         cfg.num_attention_heads,
-                        cfg.v_head_dim, // Cannot use q_head_dim because the output is v_head_dim
+                        cfg.v_head_dim,
                         cfg.softmax_scale(),
                         Some(cfg.num_attention_heads),
                         None,
@@ -714,10 +718,11 @@ impl DeepSeekV2 {
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
+            // metadata
+            //     .as_ref()
+            //     .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+            //     .unwrap_or(cache as &dyn PastKvLenCache),
+            cache as &dyn PastKvLenCache,
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
