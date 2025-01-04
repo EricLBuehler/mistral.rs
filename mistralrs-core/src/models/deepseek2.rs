@@ -9,14 +9,15 @@ use serde::Deserialize;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
+    attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{
         Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
-        DeepSeekV2RotaryEmbedding, RmsNorm,
+        DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{SplitOp, TopKLastDimOp, TopKOutput},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -34,6 +35,7 @@ serde_default_fn!(bool, norm_topk_prob, false);
 serde_default_fn!(ScoringFunc, scoring_func, ScoringFunc::Softmax);
 serde_default_fn!(Activation, hidden_act, Activation::Silu);
 serde_default_fn!(bool, tie_word_embeddings, false);
+serde_default_fn!(bool, use_flash_attn_default, false);
 
 #[derive(Deserialize, Clone, Debug)]
 enum TopkMethod {
@@ -87,11 +89,27 @@ pub struct DeepSeekV2Config {
     kv_lora_rank: usize,
     v_head_dim: usize,
     qk_nope_head_dim: usize,
+    #[serde(default = "use_flash_attn_default")]
+    pub(crate) use_flash_attn: bool,
 }
 
 impl DeepSeekV2Config {
     fn q_head_dim(&self) -> usize {
         self.qk_rope_head_dim + self.qk_nope_head_dim
+    }
+
+    fn softmax_scale(&self) -> f32 {
+        let mut softmax_scale = 1.0 / (self.q_head_dim() as f32).sqrt();
+        if let Some(DeepSeekV2RopeScaling::Yarn {
+            mscale_all_dim,
+            factor,
+            ..
+        }) = self.rope_scaling
+        {
+            let mscale = DeepSeekV2RotaryEmbedding::yarn_get_mscale(factor, mscale_all_dim);
+            softmax_scale = softmax_scale * mscale * mscale;
+        }
+        softmax_scale
     }
 }
 
@@ -116,9 +134,10 @@ struct Attention {
     kv_b_proj: Linear,
     o_proj: Linear,
     rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
-    softmax_scale: f32,
     cfg: DeepSeekV2Config,
     q_head_dim: usize,
+    paged_attn: Option<PagedAttention>,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -126,6 +145,7 @@ impl Attention {
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
+        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let q_head_dim = cfg.q_head_dim();
         let q = match cfg.q_lora_rank {
@@ -172,17 +192,6 @@ impl Attention {
             vb.pp("o_proj"),
         )?;
 
-        let mut softmax_scale = 1.0 / (q_head_dim as f32).sqrt();
-        if let Some(DeepSeekV2RopeScaling::Yarn {
-            mscale_all_dim,
-            factor,
-            ..
-        }) = cfg.rope_scaling
-        {
-            let mscale = DeepSeekV2RotaryEmbedding::yarn_get_mscale(factor, mscale_all_dim);
-            softmax_scale = softmax_scale * mscale * mscale;
-        }
-
         Ok(Self {
             q,
             kv_a_proj_with_mqa,
@@ -190,9 +199,16 @@ impl Attention {
             kv_b_proj,
             o_proj,
             rotary_emb,
-            softmax_scale,
             cfg: cfg.clone(),
             q_head_dim,
+            paged_attn,
+            sdpa_params: SdpaParams {
+                n_kv_groups: 1,
+                use_flash_attn: cfg.use_flash_attn,
+                softcap: None,
+                softmax_scale: cfg.softmax_scale(),
+                sliding_window: None,
+            },
         })
     }
 
@@ -202,6 +218,8 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (bs, seq_len, _) = xs.dims3()?;
 
@@ -263,15 +281,50 @@ impl Attention {
 
         (k, v) = kv_cache.append(&k, &v)?;
 
-        let mut attn_out = {
-            let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.softmax_scale as f64)?;
-            attn_weights = match attention_mask {
-                Some(mask) => attn_weights.broadcast_add(mask)?,
-                None => attn_weights,
-            };
-            attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-            attn_weights.matmul(&v)?
+        let mut attn_out = match &self.paged_attn {
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                    None,
+                )?,
+                None => {
+                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
+                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
+                    let mut input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    // Sanity check.
+                    assert!(attention_mask.is_some());
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        attention_mask,
+                        None,
+                        None,
+                        &mut input_metadata,
+                        None,
+                    )?
+                }
+            },
+            None => {
+                let (k, v) = kv_cache.append(&k, &v)?;
+
+                Sdpa.run_attention(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(flash_params),
+                    &self.sdpa_params,
+                )?
+            }
         };
+
         attn_out = if attention_mask.is_some() {
             attn_out.transpose(1, 2)?.reshape((bs, seq_len, ()))?
         } else {
@@ -483,8 +536,9 @@ impl DecoderLayer {
         cfg: &DeepSeekV2Config,
         vb: VarBuilder,
         layer_idx: usize,
+        paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
-        let attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"))?;
+        let attn = Attention::new(rotary_emb, cfg, vb.pp("self_attn"), paged_attn)?;
         let input_layernorm =
             RmsNorm::new(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?;
         let post_attention_layernorm = RmsNorm::new(
@@ -520,12 +574,19 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
+        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
-            .attn
-            .forward(&xs, attention_mask, seqlen_offsets, kv_cache)?;
+        let xs = self.attn.forward(
+            &xs,
+            attention_mask,
+            seqlen_offsets,
+            kv_cache,
+            metadata,
+            flash_params,
+        )?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -592,7 +653,28 @@ impl DeepSeekV2 {
                 .get(&device.location())
                 .expect("No RoPE for device location!")
                 .clone();
-            let layer = DecoderLayer::new(rotary_emb.clone(), cfg, vb_l.pp(layer_idx), layer_idx)?;
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => Some(
+                    PagedAttention::new(
+                        cfg.num_attention_heads,
+                        cfg.v_head_dim, // Cannot use q_head_dim because the output is v_head_dim
+                        cfg.softmax_scale(),
+                        Some(cfg.num_attention_heads),
+                        None,
+                        device,
+                        None,
+                    )
+                    .expect("Failed to create PagedAttention"),
+                ),
+            };
+            let layer = DecoderLayer::new(
+                rotary_emb.clone(),
+                cfg,
+                vb_l.pp(layer_idx),
+                layer_idx,
+                paged_attn,
+            )?;
             layers.push(layer)
         }
 
@@ -625,12 +707,17 @@ impl DeepSeekV2 {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
+        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
-            cache as &dyn PastKvLenCache,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(cache as &dyn PastKvLenCache),
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
@@ -643,6 +730,10 @@ impl DeepSeekV2 {
                     .as_ref(),
                 seqlen_offsets,
                 &mut cache[i],
+                metadata
+                    .as_mut()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
+                flash_params,
             )?;
         }
         let xs = xs.apply(&self.norm)?;
@@ -680,7 +771,13 @@ impl NormalModel for DeepSeekV2 {
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        self.forward(input_ids, seqlen_offsets, context_lens)
+        self.forward(
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
     fn xlora_forward(
         &self,

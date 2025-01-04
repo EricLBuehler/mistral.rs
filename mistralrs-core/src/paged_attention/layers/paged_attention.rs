@@ -70,8 +70,9 @@ impl PagedAttention {
             input_metadata.slot_mappings.clone()
         };
 
-        let (batch_size, attention_heads, seq_len, head_size) = query.shape().dims4()?;
-        let (_, key_value_heads, _, _) = key.shape().dims4()?;
+        let (batch_size, attention_heads, seq_len, q_head_size) = query.shape().dims4()?;
+        let (_, key_value_heads, _, k_head_size) = key.shape().dims4()?;
+        let (_, _, _, v_head_size) = value.shape().dims4()?;
 
         #[allow(clippy::cast_possible_truncation)]
         let att = match attention_mask {
@@ -96,19 +97,19 @@ impl PagedAttention {
         let (query, key, value) = if seq_len > 1 {
             let q = query
                 .transpose(1, 2)?
-                .reshape(((), attention_heads, head_size))?;
+                .reshape(((), attention_heads, q_head_size))?;
             let k = key
                 .transpose(1, 2)?
-                .reshape(((), key_value_heads, head_size))?;
+                .reshape(((), key_value_heads, k_head_size))?;
             let v = value
                 .transpose(1, 2)?
-                .reshape(((), key_value_heads, head_size))?;
+                .reshape(((), key_value_heads, v_head_size))?;
             (q, k, v)
         } else {
             //avoid unnecessary transpose for decoding
-            let q = query.reshape(((), attention_heads, head_size))?;
-            let k = key.reshape(((), key_value_heads, head_size))?;
-            let v = value.reshape(((), key_value_heads, head_size))?;
+            let q = query.reshape(((), attention_heads, q_head_size))?;
+            let k = key.reshape(((), key_value_heads, k_head_size))?;
+            let v = value.reshape(((), key_value_heads, v_head_size))?;
             (q, k, v)
         };
 

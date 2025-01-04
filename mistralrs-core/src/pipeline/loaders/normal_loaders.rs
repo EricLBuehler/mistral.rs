@@ -1534,8 +1534,10 @@ impl NormalModelLoader for DeepSeekV2Loader {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let mut cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        cfg.use_flash_attn = use_flash_attn;
         Ok(Box::new(models::deepseek2::DeepSeekV2::new(
-            &serde_json::from_str(config)?,
+            &cfg,
             vb,
             self.is_gptx(config)?,
             normal_loading_metadata,
@@ -1559,9 +1561,9 @@ impl NormalModelLoader for DeepSeekV2Loader {
         Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Ok(Box::new(serde_json::from_str::<
-            crate::models::deepseek2::DeepSeekV2Config,
-        >(config)?))
+        let mut config: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         Ok(
