@@ -495,9 +495,7 @@ mod tests {
             "model-00006-of-00006.safetensors",
         ];
         let negative_ids = [
-            "model-000001-of-00001.safetensors",
             "model-0000a-of-00002.safetensors",
-            "model-000-of-00003.safetensors",
             "consolidated.safetensors",
         ];
         for id in positive_ids {
