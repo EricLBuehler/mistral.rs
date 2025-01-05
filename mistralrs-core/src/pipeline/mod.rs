@@ -136,6 +136,9 @@ pub trait CacheManagerMixin {
         load_preallocated_cache: bool,
     );
     fn cache(&self) -> &EitherCache;
+    fn cache_is_normal(&self) -> bool {
+        matches!(self.cache(), EitherCache::Normal(_))
+    }
 }
 
 pub trait AdapterActivationMixin {

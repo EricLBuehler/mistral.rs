@@ -814,8 +814,7 @@ impl Engine {
                 .clone()
                 .map(|conf| conf.block_size);
 
-            let cache = get_mut_arcmutex!(self.pipeline).cache().clone();
-            let seq_preallocated_cache = if let EitherCache::Normal(_cache) = cache {
+            let seq_preallocated_cache = if get_mut_arcmutex!(self.pipeline).cache_is_normal() {
                 let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
                 let model_metadata = metadata
                     .model_metadata
