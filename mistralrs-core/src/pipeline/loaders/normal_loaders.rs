@@ -1574,11 +1574,117 @@ impl NormalModelLoader for DeepSeekV2Loader {
 }
 
 impl IsqModelLoader for DeepSeekV2Loader {
-    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
-        todo!()
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut data = vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.kv_b_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+        ];
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        if cfg.q_lora_rank.is_some() {
+            data.extend(vec![
+                Regex::new(r"layers\.(\d+)\.self_attn\.q_a_proj\.(weight|bias)$")?,
+                Regex::new(r"layers\.(\d+)\.self_attn\.q_b_proj\.(weight|bias)$")?,
+            ]);
+        } else {
+            data.push(Regex::new(
+                r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+            )?);
+        }
+        for layer_idx in 0..cfg.num_hidden_layers {
+            if cfg.n_routed_experts.is_some()
+                && layer_idx >= cfg.first_k_dense_replace
+                && layer_idx % cfg.moe_layer_freq == 0
+            {
+                for i in 0..cfg.n_routed_experts.unwrap() {
+                    data.extend(vec![
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
+                        ))?,
+                    ]);
+                }
+                if cfg.n_shared_experts.is_some() {
+                    data.extend(vec![
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
+                        ))?,
+                    ]);
+                }
+            } else {
+                data.extend(vec![
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
+                    ))?,
+                    Regex::new(&format!(r"layers.{layer_idx}.mlp\.up_proj\.(weight|bias)$"))?,
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
+                    ))?,
+                ]);
+            };
+        }
+        Ok(data)
     }
 
-    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
-        todo!()
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        for layer_idx in 0..cfg.num_hidden_layers {
+            if cfg.n_routed_experts.is_some()
+                && layer_idx >= cfg.first_k_dense_replace
+                && layer_idx % cfg.moe_layer_freq == 0
+            {
+                for i in 0..cfg.n_routed_experts.unwrap() {
+                    data.extend(vec![
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
+                        ))?,
+                    ]);
+                }
+                if cfg.n_shared_experts.is_some() {
+                    data.extend(vec![
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
+                        ))?,
+                    ]);
+                }
+            } else {
+                data.extend(vec![
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
+                    ))?,
+                    Regex::new(&format!(r"layers.{layer_idx}.mlp\.up_proj\.(weight|bias)$"))?,
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
+                    ))?,
+                ]);
+            };
+        }
+        Ok(data)
     }
 }

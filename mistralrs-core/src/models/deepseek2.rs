@@ -59,17 +59,17 @@ pub struct DeepSeekV2Config {
     moe_intermediate_size: usize,
     pub(crate) num_hidden_layers: usize,
     num_attention_heads: usize,
-    n_shared_experts: Option<usize>,
-    n_routed_experts: Option<usize>,
+    pub(crate) n_shared_experts: Option<usize>,
+    pub(crate) n_routed_experts: Option<usize>,
     #[serde(default = "routed_scaling_factor")]
     routed_scaling_factor: f64,
     #[serde(default = "topk_method")]
     topk_method: TopkMethod,
     num_experts_per_tok: Option<usize>,
     #[serde(default = "moe_layer_freq")]
-    moe_layer_freq: usize,
+    pub(crate) moe_layer_freq: usize,
     #[serde(default = "first_k_dense_replace")]
-    first_k_dense_replace: usize,
+    pub(crate) first_k_dense_replace: usize,
     // k dense layers
     #[serde(default = "norm_topk_prob")]
     norm_topk_prob: bool,
@@ -84,7 +84,7 @@ pub struct DeepSeekV2Config {
     rope_theta: f32,
     rope_scaling: Option<DeepSeekV2RopeScaling>,
     attention_bias: bool,
-    q_lora_rank: Option<usize>,
+    pub(crate) q_lora_rank: Option<usize>,
     qk_rope_head_dim: usize,
     kv_lora_rank: usize,
     v_head_dim: usize,
@@ -903,6 +903,38 @@ impl IsqModel for DeepSeekV2 {
         (tensors, &*self.mapper)
     }
 
+    fn get_layers_moe_experts_only(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            match &mut layer.moe_or_mlp {
+                MoeOrMlp::Mlp(mlp) => {
+                    tensors.push((&mut mlp.gate, Some(i)));
+                    tensors.push((&mut mlp.up, Some(i)));
+                    tensors.push((&mut mlp.down, Some(i)));
+                }
+                MoeOrMlp::Moe(moe) => {
+                    for mlp in &mut moe.experts {
+                        tensors.push((&mut mlp.gate, Some(i)));
+                        tensors.push((&mut mlp.up, Some(i)));
+                        tensors.push((&mut mlp.down, Some(i)));
+                    }
+                    if let Some(mlp) = &mut moe.shared_experts {
+                        tensors.push((&mut mlp.gate, Some(i)));
+                        tensors.push((&mut mlp.up, Some(i)));
+                        tensors.push((&mut mlp.down, Some(i)));
+                    }
+                }
+            }
+        }
+        (tensors, &*self.mapper)
+    }
+
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -922,6 +954,16 @@ impl IsqModel for DeepSeekV2 {
                 .pp("kv_a_layernorm")
                 .add(&layer.attn.kv_a_layernorm);
 
+            match &layer.moe_or_mlp {
+                MoeOrMlp::Moe(moe) => {
+                    uvb_l
+                        .pp("mlp")
+                        .pp("gate")
+                        .add_tensor("weight", moe.gate.weight.clone());
+                }
+                MoeOrMlp::Mlp(_) => (),
+            }
+
             match &layer.attn.q {
                 QProj::Plain(_) => (),
                 QProj::Lora { a: _, norm, b: _ } => {
@@ -933,8 +975,57 @@ impl IsqModel for DeepSeekV2 {
         uvb.to_safetensors()
     }
 
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        todo!()
+    fn residual_tensors_moe_experts_only(&self) -> Option<Vec<(String, Tensor)>> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+
+            uvb_l
+                .pp("self_attn")
+                .pp("kv_a_layernorm")
+                .add(&layer.attn.kv_a_layernorm);
+
+            match &layer.moe_or_mlp {
+                MoeOrMlp::Moe(moe) => {
+                    uvb_l
+                        .pp("mlp")
+                        .pp("gate")
+                        .add_tensor("weight", moe.gate.weight.clone());
+                }
+                MoeOrMlp::Mlp(_) => (),
+            }
+
+            match &layer.attn.q {
+                QProj::Plain(q) => {
+                    uvb_l.pp("self_attn").pp("q_proj").add(q);
+                }
+                QProj::Lora { a, norm, b } => {
+                    uvb_l.pp("self_attn").pp("q_a_proj").add(a);
+                    uvb_l.pp("self_attn").pp("q_a_layernorm").add(norm);
+                    uvb_l.pp("self_attn").pp("q_b_proj").add(b);
+                }
+            }
+            uvb_l
+                .pp("self_attn")
+                .pp("kv_a_proj_with_mqa")
+                .add(&layer.attn.kv_a_proj_with_mqa);
+            uvb_l
+                .pp("self_attn")
+                .pp("kv_b_proj")
+                .add(&layer.attn.kv_b_proj);
+            uvb_l.pp("self_attn").pp("o_proj").add(&layer.attn.o_proj);
+        }
+
+        Some(uvb.to_safetensors())
     }
 }
 
