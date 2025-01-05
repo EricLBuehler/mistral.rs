@@ -138,6 +138,8 @@ pub enum NormalLoaderType {
     Starcoder2,
     #[serde(rename = "phi3.5moe")]
     Phi3_5MoE,
+    #[serde(rename = "deepseekv2")]
+    DeepSeekV2,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -155,6 +157,7 @@ impl NormalLoaderType {
             "Qwen2ForCausalLM" => Ok(Self::Qwen2),
             "Starcoder2ForCausalLM" => Ok(Self::Starcoder2),
             "PhiMoEForCausalLM" => Ok(Self::Phi3_5MoE),
+            "DeepseekV2ForCausalLM" => Ok(Self::DeepSeekV2),
             other => anyhow::bail!(
                 "Unsupported Huggging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -176,6 +179,7 @@ impl FromStr for NormalLoaderType {
             "gemma2" => Ok(Self::Gemma2),
             "starcoder2" => Ok(Self::Starcoder2),
             "phi3.5moe" => Ok(Self::Phi3_5MoE),
+            "deepseekv2" => Ok(Self::DeepSeekV2),
             a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`.")),
         }
     }
@@ -194,6 +198,7 @@ impl Display for NormalLoaderType {
             Self::Phi3_5MoE => write!(f, "phi3.5moe"),
             Self::Qwen2 => write!(f, "qwen2"),
             Self::Starcoder2 => write!(f, "starcoder2"),
+            Self::DeepSeekV2 => write!(f, "deepseekv2"),
         }
     }
 }
@@ -230,6 +235,7 @@ impl AutoLoader {
             NormalLoaderType::Gemma2 => Ok(Box::new(Gemma2Loader)),
             NormalLoaderType::Starcoder2 => Ok(Box::new(Starcoder2Loader)),
             NormalLoaderType::Phi3_5MoE => Ok(Box::new(Phi3_5MoELoader)),
+            NormalLoaderType::DeepSeekV2 => Ok(Box::new(DeepSeekV2Loader)),
         }
     }
 }
@@ -1511,5 +1517,174 @@ impl IsqModelLoader for Phi3_5MoELoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
         ])
+    }
+}
+
+/// [`NormalLoader`] for a DeepSeekV2 model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+pub struct DeepSeekV2Loader;
+
+impl NormalModelLoader for DeepSeekV2Loader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let mut cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        cfg.use_flash_attn = use_flash_attn;
+        Ok(Box::new(models::deepseek2::DeepSeekV2::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _use_flash_attn: bool,
+        _vb: VarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut config: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        Ok(
+            serde_json::from_str::<crate::models::deepseek2::DeepSeekV2Config>(config)?
+                .num_hidden_layers,
+        )
+    }
+}
+
+impl IsqModelLoader for DeepSeekV2Loader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut data = vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.kv_b_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+        ];
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        if cfg.q_lora_rank.is_some() {
+            data.extend(vec![
+                Regex::new(r"layers\.(\d+)\.self_attn\.q_a_proj\.(weight|bias)$")?,
+                Regex::new(r"layers\.(\d+)\.self_attn\.q_b_proj\.(weight|bias)$")?,
+            ]);
+        } else {
+            data.push(Regex::new(
+                r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+            )?);
+        }
+        for layer_idx in 0..cfg.num_hidden_layers {
+            if cfg.n_routed_experts.is_some()
+                && layer_idx >= cfg.first_k_dense_replace
+                && layer_idx % cfg.moe_layer_freq == 0
+            {
+                for i in 0..cfg.n_routed_experts.unwrap() {
+                    data.extend(vec![
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
+                        ))?,
+                    ]);
+                }
+                if cfg.n_shared_experts.is_some() {
+                    data.extend(vec![
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
+                        ))?,
+                    ]);
+                }
+            } else {
+                data.extend(vec![
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
+                    ))?,
+                    Regex::new(&format!(r"layers.{layer_idx}.mlp\.up_proj\.(weight|bias)$"))?,
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
+                    ))?,
+                ]);
+            };
+        }
+        Ok(data)
+    }
+
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        for layer_idx in 0..cfg.num_hidden_layers {
+            if cfg.n_routed_experts.is_some()
+                && layer_idx >= cfg.first_k_dense_replace
+                && layer_idx % cfg.moe_layer_freq == 0
+            {
+                for i in 0..cfg.n_routed_experts.unwrap() {
+                    data.extend(vec![
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
+                        ))?,
+                    ]);
+                }
+                if cfg.n_shared_experts.is_some() {
+                    data.extend(vec![
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
+                        ))?,
+                        Regex::new(&format!(
+                            r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
+                        ))?,
+                    ]);
+                }
+            } else {
+                data.extend(vec![
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
+                    ))?,
+                    Regex::new(&format!(r"layers.{layer_idx}.mlp\.up_proj\.(weight|bias)$"))?,
+                    Regex::new(&format!(
+                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
+                    ))?,
+                ]);
+            };
+        }
+        Ok(data)
     }
 }

@@ -142,7 +142,7 @@ impl CacheEngine {
         let x = 16 / element_size;
         (
             model_config.num_kv_heads(),
-            model_config.head_dim() / x,
+            model_config.k_head_dim() / x,
             block_size,
             x,
         )
@@ -154,7 +154,7 @@ impl CacheEngine {
     ) -> (usize, usize, usize) {
         (
             model_config.num_kv_heads(),
-            model_config.head_dim(),
+            model_config.v_head_dim(),
             block_size,
         )
     }

@@ -398,8 +398,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
             let mut k_caches = Vec::new();
             let mut v_caches = Vec::new();
             for seq in seqs.iter_mut() {
-                k_caches.push((**seq.preallocated_cache().as_ref().unwrap()).clone());
-                v_caches.push((**seq.preallocated_cache().as_ref().unwrap()).clone());
+                let (k_preallocated_cache, v_preallocated_cache) =
+                    (*seq.preallocated_cache().as_ref().unwrap()).clone();
+                k_caches.push(k_preallocated_cache);
+                v_caches.push(v_preallocated_cache);
             }
             let k_cache = if k_caches.len() > 1 {
                 Tensor::cat(&k_caches, 0).unwrap()

@@ -154,3 +154,7 @@ required-features = []
 [[example]]
 name = "async"
 required-features = []
+
+[[example]]
+name = "deepseekv2"
+required-features = []

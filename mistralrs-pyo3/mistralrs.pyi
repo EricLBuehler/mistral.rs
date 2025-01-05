@@ -79,6 +79,7 @@ class Architecture(Enum):
     Gemma2 = "gemma2"
     Starcoder2 = "starcoder2"
     Phi3_5MoE = "phi3.5moe"
+    DeepseekV2 = "deepseekv2"
 
 @dataclass
 class VisionArchitecture(Enum):

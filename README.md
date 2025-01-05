@@ -52,6 +52,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i vision-plain -m HuggingFaceTB/SmolVLM-Instruct -a idefics3
     ```
 
+- 🐋🐋 Run the Deepseek V2 model: [documentation](docs/DEEPSEEKV2.md)
+
+    ```
+    ./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-V2-Lite
+    ```
+
 - φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
 
     ```
@@ -155,6 +161,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Llama 3.2 Vision|✅| |✅| |
 |Qwen2-VL|✅| |✅| |
 |Idefics 3|✅| |✅|✅|
+|DeepseekV2|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -407,6 +414,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `qwen2`
 - `gemma2`
 - `starcoder2`
+- `deepseekv2`
 
 ### Architecture for vision models
 
@@ -516,6 +524,7 @@ Please submit more benchmarks via raising an issue!
 |Llama 3.2 Vision| | |✅|
 |Qwen2-VL| | |✅|
 |Idefics 3| | |✅|
+|Deepseek V2| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -544,6 +553,7 @@ Please submit more benchmarks via raising an issue!
 |LLaVa| | | |
 |Qwen2-VL| | | |
 |Idefics 3| | | |
+|Deepseek V2| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -565,6 +575,7 @@ Please submit more benchmarks via raising an issue!
 |Llama 3.2 Vision| |
 |Qwen2-VL| |
 |Idefics 3|✅|
+|Deepseek V2| |
 
 
 ### Using derivative model

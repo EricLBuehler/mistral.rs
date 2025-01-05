@@ -191,8 +191,8 @@ pub struct Sequence {
     draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
 
-    // Preallocated KV cache
-    seq_preallocated_cache: Option<Tensor>,
+    // Preallocated KV cache (k,v)
+    seq_preallocated_cache: Option<(Tensor, Tensor)>,
 
     // Mutables
     tokens: Vec<u32>,
@@ -281,8 +281,8 @@ impl Sequence {
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
-        // Preallocated KV cache
-        seq_preallocated_cache: Option<Tensor>,
+        // Preallocated KV cache (k,v)
+        seq_preallocated_cache: Option<(Tensor, Tensor)>,
         //
         return_raw_logits: bool,
     ) -> Self {
@@ -499,7 +499,7 @@ impl Sequence {
         &self.completion_bytes
     }
 
-    pub fn preallocated_cache(&self) -> Option<&Tensor> {
+    pub fn preallocated_cache(&self) -> Option<&(Tensor, Tensor)> {
         self.seq_preallocated_cache.as_ref()
     }
 
