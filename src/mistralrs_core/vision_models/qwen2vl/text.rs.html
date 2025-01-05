@@ -469,7 +469,8 @@
 <a href="#468" id="468">468</a>
 <a href="#469" id="469">469</a>
 <a href="#470" id="470">470</a>
-<a href="#471" id="471">471</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
+<a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{Embedding, Module, VarBuilder};
@@ -854,7 +855,8 @@
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
-                head_dim: <span class="prelude-val">None</span>,
+                k_head_dim: <span class="prelude-val">None</span>,
+                v_head_dim: <span class="prelude-val">None</span>,
             },
             device: normal_loading_metadata.real_device.clone(),
             dtype: vb.dtype(),

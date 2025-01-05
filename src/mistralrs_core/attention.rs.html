@@ -339,7 +339,9 @@
 <a href="#338" id="338">338</a>
 <a href="#339" id="339">339</a>
 <a href="#340" id="340">340</a>
-<a href="#341" id="341">341</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -437,7 +439,6 @@
     k: <span class="kw-2">&amp;</span>Tensor,
     v: <span class="kw-2">&amp;</span>Tensor,
     mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
-    head_dim: usize,
     sdpa_params: <span class="kw-2">&amp;</span>SdpaParams,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
     <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
@@ -534,7 +535,7 @@
 
         MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
     } <span class="kw">else if let </span><span class="prelude-val">Some</span>(mask) = mask {
-        <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul_affine_div(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, (head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul_affine_mul(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, sdpa_params.softmax_scale.into())<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
             att = (att / softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
             att = att.tanh()<span class="question-mark">?</span>;
@@ -545,7 +546,7 @@
         candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>att)<span class="question-mark">?</span>;
         MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
     } <span class="kw">else </span>{
-        <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul_affine_div(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, (head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul_affine_mul(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, sdpa_params.softmax_scale.into())<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
             att = (att / softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
             att = att.tanh()<span class="question-mark">?</span>;
@@ -590,6 +591,8 @@
         sdpa_params: <span class="kw-2">&amp;</span>SdpaParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()<span class="question-mark">?</span>;
+        <span class="kw">let </span>(<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, k_head_dim) = k.dims4()<span class="question-mark">?</span>;
+        <span class="kw">let </span>(<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, v_head_dim) = v.dims4()<span class="question-mark">?</span>;
         <span class="kw">if </span>sdpa_params.use_flash_attn {
             <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
             </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
@@ -598,7 +601,8 @@
             <span class="kw">return </span>flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, flash_params, sdpa_params)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>);
         }
 
-        <span class="kw">if </span>q.device().is_metal() &amp;&amp; seq_len == <span class="number">1 </span>{
+        <span class="kw">let </span>all_head_dims_match = head_dim == k_head_dim &amp;&amp; k_head_dim == v_head_dim;
+        <span class="kw">if </span>q.device().is_metal() &amp;&amp; seq_len == <span class="number">1 </span>&amp;&amp; all_head_dims_match {
             <span class="kw">return </span>candle_nn::ops::sdpa(
                 q,
                 k,
@@ -665,7 +669,7 @@
                     )<span class="question-mark">?</span>;
 
                     <span class="comment">// Reshape to dims4
-                    </span>context_layer.reshape((b_sz, n_attn_heads, seq_len, head_dim))
+                    </span>context_layer.reshape((b_sz, n_attn_heads, seq_len, v_head_dim))
                 }
                 <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
                 </span>{
@@ -673,10 +677,10 @@
                 }
             } <span class="kw">else </span>{
                 <span class="comment">// Use the f16 kernels here if quantized (ISQ or GGML), and a large enough prompt
-                </span>naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, head_dim, sdpa_params)
+                </span>naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params)
             }
         } <span class="kw">else </span>{
-            naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, head_dim, sdpa_params)
+            naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params)
         }
     }
 }

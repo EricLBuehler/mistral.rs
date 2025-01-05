@@ -836,7 +836,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
 };
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::get_chat_template;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
@@ -1348,13 +1348,13 @@
         };
 
         <span class="kw">if </span>chat_template.bos_token.is_none() &amp;&amp; bos.is_some() {
-            chat_template.bos_token = <span class="prelude-val">Some</span>(BeginEndUnkTok(Either::Left(bos.unwrap())));
+            chat_template.bos_token = <span class="prelude-val">Some</span>(BeginEndUnkPadTok(Either::Left(bos.unwrap())));
         }
         <span class="kw">if </span>chat_template.eos_token.is_none() &amp;&amp; eos.is_some() {
-            chat_template.eos_token = <span class="prelude-val">Some</span>(BeginEndUnkTok(Either::Left(eos.unwrap())));
+            chat_template.eos_token = <span class="prelude-val">Some</span>(BeginEndUnkPadTok(Either::Left(eos.unwrap())));
         }
         <span class="kw">if </span>chat_template.unk_token.is_none() &amp;&amp; unk.is_some() {
-            chat_template.unk_token = <span class="prelude-val">Some</span>(BeginEndUnkTok(Either::Left(unk.unwrap())));
+            chat_template.unk_token = <span class="prelude-val">Some</span>(BeginEndUnkPadTok(Either::Left(unk.unwrap())));
         }
 
         <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);

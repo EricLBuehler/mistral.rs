@@ -899,7 +899,8 @@
 <a href="#898" id="898">898</a>
 <a href="#899" id="899">899</a>
 <a href="#900" id="900">900</a>
-<a href="#901" id="901">901</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
@@ -1618,7 +1619,8 @@
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: <span class="prelude-val">None</span>,
-                head_dim: <span class="prelude-val">None</span>,
+                k_head_dim: <span class="prelude-val">None</span>,
+                v_head_dim: <span class="prelude-val">None</span>,
             },
         })
     }

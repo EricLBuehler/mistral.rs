@@ -327,7 +327,7 @@
 }
 
 <span class="attr">#[derive(Debug, Deserialize)]
-</span><span class="kw">pub struct </span>BeginEndUnkTok(
+</span><span class="kw">pub struct </span>BeginEndUnkPadTok(
     <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;String, AddedTokensDecoder&gt;,
 );
 
@@ -344,7 +344,7 @@
     add_eos_token: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     added_tokens_decoder: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, AddedTokensDecoder&gt;&gt;,
     additional_special_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-    <span class="kw">pub </span>bos_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkTok&gt;,
+    <span class="kw">pub </span>bos_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkPadTok&gt;,
 
     <span class="doccomment">/// Jinja format [chat templating] for chat completion.
     ///
@@ -352,15 +352,15 @@
     </span><span class="kw">pub </span>chat_template: <span class="prelude-ty">Option</span>&lt;ChatTemplateValue&gt;,
     clean_up_tokenization_spaces: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     device_map: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    <span class="kw">pub </span>eos_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkTok&gt;,
+    <span class="kw">pub </span>eos_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkPadTok&gt;,
     legacy: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     model_max_length: <span class="prelude-ty">Option</span>&lt;f64&gt;,
-    pad_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="kw">pub </span>pad_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkPadTok&gt;,
     sp_model_kwargs: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, String&gt;&gt;,
     spaces_between_special_tokens: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     tokenizer_class: <span class="prelude-ty">Option</span>&lt;String&gt;,
     truncation_size: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    <span class="kw">pub </span>unk_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkTok&gt;,
+    <span class="kw">pub </span>unk_token: <span class="prelude-ty">Option</span>&lt;BeginEndUnkPadTok&gt;,
     use_default_system_prompt: <span class="prelude-ty">Option</span>&lt;bool&gt;,
 }
 

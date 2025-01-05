@@ -749,7 +749,9 @@
 <a href="#748" id="748">748</a>
 <a href="#749" id="749">749</a>
 <a href="#750" id="750">750</a>
-<a href="#751" id="751">751</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor, D};
 
@@ -1149,8 +1151,10 @@
             <span class="kw">let </span><span class="kw-2">mut </span>k_caches = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>v_caches = Vec::new();
             <span class="kw">for </span>seq <span class="kw">in </span>seqs.iter_mut() {
-                k_caches.push((<span class="kw-2">**</span>seq.preallocated_cache().as_ref().unwrap()).clone());
-                v_caches.push((<span class="kw-2">**</span>seq.preallocated_cache().as_ref().unwrap()).clone());
+                <span class="kw">let </span>(k_preallocated_cache, v_preallocated_cache) =
+                    (<span class="kw-2">*</span>seq.preallocated_cache().as_ref().unwrap()).clone();
+                k_caches.push(k_preallocated_cache);
+                v_caches.push(v_preallocated_cache);
             }
             <span class="kw">let </span>k_cache = <span class="kw">if </span>k_caches.len() &gt; <span class="number">1 </span>{
                 Tensor::cat(<span class="kw-2">&amp;</span>k_caches, <span class="number">0</span>).unwrap()

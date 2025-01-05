@@ -533,9 +533,7 @@
 <a href="#532" id="532">532</a>
 <a href="#533" id="533">533</a>
 <a href="#534" id="534">534</a>
-<a href="#535" id="535">535</a>
-<a href="#536" id="536">536</a>
-<a href="#537" id="537">537</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#535" id="535">535</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -564,8 +562,8 @@
 };
 
 <span class="comment">// Match files against these, avoids situations like `consolidated.safetensors`
-</span><span class="kw">const </span>SAFETENSOR_MATCH: <span class="kw-2">&amp;</span>str = <span class="string">r"model-\d{5}-of-\d{5}.safetensors\b"</span>;
-<span class="kw">const </span>QUANT_SAFETENSOR_MATCH: <span class="kw-2">&amp;</span>str = <span class="string">r"model.safetensors\b"</span>;
+</span><span class="kw">const </span>SAFETENSOR_MATCH: <span class="kw-2">&amp;</span>str = <span class="string">r"model-\d+-of-\d+\.safetensors\b"</span>;
+<span class="kw">const </span>QUANT_SAFETENSOR_MATCH: <span class="kw-2">&amp;</span>str = <span class="string">r"model\.safetensors\b"</span>;
 <span class="kw">const </span>PICKLE_MATCH: <span class="kw-2">&amp;</span>str = <span class="string">r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b"</span>;
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>XLoraPaths {
@@ -1032,9 +1030,7 @@
             <span class="string">"model-00006-of-00006.safetensors"</span>,
         ];
         <span class="kw">let </span>negative_ids = [
-            <span class="string">"model-000001-of-00001.safetensors"</span>,
             <span class="string">"model-0000a-of-00002.safetensors"</span>,
-            <span class="string">"model-000-of-00003.safetensors"</span>,
             <span class="string">"consolidated.safetensors"</span>,
         ];
         <span class="kw">for </span>id <span class="kw">in </span>positive_ids {

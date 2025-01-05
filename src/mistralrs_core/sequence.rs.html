@@ -1162,8 +1162,8 @@
     draft_cache: LayerCaches,
     xlora_cache: <span class="prelude-ty">Option</span>&lt;LayerCaches&gt;,
 
-    <span class="comment">// Preallocated KV cache
-    </span>seq_preallocated_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+    <span class="comment">// Preallocated KV cache (k,v)
+    </span>seq_preallocated_cache: <span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
 
     <span class="comment">// Mutables
     </span>tokens: Vec&lt;u32&gt;,
@@ -1252,8 +1252,8 @@
         image_gen_response_format: <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt;,
         sequence_stepping_type: SeqStepType,
         diffusion_params: <span class="prelude-ty">Option</span>&lt;DiffusionGenerationParams&gt;,
-        <span class="comment">// Preallocated KV cache
-        </span>seq_preallocated_cache: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+        <span class="comment">// Preallocated KV cache (k,v)
+        </span>seq_preallocated_cache: <span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
         <span class="comment">//
         </span>return_raw_logits: bool,
     ) -&gt; <span class="self">Self </span>{
@@ -1470,7 +1470,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes
     }
 
-    <span class="kw">pub fn </span>preallocated_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt; {
+    <span class="kw">pub fn </span>preallocated_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>(Tensor, Tensor)&gt; {
         <span class="self">self</span>.seq_preallocated_cache.as_ref()
     }
 

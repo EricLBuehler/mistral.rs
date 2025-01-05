@@ -952,7 +952,9 @@
 <a href="#951" id="951">951</a>
 <a href="#952" id="952">952</a>
 <a href="#953" id="953">953</a>
-<a href="#954" id="954">954</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
@@ -966,8 +968,9 @@
     PreProcessingMixin,
 };
 <span class="kw">use super</span>::{
-    AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
-    NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
+    AutoLoader, DeepSeekV2Loader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader,
+    MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
+    Starcoder2Loader,
 };
 <span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeExpertType;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
@@ -1156,6 +1159,7 @@
             <span class="prelude-val">Some</span>(NormalLoaderType::Gemma2) =&gt; Box::new(Gemma2Loader),
             <span class="prelude-val">Some</span>(NormalLoaderType::Starcoder2) =&gt; Box::new(Starcoder2Loader),
             <span class="prelude-val">Some</span>(NormalLoaderType::Phi3_5MoE) =&gt; Box::new(Phi3_5MoELoader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::DeepSeekV2) =&gt; Box::new(DeepSeekV2Loader),
             <span class="prelude-val">None </span>=&gt; Box::new(AutoLoader),
         };
         <span class="prelude-val">Ok</span>(Box::new(NormalLoader {
