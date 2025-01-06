@@ -63,6 +63,7 @@ mod sequence;
 mod toml_selector;
 mod tools;
 mod topology;
+mod transformer;
 mod utils;
 mod vision_models;
 mod xlora_models;
