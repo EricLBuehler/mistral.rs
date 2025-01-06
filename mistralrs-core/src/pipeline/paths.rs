@@ -27,8 +27,8 @@ use crate::{
 };
 
 // Match files against these, avoids situations like `consolidated.safetensors`
-const SAFETENSOR_MATCH: &str = r"model-\d{5}-of-\d{5}.safetensors\b";
-const QUANT_SAFETENSOR_MATCH: &str = r"model.safetensors\b";
+const SAFETENSOR_MATCH: &str = r"model-\d+-of-\d+\.safetensors\b";
+const QUANT_SAFETENSOR_MATCH: &str = r"model\.safetensors\b";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 pub(crate) struct XLoraPaths {
@@ -495,9 +495,7 @@ mod tests {
             "model-00006-of-00006.safetensors",
         ];
         let negative_ids = [
-            "model-000001-of-00001.safetensors",
             "model-0000a-of-00002.safetensors",
-            "model-000-of-00003.safetensors",
             "consolidated.safetensors",
         ];
         for id in positive_ids {

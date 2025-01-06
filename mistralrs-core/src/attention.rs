@@ -96,7 +96,6 @@ fn naive_sdpa(
     k: &Tensor,
     v: &Tensor,
     mask: Option<&Tensor>,
-    head_dim: usize,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
     #[cfg(feature = "metal")]
@@ -193,7 +192,7 @@ fn naive_sdpa(
 
         MatMul.matmul(&att, v)
     } else if let Some(mask) = mask {
-        let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
+        let mut att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
             att = att.tanh()?;
@@ -204,7 +203,7 @@ fn naive_sdpa(
         candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
         MatMul.matmul(&att, v)
     } else {
-        let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
+        let mut att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
             att = att.tanh()?;
@@ -249,6 +248,8 @@ impl Sdpa {
         sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
+        let (_, _, _, k_head_dim) = k.dims4()?;
+        let (_, _, _, v_head_dim) = v.dims4()?;
         if sdpa_params.use_flash_attn {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
@@ -257,7 +258,8 @@ impl Sdpa {
             return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
         }
 
-        if q.device().is_metal() && seq_len == 1 {
+        let all_head_dims_match = head_dim == k_head_dim && k_head_dim == v_head_dim;
+        if q.device().is_metal() && seq_len == 1 && all_head_dims_match {
             return candle_nn::ops::sdpa(
                 q,
                 k,
@@ -324,7 +326,7 @@ impl Sdpa {
                     )?;
 
                     // Reshape to dims4
-                    context_layer.reshape((b_sz, n_attn_heads, seq_len, head_dim))
+                    context_layer.reshape((b_sz, n_attn_heads, seq_len, v_head_dim))
                 }
                 #[cfg(not(feature = "cuda"))]
                 {
@@ -332,10 +334,10 @@ impl Sdpa {
                 }
             } else {
                 // Use the f16 kernels here if quantized (ISQ or GGML), and a large enough prompt
-                naive_sdpa(q, &k, &v, mask, head_dim, sdpa_params)
+                naive_sdpa(q, &k, &v, mask, sdpa_params)
             }
         } else {
-            naive_sdpa(q, &k, &v, mask, head_dim, sdpa_params)
+            naive_sdpa(q, &k, &v, mask, sdpa_params)
         }
     }
 }

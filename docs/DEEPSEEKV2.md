@@ -1,34 +1,25 @@
-# Phi 3.5 Model: [`microsoft/Phi-3.5-MoE-instruct`](https://huggingface.co/microsoft/Phi-3.5-MoE-instruct)
+# Deepseek V2: [`deepseek-ai/DeepSeek-V2-Lite`](https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite)
 
-The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture of expert LLM.
+The Deepseek V2 is a mixture of expert (MoE) model featuring ["Multi-head Latent Attention"](https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite#5-model-architecture).
 
-- Context length of **128k tokens**
-- Trained on **4.9T tokens**
-- 16 experts (16x3.8B parameters) with **6.6B active parameters**
-- Expect inference performance of a 7B model
-
-## About the MoE mechanism
-1) Compute router gating logits
-2) From the router gating logits, select the top-2 selected experts and the associated weights
-3) The hidden states for each token in the sequence is computed by (if selected) applying the expert output to that token, and then weighting it. 
-    - If multiple experts are selected for the token, then this becomes a weighted sum
-    - The design is flexible: 2 or 1 experts can be selected, enabling dense or sparse gating
+- Context length of **32k tokens** (Lite model), **128k tokens** (full model)
+- 64 routed experts (Lite model), 160 routed experts (full model)
 
 ```
-./mistralrs-server --isq Q4K -i plain -m microsoft/Phi-3.5-MoE-instruct
+./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-V2-Lite
 ```
 
 > [!NOTE]
 > This models supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
 ```
-./mistralrs-server --isq Q4K -i plain -m microsoft/Phi-3.5-MoE-instruct --organization moqe
+./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-V2-Lite --organization moqe
 ```
 
 ## HTTP API
 
 ```
-./mistralrs-server --isq Q4K --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
+./mistralrs-server --isq Q4K --port 1234 plain -m deepseek-ai/DeepSeek-V2-Lite
 ```
 
 ```py
@@ -44,7 +35,7 @@ while True:
     prompt = input(">>> ")
     messages.append({"role": "user", "content": prompt})
     completion = client.chat.completions.create(
-        model="phi3.5moe",
+        model="deepseekv2",
         messages=messages,
         max_tokens=256,
         frequency_penalty=1.0,
@@ -62,8 +53,8 @@ from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
-        model_id="microsoft/Phi-3.5-MoE-instruct",
-        arch=Architecture.Phi3_5MoE ,
+        model_id="deepseek-ai/DeepSeek-V2-Lite",
+        arch=Architecture.DeepseekV2,
     ),
 )
 
@@ -84,7 +75,7 @@ print(res.usage)
 ```
 
 ## Rust API
-You can find this example [here](../mistralrs/examples/phi3_5_moe/main.rs).
+You can find this example [here](../mistralrs/examples/deepseekv2/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -94,7 +85,7 @@ use mistralrs::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("microsoft/Phi-3.5-MoE-instruct")
+    let model = TextModelBuilder::new("deepseek-ai/DeepSeek-V2-Lite")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
