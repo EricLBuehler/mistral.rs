@@ -1035,7 +1035,17 @@
 <a href="#1034" id="1034">1034</a>
 <a href="#1035" id="1035">1035</a>
 <a href="#1036" id="1036">1036</a>
-<a href="#1037" id="1037">1037</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
+<a href="#1037" id="1037">1037</a>
+<a href="#1038" id="1038">1038</a>
+<a href="#1039" id="1039">1039</a>
+<a href="#1040" id="1040">1040</a>
+<a href="#1041" id="1041">1041</a>
+<a href="#1042" id="1042">1042</a>
+<a href="#1043" id="1043">1043</a>
+<a href="#1044" id="1044">1044</a>
+<a href="#1045" id="1045">1045</a>
+<a href="#1046" id="1046">1046</a>
+<a href="#1047" id="1047">1047</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>llguidance::toktrie::TokEnv;
 <span class="kw">use </span>once_cell::sync::Lazy;
@@ -1110,18 +1120,22 @@
         config: SchedulerConfig,
         truncate_sequence: bool,
         <span class="kw-2">mut </span>no_kv_cache: bool,
-        <span class="kw-2">mut </span>no_prefix_cache: bool,
+        <span class="kw-2">mut </span>_no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         no_kv_cache |= <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().no_kv_cache;
-        no_prefix_cache |= <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().no_prefix_cache;
-        <span class="comment">// TODO: Prefix caching is always disabled if using PagedAttention for now.
-        </span><span class="kw">let </span>no_prefix_cache = <span class="macro">matches!</span>(config, SchedulerConfig::PagedAttentionMeta { .. })
-            || no_prefix_cache
-            || no_kv_cache;
+
+        <span class="comment">// TODO: We need a nice fix, when prefix caching is enabled setting the non-PA pre op to
+        // Nothing makes it work but breaks all other cases. This requires more investigation!!
+        // no_prefix_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache;
+        // TODO: Prefix caching is always disabled if using PagedAttention for now.
+        // let no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
+        //     || no_prefix_cache
+        //     || no_kv_cache;
+        </span><span class="kw">let </span>no_prefix_cache = <span class="bool-val">true</span>;
         <span class="self">Self </span>{
             rx,
             pipeline,
@@ -1271,7 +1285,9 @@
                                 <span class="string">"All sequences must either return raw logits, or not."
                             </span>);
 
-                            pipeline
+                            <span class="comment">// Reset non granular state because the old sequence must be dead.
+                            // Technically we don't need to do this but it is better to be safe.
+                            </span>pipeline
                                 .step(
                                     <span class="kw-2">&amp;mut </span>scheduled.prompt,
                                     <span class="bool-val">true</span>,
@@ -1280,7 +1296,11 @@
                                     <span class="self">self</span>.disable_eos_stop,
                                     rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions {
-                                        pre_op: CacheInstruction::Nothing(adapter_inst),
+                                        pre_op: CacheInstruction::Reset {
+                                            load_preallocated_cache: <span class="bool-val">true</span>,
+                                            reset_non_granular: <span class="bool-val">false</span>,
+                                            adapter_inst,
+                                        },
                                         post_op,
                                     },
                                 )
