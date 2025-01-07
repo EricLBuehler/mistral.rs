@@ -73,18 +73,22 @@ impl Engine {
         config: SchedulerConfig,
         truncate_sequence: bool,
         mut no_kv_cache: bool,
-        mut no_prefix_cache: bool,
+        mut _no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
-        no_prefix_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache;
+
+        // TODO: We need a nice fix, when prefix caching is enabled setting the non-PA pre op to
+        // no_prefix_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache;
         // TODO: Prefix caching is always disabled if using PagedAttention for now.
-        let no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
-            || no_prefix_cache
-            || no_kv_cache;
+        // let no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
+        //     || no_prefix_cache
+        //     || no_kv_cache;
+        // Nothing makes it work but breaks all other cases. This requires more investigation!!
+        let no_prefix_cache = true;
         Self {
             rx,
             pipeline,
@@ -234,6 +238,8 @@ impl Engine {
                                 "All sequences must either return raw logits, or not."
                             );
 
+                            // Reset non granular state because the old sequence must be dead.
+                            // Technically we don't need to do this but it is better to be safe.
                             pipeline
                                 .step(
                                     &mut scheduled.prompt,
@@ -243,7 +249,11 @@ impl Engine {
                                     self.disable_eos_stop,
                                     rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions {
-                                        pre_op: CacheInstruction::Nothing(adapter_inst),
+                                        pre_op: CacheInstruction::Reset {
+                                            load_preallocated_cache: true,
+                                            reset_non_granular: false,
+                                            adapter_inst,
+                                        },
                                         post_op,
                                     },
                                 )
