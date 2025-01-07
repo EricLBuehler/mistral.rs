@@ -82,12 +82,12 @@ impl Engine {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
         // TODO: We need a nice fix, when prefix caching is enabled setting the non-PA pre op to
+        // Nothing makes it work but breaks all other cases. This requires more investigation!!
         // no_prefix_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache;
         // TODO: Prefix caching is always disabled if using PagedAttention for now.
         // let no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
         //     || no_prefix_cache
         //     || no_kv_cache;
-        // Nothing makes it work but breaks all other cases. This requires more investigation!!
         let no_prefix_cache = true;
         Self {
             rx,
