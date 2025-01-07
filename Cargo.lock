@@ -395,7 +395,7 @@ checksum = "325918d6fe32f23b19878fe4b34794ae41fc19ddbe53b10571a4874d44ffd39b"
 [[package]]
 name = "candle-core"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=af655eb#af655eb77eaa25f9b8b3ab3f180a187e3bb2bc44"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=f524bc6#f524bc68a929e2404ea855f692bf30d98ff15119"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -426,7 +426,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=af655eb#af655eb77eaa25f9b8b3ab3f180a187e3bb2bc44"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=f524bc6#f524bc68a929e2404ea855f692bf30d98ff15119"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -458,7 +458,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=af655eb#af655eb77eaa25f9b8b3ab3f180a187e3bb2bc44"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=f524bc6#f524bc68a929e2404ea855f692bf30d98ff15119"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -466,7 +466,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=af655eb#af655eb77eaa25f9b8b3ab3f180a187e3bb2bc44"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=f524bc6#f524bc68a929e2404ea855f692bf30d98ff15119"
 dependencies = [
  "metal 0.27.0",
  "once_cell",
@@ -477,7 +477,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=af655eb#af655eb77eaa25f9b8b3ab3f180a187e3bb2bc44"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=f524bc6#f524bc68a929e2404ea855f692bf30d98ff15119"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -1180,12 +1180,13 @@ dependencies = [
 
 [[package]]
 name = "float8"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7c3475274d374d263c4c40c43ad854c5bdf733c7db775bbd3c1ca2ad7427978"
+checksum = "ea7c017f762b1198f03787816240bd8d07eb3dcea71262f6646b86d319b71460"
 dependencies = [
  "cudarc",
  "half",
+ "mistralrs_cudarc_fork",
  "num-traits",
  "rand",
  "rand_distr",
