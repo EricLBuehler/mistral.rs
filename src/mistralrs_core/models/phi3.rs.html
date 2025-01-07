@@ -1004,8 +1004,8 @@
             <span class="prelude-val">Some</span>(paged_attn) =&gt; <span class="kw">match </span>metadata {
                 <span class="prelude-val">Some</span>(((key_cache, value_cache), input_metadata)) =&gt; paged_attn.forward(
                     <span class="kw-2">&amp;</span>q,
-                    <span class="kw-2">&amp;</span>k,
-                    <span class="kw-2">&amp;</span>v,
+                    <span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>,
+                    <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>,
                     attention_mask,
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
@@ -1020,8 +1020,8 @@
                     </span><span class="macro">assert!</span>(attention_mask.is_some());
                     paged_attn.forward(
                         <span class="kw-2">&amp;</span>q,
-                        <span class="kw-2">&amp;</span>k,
-                        <span class="kw-2">&amp;</span>v,
+                        <span class="kw-2">&amp;</span>k.contiguous()<span class="question-mark">?</span>,
+                        <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>,
                         attention_mask,
                         <span class="prelude-val">None</span>,
                         <span class="prelude-val">None</span>,
