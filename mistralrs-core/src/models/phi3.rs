@@ -488,6 +488,7 @@ impl Model {
                 max_seq_len: cfg.max_position_embeddings,
                 mapper,
                 use_two_attention_masks: false,
+                use_sliding_window_attention_mask: true,
                 sliding_window: cfg.sliding_window,
                 final_logit_softcapping: None,
                 cfg: ModelConfigMetadata {

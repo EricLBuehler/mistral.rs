@@ -106,6 +106,7 @@ pub(crate) struct Model {
     pub max_seq_len: usize,
     pub mapper: Box<dyn DeviceMapper + Send + Sync>,
     pub use_two_attention_masks: bool,
+    pub use_sliding_window_attention_mask: bool,
     pub sliding_window: Option<usize>,
     pub final_logit_softcapping: Option<f64>,
     pub cfg: ModelConfigMetadata,
@@ -146,16 +147,28 @@ impl Model {
             )
         } else {
             (
-                CausalMasker.make_sliding_window_causal_mask_matrix(
-                    input_ids,
-                    metadata
-                        .as_ref()
-                        .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                        .unwrap_or(cache as &dyn PastKvLenCache),
-                    self.sliding_window,
-                    xs.dtype(),
-                    self.cfg.num_attn_heads,
-                )?,
+                if self.use_sliding_window_attention_mask {
+                    CausalMasker.make_sliding_window_causal_mask_matrix(
+                        input_ids,
+                        metadata
+                            .as_ref()
+                            .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                            .unwrap_or(cache as &dyn PastKvLenCache),
+                        self.sliding_window,
+                        xs.dtype(),
+                        self.cfg.num_attn_heads,
+                    )?
+                } else {
+                    CausalMasker.make_causal_mask_matrix(
+                        input_ids,
+                        metadata
+                            .as_ref()
+                            .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                            .unwrap_or(cache as &dyn PastKvLenCache),
+                        xs.dtype(),
+                        self.cfg.num_attn_heads,
+                    )?
+                },
                 None,
             )
         };
