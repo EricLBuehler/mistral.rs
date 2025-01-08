@@ -154,15 +154,16 @@ impl DequantizeOp {
             }
             BnbQuantType::Fp4 => {
                 let mut out = vec![T::zero(); self.shape.elem_count()];
-                for block_idx in (0..self.n).step_by(self.blocksize) {
-                    let valid_items = if self.n > self.blocksize + block_idx {
-                        self.blocksize
+                let blocksize = self.blocksize / 2;
+                for block_idx in (0..self.n).step_by(blocksize) {
+                    let valid_items = if self.n > blocksize + block_idx {
+                        blocksize
                     } else {
                         self.n - block_idx
                     };
                     let block_end = block_idx + valid_items;
 
-                    let local_abs_max = absmax[block_idx / self.blocksize];
+                    let local_abs_max = absmax[block_idx / blocksize];
 
                     for i in block_idx..block_end {
                         out[i * 2] =
@@ -177,15 +178,16 @@ impl DequantizeOp {
             }
             BnbQuantType::Nf4 => {
                 let mut out = vec![T::zero(); self.shape.elem_count()];
-                for block_idx in (0..self.n).step_by(self.blocksize) {
-                    let valid_items = if self.n > self.blocksize + block_idx {
-                        self.blocksize
+                let blocksize = self.blocksize / 2;
+                for block_idx in (0..self.n).step_by(blocksize) {
+                    let valid_items = if self.n > blocksize + block_idx {
+                        blocksize
                     } else {
                         self.n - block_idx
                     };
                     let block_end = block_idx + valid_items;
 
-                    let local_abs_max = absmax[block_idx / (self.blocksize / 2)];
+                    let local_abs_max = absmax[block_idx / blocksize];
 
                     for i in block_idx..block_end {
                         out[i * 2] =

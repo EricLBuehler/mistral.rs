@@ -61,10 +61,13 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
         "hqq8" => IsqType::HQQ8,
         "hqq4" => IsqType::HQQ4,
         "fp8" => IsqType::F8E4M3,
+        "fp4" => IsqType::FP4,
+        "nf4" => IsqType::NF4,
+        "int8" => IsqType::INT8,
         // "hqq3" => IsqType::HQQ3,
         // "hqq2" => IsqType::HQQ2,
         // "hqq1" => IsqType::HQQ1,
-        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`.")),
+        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `FP4`, `NF4`, `INT8`.")),
     };
     #[cfg(feature = "cuda")]
     {

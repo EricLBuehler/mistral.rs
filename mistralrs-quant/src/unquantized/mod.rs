@@ -10,12 +10,13 @@ use candle_core::{quantized::GgmlDType, DType, Device, DeviceLocation, Result, S
 use candle_nn::Linear;
 
 use crate::{
+    bitsandbytes::ISQ_BNB_BLOCKSIZE,
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
-    FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, QuantMethod, QuantMethodConfig,
-    QuantizedSerde, QuantizedSerdeType,
+    BnbLinear, BnbQuantType, FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, QuantMethod,
+    QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
@@ -216,6 +217,35 @@ impl QuantMethod for UnquantLinear {
                     dtype: DType::F8E4M3,
                 })?))
             }
+            Some(IsqType::FP4 | IsqType::NF4 | IsqType::INT8) => {
+                if imatrix_weight.is_some() {
+                    // TODO just warn?
+                    candle_core::bail!("HQQ does not support imatrix.");
+                }
+
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let bits = match dtype {
+                    Some(IsqType::FP4) => BnbQuantType::Fp4,
+                    Some(IsqType::NF4) => BnbQuantType::Nf4,
+                    Some(IsqType::INT8) => BnbQuantType::Int8,
+                    _ => candle_core::bail!("Expected a BNB ISQ type."),
+                };
+                let res = BnbLinear::quantize_onto(
+                    &self.w,
+                    bits,
+                    self.w.dtype().into(),
+                    ISQ_BNB_BLOCKSIZE,
+                    &device,
+                )?;
+                if let Some(ref bias) = self.b {
+                    let bias = bias
+                        .to_device(&device)?
+                        .to_dtype(res.dtype_and_device().0)?;
+                    Ok(Arc::new(res.with_bias(bias)))
+                } else {
+                    Ok(Arc::new(res))
+                }
+            }
             None => {
                 // Ignore imatrix altogether
 
@@ -251,7 +281,10 @@ impl QuantMethod for UnquantLinear {
             | IsqType::Q6K
             | IsqType::Q8K
             | IsqType::Q8_0
-            | IsqType::Q8_1 => None,
+            | IsqType::Q8_1
+            | IsqType::FP4
+            | IsqType::NF4
+            | IsqType::INT8 => None,
         }
     }
 
