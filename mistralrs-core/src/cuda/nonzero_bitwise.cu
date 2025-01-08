@@ -42,13 +42,24 @@ void count_nonzero(const T *d_in, const uint32_t N, uint32_t *h_out) {
     count_nonzero(d_in, N, &result);                                           \
     return result;                                                             \
   }
+#define COUNT_NONZERO_OP_DUMMY(RUST_NAME)                                      \
+  extern "C" uint32_t count_nonzero_##RUST_NAME(const uint16_t *d_in,          \
+                                                uint32_t N) {                  \
+    uint32_t result;                                                           \
+    count_nonzero(d_in, N, &result);                                           \
+    return result;                                                             \
+  }
 
 #if __CUDA_ARCH__ >= 800
 COUNT_NONZERO_OP(__nv_bfloat16, bf16)
+#else
+COUNT_NONZERO_OP_DUMMY(bf16)
 #endif
 
 #if __CUDA_ARCH__ >= 530
 COUNT_NONZERO_OP(__half, f16)
+#else
+COUNT_NONZERO_OP_DUMMY(f16)
 #endif
 
 COUNT_NONZERO_OP(float, f32)
@@ -115,12 +126,23 @@ void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
     nonzero(d_in, N, num_nonzero, dims, num_dims, d_out);                      \
   }
 
+#define NONZERO_OP_DUMMY(RUST_NAME)                                            \
+  extern "C" void nonzero_##RUST_NAME(                                         \
+      const uint16_t *d_in, uint32_t N, uint32_t num_nonzero,                  \
+      const uint32_t *dims, uint32_t num_dims, uint32_t *d_out) {              \
+    nonzero(d_in, N, num_nonzero, dims, num_dims, d_out);                      \
+  }
+
 #if __CUDA_ARCH__ >= 800
 NONZERO_OP(__nv_bfloat16, bf16)
+#else
+NONZERO_OP_DUMMY(bf16)
 #endif
 
 #if __CUDA_ARCH__ >= 530
 NONZERO_OP(__half, f16)
+#else
+NONZERO_OP_DUMMY(f16)
 #endif
 
 NONZERO_OP(float, f32)
