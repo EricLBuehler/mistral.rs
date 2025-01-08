@@ -3,6 +3,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <vector>
+#include <assert.h>
 
 #if __CUDA_ARCH__ >= 530
 #include "cuda_fp16.h"

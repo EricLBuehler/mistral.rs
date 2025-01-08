@@ -2,6 +2,7 @@
 // https://github.com/pytorch/pytorch/blob/65aa16f968af2cd18ff8c25cc657e7abda594bfc/aten/src/ATen/native/cuda/Nonzero.cu
 #include <cub/cub.cuh>
 #include <stdint.h>
+#include <assert.h>
 
 int next_power_of_2(const uint32_t num_nonzero) {
   int result = 1;
@@ -45,9 +46,7 @@ void count_nonzero(const T *d_in, const uint32_t N, uint32_t *h_out) {
 #define COUNT_NONZERO_OP_DUMMY(RUST_NAME)                                      \
   extern "C" uint32_t count_nonzero_##RUST_NAME(const uint16_t *d_in,          \
                                                 uint32_t N) {                  \
-    uint32_t result;                                                           \
-    count_nonzero(d_in, N, &result);                                           \
-    return result;                                                             \
+    return 0;                                                                  \
   }
 
 #if __CUDA_ARCH__ >= 800
@@ -130,7 +129,7 @@ void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
   extern "C" void nonzero_##RUST_NAME(                                         \
       const uint16_t *d_in, uint32_t N, uint32_t num_nonzero,                  \
       const uint32_t *dims, uint32_t num_dims, uint32_t *d_out) {              \
-    nonzero(d_in, N, num_nonzero, dims, num_dims, d_out);                      \
+    assert(false);                                                             \
   }
 
 #if __CUDA_ARCH__ >= 800
