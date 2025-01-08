@@ -7,12 +7,11 @@ use tokenizers::Tokenizer;
 use tracing::info;
 
 use crate::{
-    diffusion_models::{
+    common_models::{
         clip::text::{ClipConfig, ClipTextTransformer},
-        flux,
         t5::{self, T5EncoderModel},
-        DiffusionGenerationParams,
     },
+    diffusion_models::{flux, DiffusionGenerationParams},
     pipeline::DiffusionModel,
     utils::varbuilder_utils::from_mmaped_safetensors,
 };
@@ -110,7 +109,7 @@ fn get_t5_model(
     )?;
     let config_filename = repo.get("config.json").map_err(candle_core::Error::msg)?;
     let config = std::fs::read_to_string(config_filename)?;
-    let config: t5::Config = serde_json::from_str(&config).map_err(candle_core::Error::msg)?;
+    let config: t5::T5Config = serde_json::from_str(&config).map_err(candle_core::Error::msg)?;
 
     t5::T5EncoderModel::load(vb, &config, device, offloaded)
 }

@@ -14,7 +14,10 @@ use candle_core::{
     quantized::{QMatMul, QTensor},
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
-use candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
+use candle_nn::{
+    Conv1d, Conv1dConfig, Conv2d, Conv2dConfig, ConvTranspose1d, ConvTranspose1dConfig, Linear,
+    Module, VarBuilder,
+};
 use mistralrs_quant::QuantMethod;
 use serde::{Deserialize, Serialize};
 
@@ -1274,5 +1277,94 @@ impl Module for Conv3dNoBias {
         let xs2 = xs.i((.., .., 1, .., ..))?;
 
         (self.conv2d_1.forward(&xs1)? + self.conv2d_2.forward(&xs2)?)?.unsqueeze(2)
+    }
+}
+fn lp_norm(xs: &Tensor, p: usize, dim: usize) -> Result<Tensor> {
+    let l2_norm = xs.powf(p as f64)?.sum_keepdim(dim)?.sqrt()?;
+    Ok(l2_norm) //xs.broadcast_div(&l2_norm)
+}
+
+pub fn l2_norm(xs: &Tensor, dim: usize) -> Result<Tensor> {
+    xs.broadcast_div(&lp_norm(xs, 2, dim)?)
+}
+
+/// Conv1d from weight norm parts (weight_v, weight_g)
+pub fn wn_conv1d(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv1dConfig,
+    vb: VarBuilder,
+) -> Result<Conv1d> {
+    let wv = vb.get(
+        (out_channels, in_channels / cfg.groups, kernel_size),
+        "weight_v",
+    )?;
+    let v_norm = l2_norm(&wv, 1)?;
+
+    let wg = vb.get((out_channels, 1, 1), "weight_g")?;
+
+    let w = wg.broadcast_mul(&(wv / v_norm)?)?;
+
+    let bs = vb.get(out_channels, "bias")?;
+    Ok(Conv1d::new(w, Some(bs), cfg))
+}
+
+/// Conv transpose1d from weight norm parts (weight_v, weight_g)
+pub fn wn_conv_transpose1d(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: ConvTranspose1dConfig,
+    vb: VarBuilder,
+) -> Result<ConvTranspose1d> {
+    let wv = vb.get(
+        (out_channels, in_channels / cfg.groups, kernel_size),
+        "weight_v",
+    )?;
+    let v_norm = l2_norm(&wv, 1)?;
+
+    let wg = vb.get((out_channels, 1, 1), "weight_g")?;
+
+    let w = wg.broadcast_mul(&(wv / v_norm)?)?;
+
+    let bs = vb.get(out_channels, "bias")?;
+    Ok(ConvTranspose1d::new(w, Some(bs), cfg))
+}
+
+mod tests {
+    #[test]
+    fn l2_norm() {
+        use crate::layers::l2_norm;
+        use candle_core::{Device, Tensor};
+
+        let data = Tensor::new(
+            &[
+                [-0.2007f32, 0.2421, 0.8167],
+                [-0.2650f32, 0.0338, 0.5677],
+                [-0.2404f32, 0.8791, -0.2642],
+            ],
+            &Device::Cpu,
+        )
+        .unwrap();
+        let target = Tensor::new(
+            &[
+                [-0.2293f32, 0.2766, 0.9332],
+                [-0.4224f32, 0.0538, 0.9048],
+                [-0.2533f32, 0.9265, -0.2784],
+            ],
+            &Device::Cpu,
+        )
+        .unwrap();
+        let l2_norm = l2_norm(&data, 1).unwrap();
+        let diff = (l2_norm - target)
+            .unwrap()
+            .abs()
+            .unwrap()
+            .mean_all()
+            .unwrap()
+            .to_scalar::<f32>()
+            .unwrap();
+        assert!(diff < 0.1);
     }
 }
