@@ -422,7 +422,7 @@ async fn main() -> Result<()> {
         (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            MemoryGpuConfig::Amount(m),
+            MemoryGpuConfig::MbAmount(m),
         )?),
         (block_size, Some(_m), Some(f), None, true, false) => {
             info!("Both memory size, and usage were specified, defaulting to the usage value.");

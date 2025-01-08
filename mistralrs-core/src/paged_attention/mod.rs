@@ -54,7 +54,7 @@ pub enum AttentionImplementation {
 #[derive(Clone, Copy)]
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 pub enum MemoryGpuConfig {
-    Amount(usize),
+    MbAmount(usize),
     Utilization(f32),
     ContextSize(usize),
 }
@@ -104,7 +104,7 @@ pub fn calculate_cache_config(
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     let mem_gpu = match mem_gpu {
-        MemoryGpuConfig::Amount(v) => v,
+        MemoryGpuConfig::MbAmount(v) => v,
         MemoryGpuConfig::Utilization(f) => {
             let free = MemoryUsage.get_memory_available(device)? as f32 / SIZE_IN_MB as f32;
             let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
