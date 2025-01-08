@@ -43,13 +43,13 @@ void count_nonzero(const T *d_in, const uint32_t N, uint32_t *h_out) {
     return result;                                                             \
   }
 
-//#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800
 COUNT_NONZERO_OP(__nv_bfloat16, bf16)
-//#endif
+#endif
 
-//#if __CUDA_ARCH__ >= 530
+#if __CUDA_ARCH__ >= 530
 COUNT_NONZERO_OP(__half, f16)
-//#endif
+#endif
 
 COUNT_NONZERO_OP(float, f32)
 COUNT_NONZERO_OP(double, f64)
@@ -115,13 +115,13 @@ void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
     nonzero(d_in, N, num_nonzero, dims, num_dims, d_out);                      \
   }
 
-//#if __CUDA_ARCH__ >= 800
+#if __CUDA_ARCH__ >= 800
 NONZERO_OP(__nv_bfloat16, bf16)
-//#endif
+#endif
 
-//#if __CUDA_ARCH__ >= 530
+#if __CUDA_ARCH__ >= 530
 NONZERO_OP(__half, f16)
-//#endif
+#endif
 
 NONZERO_OP(float, f32)
 NONZERO_OP(double, f64)
