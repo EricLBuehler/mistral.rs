@@ -85,10 +85,102 @@ struct FloatVec<bf16_8_t> {
   using Type = Float8_;
 };
 
+// Define fallback implementations for BF16 operations.
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+inline __device__ float2 __bfloat1622float2_fallback(const __nv_bfloat162 val) {
+    float2 result;
+    unsigned int x = ((unsigned int)*reinterpret_cast<const unsigned short*>(&val.x)) << 16;
+    unsigned int y = ((unsigned int)*reinterpret_cast<const unsigned short*>(&val.y)) << 16;
+    result.x = __uint_as_float(x);
+    result.y = __uint_as_float(y);
+    return result;
+}
+
+inline __device__ __nv_bfloat162 __bfloat162bfloat162_fallback(const __nv_bfloat16 val) {
+    __nv_bfloat162 result;
+    unsigned short bits = *reinterpret_cast<const unsigned short*>(&val);
+    asm("mov.b16 %0, %1;" : "=h"((unsigned short&)result.x) : "h"(bits));
+    asm("mov.b16 %0, %1;" : "=h"((unsigned short&)result.y) : "h"(bits));
+    return result;
+}
+
+inline __device__ __nv_bfloat16 __hadd_fallback(__nv_bfloat16 a, __nv_bfloat16 b) {
+  
+    unsigned int a_bits = ((unsigned int)*reinterpret_cast<const unsigned short*>(&a)) << 16;
+    unsigned int b_bits = ((unsigned int)*reinterpret_cast<const unsigned short*>(&b)) << 16;
+    float fa = __uint_as_float(a_bits);
+    float fb = __uint_as_float(b_bits);
+    float sum = fa + fb;
+    unsigned short result = __float_as_uint(sum) >> 16;
+    return *reinterpret_cast<__nv_bfloat16*>(&result);
+}
+
+inline __device__ __nv_bfloat162 __hadd2_fallback(__nv_bfloat162 a, __nv_bfloat162 b) {
+    __nv_bfloat162 result;
+    result.x = __hadd_fallback(a.x, b.x);
+    result.y = __hadd_fallback(a.y, b.y);
+    return result;
+}
+
+inline __device__ __nv_bfloat16 __hmul_fallback(__nv_bfloat16 a, __nv_bfloat16 b) {
+    __nv_bfloat16 result;
+    unsigned int a_bits = ((unsigned int)*reinterpret_cast<const unsigned short*>(&a)) << 16;
+    unsigned int b_bits = ((unsigned int)*reinterpret_cast<const unsigned short*>(&b)) << 16;
+    float fa = __uint_as_float(a_bits);
+    float fb = __uint_as_float(b_bits);
+    float prod = fa * fb;
+    unsigned short res = __float_as_uint(prod) >> 16;
+    asm("mov.b16 %0, %1;" : "=h"((unsigned short&)result) : "h"(res));
+    return result;
+}
+
+inline __device__ __nv_bfloat162 __hmul2_fallback(__nv_bfloat162 a, __nv_bfloat162 b) {
+    __nv_bfloat162 result;
+    result.x = __hmul_fallback(a.x, b.x);
+    result.y = __hmul_fallback(a.y, b.y);
+    return result;
+}
+
+inline __device__ __nv_bfloat162 __float22bfloat162_rn_fallback(float2 f) {
+    __nv_bfloat162 result;
+    // Add proper rounding logic
+    unsigned int x = __float_as_uint(f.x);
+    unsigned int y = __float_as_uint(f.y);
+    unsigned short rx = (x >> 16) + ((x & 0x7FFF) > 0x4000);
+    unsigned short ry = (y >> 16) + ((y & 0x7FFF) > 0x4000);
+    asm("mov.b16 %0, %1;" : "=h"((unsigned short&)result.x) : "h"(rx));
+    asm("mov.b16 %0, %1;" : "=h"((unsigned short&)result.y) : "h"(ry));
+    return result;
+}
+
+inline __device__ __nv_bfloat162 __hfma2_fallback(__nv_bfloat162 a, __nv_bfloat162 b, __nv_bfloat162 c) {
+    __nv_bfloat162 result;
+    // Use direct float computation for better numerical stability
+    float2 fa = __bfloat1622float2_fallback(a);
+    float2 fb = __bfloat1622float2_fallback(b);
+    float2 fc = __bfloat1622float2_fallback(c);
+    
+    // Use regular multiplication and addition instead of fmaf
+    float2 fres;
+    fres.x = (fa.x * fb.x) + fc.x;
+    fres.y = (fa.y * fb.y) + fc.y;
+    
+    // Convert back with proper rounding
+    return __float22bfloat162_rn_fallback(fres);
+}
+
+inline __device__ __nv_bfloat16 __ushort_as_bfloat16_fallback(const unsigned short int i) {
+    __nv_bfloat16 result;
+    // Efficient bit manipulation for older architectures
+    asm("mov.b16 %0, %1;" : "=h"((unsigned short&)result) : "h"(i));
+    return result;
+}
+#endif
+
 // Utility functions for type conversions.
 inline __device__ float2 bf1622float2(const __nv_bfloat162 val) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __bfloat1622float2_fallback(val);
 #else
   return __bfloat1622float2(val);
 #endif
@@ -96,7 +188,7 @@ inline __device__ float2 bf1622float2(const __nv_bfloat162 val) {
 
 inline __device__ __nv_bfloat162 bf162bf162(const __nv_bfloat16 val) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __bfloat162bfloat162_fallback(val);
 #else
   return __bfloat162bfloat162(val);
 #endif
@@ -105,7 +197,11 @@ inline __device__ __nv_bfloat162 bf162bf162(const __nv_bfloat16 val) {
 // Vector addition.
 inline __device__ __nv_bfloat16 add(__nv_bfloat16 a, __nv_bfloat16 b) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  #ifndef USE_ROCM
+    assert(false);
+  #else
+    return __hadd_fallback(a, b);
+  #endif
 #else
   #ifndef USE_ROCM
     return a + b;
@@ -117,7 +213,7 @@ inline __device__ __nv_bfloat16 add(__nv_bfloat16 a, __nv_bfloat16 b) {
 
 inline __device__ __nv_bfloat162 add(__nv_bfloat162 a, __nv_bfloat162 b) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __hadd2_fallback(a, b);
 #else
   return __hadd2(a, b);
 #endif
@@ -164,7 +260,7 @@ inline __device__ Float8_ add(bf16_8_t a, Float8_ fb) {
 template<>
 inline __device__ __nv_bfloat16 mul(__nv_bfloat16 a, __nv_bfloat16 b) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __hmul_fallback(a, b);
 #else
   return __hmul(a, b);
 #endif
@@ -173,7 +269,7 @@ inline __device__ __nv_bfloat16 mul(__nv_bfloat16 a, __nv_bfloat16 b) {
 template<>
 inline __device__ __nv_bfloat162 mul(__nv_bfloat162 a, __nv_bfloat162 b) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __hmul2_fallback(a, b);
 #else
   return __hmul2(a, b);
 #endif
@@ -282,7 +378,7 @@ inline __device__ Float8_ mul(__nv_bfloat16 a, bf16_8_t b) {
 // Vector fused multiply-add.
 inline __device__ __nv_bfloat162 fma(__nv_bfloat162 a, __nv_bfloat162 b, __nv_bfloat162 c) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __hfma2_fallback(a, b, c);
 #else
   return __hfma2(a, b, c);
 #endif
@@ -290,7 +386,7 @@ inline __device__ __nv_bfloat162 fma(__nv_bfloat162 a, __nv_bfloat162 b, __nv_bf
 
 inline __device__ __nv_bfloat162 fma(__nv_bfloat16 a, __nv_bfloat162 b, __nv_bfloat162 c) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __hfma2_fallback(bf162bf162(a), b, c);
 #else
   return __hfma2(bf162bf162(a), b, c);
 #endif
@@ -407,15 +503,17 @@ inline __device__ void from_float(__nv_bfloat16& dst, float src) {
 
 inline __device__ void from_float(__nv_bfloat162& dst, float2 src) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  dst = __float22bfloat162_rn_fallback(src);
 #else
   dst = __float22bfloat162_rn(src);
 #endif
 }
 
+
 inline __device__ void from_float(bf16_4_t& dst, Float4_ src) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  dst.x = __float22bfloat162_rn_fallback(src.x);
+  dst.y = __float22bfloat162_rn_fallback(src.y);
 #else
   dst.x = __float22bfloat162_rn(src.x);
   dst.y = __float22bfloat162_rn(src.y);
@@ -424,7 +522,10 @@ inline __device__ void from_float(bf16_4_t& dst, Float4_ src) {
 
 inline __device__ void from_float(bf16_8_t& dst, Float8_ src) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  dst.x = __float22bfloat162_rn_fallback(src.x);
+  dst.y = __float22bfloat162_rn_fallback(src.y);
+  dst.z = __float22bfloat162_rn_fallback(src.z);
+  dst.w = __float22bfloat162_rn_fallback(src.w);
 #else
   dst.x = __float22bfloat162_rn(src.x);
   dst.y = __float22bfloat162_rn(src.y);
@@ -441,7 +542,8 @@ inline __device__ float to_float(__nv_bfloat16 u) {
 // Zero-out a variable.
 inline __device__ void zero(__nv_bfloat16& dst) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  unsigned short zero_bits = 0x0000U;
+  dst = __ushort_as_bfloat16_fallback(zero_bits);
 #else
   // Same as CUDART_ZERO_BF16 introduced in CUDA 12.2.
   dst = __ushort_as_bfloat16((unsigned short)0x0000U);
