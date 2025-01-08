@@ -764,7 +764,15 @@
 <a href="#763" id="763">763</a>
 <a href="#764" id="764">764</a>
 <a href="#765" id="765">765</a>
-<a href="#766" id="766">766</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{ops::Mul, sync::Arc};
 
@@ -776,7 +784,10 @@
 <span class="kw">use </span>mistralrs_quant::QuantMethod;
 
 <span class="kw">use crate</span>::{
-    attention::SdpaParams, layers::Sdpa, pipeline::IsqModel, utils::unvarbuilder::UnVarBuilder,
+    attention::SdpaParams,
+    layers::{GetFloatInfo, Sdpa},
+    pipeline::IsqModel,
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 <span class="kw">use super</span>::{MLlamaVisionConfig, VisionActivation};
@@ -1207,8 +1218,13 @@
 
     <span class="comment">// Reshape to 2d and create 4d attn mask
     // (batch_size, 1, max_num_tiles * target_length, max_num_tiles * target_length)
-    </span>attention_mask = attention_mask.reshape((bs, max_num_tiles * target_length, <span class="number">1</span>))<span class="question-mark">?</span>;
-    attention_mask.matmul(<span class="kw-2">&amp;</span>attention_mask.transpose(D::Minus1, D::Minus2)<span class="question-mark">?</span>.mul(-<span class="number">1e15</span>)<span class="question-mark">?</span>)
+    </span><span class="kw">let </span>neg_inf_value = dtype.finfo()<span class="question-mark">?</span>.min;
+    attention_mask = attention_mask.reshape((bs, max_num_tiles * target_length, <span class="number">1</span>))<span class="question-mark">?</span>;
+    attention_mask.matmul(
+        <span class="kw-2">&amp;</span>attention_mask
+            .transpose(D::Minus1, D::Minus2)<span class="question-mark">?
+            </span>.mul(neg_inf_value)<span class="question-mark">?</span>,
+    )
 }
 
 <span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">struct </span>MLlamaVisionModel {

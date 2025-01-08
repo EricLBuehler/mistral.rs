@@ -773,63 +773,17 @@
 <a href="#772" id="772">772</a>
 <a href="#773" id="773">773</a>
 <a href="#774" id="774">774</a>
-<a href="#775" id="775">775</a>
-<a href="#776" id="776">776</a>
-<a href="#777" id="777">777</a>
-<a href="#778" id="778">778</a>
-<a href="#779" id="779">779</a>
-<a href="#780" id="780">780</a>
-<a href="#781" id="781">781</a>
-<a href="#782" id="782">782</a>
-<a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a>
-<a href="#785" id="785">785</a>
-<a href="#786" id="786">786</a>
-<a href="#787" id="787">787</a>
-<a href="#788" id="788">788</a>
-<a href="#789" id="789">789</a>
-<a href="#790" id="790">790</a>
-<a href="#791" id="791">791</a>
-<a href="#792" id="792">792</a>
-<a href="#793" id="793">793</a>
-<a href="#794" id="794">794</a>
-<a href="#795" id="795">795</a>
-<a href="#796" id="796">796</a>
-<a href="#797" id="797">797</a>
-<a href="#798" id="798">798</a>
-<a href="#799" id="799">799</a>
-<a href="#800" id="800">800</a>
-<a href="#801" id="801">801</a>
-<a href="#802" id="802">802</a>
-<a href="#803" id="803">803</a>
-<a href="#804" id="804">804</a>
-<a href="#805" id="805">805</a>
-<a href="#806" id="806">806</a>
-<a href="#807" id="807">807</a>
-<a href="#808" id="808">808</a>
-<a href="#809" id="809">809</a>
-<a href="#810" id="810">810</a>
-<a href="#811" id="811">811</a>
-<a href="#812" id="812">812</a>
-<a href="#813" id="813">813</a>
-<a href="#814" id="814">814</a>
-<a href="#815" id="815">815</a>
-<a href="#816" id="816">816</a>
-<a href="#817" id="817">817</a>
-<a href="#818" id="818">818</a>
-<a href="#819" id="819">819</a>
-<a href="#820" id="820">820</a>
-<a href="#821" id="821">821</a>
-<a href="#822" id="822">822</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#775" id="775">775</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// T5 Text Model
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, VarBuilder};
-<span class="kw">use </span>float8::F8E4M3;
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>std::sync::Arc;
+
+<span class="kw">use </span><span class="kw">crate</span>::layers::clamp_for_f16;
 
 <span class="kw">fn </span>default_relative_attention_max_distance() -&gt; usize {
     <span class="number">128
@@ -1423,54 +1377,6 @@
         };
         <span class="prelude-val">Ok</span>(())
     }
-}
-
-<span class="kw">trait </span>TensorInfExtend {
-    <span class="kw">fn </span>is_inf(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;
-    <span class="kw">where
-        </span><span class="self">Self</span>: Sized;
-    <span class="kw">fn </span>any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt;;
-}
-
-<span class="kw">impl </span>TensorInfExtend <span class="kw">for </span>Tensor {
-    <span class="kw">fn </span>is_inf(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="self">self</span>.broadcast_eq(<span class="kw-2">&amp;</span>Tensor::new(f64::INFINITY, <span class="self">self</span>.device())<span class="question-mark">?</span>.to_dtype(<span class="self">self</span>.dtype())<span class="question-mark">?</span>)
-    }
-
-    <span class="kw">fn </span>any(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
-        <span class="kw">let </span>sum = <span class="self">self</span>.sum_all()<span class="question-mark">?</span>;
-        <span class="kw">match </span><span class="self">self</span>.dtype() {
-            DType::U8 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;u8&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
-            DType::U32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;u32&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
-            DType::I16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i16&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
-            DType::I32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i32&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
-            DType::I64 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;i64&gt;()<span class="question-mark">? </span>== <span class="number">0</span>),
-            DType::F16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;half::f16&gt;()<span class="question-mark">? </span>== half::f16::from_f32_const(<span class="number">0.</span>)),
-            DType::BF16 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;half::bf16&gt;()<span class="question-mark">? </span>== half::bf16::from_f32_const(<span class="number">0.</span>)),
-            DType::F32 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;f32&gt;()<span class="question-mark">? </span>== <span class="number">0.</span>),
-            DType::F64 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;f64&gt;()<span class="question-mark">? </span>== <span class="number">0.</span>),
-            DType::F8E4M3 =&gt; <span class="prelude-val">Ok</span>(sum.to_scalar::&lt;F8E4M3&gt;()<span class="question-mark">? </span>== F8E4M3::ZERO),
-        }
-    }
-}
-
-<span class="kw">fn </span>clamp_for_f16(xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="kw">let </span><span class="kw-2">mut </span>max = <span class="kw">match </span>xs.dtype() {
-        DType::U8 =&gt; u8::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
-        DType::U32 =&gt; u32::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
-        DType::I16 =&gt; i16::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
-        DType::I32 =&gt; i32::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
-        DType::I64 =&gt; i64::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
-        DType::F16 =&gt; half::f16::MAX.to_f64_const() - <span class="number">1000.</span>,
-        DType::BF16 =&gt; half::bf16::MAX.to_f64_const() - <span class="number">1000.</span>,
-        DType::F32 =&gt; f32::MAX <span class="kw">as </span>f64 - <span class="number">1000.</span>,
-        DType::F64 =&gt; f64::MAX - <span class="number">1000.</span>,
-        DType::F8E4M3 =&gt; F8E4M3::MAX.to_f64() - <span class="number">1000.</span>,
-    };
-    <span class="kw">if </span>xs.is_inf()<span class="question-mark">?</span>.any()<span class="question-mark">? </span>{
-        max -= <span class="number">1000.</span>;
-    }
-    xs.clamp(-max, max)
 }
 
 <span class="attr">#[derive(Debug, Clone)]

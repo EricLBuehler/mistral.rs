@@ -295,13 +295,7 @@
 <a href="#294" id="294">294</a>
 <a href="#295" id="295">295</a>
 <a href="#296" id="296">296</a>
-<a href="#297" id="297">297</a>
-<a href="#298" id="298">298</a>
-<a href="#299" id="299">299</a>
-<a href="#300" id="300">300</a>
-<a href="#301" id="301">301</a>
-<a href="#302" id="302">302</a>
-<a href="#303" id="303">303</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#297" id="297">297</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
 <span class="kw">mod </span>inputs_processor;
@@ -323,6 +317,7 @@
 <span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
+    layers::GetFloatInfo,
     layers_masker::masked_fill,
     ops::RepeatInterleaveOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -349,18 +344,18 @@
 
     <span class="comment">// Invert the mask
     </span><span class="kw">let </span>inverted_cross_attn_mask = (<span class="number">1. </span>- cross_attn_mask)<span class="question-mark">?</span>;
-    <span class="kw">const </span>NEG_INF_VALUE: f32 = -<span class="number">1e15</span>;
+    <span class="kw">let </span>neg_inf_value = dtype.finfo()<span class="question-mark">?</span>.min;
     cross_attn_mask = masked_fill(
         <span class="kw-2">&amp;</span>inverted_cross_attn_mask,
         <span class="kw-2">&amp;</span>inverted_cross_attn_mask.ne(<span class="number">0.</span>)<span class="question-mark">?</span>,
-        NEG_INF_VALUE,
+        neg_inf_value <span class="kw">as </span>f32,
     )<span class="question-mark">?</span>;
 
     <span class="comment">// Apply full-row bias which return 4d tensor of shape (b, h, s1, 1) where
     // value is 0 if a full row in cross attn mask's last dimension contains
     // negative infinity values, otherwise it's 1
     </span><span class="kw">let </span>full_text_row_masked_out_mask = cross_attn_mask
-        .ne(NEG_INF_VALUE)<span class="question-mark">?
+        .ne(neg_inf_value)<span class="question-mark">?
         </span>.sum(D::Minus1)<span class="question-mark">?
         </span>.ne(<span class="number">0.</span>)<span class="question-mark">?
         </span>.unsqueeze(D::Minus1)<span class="question-mark">?</span>;
@@ -390,16 +385,11 @@
         attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>real_dev = normal_loading_metadata.real_device.clone();
-        <span class="comment">// This vision model is very sensitive.
-        </span><span class="kw">let </span>vision_model_dtype = <span class="kw">if </span>vb.dtype() == DType::F16 {
-            DType::F32
-        } <span class="kw">else </span>{
-            vb.dtype()
-        };
+        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>vb.pp(<span class="string">"multi_modal_projector"</span>).get_unchecked(<span class="string">"weight"</span>));
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             vision_model: MLlamaVisionModel::new(
                 <span class="kw-2">&amp;</span>cfg.vision_config,
-                vb.pp(<span class="string">"vision_model"</span>).set_dtype(vision_model_dtype),
+                vb.pp(<span class="string">"vision_model"</span>),
                 <span class="kw-2">&amp;</span>real_dev,
             )<span class="question-mark">?</span>,
             language_model: MLlamaTextModel::new(
@@ -412,9 +402,7 @@
             multi_modal_projector: linear(
                 cfg.vision_config.vision_output_dim,
                 cfg.text_config.hidden_size,
-                vb.pp(<span class="string">"multi_modal_projector"</span>)
-                    .set_device(real_dev.clone())
-                    .set_dtype(vision_model_dtype),
+                vb.pp(<span class="string">"multi_modal_projector"</span>).set_device(real_dev.clone()),
             )<span class="question-mark">?</span>,
             hidden_size: cfg.text_config.hidden_size,
             dtype: vb.dtype(),
