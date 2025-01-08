@@ -294,8 +294,7 @@
 <a href="#293" id="293">293</a>
 <a href="#294" id="294">294</a>
 <a href="#295" id="295">295</a>
-<a href="#296" id="296">296</a>
-<a href="#297" id="297">297</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#296" id="296">296</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
 <span class="kw">mod </span>inputs_processor;
@@ -385,7 +384,6 @@
         attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>real_dev = normal_loading_metadata.real_device.clone();
-        <span class="macro">dbg!</span>(<span class="kw-2">&amp;</span>vb.pp(<span class="string">"multi_modal_projector"</span>).get_unchecked(<span class="string">"weight"</span>));
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             vision_model: MLlamaVisionModel::new(
                 <span class="kw-2">&amp;</span>cfg.vision_config,
