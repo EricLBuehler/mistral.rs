@@ -177,7 +177,7 @@
 <span class="attr">#[derive(Clone, Copy)]
 #[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyo3::pyclass)]
 </span><span class="kw">pub enum </span>MemoryGpuConfig {
-    Amount(usize),
+    MbAmount(usize),
     Utilization(f32),
     ContextSize(usize),
 }
@@ -227,7 +227,7 @@
 
     <span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     </span><span class="kw">let </span>mem_gpu = <span class="kw">match </span>mem_gpu {
-        MemoryGpuConfig::Amount(v) =&gt; v,
+        MemoryGpuConfig::MbAmount(v) =&gt; v,
         MemoryGpuConfig::Utilization(f) =&gt; {
             <span class="kw">let </span>free = MemoryUsage.get_memory_available(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32;
             <span class="kw">let </span>total = MemoryUsage.get_total_memory(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32;

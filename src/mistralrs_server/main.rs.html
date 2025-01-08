@@ -931,7 +931,7 @@
         (block_size, <span class="prelude-val">Some</span>(m), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
             block_size,
             <span class="number">512</span>,
-            MemoryGpuConfig::Amount(m),
+            MemoryGpuConfig::MbAmount(m),
         )<span class="question-mark">?</span>),
         (block_size, <span class="prelude-val">Some</span>(_m), <span class="prelude-val">Some</span>(f), <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; {
             <span class="macro">info!</span>(<span class="string">"Both memory size, and usage were specified, defaulting to the usage value."</span>);
