@@ -88,7 +88,6 @@ impl MLlamaModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let real_dev = normal_loading_metadata.real_device.clone();
-        dbg!(&vb.pp("multi_modal_projector").get_unchecked("weight"));
         Ok(Self {
             vision_model: MLlamaVisionModel::new(
                 &cfg.vision_config,
