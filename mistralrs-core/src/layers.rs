@@ -15,6 +15,8 @@ use candle_core::{
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
 use candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
+use float8::F8E4M3;
+use half::{bf16, f16};
 use mistralrs_quant::QuantMethod;
 use serde::{Deserialize, Serialize};
 
@@ -1274,5 +1276,108 @@ impl Module for Conv3dNoBias {
         let xs2 = xs.i((.., .., 1, .., ..))?;
 
         (self.conv2d_1.forward(&xs1)? + self.conv2d_2.forward(&xs2)?)?.unsqueeze(2)
+    }
+}
+
+pub trait TensorInfExtend {
+    fn is_inf(&self) -> Result<Self>
+    where
+        Self: Sized;
+    fn any(&self) -> Result<bool>;
+}
+
+impl TensorInfExtend for Tensor {
+    fn is_inf(&self) -> Result<Self> {
+        self.broadcast_eq(&Tensor::new(f32::INFINITY, self.device())?.to_dtype(self.dtype())?)
+    }
+
+    fn any(&self) -> Result<bool> {
+        let sum = self.sum_all()?;
+        match self.dtype() {
+            DType::U8 => Ok(sum.to_scalar::<u8>()? == 0),
+            DType::U32 => Ok(sum.to_scalar::<u32>()? == 0),
+            DType::I16 => Ok(sum.to_scalar::<i16>()? == 0),
+            DType::I32 => Ok(sum.to_scalar::<i32>()? == 0),
+            DType::I64 => Ok(sum.to_scalar::<i64>()? == 0),
+            DType::F16 => Ok(sum.to_scalar::<half::f16>()? == half::f16::from_f32_const(0.)),
+            DType::BF16 => Ok(sum.to_scalar::<half::bf16>()? == half::bf16::from_f32_const(0.)),
+            DType::F32 => Ok(sum.to_scalar::<f32>()? == 0.),
+            DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
+            DType::F8E4M3 => Ok(sum.to_scalar::<F8E4M3>()? == F8E4M3::ZERO),
+        }
+    }
+}
+
+pub fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
+    let mut max = match xs.dtype() {
+        DType::U8 => u8::MAX as f32 - 1000.,
+        DType::U32 => u32::MAX as f32 - 1000.,
+        DType::I16 => i16::MAX as f32 - 1000.,
+        DType::I32 => i32::MAX as f32 - 1000.,
+        DType::I64 => i64::MAX as f32 - 1000.,
+        DType::F16 => half::f16::MAX.to_f32_const() - 1000.,
+        DType::BF16 => half::bf16::MAX.to_f32_const() - 1000.,
+        DType::F32 => f32::MAX - 1000.,
+        DType::F64 => f64::MAX as f32 - 1000.,
+        DType::F8E4M3 => F8E4M3::MAX.to_f32() - 1000.,
+    };
+    if xs.is_inf()?.any()? {
+        max -= 1000.;
+    }
+    xs.clamp(-max, max)
+}
+
+pub struct FloatInfo {
+    /// Minimum representable value.
+    pub min: f64,
+    /// Maximum representable value.
+    pub max: f64,
+    /// The difference between 1.0 and the next smallest representable float larger than 1.0.
+    pub eps: f64,
+    pub dtype: DType,
+}
+
+pub trait GetFloatInfo {
+    fn finfo(&self) -> Result<FloatInfo>;
+}
+
+impl GetFloatInfo for DType {
+    fn finfo(&self) -> Result<FloatInfo> {
+        let finfo = match self {
+            Self::BF16 => FloatInfo {
+                min: bf16::MIN.to_f64(),
+                max: bf16::MAX.to_f64(),
+                eps: bf16::EPSILON.to_f64(),
+                dtype: DType::BF16,
+            },
+            Self::F16 => FloatInfo {
+                min: f16::MIN.to_f64(),
+                max: f16::MAX.to_f64(),
+                eps: f16::EPSILON.to_f64(),
+                dtype: DType::F16,
+            },
+            Self::F32 => FloatInfo {
+                min: f32::MIN as f64,
+                max: f32::MAX as f64,
+                eps: f32::EPSILON as f64,
+                dtype: DType::F32,
+            },
+            Self::F64 => FloatInfo {
+                min: f64::MIN,
+                max: f64::MAX,
+                eps: f64::EPSILON,
+                dtype: DType::F64,
+            },
+            Self::F8E4M3 => FloatInfo {
+                min: F8E4M3::MIN.to_f64(),
+                max: F8E4M3::MAX.to_f64(),
+                eps: F8E4M3::EPSILON.to_f64(),
+                dtype: DType::F8E4M3,
+            },
+            other => {
+                candle_core::bail!("Expected a float type for `GetFloatInfo`, got {other:?}");
+            }
+        };
+        Ok(finfo)
     }
 }
