@@ -272,7 +272,7 @@ class Runner:
             It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
         - `num_device_layers` sets the number of layers to load and run on each device.
             Each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
-            the corresponding number of layers.
+            the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
         - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
         - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
         - `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
