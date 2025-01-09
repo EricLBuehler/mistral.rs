@@ -363,20 +363,14 @@ pub trait DeviceMappedModelLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
-        unimplemented!("eventually this method will be required")
-    }
+    ) -> Result<usize>;
     fn per_layer_size_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
-        unimplemented!("eventually this method will be required")
-    }
-    fn num_layers(&self, config: &str) -> Result<usize> {
-        unimplemented!("eventually this method will be required")
-    }
+    ) -> Result<usize>;
+    fn num_layers(&self, config: &str) -> Result<usize>;
 
     /// weight_pack_factor only applies to quantized weights.
     fn get_device_layers(
