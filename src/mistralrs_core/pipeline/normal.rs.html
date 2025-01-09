@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/normal.rs`."><title>normal.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b0742ba02757f159.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.83.0 (90b35a623 2024-11-26)" data-channel="1.83.0" data-search-js="search-f0d225181b97f9a4.js" data-settings-js="settings-805db61a62df4bd2.js" ><script src="../../../static.files/storage-1d39b6787ed640ff.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-f070b9041d14864c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-0111fcff984fae8f.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>normal.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/normal.rs`."><title>normal.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>normal.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -954,7 +954,68 @@
 <a href="#953" id="953">953</a>
 <a href="#954" id="954">954</a>
 <a href="#955" id="955">955</a>
-<a href="#956" id="956">956</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
+<a href="#975" id="975">975</a>
+<a href="#976" id="976">976</a>
+<a href="#977" id="977">977</a>
+<a href="#978" id="978">978</a>
+<a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a>
+<a href="#983" id="983">983</a>
+<a href="#984" id="984">984</a>
+<a href="#985" id="985">985</a>
+<a href="#986" id="986">986</a>
+<a href="#987" id="987">987</a>
+<a href="#988" id="988">988</a>
+<a href="#989" id="989">989</a>
+<a href="#990" id="990">990</a>
+<a href="#991" id="991">991</a>
+<a href="#992" id="992">992</a>
+<a href="#993" id="993">993</a>
+<a href="#994" id="994">994</a>
+<a href="#995" id="995">995</a>
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a>
+<a href="#1003" id="1003">1003</a>
+<a href="#1004" id="1004">1004</a>
+<a href="#1005" id="1005">1005</a>
+<a href="#1006" id="1006">1006</a>
+<a href="#1007" id="1007">1007</a>
+<a href="#1008" id="1008">1008</a>
+<a href="#1009" id="1009">1009</a>
+<a href="#1010" id="1010">1010</a>
+<a href="#1011" id="1011">1011</a>
+<a href="#1012" id="1012">1012</a>
+<a href="#1013" id="1013">1013</a>
+<a href="#1014" id="1014">1014</a>
+<a href="#1015" id="1015">1015</a>
+<a href="#1016" id="1016">1016</a>
+<a href="#1017" id="1017">1017</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
@@ -973,27 +1034,26 @@
     Starcoder2Loader,
 };
 <span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeExpertType;
-<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
+<span class="kw">use </span><span class="kw">crate</span>::device_map::{<span class="self">self</span>, DeviceMapper};
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::get_chat_template;
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::isq::UqffFullSer;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::isq::{UqffFullSer, UQFF_RESIDUAL_SAFETENSORS};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::make_prompt_chunk;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher_v2::PrefixCacheManagerV2;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
-<span class="kw">use </span><span class="kw">crate</span>::utils::debug::DeviceRepr;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    normal_model_loader, xlora_model_loader, DeviceMapSetting, PagedAttentionConfig, Pipeline,
     Topology, TryIntoDType,
 };
-<span class="kw">use </span>anyhow::Result;
+<span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_quant::IsqType;
@@ -1189,7 +1249,7 @@
         dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
@@ -1229,26 +1289,88 @@
         dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
         device: <span class="kw-2">&amp;</span>Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        <span class="kw-2">mut </span>mapper: DeviceMapSetting,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
-        <span class="comment">// Otherwise, the device mapper will print it
-        </span><span class="kw">if </span>mapper.is_dummy()
-            &amp;&amp; (<span class="self">self</span>.config.topology.is_none()
-                || <span class="self">self
-                    </span>.config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map()))
-        {
-            <span class="macro">info!</span>(
-                <span class="string">"Loading model `{}` on {}."</span>,
-                <span class="self">self</span>.get_id(),
-                device.device_pretty_repr()
-            );
+
+        <span class="comment">// If auto, convert to Map
+        </span><span class="kw">if let </span>DeviceMapSetting::Auto = mapper.clone() {
+            <span class="kw">let </span>devices = device_map::get_all_similar_devices(device)<span class="question-mark">?</span>;
+            <span class="comment">// Initial dtype
+            </span><span class="kw">let </span>dtype = dtype.try_into_dtype(<span class="kw-2">&amp;</span>devices.iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())<span class="question-mark">?</span>;
+
+            <span class="comment">// ISQ or UQFF: quantized path
+            // Match logic below where UQFF has priority
+            </span><span class="kw">let </span>(per_layer_size_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(serialized) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
+                    <span class="kw">let </span>parent = serialized
+                        .parent()
+                        .context(<span class="string">"Target UQFF path must have a filename!"</span>)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>residual = parent.join(UQFF_RESIDUAL_SAFETENSORS);
+
+                    <span class="kw">let </span>ser_total_size = {
+                        <span class="kw">let </span>ser_artifacts = <span class="kw">unsafe </span>{
+                            candle_core::safetensors::MmapedSafetensors::new(serialized)<span class="question-mark">?
+                        </span>};
+                        ser_artifacts
+                            .tensors()
+                            .iter()
+                            .map(|(<span class="kw">_</span>, t)| t.data().len())
+                            .sum::&lt;usize&gt;()
+                    };
+                    <span class="kw">let </span>res_total_size = {
+                        <span class="kw">let </span>res_artifacts =
+                            <span class="kw">unsafe </span>{ candle_core::safetensors::MmapedSafetensors::new(residual)<span class="question-mark">? </span>};
+                        res_artifacts
+                            .tensors()
+                            .iter()
+                            .map(|(<span class="kw">_</span>, t)| t.data().len())
+                            .sum::&lt;usize&gt;()
+                    };
+                    <span class="kw">let </span>size_per_layer = ser_total_size / <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>;
+
+                    <span class="comment">// This is not completely correct but hopefully close enough.
+                    // For example, the norms are not necessarily correctly done.
+                    </span>(size_per_layer, res_total_size, ser_total_size)
+                } <span class="kw">else if let </span><span class="prelude-val">Some</span>(isq) = in_situ_quant {
+                    <span class="kw">let </span>weight_pack_factor = isq.pack_factor(dtype);
+                    <span class="kw">let </span>per_layer_size_in_bytes =
+                        <span class="self">self</span>.inner
+                            .per_layer_size_in_bytes(<span class="kw-2">&amp;</span>config, dtype, weight_pack_factor)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>non_mapped_size_in_bytes =
+                        <span class="self">self</span>.inner
+                            .non_mapped_size_in_bytes(<span class="kw-2">&amp;</span>config, dtype, weight_pack_factor)<span class="question-mark">?</span>;
+                    (
+                        per_layer_size_in_bytes,
+                        non_mapped_size_in_bytes,
+                        per_layer_size_in_bytes * <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?
+                            </span>+ non_mapped_size_in_bytes,
+                    )
+                } <span class="kw">else </span>{
+                    <span class="kw">let </span>per_layer_size_in_bytes =
+                        <span class="self">self</span>.inner.per_layer_size_in_bytes(<span class="kw-2">&amp;</span>config, dtype, <span class="number">1</span>)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>non_mapped_size_in_bytes =
+                        <span class="self">self</span>.inner.non_mapped_size_in_bytes(<span class="kw-2">&amp;</span>config, dtype, <span class="number">1</span>)<span class="question-mark">?</span>;
+                    (
+                        per_layer_size_in_bytes,
+                        non_mapped_size_in_bytes,
+                        per_layer_size_in_bytes * <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?
+                            </span>+ non_mapped_size_in_bytes,
+                    )
+                };
+            <span class="kw">let </span>new = <span class="self">self</span>.inner.get_device_layers(
+                <span class="kw-2">&amp;</span>config,
+                <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
+                per_layer_size_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                <span class="kw-2">&amp;</span>devices,
+            )<span class="question-mark">?</span>;
+            mapper = DeviceMapSetting::Map(new);
         }
+
         <span class="kw">let </span>pipeline_mapper = mapper.into_mapper(
             <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
             device,

@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/layers.rs`."><title>layers.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../static.files/rustdoc-b0742ba02757f159.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.83.0 (90b35a623 2024-11-26)" data-channel="1.83.0" data-search-js="search-f0d225181b97f9a4.js" data-settings-js="settings-805db61a62df4bd2.js" ><script src="../../static.files/storage-1d39b6787ed640ff.js"></script><script defer src="../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-f070b9041d14864c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-0111fcff984fae8f.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/</div>layers.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/layers.rs`."><title>layers.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../static.files/storage-59e33391.js"></script><script defer src="../../static.files/src-script-56102188.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/</div>layers.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -1314,84 +1314,9 @@
 <a href="#1313" id="1313">1313</a>
 <a href="#1314" id="1314">1314</a>
 <a href="#1315" id="1315">1315</a>
-<a href="#1316" id="1316">1316</a>
-<a href="#1317" id="1317">1317</a>
-<a href="#1318" id="1318">1318</a>
-<a href="#1319" id="1319">1319</a>
-<a href="#1320" id="1320">1320</a>
-<a href="#1321" id="1321">1321</a>
-<a href="#1322" id="1322">1322</a>
-<a href="#1323" id="1323">1323</a>
-<a href="#1324" id="1324">1324</a>
-<a href="#1325" id="1325">1325</a>
-<a href="#1326" id="1326">1326</a>
-<a href="#1327" id="1327">1327</a>
-<a href="#1328" id="1328">1328</a>
-<a href="#1329" id="1329">1329</a>
-<a href="#1330" id="1330">1330</a>
-<a href="#1331" id="1331">1331</a>
-<a href="#1332" id="1332">1332</a>
-<a href="#1333" id="1333">1333</a>
-<a href="#1334" id="1334">1334</a>
-<a href="#1335" id="1335">1335</a>
-<a href="#1336" id="1336">1336</a>
-<a href="#1337" id="1337">1337</a>
-<a href="#1338" id="1338">1338</a>
-<a href="#1339" id="1339">1339</a>
-<a href="#1340" id="1340">1340</a>
-<a href="#1341" id="1341">1341</a>
-<a href="#1342" id="1342">1342</a>
-<a href="#1343" id="1343">1343</a>
-<a href="#1344" id="1344">1344</a>
-<a href="#1345" id="1345">1345</a>
-<a href="#1346" id="1346">1346</a>
-<a href="#1347" id="1347">1347</a>
-<a href="#1348" id="1348">1348</a>
-<a href="#1349" id="1349">1349</a>
-<a href="#1350" id="1350">1350</a>
-<a href="#1351" id="1351">1351</a>
-<a href="#1352" id="1352">1352</a>
-<a href="#1353" id="1353">1353</a>
-<a href="#1354" id="1354">1354</a>
-<a href="#1355" id="1355">1355</a>
-<a href="#1356" id="1356">1356</a>
-<a href="#1357" id="1357">1357</a>
-<a href="#1358" id="1358">1358</a>
-<a href="#1359" id="1359">1359</a>
-<a href="#1360" id="1360">1360</a>
-<a href="#1361" id="1361">1361</a>
-<a href="#1362" id="1362">1362</a>
-<a href="#1363" id="1363">1363</a>
-<a href="#1364" id="1364">1364</a>
-<a href="#1365" id="1365">1365</a>
-<a href="#1366" id="1366">1366</a>
-<a href="#1367" id="1367">1367</a>
-<a href="#1368" id="1368">1368</a>
-<a href="#1369" id="1369">1369</a>
-<a href="#1370" id="1370">1370</a>
-<a href="#1371" id="1371">1371</a>
-<a href="#1372" id="1372">1372</a>
-<a href="#1373" id="1373">1373</a>
-<a href="#1374" id="1374">1374</a>
-<a href="#1375" id="1375">1375</a>
-<a href="#1376" id="1376">1376</a>
-<a href="#1377" id="1377">1377</a>
-<a href="#1378" id="1378">1378</a>
-<a href="#1379" id="1379">1379</a>
-<a href="#1380" id="1380">1380</a>
-<a href="#1381" id="1381">1381</a>
-<a href="#1382" id="1382">1382</a>
-<a href="#1383" id="1383">1383</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1316" id="1316">1316</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-</span><span class="kw">use </span>std::{
-    f32::consts::PI,
-    ops::Mul,
-    str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+</span><span class="kw">use </span>std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
 <span class="kw">use </span>candle_core::{
     quantized::{QMatMul, QTensor},
@@ -1400,7 +1325,7 @@
 <span class="kw">use </span>candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
 <span class="kw">use </span>float8::F8E4M3;
 <span class="kw">use </span>half::{bf16, f16};
-<span class="kw">use </span>mistralrs_quant::QuantMethod;
+<span class="kw">use </span>mistralrs_quant::get_use_matmul_via_f16;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">pub use </span><span class="kw">crate</span>::attention::Sdpa;
@@ -1411,8 +1336,9 @@
     models::llama,
     ops::SplitOp,
     vision_models::mllama::{MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig},
-    INHIBIT_GEMM_F16,
 };
+
+<span class="kw">pub use </span>mistralrs_quant::MatMul;
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>RmsNorm {
@@ -2320,66 +2246,6 @@
             k_embeds.push(k_embed);
         }
         <span class="prelude-val">Ok</span>((Tensor::cat(<span class="kw-2">&amp;</span>q_embeds, <span class="number">0</span>)<span class="question-mark">?</span>, Tensor::cat(<span class="kw-2">&amp;</span>k_embeds, <span class="number">0</span>)<span class="question-mark">?</span>))
-    }
-}
-
-<span class="doccomment">/// Matrix multiplication, configurable to be via f16 (to use the faster GEMM kernels) optionally.
-</span><span class="kw">pub struct </span>MatMul;
-
-<span class="doccomment">/// Set the matmuls to go via f16
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">static </span>USE_MATMUL_VIA_F16: AtomicBool = AtomicBool::new(<span class="bool-val">false</span>);
-
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>set_use_matmul_via_f16(via_f16: bool) {
-    <span class="kw">if </span>!INHIBIT_GEMM_F16.load(Ordering::Relaxed) {
-        USE_MATMUL_VIA_F16.store(via_f16, Ordering::Relaxed)
-    }
-}
-<span class="kw">pub fn </span>get_use_matmul_via_f16() -&gt; bool {
-    USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
-}
-
-<span class="kw">impl </span>MatMul {
-    <span class="doccomment">/// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    </span><span class="kw">pub fn </span>matmul(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor, b: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">if </span>!get_use_matmul_via_f16() {
-            <span class="kw">return </span>a.matmul(b);
-        }
-        <span class="kw">let </span>original_dtype = a.dtype();
-        a.to_dtype(DType::F16)<span class="question-mark">?
-            </span>.matmul(<span class="kw-2">&amp;</span>b.to_dtype(DType::F16)<span class="question-mark">?</span>)<span class="question-mark">?
-            </span>.to_dtype(original_dtype)
-    }
-
-    <span class="doccomment">/// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    /// The result will be divided by the `scale` parameter in an affine division.
-    </span><span class="kw">pub fn </span>matmul_affine_div(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor, b: <span class="kw-2">&amp;</span>Tensor, scale: f64) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="comment">// TODO(EricLBuehler): Optimize this by using the gemm parameter?
-        </span><span class="self">self</span>.matmul(a, b)<span class="question-mark">? </span>/ scale
-    }
-
-    <span class="doccomment">/// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    /// The result will be divided by the `scale` parameter in an affine multiplication.
-    </span><span class="kw">pub fn </span>matmul_affine_mul(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor, b: <span class="kw-2">&amp;</span>Tensor, scale: f64) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="comment">// TODO(EricLBuehler): Optimize this by using the gemm parameter?
-        </span><span class="self">self</span>.matmul(a, b)<span class="question-mark">? </span>* scale
-    }
-
-    <span class="doccomment">/// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    </span><span class="kw">pub fn </span>qmatmul(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, matmul: <span class="kw-2">&amp;</span>QMatMul) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">if </span>get_use_matmul_via_f16() {
-            matmul.forward_via_f16(x)
-        } <span class="kw">else </span>{
-            matmul.forward(x)
-        }
-    }
-
-    <span class="doccomment">/// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    </span><span class="kw">pub fn </span>qmethod_matmul(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, matmul: <span class="kw-2">&amp;</span><span class="kw">dyn </span>QuantMethod) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">if </span>get_use_matmul_via_f16() {
-            matmul.forward_via_half(x)
-        } <span class="kw">else </span>{
-            matmul.forward(x)
-        }
     }
 }
 

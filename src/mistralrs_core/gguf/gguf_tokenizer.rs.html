@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/gguf/gguf_tokenizer.rs`."><title>gguf_tokenizer.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b0742ba02757f159.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.83.0 (90b35a623 2024-11-26)" data-channel="1.83.0" data-search-js="search-f0d225181b97f9a4.js" data-settings-js="settings-805db61a62df4bd2.js" ><script src="../../../static.files/storage-1d39b6787ed640ff.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-f070b9041d14864c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-0111fcff984fae8f.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/gguf/</div>gguf_tokenizer.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/gguf/gguf_tokenizer.rs`."><title>gguf_tokenizer.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/gguf/</div>gguf_tokenizer.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -561,7 +561,8 @@
 <a href="#560" id="560">560</a>
 <a href="#561" id="561">561</a>
 <a href="#562" id="562">562</a>
-<a href="#563" id="563">563</a></pre></div><pre class="rust"><code><span class="comment">// https://github.com/huggingface/transformers/blob/8685b3c5d2dd2550527773d2a02499495a759e31/src/transformers/convert_slow_tokenizer.py
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a></pre></div><pre class="rust"><code><span class="comment">// https://github.com/huggingface/transformers/blob/8685b3c5d2dd2550527773d2a02499495a759e31/src/transformers/convert_slow_tokenizer.py
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::atomic::Ordering};
 
@@ -747,11 +748,11 @@
         Normalizer::Replace(<span class="string">" "</span>, <span class="string">"▁"</span>),
     ]);
 
-    <span class="kw">let </span><span class="kw-2">mut </span>tokenizer: Tokenizer = TokenizerX::try_builder()
-        .with_model(model)
-        .with_decoder(decoder)
-        .with_normalizer(normalizer)
-        .build()<span class="question-mark">?</span>;
+    <span class="kw">let </span><span class="kw-2">mut </span>tokenizer: Tokenizer = TokenizerX::new(
+        ModelWrapper::Unigram(model),
+        <span class="prelude-val">Some</span>(decoder),
+        <span class="prelude-val">Some</span>(normalizer),
+    )<span class="question-mark">?</span>;
 
     <span class="comment">// Add special tokens (bos, eos, unk):
     </span><span class="kw">let </span>special_tokens = add_special_tokens(p, <span class="kw-2">&amp;mut </span>tokenizer, bos, eos, <span class="prelude-val">Some</span>(unk));
@@ -797,10 +798,11 @@
 
     <span class="kw">let </span>bpe = bpe.build().map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
 
-    <span class="kw">let </span><span class="kw-2">mut </span>tokenizer = TokenizerX::try_builder()
-        .with_model(bpe)
-        .with_decoder(Decoder::ByteLevel(<span class="bool-val">true</span>, <span class="bool-val">true</span>, <span class="bool-val">true</span>))
-        .build()<span class="question-mark">?</span>;
+    <span class="kw">let </span><span class="kw-2">mut </span>tokenizer = TokenizerX::new(
+        ModelWrapper::BPE(bpe),
+        <span class="prelude-val">Some</span>(Decoder::ByteLevel(<span class="bool-val">true</span>, <span class="bool-val">true</span>, <span class="bool-val">true</span>)),
+        <span class="prelude-val">None</span>,
+    )<span class="question-mark">?</span>;
     tokenizer.with_pre_tokenizer(<span class="prelude-val">Some</span>(pre_tokenizers::byte_level::ByteLevel::new(
         <span class="bool-val">false</span>, <span class="bool-val">true</span>, <span class="bool-val">true</span>,
     )));
@@ -840,23 +842,23 @@
 // Upstream `TokenizerBuilder` is difficult to work with:
 // https://github.com/huggingface/tokenizers/issues/1549
 </span><span class="kw">struct </span>TokenizerX;
-<span class="attr">#[buildstructor::buildstructor]
-</span><span class="kw">impl </span>TokenizerX {
-    <span class="attr">#[builder]
-    </span><span class="kw">fn </span>try_new&lt;<span class="lifetime">'a</span>&gt;(
-        with_model: ModelWrapper,
-        with_decoder: <span class="prelude-ty">Option</span>&lt;Decoder&lt;<span class="lifetime">'a</span>&gt;&gt;,
-        with_normalizer: <span class="prelude-ty">Option</span>&lt;Normalizer&lt;<span class="lifetime">'a</span>&gt;&gt;,
+
+<span class="kw">impl </span>TokenizerX {
+    <span class="attr">#[allow(clippy::new_ret_no_self)]
+    </span><span class="kw">fn </span>new&lt;<span class="lifetime">'a</span>&gt;(
+        model: ModelWrapper,
+        decoder: <span class="prelude-ty">Option</span>&lt;Decoder&lt;<span class="lifetime">'a</span>&gt;&gt;,
+        normalizer: <span class="prelude-ty">Option</span>&lt;Normalizer&lt;<span class="lifetime">'a</span>&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tokenizer&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>tokenizer = Tokenizer::new(with_model);
+        <span class="kw">let </span><span class="kw-2">mut </span>tokenizer = Tokenizer::new(model);
 
         <span class="comment">// Handle local enum to remote enum type:
-        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(decoder) = with_decoder {
+        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(decoder) = decoder {
             <span class="kw">let </span>d = DecoderWrapper::try_from(decoder)<span class="question-mark">?</span>;
             tokenizer.with_decoder(<span class="prelude-val">Some</span>(d));
         }
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(normalizer) = with_normalizer {
-            <span class="kw">let </span>n = NormalizerWrapper::try_from(normalizer)<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(normalizer) = normalizer {
+            <span class="kw">let </span>n: NormalizerWrapper = NormalizerWrapper::try_from(normalizer)<span class="question-mark">?</span>;
             tokenizer.with_normalizer(<span class="prelude-val">Some</span>(n));
         }
 

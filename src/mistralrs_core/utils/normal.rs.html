@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/utils/normal.rs`."><title>normal.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../static.files/rustdoc-b0742ba02757f159.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.83.0 (90b35a623 2024-11-26)" data-channel="1.83.0" data-search-js="search-f0d225181b97f9a4.js" data-settings-js="settings-805db61a62df4bd2.js" ><script src="../../../static.files/storage-1d39b6787ed640ff.js"></script><script defer src="../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-f070b9041d14864c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-0111fcff984fae8f.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/utils/</div>normal.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/utils/normal.rs`."><title>normal.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/utils/</div>normal.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -164,7 +164,13 @@
 <a href="#163" id="163">163</a>
 <a href="#164" id="164">164</a>
 <a href="#165" id="165">165</a>
-<a href="#166" id="166">166</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Display, str::FromStr};
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Display, str::FromStr};
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
@@ -282,40 +288,46 @@
 }
 
 <span class="kw">fn </span>determine_auto_dtype_all(devices: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>Device]) -&gt; candle_core::Result&lt;DType&gt; {
-    <span class="kw">let </span>dev_dtypes = get_dtypes();
-    <span class="kw">for </span>dtype <span class="kw">in </span>get_dtypes_non_cuda()
-        .iter()
-        .filter(|x| dev_dtypes.contains(x))
-    {
-        <span class="kw">let </span><span class="kw-2">mut </span>results = Vec::new();
-        <span class="kw">for </span>device <span class="kw">in </span>devices {
-            <span class="comment">// Try a matmul
-            </span><span class="kw">let </span>x = Tensor::zeros((<span class="number">2</span>, <span class="number">2</span>), <span class="kw-2">*</span>dtype, device)<span class="question-mark">?</span>;
-            results.push(x.matmul(<span class="kw-2">&amp;</span>x));
-        }
-        <span class="kw">if </span>results.iter().all(|x| x.is_ok()) {
-            <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="kw-2">*</span>dtype);
-        } <span class="kw">else </span>{
-            <span class="kw">for </span>result <span class="kw">in </span>results {
-                <span class="kw">match </span>result {
-                    <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; (),
-                    <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">match </span>e {
-                        <span class="comment">// For CUDA
-                        </span>candle_core::Error::UnsupportedDTypeForOp(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
-                        <span class="comment">// Accelerate backend doesn't support f16/bf16
-                        // Metal backend doesn't support f16
-                        </span>candle_core::Error::Msg(<span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
-                        <span class="comment">// This is when the metal backend doesn't support bf16
-                        </span>candle_core::Error::Metal(<span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
-                        <span class="comment">// If running with RUST_BACKTRACE=1
-                        </span>candle_core::Error::WithBacktrace { .. } =&gt; <span class="kw">continue</span>,
-                        other =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(other),
-                    },
+    <span class="comment">// We can safely use bf16 for accelerate because we cast up to f32 in all matmuls anyway.
+    </span><span class="attr">#[cfg(feature = <span class="string">"accelerate"</span>)]
+    </span><span class="kw">return </span><span class="prelude-val">Ok</span>(DType::BF16);
+    <span class="attr">#[cfg(not(feature = <span class="string">"accelerate"</span>))]
+    </span>{
+        <span class="kw">let </span>dev_dtypes = get_dtypes();
+        <span class="kw">for </span>dtype <span class="kw">in </span>get_dtypes_non_cuda()
+            .iter()
+            .filter(|x| dev_dtypes.contains(x))
+        {
+            <span class="kw">let </span><span class="kw-2">mut </span>results = Vec::new();
+            <span class="kw">for </span>device <span class="kw">in </span>devices {
+                <span class="comment">// Try a matmul
+                </span><span class="kw">let </span>x = Tensor::zeros((<span class="number">2</span>, <span class="number">2</span>), <span class="kw-2">*</span>dtype, device)<span class="question-mark">?</span>;
+                results.push(x.matmul(<span class="kw-2">&amp;</span>x));
+            }
+            <span class="kw">if </span>results.iter().all(|x| x.is_ok()) {
+                <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="kw-2">*</span>dtype);
+            } <span class="kw">else </span>{
+                <span class="kw">for </span>result <span class="kw">in </span>results {
+                    <span class="kw">match </span>result {
+                        <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; (),
+                        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">match </span>e {
+                            <span class="comment">// For CUDA
+                            </span>candle_core::Error::UnsupportedDTypeForOp(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
+                            <span class="comment">// Accelerate backend doesn't support f16/bf16
+                            // Metal backend doesn't support f16
+                            </span>candle_core::Error::Msg(<span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
+                            <span class="comment">// This is when the metal backend doesn't support bf16
+                            </span>candle_core::Error::Metal(<span class="kw">_</span>) =&gt; <span class="kw">continue</span>,
+                            <span class="comment">// If running with RUST_BACKTRACE=1
+                            </span>candle_core::Error::WithBacktrace { .. } =&gt; <span class="kw">continue</span>,
+                            other =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(other),
+                        },
+                    }
                 }
             }
         }
+        <span class="prelude-val">Ok</span>(DType::F32)
     }
-    <span class="prelude-val">Ok</span>(DType::F32)
 }
 
 <span class="kw">impl </span>TryIntoDType <span class="kw">for </span>ModelDType {

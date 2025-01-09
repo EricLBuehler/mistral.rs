@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/idefics2/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-b0742ba02757f159.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.83.0 (90b35a623 2024-11-26)" data-channel="1.83.0" data-search-js="search-f0d225181b97f9a4.js" data-settings-js="settings-805db61a62df4bd2.js" ><script src="../../../../static.files/storage-1d39b6787ed640ff.js"></script><script defer src="../../../../static.files/src-script-e66d777a5a92e9b2.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-f070b9041d14864c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-0111fcff984fae8f.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-422f7d1d52889060.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-2c020d218678b618.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/idefics2/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/idefics2/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../../static.files/storage-59e33391.js"></script><script defer src="../../../../static.files/src-script-56102188.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/idefics2/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -1304,7 +1304,7 @@
 <span class="kw">use crate</span>::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    layers::{repeat_kv, Activation, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, Activation, CausalMasker, MatMul, QLinear, RmsNorm},
     models::mistral::Model <span class="kw">as </span>Mistral,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -1393,73 +1393,73 @@
 </span>}
 
 <span class="attr">#[derive(Debug, Clone, PartialEq, Deserialize)]
-</span><span class="kw">struct </span>PerceiverConfig {
+</span><span class="kw">pub struct </span>PerceiverConfig {
     <span class="attr">#[serde(default = <span class="string">"default_act"</span>)]
-    </span>hidden_act: Activation,
+    </span><span class="kw">pub </span>hidden_act: Activation,
     <span class="attr">#[serde(default = <span class="string">"default_64"</span>)]
-    </span>resampler_n_latents: usize,
+    </span><span class="kw">pub </span>resampler_n_latents: usize,
     <span class="attr">#[serde(default = <span class="string">"default_3"</span>)]
-    </span>resampler_depth: usize,
+    </span><span class="kw">pub </span>resampler_depth: usize,
     <span class="attr">#[serde(default = <span class="string">"default_16"</span>)]
-    </span>resampler_n_heads: usize,
+    </span><span class="kw">pub </span>resampler_n_heads: usize,
     <span class="attr">#[serde(default = <span class="string">"default_96"</span>)]
-    </span>resampler_head_dim: usize,
+    </span><span class="kw">pub </span>resampler_head_dim: usize,
     <span class="attr">#[serde(default = <span class="string">"default_4"</span>)]
-    </span>num_key_value_heads: usize,
+    </span><span class="kw">pub </span>num_key_value_heads: usize,
     <span class="attr">#[serde(default = <span class="string">"default_0_0"</span>)]
-    </span>attention_dropout: f32,
+    </span><span class="kw">pub </span>attention_dropout: f32,
 }
 
 <span class="attr">#[derive(Debug, Clone, PartialEq, Deserialize)]
-</span><span class="kw">struct </span>VisionConfig {
+</span><span class="kw">pub struct </span>VisionConfig {
     <span class="attr">#[serde(default = <span class="string">"default_768"</span>)]
-    </span>hidden_size: usize,
+    </span><span class="kw">pub </span>hidden_size: usize,
     <span class="attr">#[serde(default = <span class="string">"default_3072"</span>)]
-    </span>intermediate_size: usize,
+    </span><span class="kw">pub </span>intermediate_size: usize,
     <span class="attr">#[serde(default = <span class="string">"default_12"</span>)]
-    </span>num_hidden_layers: usize,
+    </span><span class="kw">pub </span>num_hidden_layers: usize,
     <span class="attr">#[serde(default = <span class="string">"default_12"</span>)]
-    </span>num_attention_heads: usize,
+    </span><span class="kw">pub </span>num_attention_heads: usize,
     <span class="attr">#[serde(default = <span class="string">"default_3"</span>)]
-    </span>num_channels: usize,
+    </span><span class="kw">pub </span>num_channels: usize,
     <span class="attr">#[serde(default = <span class="string">"default_224"</span>)]
-    </span>image_size: usize,
+    </span><span class="kw">pub </span>image_size: usize,
     <span class="attr">#[serde(default = <span class="string">"default_32"</span>)]
-    </span>patch_size: usize,
+    </span><span class="kw">pub </span>patch_size: usize,
     <span class="attr">#[serde(default = <span class="string">"default_gelu"</span>)]
-    </span>hidden_act: Activation,
+    </span><span class="kw">pub </span>hidden_act: Activation,
     <span class="attr">#[serde(default = <span class="string">"default_eps"</span>)]
-    </span>layer_norm_eps: f64,
+    </span><span class="kw">pub </span>layer_norm_eps: f64,
     <span class="attr">#[serde(default = <span class="string">"default_0_0"</span>)]
-    </span>attn_dropout: f32,
+    </span><span class="kw">pub </span>attn_dropout: f32,
     <span class="attr">#[serde(default = <span class="string">"default_0_02"</span>)]
-    </span>initiailizer_range: f32,
+    </span><span class="kw">pub </span>initiailizer_range: f32,
 }
 
 <span class="attr">#[derive(Debug, Clone, PartialEq, Deserialize)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>TextConfig {
     <span class="attr">#[serde(default = <span class="string">"default_32000"</span>)]
-    </span>vocab_size: usize,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) vocab_size: usize,
     <span class="attr">#[serde(default = <span class="string">"default_4096"</span>)]
-    </span>hidden_size: usize,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) hidden_size: usize,
     <span class="attr">#[serde(default = <span class="string">"default_14336"</span>)]
-    </span>intermediate_size: usize,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) intermediate_size: usize,
     <span class="attr">#[serde(default = <span class="string">"default_32"</span>)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) num_hidden_layers: usize,
     <span class="attr">#[serde(default = <span class="string">"default_32"</span>)]
-    </span>num_attention_heads: usize,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) num_attention_heads: usize,
     <span class="attr">#[serde(default = <span class="string">"default_8"</span>)]
-    </span>num_key_value_heads: usize,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) num_key_value_heads: usize,
     <span class="attr">#[serde(default = <span class="string">"default_act"</span>)]
-    </span>hidden_act: Activation,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) hidden_act: Activation,
     <span class="attr">#[serde(default = <span class="string">"default_131072"</span>)]
-    </span>max_position_embeddings: usize,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) max_position_embeddings: usize,
     <span class="attr">#[serde(default = <span class="string">"default_eps"</span>)]
-    </span>rms_norm_eps: f64,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) rms_norm_eps: f64,
     <span class="attr">#[serde(default = <span class="string">"default_rope"</span>)]
-    </span>rope_theta: f64,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) rope_theta: f64,
     <span class="attr">#[serde(default = <span class="string">"default_sliding"</span>)]
-    </span>sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
     <span class="attr">#[serde(default = <span class="string">"default_false"</span>)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
@@ -1490,13 +1490,13 @@
 
 <span class="attr">#[derive(Debug, Clone, PartialEq, Deserialize)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>Config {
-    perceiver_config: PerceiverConfig,
-    vision_config: VisionConfig,
+    <span class="kw">pub </span>perceiver_config: PerceiverConfig,
+    <span class="kw">pub </span>vision_config: VisionConfig,
     <span class="kw">pub</span>(<span class="kw">crate</span>) text_config: TextConfig,
     <span class="attr">#[serde(default = <span class="string">"default_32001"</span>)]
-    </span>image_token_id: usize,
+    </span><span class="kw">pub </span>image_token_id: usize,
     <span class="attr">#[serde(default = <span class="string">"default_false"</span>)]
-    </span>tie_word_embeddings: bool,
+    </span><span class="kw">pub </span>tie_word_embeddings: bool,
 }
 
 <span class="comment">// == START VISION MODEL ==
@@ -1702,7 +1702,7 @@
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>attn_weights =
-            (q.contiguous()<span class="question-mark">?</span>.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>)<span class="question-mark">? </span>* <span class="self">self</span>.scale)<span class="question-mark">?</span>;
+            (MatMul.matmul(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>)<span class="question-mark">? </span>* <span class="self">self</span>.scale)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>attn_weights = CausalMasker.apply_mask_one_and_zero(
             <span class="kw-2">&amp;</span>attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
@@ -1710,7 +1710,7 @@
             <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = attn_weights.matmul(<span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
         <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
@@ -2058,7 +2058,7 @@
         <span class="kw">let </span>k = repeat_kv(k, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v, <span class="self">self</span>.num_kv_groups)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>attn_weights = (q.contiguous()<span class="question-mark">?</span>.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?
+        <span class="kw">let </span>attn_weights = (MatMul.matmul(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?
             </span>/ (<span class="self">self</span>.head_dim <span class="kw">as </span>f64).sqrt())<span class="question-mark">?</span>;
 
         <span class="kw">let </span>attn_weights = CausalMasker.apply_mask_one_and_zero(
@@ -2067,7 +2067,7 @@
             <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = attn_weights.matmul(<span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
 
         <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
