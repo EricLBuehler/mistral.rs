@@ -300,14 +300,42 @@ impl IsqModelLoader for AutoLoader {
 }
 
 impl DeviceMappedModelLoader for AutoLoader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.non_mapped_size_in_bytes(config, dtype, weight_pack_factor)
+    }
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        Self::get_loader(config)?.num_layers(config)
+    }
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.per_layer_size_in_bytes(config, dtype, weight_pack_factor)
+    }
     fn get_device_layers(
         &self,
         config: &str,
+        num_layers: usize,
+        per_layer_size_in_bytes: usize,
+        non_mapped_size_in_bytes: usize,
+        total_model_size_in_bytes: usize,
         devices: &[Device],
-        dtype: DType,
-        weight_pack_factor: usize,
     ) -> Result<DeviceMapMetadata> {
-        Self::get_loader(config)?.get_device_layers(config, devices, dtype, weight_pack_factor)
+        Self::get_loader(config)?.get_device_layers(
+            config,
+            num_layers,
+            per_layer_size_in_bytes,
+            non_mapped_size_in_bytes,
+            total_model_size_in_bytes,
+            devices,
+        )
     }
 }
 

@@ -14,6 +14,7 @@ use super::{
 use crate::device_map::{self, DeviceMapper};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::isq::UQFF_RESIDUAL_SAFETENSORS;
 use crate::pipeline::llg::build_tok_env;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
@@ -30,7 +31,7 @@ use crate::{
     AnyMoeExpertType, DeviceMapSetting, Ordering, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
@@ -212,16 +213,77 @@ impl Loader for VisionLoader {
             // Initial dtype
             let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
 
-            let mut weight_pack_factor = 1;
             // ISQ or UQFF: quantized path
-            if let Some(isq) = in_situ_quant {
-                weight_pack_factor = isq.pack_factor(dtype);
-            } else if self.config.from_uqff.is_some() {
-                todo!()
-            }
-            let new = self
-                .inner
-                .get_device_layers(&config, &devices, dtype, weight_pack_factor)?;
+            // Match logic below where UQFF has priority
+            let (per_layer_size_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+                if let Some(serialized) = &*self.from_uqff.read().unwrap() {
+                    let parent = serialized
+                        .parent()
+                        .context("Target UQFF path must have a filename!")?;
+                    let residual = parent.join(UQFF_RESIDUAL_SAFETENSORS);
+
+                    let ser_total_size = {
+                        let ser_artifacts = unsafe {
+                            candle_core::safetensors::MmapedSafetensors::new(serialized)?
+                        };
+                        ser_artifacts
+                            .tensors()
+                            .iter()
+                            .map(|(_, t)| t.data().len())
+                            .sum::<usize>()
+                    };
+                    let res_total_size = {
+                        let res_artifacts =
+                            unsafe { candle_core::safetensors::MmapedSafetensors::new(residual)? };
+                        res_artifacts
+                            .tensors()
+                            .iter()
+                            .map(|(_, t)| t.data().len())
+                            .sum::<usize>()
+                    };
+                    let size_per_layer = ser_total_size / self.inner.num_layers(&config)?;
+
+                    // This is not completely correct but hopefully close enough.
+                    // For example, the norms are not necessarily correctly done.
+                    (
+                        size_per_layer,
+                        res_total_size,
+                        ser_total_size + res_total_size,
+                    )
+                } else if let Some(isq) = in_situ_quant {
+                    let weight_pack_factor = isq.pack_factor(dtype);
+                    let per_layer_size_in_bytes =
+                        self.inner
+                            .per_layer_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner
+                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    (
+                        per_layer_size_in_bytes,
+                        non_mapped_size_in_bytes,
+                        per_layer_size_in_bytes * self.inner.num_layers(&config)?
+                            + non_mapped_size_in_bytes,
+                    )
+                } else {
+                    let per_layer_size_in_bytes =
+                        self.inner.per_layer_size_in_bytes(&config, dtype, 1)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner.non_mapped_size_in_bytes(&config, dtype, 1)?;
+                    (
+                        per_layer_size_in_bytes,
+                        non_mapped_size_in_bytes,
+                        per_layer_size_in_bytes * self.inner.num_layers(&config)?
+                            + non_mapped_size_in_bytes,
+                    )
+                };
+            let new = self.inner.get_device_layers(
+                &config,
+                self.inner.num_layers(&config)?,
+                per_layer_size_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                &devices,
+            )?;
             mapper = DeviceMapSetting::Map(new);
         }
 

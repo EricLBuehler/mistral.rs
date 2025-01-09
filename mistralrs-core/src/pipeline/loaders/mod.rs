@@ -381,16 +381,14 @@ pub trait DeviceMappedModelLoader {
     /// weight_pack_factor only applies to quantized weights.
     fn get_device_layers(
         &self,
-        config: &str,
+        _config: &str,
+        num_layers: usize,
+        per_layer_size_in_bytes: usize,
+        non_mapped_size_in_bytes: usize,
+        total_model_size_in_bytes: usize,
         devices: &[Device],
-        dtype: DType,
-        weight_pack_factor: usize,
     ) -> Result<DeviceMapMetadata> {
-        let per_layer_size_in_bytes =
-            self.per_layer_size_in_bytes(config, dtype, weight_pack_factor)?;
-        let num_layers = self.num_layers(config)?;
-        let mut remaining_to_map = per_layer_size_in_bytes * num_layers
-            + self.non_mapped_size_in_bytes(config, dtype, weight_pack_factor)?;
+        let mut remaining_to_map = total_model_size_in_bytes;
 
         // Always add the CPU as fallback
         let devices = [devices, &[Device::Cpu]].concat();
@@ -427,10 +425,10 @@ pub trait DeviceMappedModelLoader {
             }
 
             current_layer += layers_on_device;
-            remaining_to_map -= per_layer_size_in_bytes * layers_on_device;
+            remaining_to_map =
+                remaining_to_map.saturating_sub(per_layer_size_in_bytes * layers_on_device);
             if current_ordinal - 1 == 0 {
-                remaining_to_map -=
-                    self.non_mapped_size_in_bytes(config, dtype, weight_pack_factor)?;
+                remaining_to_map = remaining_to_map.saturating_sub(non_mapped_size_in_bytes);
             }
         }
         if remaining_to_map > 0 {
