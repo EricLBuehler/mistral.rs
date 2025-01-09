@@ -353,10 +353,9 @@ async fn main() -> Result<()> {
     let mapper = if let Some(device_layers) = args.num_device_layers {
         if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
             let layers = device_layers[0].parse::<usize>().unwrap();
-            DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
-                ordinal: 0,
-                layers,
-            }])
+            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
+                DeviceLayerMapMetadata { ordinal: 0, layers },
+            ]))
         } else {
             let mut mapping = Vec::new();
             for layer in device_layers {
@@ -380,10 +379,10 @@ async fn main() -> Result<()> {
                     layers: num,
                 });
             }
-            DeviceMapMetadata::from_num_device_layers(mapping)
+            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapMetadata::dummy()
+        DeviceMapSetting::Auto
     };
 
     let no_paged_attn = if device.is_cuda() {
@@ -457,8 +456,7 @@ async fn main() -> Result<()> {
         &dtype,
         &device,
         false,
-        // DeviceMapSetting::Map(mapper),
-        DeviceMapSetting::Auto,
+        mapper,
         args.in_situ_quant,
         cache_config,
     )?;

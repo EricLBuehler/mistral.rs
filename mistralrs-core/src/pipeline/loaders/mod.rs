@@ -455,7 +455,7 @@ pub trait DeviceMappedModelLoader {
 ///     &ModelDType::Auto,
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
-///     DeviceMapSetting::dummy(),
+///     DeviceMapSetting::Auto,
 ///     None,
 ///     None,
 /// ).unwrap();
