@@ -11,7 +11,6 @@ use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
@@ -25,7 +24,7 @@ use std::io;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::warn;
 
 pub struct DiffusionPipeline {
     model: Box<dyn DiffusionModel + Send + Sync>,
@@ -139,6 +138,10 @@ impl Loader for DiffusionLoader {
             .downcast_ref::<DiffusionModelPaths>()
             .expect("Path downcast failed.")
             .0;
+
+        if matches!(mapper, DeviceMapSetting::Map(_)) {
+            anyhow::bail!("Device mapping is not supported for diffusion models.")
+        }
 
         if in_situ_quant.is_some() {
             anyhow::bail!("ISQ is not supported for Diffusion models.");

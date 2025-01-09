@@ -252,6 +252,16 @@ impl Loader for GGMLLoader {
             );
         }
 
+        if matches!(mapper, DeviceMapSetting::Map(_)) {
+            anyhow::bail!("Device mapping is not supported for diffusion models.")
+        }
+
+        if paged_attn_config.is_some() {
+            warn!("PagedAttention is not supported for GGML models, disabling it.");
+
+            paged_attn_config = None;
+        }
+
         info!(
             "Loading model `{}` on {}.",
             self.get_id(),

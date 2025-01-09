@@ -9,7 +9,7 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
     ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
-use crate::device_map::{self, DeviceMapper};
+use crate::device_map::DeviceMapper;
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
@@ -24,7 +24,6 @@ use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
@@ -332,7 +331,7 @@ impl Loader for GGUFLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapSetting,
+        mut mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -351,6 +350,11 @@ impl Loader for GGUFLoader {
         let model = Content::from_readers(&mut readers)?;
         model.print_metadata()?;
         let arch = model.arch();
+
+        if let DeviceMapSetting::Auto = mapper.clone() {
+            warn!("GGUF models do not support automatic device mapping, disabling it");
+            mapper = DeviceMapSetting::dummy();
+        }
 
         let GgufTokenizerConversion {
             tokenizer,
