@@ -49,7 +49,7 @@ impl GgufLoraModelBuilder {
             &ModelDType::Auto,
             &best_device(self.gguf_model.force_cpu)?,
             !self.gguf_model.with_logging,
-            DeviceMapMetadata::dummy(),
+            DeviceMapSetting::Auto,
             None,
             self.gguf_model.paged_attn_cfg,
         )?;

@@ -18,9 +18,10 @@ use crate::{
     serde_default_fn,
     utils::log::once_log_info,
     xlora_models::NonGranularState,
+    DeviceMapMetadata,
 };
 use anyhow::Result;
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 
 use mistralrs_quant::QuantizedConfig;
@@ -34,6 +35,8 @@ use crate::{
     models,
     xlora_models::{self, XLoraConfig},
 };
+
+use super::DeviceMappedModelLoader;
 
 pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     #[allow(clippy::too_many_arguments)]
@@ -87,7 +90,7 @@ pub struct NormalLoadingMetadata {
     pub real_device: Device,
 }
 
-pub trait NormalModelLoader: IsqModelLoader + Send + Sync {
+pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
     fn load(
         &self,
         config: &str,
@@ -203,6 +206,16 @@ impl Display for NormalLoaderType {
     }
 }
 
+macro_rules! bias_if {
+    ($cond:expr, $size:expr) => {
+        if $cond {
+            $size
+        } else {
+            0
+        }
+    };
+}
+
 /// Load a model based on the Huggging Face Transformers -CausalLM model class
 pub struct AutoLoader;
 
@@ -293,6 +306,46 @@ impl NormalModelLoader for AutoLoader {
 impl IsqModelLoader for AutoLoader {
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         Self::get_loader(config)?.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for AutoLoader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.non_mapped_size_in_bytes(config, dtype, weight_pack_factor)
+    }
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        Self::get_loader(config)?.num_layers(config)
+    }
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.per_layer_size_in_bytes(config, dtype, weight_pack_factor)
+    }
+    fn get_device_layers(
+        &self,
+        config: &str,
+        num_layers: usize,
+        per_layer_size_in_bytes: usize,
+        non_mapped_size_in_bytes: usize,
+        total_model_size_in_bytes: usize,
+        devices: &[Device],
+    ) -> Result<DeviceMapMetadata> {
+        Self::get_loader(config)?.get_device_layers(
+            config,
+            num_layers,
+            per_layer_size_in_bytes,
+            non_mapped_size_in_bytes,
+            total_model_size_in_bytes,
+            devices,
+        )
     }
 }
 
@@ -411,6 +464,71 @@ impl IsqModelLoader for MistralLoader {
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+}
+
+impl DeviceMappedModelLoader for MistralLoader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = MistralBasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = MistralBasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
     }
 }
 
@@ -542,6 +660,75 @@ impl IsqModelLoader for GemmaLoader {
     }
 }
 
+impl DeviceMappedModelLoader for GemmaLoader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = GemmaBasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = GemmaBasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = cfg.head_dim * cfg.num_attention_heads;
+            let size_kv = cfg.head_dim * cfg.num_key_value_heads;
+            let q_proj =
+                size_in * size_q / weight_pack_factor + bias_if!(cfg.attention_bias, size_q);
+            let k_proj =
+                size_in * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let v_proj =
+                size_in * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let o_proj =
+                size_q * size_in / weight_pack_factor + bias_if!(cfg.attention_bias, size_in);
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = GemmaBasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
+    }
+}
+
 // ======================== Llama loader
 
 #[derive(Deserialize)]
@@ -664,6 +851,71 @@ impl IsqModelLoader for LlamaLoader {
     }
 }
 
+impl DeviceMappedModelLoader for LlamaLoader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
+    }
+}
+
 // ======================== Mixtral loader
 
 #[derive(Deserialize)]
@@ -783,6 +1035,74 @@ impl IsqModelLoader for MixtralLoader {
     }
 }
 
+impl DeviceMappedModelLoader for MixtralLoader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = MixtralBasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = MixtralBasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let moe_block = {
+                let gate = cfg.hidden_size * cfg.num_local_experts;
+                // Assume quantizing weight pack factor
+                let w1 = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                let w2 = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                let w3 = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                gate + cfg.num_local_experts * w1
+                    + cfg.num_local_experts * w2
+                    + cfg.num_local_experts * w3
+            };
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + moe_block
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = MixtralBasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
+    }
+}
+
 // ======================== Phi2 loader
 
 #[derive(Deserialize)]
@@ -898,6 +1218,66 @@ impl IsqModelLoader for Phi2Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.fc2\.(weight|bias)$")?,
         ])
+    }
+}
+
+impl DeviceMappedModelLoader for Phi2Loader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = Phi2BasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = Phi2BasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = cfg.head_dim() * cfg.num_attention_heads;
+            let size_kv = cfg.head_dim() * cfg.num_key_value_heads();
+            let q_proj = size_in * size_q / weight_pack_factor + size_q;
+            let k_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let v_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let o_proj = size_q * size_in / weight_pack_factor + size_in;
+            let (q_norm, k_norm) = if cfg.qk_layernorm {
+                (cfg.head_dim(), cfg.head_dim())
+            } else {
+                (0, 0)
+            };
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let fc1 = h_size * i_size / weight_pack_factor;
+            let fc2 = h_size * i_size / weight_pack_factor;
+
+            input_layernorm + q_proj + k_proj + v_proj + o_proj + q_norm + k_norm + fc1 + fc2
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = Phi2BasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
     }
 }
 
@@ -1024,6 +1404,66 @@ impl IsqModelLoader for Phi3Loader {
     }
 }
 
+impl DeviceMappedModelLoader for Phi3Loader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = Phi3BasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = Phi3BasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let head_dim = cfg.head_dim();
+            let op_size = head_dim * head_dim + 2 * cfg.num_key_value_heads * head_dim;
+            let qkv_proj = size_in * op_size / weight_pack_factor;
+            let o_proj =
+                (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor + size_in;
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_up_proj = h_size * (2 * i_size) / weight_pack_factor;
+            let down_proj = h_size * i_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + qkv_proj
+                + o_proj
+                + gate_up_proj
+                + down_proj
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = Phi3BasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
+    }
+}
+
 // ======================== Qwen2 loader
 
 #[derive(Deserialize)]
@@ -1128,6 +1568,71 @@ impl IsqModelLoader for Qwen2Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
+    }
+}
+
+impl DeviceMappedModelLoader for Qwen2Loader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor + size_q;
+            let k_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let v_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
     }
 }
 
@@ -1264,6 +1769,75 @@ impl IsqModelLoader for Gemma2Loader {
     }
 }
 
+impl DeviceMappedModelLoader for Gemma2Loader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = Gemma2BasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = Gemma2BasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = cfg.head_dim * cfg.num_attention_heads;
+            let size_kv = cfg.head_dim * cfg.num_key_value_heads;
+            let q_proj =
+                size_in * size_q / weight_pack_factor + bias_if!(cfg.attention_bias, size_q);
+            let k_proj =
+                size_in * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let v_proj =
+                size_in * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let o_proj =
+                size_q * size_in / weight_pack_factor + bias_if!(cfg.attention_bias, size_in);
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = Gemma2BasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
+    }
+}
+
 // ======================== Starcoder2 loader
 
 #[derive(Deserialize, Debug)]
@@ -1378,6 +1952,69 @@ impl IsqModelLoader for Starcoder2Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.c_proj\.(weight|bias)$")?,
         ])
+    }
+}
+
+impl DeviceMappedModelLoader for Starcoder2Loader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor + bias_if!(cfg.use_bias, size_q);
+            let k_proj = size_in * size_kv / weight_pack_factor + bias_if!(cfg.use_bias, size_kv);
+            let v_proj = size_in * size_kv / weight_pack_factor + bias_if!(cfg.use_bias, size_kv);
+            let o_proj = size_q * size_in / weight_pack_factor + bias_if!(cfg.use_bias, size_in);
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let fc1 = h_size * i_size / weight_pack_factor;
+            let fc2 = h_size * i_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + fc1
+                + fc2
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
     }
 }
 
@@ -1517,6 +2154,78 @@ impl IsqModelLoader for Phi3_5MoELoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
         ])
+    }
+}
+
+impl DeviceMappedModelLoader for Phi3_5MoELoader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = cfg.head_dim() * cfg.num_attention_heads;
+            let size_kv = cfg.head_dim() * cfg.num_key_value_heads;
+            let q_proj =
+                size_in * size_q / weight_pack_factor + bias_if!(cfg.attention_bias, size_q);
+            let k_proj =
+                size_in * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let v_proj =
+                size_in * size_kv / weight_pack_factor + bias_if!(cfg.attention_bias, size_kv);
+            let o_proj =
+                size_q * size_in / weight_pack_factor + bias_if!(cfg.attention_bias, size_in);
+
+            let moe_block = {
+                let gate = cfg.hidden_size * cfg.num_local_experts;
+                // Assume quantizing weight pack factor
+                let w1 = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                let w2 = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                let w3 = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                gate + cfg.num_local_experts * w1
+                    + cfg.num_local_experts * w2
+                    + cfg.num_local_experts * w3
+            };
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + moe_block
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
     }
 }
 
@@ -1686,5 +2395,115 @@ impl IsqModelLoader for DeepSeekV2Loader {
             };
         }
         Ok(data)
+    }
+}
+
+impl DeviceMappedModelLoader for DeepSeekV2Loader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let q_proj = match cfg.q_lora_rank {
+                Some(lora_rank) => {
+                    let a = cfg.hidden_size * lora_rank;
+                    let norm = lora_rank;
+                    let b = (cfg.num_attention_heads * cfg.q_head_dim()) * lora_rank;
+                    a + norm + b
+                }
+                None => (cfg.num_attention_heads * cfg.q_head_dim()) * cfg.hidden_size,
+            };
+            let kv_a_proj_with_mqa = cfg.hidden_size * (cfg.kv_lora_rank + cfg.qk_rope_head_dim)
+                / weight_pack_factor
+                + bias_if!(cfg.attention_bias, cfg.kv_lora_rank + cfg.qk_rope_head_dim);
+            let kv_a_layernorm = cfg.kv_lora_rank;
+            let kv_b_proj = cfg.kv_lora_rank
+                * cfg.num_attention_heads
+                * (cfg.q_head_dim() - cfg.qk_rope_head_dim + cfg.v_head_dim)
+                / weight_pack_factor;
+            let o_proj = cfg.num_attention_heads * cfg.v_head_dim * cfg.hidden_size
+                / weight_pack_factor
+                + bias_if!(cfg.attention_bias, cfg.hidden_size);
+
+            let moe_block = {
+                let mut sum = 0;
+                for layer_idx in 0..cfg.num_hidden_layers {
+                    if cfg.n_routed_experts.is_some()
+                        && layer_idx >= cfg.first_k_dense_replace
+                        && layer_idx % cfg.moe_layer_freq == 0
+                    {
+                        let h_size = cfg.hidden_size;
+                        let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                            * cfg.n_routed_experts.unwrap();
+                        let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                            * cfg.n_routed_experts.unwrap();
+                        let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
+                            * cfg.n_routed_experts.unwrap();
+                        let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
+                            let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                                / weight_pack_factor;
+                            let up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                                / weight_pack_factor;
+                            let down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
+                                / weight_pack_factor;
+                            gate_proj + up_proj + down_proj
+                        } else {
+                            0
+                        };
+                        let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
+                        sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                    } else {
+                        let h_size = cfg.hidden_size;
+                        let i_size = cfg.intermediate_size;
+                        let gate_proj = h_size * i_size / weight_pack_factor;
+                        let up_proj = h_size * i_size / weight_pack_factor;
+                        let down_proj = i_size * h_size / weight_pack_factor;
+                        sum += gate_proj + up_proj + down_proj;
+                    }
+                }
+                sum
+            };
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + kv_a_layernorm
+                + kv_a_proj_with_mqa
+                + kv_b_proj
+                + o_proj
+                + moe_block
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
     }
 }

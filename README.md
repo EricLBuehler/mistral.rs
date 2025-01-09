@@ -98,12 +98,12 @@ Mistral.rs supports several model categories:
 - Grammar support with JSON Schema, Regex, Lark, and Guidance via [LLGuidance library](https://github.com/microsoft/llguidance)
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
     - Enhance performance with an [imatrix](docs/IMATRIX.md)!
+- Automatic [device mapping](docs/DEVICE_MAPPING.md) to easily load and run models across multiple GPUs and CPU.
 
 **Fast**:
 - Apple silicon support: ARM NEON, Accelerate, Metal
 - Accelerated CPU inference with MKL, AVX support
 - CUDA support with flash attention and cuDNN.
-- [Device mapping](docs/DEVICE_MAPPING.md): load and run some layers on the device and the rest on the CPU.
 
 **Quantization**:
 - [Details](docs/QUANTS.md)

@@ -13,7 +13,7 @@ pub struct GgufModelBuilder {
     pub(crate) hf_revision: Option<String>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
-    pub(crate) device_mapping: Option<DeviceMapMetadata>,
+    pub(crate) device_mapping: Option<DeviceMapSetting>,
 
     // Model running
     pub(crate) prompt_batchsize: Option<NonZeroUsize>,
@@ -146,7 +146,7 @@ impl GgufModelBuilder {
 
     /// Provide metadata to initialize the device mapper. Generally, it is more programmatic and easier to use
     /// the [`Topology`], see [`Self::with_topology`].
-    pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
+    pub fn with_device_mapping(mut self, device_mapping: DeviceMapSetting) -> Self {
         self.device_mapping = Some(device_mapping);
         self
     }
@@ -177,7 +177,7 @@ impl GgufModelBuilder {
             &ModelDType::Auto,
             &best_device(self.force_cpu)?,
             !self.with_logging,
-            self.device_mapping.unwrap_or(DeviceMapMetadata::dummy()),
+            self.device_mapping.unwrap_or(DeviceMapSetting::Auto),
             None,
             self.paged_attn_cfg,
         )?;

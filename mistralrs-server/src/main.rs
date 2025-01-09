@@ -9,9 +9,9 @@ use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, IsqType,
-    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
-    PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
@@ -104,6 +104,7 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     prefix_cache_n: usize,
 
+    /// Note: this is deprecated in favor of automatic device mapping.
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
@@ -353,10 +354,9 @@ async fn main() -> Result<()> {
     let mapper = if let Some(device_layers) = args.num_device_layers {
         if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
             let layers = device_layers[0].parse::<usize>().unwrap();
-            DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
-                ordinal: 0,
-                layers,
-            }])
+            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
+                DeviceLayerMapMetadata { ordinal: 0, layers },
+            ]))
         } else {
             let mut mapping = Vec::new();
             for layer in device_layers {
@@ -380,10 +380,10 @@ async fn main() -> Result<()> {
                     layers: num,
                 });
             }
-            DeviceMapMetadata::from_num_device_layers(mapping)
+            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapMetadata::dummy()
+        DeviceMapSetting::Auto
     };
 
     let no_paged_attn = if device.is_cuda() {

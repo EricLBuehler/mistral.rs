@@ -3,13 +3,10 @@
 #[cfg(feature = "metal")]
 use std::sync::atomic::AtomicUsize;
 
-use crate::{
-    cublaslt::CUBLASLT_HANDLE,
-    layers::{get_use_matmul_via_f16, MatMul},
-    pipeline::text_models_inputs_processor::FlashParams,
-};
+use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::text_models_inputs_processor::FlashParams};
 
 use candle_core::{Device, Result, Tensor};
+use mistralrs_quant::{get_use_matmul_via_f16, MatMul};
 
 #[cfg(feature = "metal")]
 /// Initial, sentinel value is usize::MAX

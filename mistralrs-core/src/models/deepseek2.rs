@@ -53,49 +53,49 @@ enum ScoringFunc {
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct DeepSeekV2Config {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    moe_intermediate_size: usize,
+    pub(crate) vocab_size: usize,
+    pub(crate) hidden_size: usize,
+    pub(crate) intermediate_size: usize,
+    pub(crate) moe_intermediate_size: usize,
     pub(crate) num_hidden_layers: usize,
-    num_attention_heads: usize,
+    pub(crate) num_attention_heads: usize,
     pub(crate) n_shared_experts: Option<usize>,
     pub(crate) n_routed_experts: Option<usize>,
     #[serde(default = "routed_scaling_factor")]
-    routed_scaling_factor: f64,
+    pub(crate) routed_scaling_factor: f64,
     #[serde(default = "topk_method")]
     topk_method: TopkMethod,
-    num_experts_per_tok: Option<usize>,
+    pub(crate) num_experts_per_tok: Option<usize>,
     #[serde(default = "moe_layer_freq")]
     pub(crate) moe_layer_freq: usize,
     #[serde(default = "first_k_dense_replace")]
     pub(crate) first_k_dense_replace: usize,
     // k dense layers
     #[serde(default = "norm_topk_prob")]
-    norm_topk_prob: bool,
+    pub(crate) norm_topk_prob: bool,
     #[serde(default = "scoring_func")]
     scoring_func: ScoringFunc,
     #[serde(default = "hidden_act")]
-    hidden_act: Activation,
-    max_position_embeddings: usize,
-    rms_norm_eps: f64,
+    pub(crate) hidden_act: Activation,
+    pub(crate) max_position_embeddings: usize,
+    pub(crate) rms_norm_eps: f64,
     #[serde(default = "tie_word_embeddings")]
-    tie_word_embeddings: bool,
-    rope_theta: f32,
-    rope_scaling: Option<DeepSeekV2RopeScaling>,
-    attention_bias: bool,
+    pub(crate) tie_word_embeddings: bool,
+    pub(crate) rope_theta: f32,
+    pub(crate) rope_scaling: Option<DeepSeekV2RopeScaling>,
+    pub(crate) attention_bias: bool,
     pub(crate) q_lora_rank: Option<usize>,
-    qk_rope_head_dim: usize,
-    kv_lora_rank: usize,
-    v_head_dim: usize,
-    qk_nope_head_dim: usize,
+    pub(crate) qk_rope_head_dim: usize,
+    pub(crate) kv_lora_rank: usize,
+    pub(crate) v_head_dim: usize,
+    pub(crate) qk_nope_head_dim: usize,
     #[serde(default = "use_flash_attn_default")]
     pub(crate) use_flash_attn: bool,
-    quantization_config: Option<QuantizedConfig>,
+    pub(crate) quantization_config: Option<QuantizedConfig>,
 }
 
 impl DeepSeekV2Config {
-    fn q_head_dim(&self) -> usize {
+    pub(crate) fn q_head_dim(&self) -> usize {
         self.qk_rope_head_dim + self.qk_nope_head_dim
     }
 

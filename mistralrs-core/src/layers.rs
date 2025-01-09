@@ -1,14 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{
-    f32::consts::PI,
-    ops::Mul,
-    str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
@@ -17,7 +9,7 @@ use candle_core::{
 use candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
 use float8::F8E4M3;
 use half::{bf16, f16};
-use mistralrs_quant::QuantMethod;
+use mistralrs_quant::get_use_matmul_via_f16;
 use serde::{Deserialize, Serialize};
 
 pub use crate::attention::Sdpa;
@@ -28,8 +20,9 @@ use crate::{
     models::llama,
     ops::SplitOp,
     vision_models::mllama::{MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig},
-    INHIBIT_GEMM_F16,
 };
+
+pub use mistralrs_quant::MatMul;
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -937,66 +930,6 @@ impl DeepSeekV2RotaryEmbedding {
             k_embeds.push(k_embed);
         }
         Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
-    }
-}
-
-/// Matrix multiplication, configurable to be via f16 (to use the faster GEMM kernels) optionally.
-pub struct MatMul;
-
-/// Set the matmuls to go via f16
-pub(crate) static USE_MATMUL_VIA_F16: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn set_use_matmul_via_f16(via_f16: bool) {
-    if !INHIBIT_GEMM_F16.load(Ordering::Relaxed) {
-        USE_MATMUL_VIA_F16.store(via_f16, Ordering::Relaxed)
-    }
-}
-pub fn get_use_matmul_via_f16() -> bool {
-    USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
-}
-
-impl MatMul {
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    pub fn matmul(&self, a: &Tensor, b: &Tensor) -> Result<Tensor> {
-        if !get_use_matmul_via_f16() {
-            return a.matmul(b);
-        }
-        let original_dtype = a.dtype();
-        a.to_dtype(DType::F16)?
-            .matmul(&b.to_dtype(DType::F16)?)?
-            .to_dtype(original_dtype)
-    }
-
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    /// The result will be divided by the `scale` parameter in an affine division.
-    pub fn matmul_affine_div(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
-        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
-        self.matmul(a, b)? / scale
-    }
-
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    /// The result will be divided by the `scale` parameter in an affine multiplication.
-    pub fn matmul_affine_mul(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
-        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
-        self.matmul(a, b)? * scale
-    }
-
-    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
-        if get_use_matmul_via_f16() {
-            matmul.forward_via_f16(x)
-        } else {
-            matmul.forward(x)
-        }
-    }
-
-    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
-        if get_use_matmul_via_f16() {
-            matmul.forward_via_half(x)
-        } else {
-            matmul.forward(x)
-        }
     }
 }
 

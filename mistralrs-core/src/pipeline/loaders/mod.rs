@@ -10,9 +10,9 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use as_any::AsAny;
-use candle_core::Device;
+use candle_core::{DType, Device};
 use mistralrs_quant::IsqType;
 use tokio::sync::Mutex;
 
@@ -33,8 +33,8 @@ pub use diffusion_loaders::{
 };
 
 use crate::{
-    lora::LoraConfig, xlora_models::XLoraConfig, DeviceMapMetadata, Ordering, PagedAttentionConfig,
-    TryIntoDType,
+    lora::LoraConfig, utils::debug::DeviceRepr, xlora_models::XLoraConfig, DeviceLayerMapMetadata,
+    DeviceMapMetadata, DeviceMapSetting, MemoryUsage, Ordering, PagedAttentionConfig, TryIntoDType,
 };
 
 use super::Pipeline;
@@ -357,12 +357,95 @@ impl ModelKind {
     }
 }
 
+pub trait DeviceMappedModelLoader {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize>;
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize>;
+    fn num_layers(&self, config: &str) -> Result<usize>;
+
+    /// weight_pack_factor only applies to quantized weights.
+    fn get_device_layers(
+        &self,
+        _config: &str,
+        num_layers: usize,
+        per_layer_size_in_bytes: usize,
+        non_mapped_size_in_bytes: usize,
+        total_model_size_in_bytes: usize,
+        devices: &[Device],
+    ) -> Result<DeviceMapMetadata> {
+        let mut remaining_to_map = total_model_size_in_bytes;
+
+        // Always add the CPU as fallback
+        let devices = [devices, &[Device::Cpu]].concat();
+
+        let mut per_layer_avail = Vec::new();
+        for dev in devices.clone() {
+            let usage = MemoryUsage.get_memory_available(&dev)?;
+            per_layer_avail.push((usage, dev));
+        }
+        // Reverse so we don't use the cpu first!
+        per_layer_avail.reverse();
+
+        let mut device_layers = Vec::new();
+
+        let mut current_ordinal = 0;
+        let mut current_layer = 0;
+        while remaining_to_map > 0 && !per_layer_avail.is_empty() {
+            let (device_capacity, device) = per_layer_avail
+                .pop()
+                .context("No more devices to map to. The model does not fit on this system.")?;
+            let layers_on_device = if device_capacity >= remaining_to_map {
+                num_layers - current_layer
+            } else {
+                device_capacity / per_layer_size_in_bytes
+            };
+
+            // CPU mappings are automatically handled by the traditional device mapper, we can just leave them out here.
+            if !device.is_cpu() {
+                device_layers.push(DeviceLayerMapMetadata {
+                    ordinal: current_ordinal,
+                    layers: layers_on_device,
+                });
+                current_ordinal += 1;
+            }
+
+            current_layer += layers_on_device;
+            remaining_to_map =
+                remaining_to_map.saturating_sub(per_layer_size_in_bytes * layers_on_device);
+            if current_ordinal - 1 == 0 {
+                remaining_to_map = remaining_to_map.saturating_sub(non_mapped_size_in_bytes);
+            }
+        }
+        if remaining_to_map > 0 {
+            anyhow::bail!(
+                "This model does not fit on the devices {:?}, and exceeds total capacity by {}MB",
+                devices
+                    .iter()
+                    .map(|dev| dev.device_pretty_repr())
+                    .collect::<Vec<_>>(),
+                remaining_to_map / (1024 * 1024)
+            );
+        }
+
+        Ok(DeviceMapMetadata::from_num_device_layers(device_layers))
+    }
+}
+
 /// The `Loader` trait abstracts the loading process. The primary entrypoint is the
 /// `load_model` method.
 ///
 /// # Example
 /// ```no_run
-/// use mistralrs_core::{Loader, TokenSource, DeviceMapMetadata, ModelDType};
+/// use mistralrs_core::{Loader, TokenSource, DeviceMapSetting, ModelDType};
 /// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
@@ -372,7 +455,7 @@ impl ModelKind {
 ///     &ModelDType::Auto,
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
-///     DeviceMapMetadata::dummy(),
+///     DeviceMapSetting::Auto,
 ///     None,
 ///     None,
 /// ).unwrap();
@@ -389,7 +472,7 @@ pub trait Loader: Send + Sync {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
@@ -407,7 +490,7 @@ pub trait Loader: Send + Sync {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;

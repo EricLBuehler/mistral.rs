@@ -52,7 +52,7 @@ pub struct Stream<'a> {
     rx: Receiver<Response>,
 }
 
-impl<'a> Stream<'a> {
+impl Stream<'_> {
     pub async fn next(&mut self) -> Option<Response> {
         self.rx.recv().await
     }

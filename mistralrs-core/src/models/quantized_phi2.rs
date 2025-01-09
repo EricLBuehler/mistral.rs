@@ -27,7 +27,7 @@ use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapMetadata;
+use crate::DeviceMapSetting;
 use crate::Topology;
 
 pub const MAX_SEQ_LEN: usize = 4096;
@@ -225,7 +225,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
         device: &Device,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         topology: Option<&'_ Topology>,
         attention_mechanism: AttentionImplementation,
         dtype: DType,

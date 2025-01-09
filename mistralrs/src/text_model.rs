@@ -15,7 +15,7 @@ pub struct TextModelBuilder {
     pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
-    pub(crate) device_mapping: Option<DeviceMapMetadata>,
+    pub(crate) device_mapping: Option<DeviceMapSetting>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
@@ -223,7 +223,7 @@ impl TextModelBuilder {
 
     /// Provide metadata to initialize the device mapper. Generally, it is more programmatic and easier to use
     /// the [`Topology`], see [`Self::with_topology`].
-    pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
+    pub fn with_device_mapping(mut self, device_mapping: DeviceMapSetting) -> Self {
         self.device_mapping = Some(device_mapping);
         self
     }
@@ -279,7 +279,7 @@ impl TextModelBuilder {
             &self.dtype,
             &best_device(self.force_cpu)?,
             !self.with_logging,
-            self.device_mapping.unwrap_or(DeviceMapMetadata::dummy()),
+            self.device_mapping.unwrap_or(DeviceMapSetting::Auto),
             self.isq,
             self.paged_attn_cfg,
         )?;

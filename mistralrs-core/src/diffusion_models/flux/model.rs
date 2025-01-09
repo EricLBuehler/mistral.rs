@@ -4,6 +4,8 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm, VarBuilder};
 use serde::Deserialize;
 
+use crate::layers::MatMul;
+
 const MLP_RATIO: f64 = 4.;
 const HIDDEN_SIZE: usize = 3072;
 const AXES_DIM: &[usize] = &[16, 56, 56];
@@ -34,8 +36,8 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
     let q = q.flatten_to(batch_dims.len() - 1)?;
     let k = k.flatten_to(batch_dims.len() - 1)?;
     let v = v.flatten_to(batch_dims.len() - 1)?;
-    let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
-    let attn_scores = candle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(&v)?;
+    let attn_weights = (MatMul.matmul(&q, &k.t()?)? * scale_factor)?;
+    let attn_scores = MatMul.matmul(&candle_nn::ops::softmax_last_dim(&attn_weights)?, &v)?;
     batch_dims.push(attn_scores.dim(D::Minus2)?);
     batch_dims.push(attn_scores.dim(D::Minus1)?);
     attn_scores.reshape(batch_dims)

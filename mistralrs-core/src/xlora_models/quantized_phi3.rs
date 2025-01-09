@@ -19,7 +19,7 @@ use crate::pipeline::extract_logits;
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::EitherCache;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapMetadata;
+use crate::DeviceMapSetting;
 use crate::Topology;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
@@ -234,7 +234,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         topology: Option<&'_ Topology>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
         dtype: DType,

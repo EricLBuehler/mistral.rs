@@ -17,27 +17,26 @@ use super::{
     Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
-use crate::device_map::DeviceMapper;
+use crate::device_map::{self, DeviceMapper};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::get_chat_template;
-use crate::pipeline::isq::UqffFullSer;
+use crate::pipeline::isq::{UqffFullSer, UQFF_RESIDUAL_SAFETENSORS};
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    normal_model_loader, xlora_model_loader, DeviceMapSetting, PagedAttentionConfig, Pipeline,
     Topology, TryIntoDType,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
@@ -233,7 +232,7 @@ impl Loader for NormalLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -273,26 +272,88 @@ impl Loader for NormalLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mut mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        // Otherwise, the device mapper will print it
-        if mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map()))
-        {
-            info!(
-                "Loading model `{}` on {}.",
-                self.get_id(),
-                device.device_pretty_repr()
-            );
+
+        // If auto, convert to Map
+        if let DeviceMapSetting::Auto = mapper.clone() {
+            let devices = device_map::get_all_similar_devices(device)?;
+            // Initial dtype
+            let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
+
+            // ISQ or UQFF: quantized path
+            // Match logic below where UQFF has priority
+            let (per_layer_size_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+                if let Some(serialized) = &*self.from_uqff.read().unwrap() {
+                    let parent = serialized
+                        .parent()
+                        .context("Target UQFF path must have a filename!")?;
+                    let residual = parent.join(UQFF_RESIDUAL_SAFETENSORS);
+
+                    let ser_total_size = {
+                        let ser_artifacts = unsafe {
+                            candle_core::safetensors::MmapedSafetensors::new(serialized)?
+                        };
+                        ser_artifacts
+                            .tensors()
+                            .iter()
+                            .map(|(_, t)| t.data().len())
+                            .sum::<usize>()
+                    };
+                    let res_total_size = {
+                        let res_artifacts =
+                            unsafe { candle_core::safetensors::MmapedSafetensors::new(residual)? };
+                        res_artifacts
+                            .tensors()
+                            .iter()
+                            .map(|(_, t)| t.data().len())
+                            .sum::<usize>()
+                    };
+                    let size_per_layer = ser_total_size / self.inner.num_layers(&config)?;
+
+                    // This is not completely correct but hopefully close enough.
+                    // For example, the norms are not necessarily correctly done.
+                    (size_per_layer, res_total_size, ser_total_size)
+                } else if let Some(isq) = in_situ_quant {
+                    let weight_pack_factor = isq.pack_factor(dtype);
+                    let per_layer_size_in_bytes =
+                        self.inner
+                            .per_layer_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner
+                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    (
+                        per_layer_size_in_bytes,
+                        non_mapped_size_in_bytes,
+                        per_layer_size_in_bytes * self.inner.num_layers(&config)?
+                            + non_mapped_size_in_bytes,
+                    )
+                } else {
+                    let per_layer_size_in_bytes =
+                        self.inner.per_layer_size_in_bytes(&config, dtype, 1)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner.non_mapped_size_in_bytes(&config, dtype, 1)?;
+                    (
+                        per_layer_size_in_bytes,
+                        non_mapped_size_in_bytes,
+                        per_layer_size_in_bytes * self.inner.num_layers(&config)?
+                            + non_mapped_size_in_bytes,
+                    )
+                };
+            let new = self.inner.get_device_layers(
+                &config,
+                self.inner.num_layers(&config)?,
+                per_layer_size_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                &devices,
+            )?;
+            mapper = DeviceMapSetting::Map(new);
         }
+
         let pipeline_mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,

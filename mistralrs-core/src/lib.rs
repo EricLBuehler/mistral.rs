@@ -68,7 +68,9 @@ mod vision_models;
 mod xlora_models;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
-pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
+pub use device_map::{
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
+};
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_quant::IsqType;
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
@@ -240,8 +242,6 @@ impl MistralRsBuilder {
         MistralRs::new(self)
     }
 }
-
-pub(crate) static INHIBIT_GEMM_F16: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "cuda")]
 fn set_gemm_reduced_precision_f16() {

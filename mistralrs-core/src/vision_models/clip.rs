@@ -7,7 +7,7 @@ use candle_core::{IndexOp, Result, Shape, Tensor, D};
 use candle_nn::{Conv2dConfig, Module};
 use mistralrs_quant::QuantMethod;
 
-use crate::{serde_default_fn, utils::unvarbuilder::UnVarBuilder};
+use crate::{layers::MatMul, serde_default_fn, utils::unvarbuilder::UnVarBuilder};
 
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub enum Activation {
@@ -164,7 +164,7 @@ impl ClipAttention {
         let value_states = self
             .shape(&self.v_proj.forward(xs)?, seq_len, bsz)?
             .reshape(proj_shape)?;
-        let attn_weights = query_states.matmul(&key_states.transpose(1, 2)?)?;
+        let attn_weights = MatMul.matmul(&query_states, &key_states.transpose(1, 2)?)?;
 
         let src_len = key_states.dim(1)?;
 
@@ -179,7 +179,7 @@ impl ClipAttention {
 
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
 
-        let attn_output = attn_weights.matmul(&value_states)?;
+        let attn_output = MatMul.matmul(&attn_weights, &value_states)?;
         let attn_output = attn_output
             .reshape((bsz, self.num_attention_heads, seq_len, self.head_dim))?
             .transpose(1, 2)?
