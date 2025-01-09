@@ -119,7 +119,7 @@ impl QuantMethod for UnquantLinear {
                 }
             }
         } else {
-            MatMul.matmul(&a, &w.t()?)
+            MatMul.matmul(a, &w.t()?)
         }
     }
 

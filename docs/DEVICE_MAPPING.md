@@ -1,7 +1,7 @@
 # Device mapping
 
 In mistral.rs, device mapping is **automatically managed** to be as performant and easy as possible. Automatic device mapping is enabled
-by default in the CLI/server and Python API and does not make any changes when the model fits entierly on the GPU.
+by default in the CLI/server and Python API and does not make any changes when the model fits entirely on the GPU.
 
 Automatic device mapping works by prioritizing loading models into GPU memory, and any remaining parts are loaded into CPU memory.
 Models architectures such as vision models which greatly benefit from GPU acceleration also automatically prioritize keeping those

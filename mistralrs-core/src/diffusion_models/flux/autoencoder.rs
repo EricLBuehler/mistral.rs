@@ -21,7 +21,7 @@ pub struct Config {
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
-    let attn_weights = (MatMul.matmul(&q, &k.t()?)? * scale_factor)?;
+    let attn_weights = (MatMul.matmul(q, &k.t()?)? * scale_factor)?;
     MatMul.matmul(&candle_nn::ops::softmax_last_dim(&attn_weights)?, v)
 }
 

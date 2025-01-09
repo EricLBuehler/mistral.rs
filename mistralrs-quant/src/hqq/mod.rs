@@ -503,7 +503,7 @@ impl HqqLayer {
             [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
             _ => w.t()?,
         };
-        let res = MatMul.matmul(&xs, &w)?;
+        let res = MatMul.matmul(xs, &w)?;
         if let Some(ref bias) = self.bias {
             res + bias
         } else {
