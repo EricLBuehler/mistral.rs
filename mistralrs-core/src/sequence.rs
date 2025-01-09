@@ -920,6 +920,7 @@ impl SequenceGroup {
         &mut self,
         seq: &Sequence,
         model: String,
+        usage_opt: Option<Usage>,
     ) -> Result<(), Box<SendError<Response>>> {
         if self.chat_streaming_chunks.len() == self.n_choices && self.is_streaming {
             let mut swap_streaming_chunks = vec![];
@@ -934,6 +935,7 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
+                    usage: usage_opt,
                 }))
                 .await?;
         } else if self.completion_streaming_chunks.len() == self.n_choices && self.is_streaming {
