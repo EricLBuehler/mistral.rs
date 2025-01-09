@@ -393,6 +393,8 @@ pub trait DeviceMappedModelLoader {
             let usage = MemoryUsage.get_memory_available(&dev)?;
             per_layer_avail.push((usage, dev));
         }
+        // Reverse so we don't use the cpu first!
+        per_layer_avail.reverse();
 
         let mut mappings = Vec::new();
         let mut used_devices = Vec::new();
