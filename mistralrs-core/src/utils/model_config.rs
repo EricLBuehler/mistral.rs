@@ -10,7 +10,7 @@ use crate::{
     paged_attention::AttentionImplementation,
     pipeline::ModelPaths,
     xlora_models::XLoraConfig,
-    DeviceMapMetadata, Topology,
+    DeviceMapSetting, Topology,
 };
 
 #[derive(derive_more::From)]
@@ -23,7 +23,7 @@ pub struct FileGGML {
 #[derive(derive_more::From)]
 pub struct Device<'a> {
     device: &'a candle_core::Device,
-    pub mapper: DeviceMapMetadata,
+    pub mapper: DeviceMapSetting,
     pub topology: Option<&'a Topology>,
 }
 
@@ -166,7 +166,7 @@ pub trait FromGGUF {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: Content<'_, R>,
         device: &candle_core::Device,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         topology: Option<&Topology>,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
@@ -200,7 +200,7 @@ pub trait FromAdapterGGUF {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         topology: Option<&Topology>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
         dtype: DType,

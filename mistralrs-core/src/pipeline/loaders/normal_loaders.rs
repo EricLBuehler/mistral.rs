@@ -18,9 +18,9 @@ use crate::{
     serde_default_fn,
     utils::log::once_log_info,
     xlora_models::NonGranularState,
-    DeviceLayerMapMetadata, MemoryUsage,
+    DeviceMapMetadata,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 
@@ -303,11 +303,10 @@ impl DeviceMappedModelLoader for AutoLoader {
     fn get_device_layers(
         &self,
         config: &str,
-        ordinals: &[usize],
+        devices: &[Device],
         dtype: DType,
-        base_device: &Device,
-    ) -> Result<(Vec<DeviceLayerMapMetadata>, Vec<Device>)> {
-        Self::get_loader(config)?.get_device_layers(config, ordinals, dtype, base_device)
+    ) -> Result<DeviceMapMetadata> {
+        Self::get_loader(config)?.get_device_layers(config, devices, dtype)
     }
 }
 

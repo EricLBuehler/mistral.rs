@@ -20,7 +20,7 @@ use tracing::info;
 use crate::device_map::DeviceMapper;
 use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
 use crate::pipeline::{extract_logits, Cache, EitherCache};
-use crate::{DeviceMapMetadata, Topology};
+use crate::{DeviceMapSetting, Topology};
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -488,7 +488,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         topology: Option<&'_ Topology>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
         dtype: DType,

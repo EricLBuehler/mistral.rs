@@ -13,7 +13,7 @@ use crate::pipeline::{EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::{DeviceMapMetadata, Topology};
+use crate::{DeviceMapSetting, Topology};
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
@@ -235,7 +235,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
         device: &Device,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         topology: Option<&'_ Topology>,
         attention_mechanism: AttentionImplementation,
         dtype: DType,

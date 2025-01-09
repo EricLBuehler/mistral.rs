@@ -9,9 +9,9 @@ use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, IsqType,
-    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
-    PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
@@ -457,7 +457,8 @@ async fn main() -> Result<()> {
         &dtype,
         &device,
         false,
-        mapper,
+        // DeviceMapSetting::Map(mapper),
+        DeviceMapSetting::Auto,
         args.in_situ_quant,
         cache_config,
     )?;

@@ -2383,6 +2383,7 @@ dependencies = [
  "itertools 0.13.0",
  "llguidance",
  "lrtable",
+ "metal",
  "minijinja",
  "minijinja-contrib",
  "mistralrs-paged-attn",

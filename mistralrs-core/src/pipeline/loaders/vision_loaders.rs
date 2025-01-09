@@ -12,7 +12,7 @@ use pyo3::pyclass;
 use regex::Regex;
 use serde::Deserialize;
 
-use super::NormalLoadingMetadata;
+use super::{DeviceMappedModelLoader, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
@@ -58,7 +58,7 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any>;
 }
 
-pub trait VisionModelLoader: IsqModelLoader + Send + Sync {
+pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
     fn load(
         &self,
         config: &str,
@@ -196,6 +196,8 @@ impl IsqModelLoader for Phi3VLoader {
     }
 }
 
+impl DeviceMappedModelLoader for Phi3VLoader {}
+
 // ======================== Idefics 2 loader
 
 /// [`VisionLoader`] for an Idefics 2 Vision model.
@@ -282,6 +284,8 @@ impl IsqModelLoader for Idefics2Loader {
     }
 }
 
+impl DeviceMappedModelLoader for Idefics2Loader {}
+
 // ======================== LLaVANext Loader
 
 /// [`VisionLoader`] for an LLaVANext Vision model.
@@ -363,6 +367,8 @@ impl IsqModelLoader for LLaVANextLoader {
     }
 }
 
+impl DeviceMappedModelLoader for LLaVANextLoader {}
+
 // ======================== LLaVA Loader
 
 /// [`VisionLoader`] for an LLaVA Vision model.
@@ -443,6 +449,8 @@ impl IsqModelLoader for LLaVALoader {
         ])
     }
 }
+
+impl DeviceMappedModelLoader for LLaVALoader {}
 
 // ======================== MLlama Loader
 
@@ -578,6 +586,8 @@ impl IsqModelLoader for VLlamaLoader {
     }
 }
 
+impl DeviceMappedModelLoader for VLlamaLoader {}
+
 // ======================== Qwen2VL Loader
 
 /// [`VisionLoader`] for an Qwen2-VL model.
@@ -661,6 +671,8 @@ impl IsqModelLoader for Qwen2VLLoader {
         ])
     }
 }
+
+impl DeviceMappedModelLoader for Qwen2VLLoader {}
 
 // ======================== Idefics 3 loader
 
@@ -747,3 +759,5 @@ impl IsqModelLoader for Idefics3Loader {
         ])
     }
 }
+
+impl DeviceMappedModelLoader for Idefics3Loader {}
