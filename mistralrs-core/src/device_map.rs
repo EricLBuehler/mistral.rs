@@ -141,16 +141,16 @@ impl DeviceMapSetting {
 
                 // Print it out
                 {
-                    once_log_info(format!(
-                        "Loading model according to the following repeating layer mappings:"
-                    ));
+                    once_log_info(
+                        "Loading model according to the following repeating layer mappings:",
+                    );
                     let mut start_index = 0;
                     let mut current_dev = &combined[0];
 
                     // Iterate starting from index 1 to detect when the variant changes
                     for (i, variant) in combined.iter().enumerate().skip(1) {
                         // If the variant changes, print the previous continuous block
-                        if !variant.same_device(&current_dev) {
+                        if !variant.same_device(current_dev) {
                             once_log_info(format!(
                                 "Layers {}-{}: {}",
                                 start_index,

@@ -209,7 +209,7 @@ impl Loader for VisionLoader {
 
         // If auto, convert to Map
         if let DeviceMapSetting::Auto = mapper.clone() {
-            let devices = device_map::get_all_similar_devices(&device)?;
+            let devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype
             let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
 
