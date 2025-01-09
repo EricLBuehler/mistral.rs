@@ -148,6 +148,55 @@ pub enum IsqType {
     F8E4M3,
 }
 
+impl IsqType {
+    /// Factor by which the weight size is reduced over the given dtype.
+    /// original size / pack factor = quantized size
+    pub fn pack_factor(&self, dtype: DType) -> usize {
+        match self {
+            Self::Q4_0 => {
+                (dtype.size_in_bytes() * GgmlDType::Q4_0.block_size()) / GgmlDType::Q4_0.type_size()
+            }
+            Self::Q4_1 => {
+                (dtype.size_in_bytes() * GgmlDType::Q4_1.block_size()) / GgmlDType::Q4_1.type_size()
+            }
+            Self::Q5_0 => {
+                (dtype.size_in_bytes() * GgmlDType::Q5_0.block_size()) / GgmlDType::Q5_0.type_size()
+            }
+            Self::Q5_1 => {
+                (dtype.size_in_bytes() * GgmlDType::Q5_1.block_size()) / GgmlDType::Q5_1.type_size()
+            }
+            Self::Q8_0 => {
+                (dtype.size_in_bytes() * GgmlDType::Q8_0.block_size()) / GgmlDType::Q8_0.type_size()
+            }
+            Self::Q8_1 => {
+                (dtype.size_in_bytes() * GgmlDType::Q8_1.block_size()) / GgmlDType::Q8_1.type_size()
+            }
+            Self::Q2K => {
+                (dtype.size_in_bytes() * GgmlDType::Q2K.block_size()) / GgmlDType::Q2K.type_size()
+            }
+            Self::Q3K => {
+                (dtype.size_in_bytes() * GgmlDType::Q3K.block_size()) / GgmlDType::Q3K.type_size()
+            }
+            Self::Q4K => {
+                (dtype.size_in_bytes() * GgmlDType::Q4K.block_size()) / GgmlDType::Q4K.type_size()
+            }
+            Self::Q5K => {
+                (dtype.size_in_bytes() * GgmlDType::Q5K.block_size()) / GgmlDType::Q5K.type_size()
+            }
+            Self::Q6K => {
+                (dtype.size_in_bytes() * GgmlDType::Q6K.block_size()) / GgmlDType::Q6K.type_size()
+            }
+            Self::Q8K => {
+                (dtype.size_in_bytes() * GgmlDType::Q8K.block_size()) / GgmlDType::Q8K.type_size()
+            }
+            // Estimates
+            Self::HQQ4 => 4,
+            Self::HQQ8 => 2,
+            Self::F8E4M3 => 2,
+        }
+    }
+}
+
 impl TryFrom<IsqType> for GgmlDType {
     type Error = candle_core::Error;
 

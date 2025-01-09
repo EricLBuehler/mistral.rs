@@ -305,8 +305,9 @@ impl DeviceMappedModelLoader for AutoLoader {
         config: &str,
         devices: &[Device],
         dtype: DType,
+        weight_pack_factor: usize,
     ) -> Result<DeviceMapMetadata> {
-        Self::get_loader(config)?.get_device_layers(config, devices, dtype)
+        Self::get_loader(config)?.get_device_layers(config, devices, dtype, weight_pack_factor)
     }
 }
 
@@ -683,7 +684,32 @@ impl IsqModelLoader for LlamaLoader {
 }
 
 impl DeviceMappedModelLoader for LlamaLoader {
-    fn per_layer_size_in_bytes(&self, config: &str, dtype: DType) -> Result<usize> {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
         let cfg = LlamaBasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -692,16 +718,16 @@ impl DeviceMappedModelLoader for LlamaLoader {
             let size_in = cfg.hidden_size;
             let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
             let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-            let q_proj = size_in * size_q;
-            let k_proj = size_in * size_kv;
-            let v_proj = size_in * size_kv;
-            let o_proj = size_q * size_in;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
+            let o_proj = size_q * size_in / weight_pack_factor;
 
             let h_size = cfg.hidden_size;
             let i_size = cfg.intermediate_size;
-            let gate_proj = h_size * i_size;
-            let up_proj = h_size * i_size;
-            let down_proj = i_size * h_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
 
             input_layernorm
                 + post_attention_layernorm

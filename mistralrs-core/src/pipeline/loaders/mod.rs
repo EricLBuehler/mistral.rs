@@ -33,8 +33,8 @@ pub use diffusion_loaders::{
 };
 
 use crate::{
-    lora::LoraConfig, xlora_models::XLoraConfig, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, MemoryUsage, Ordering, PagedAttentionConfig, TryIntoDType,
+    lora::LoraConfig, utils::debug::DeviceRepr, xlora_models::XLoraConfig, DeviceLayerMapMetadata,
+    DeviceMapMetadata, DeviceMapSetting, MemoryUsage, Ordering, PagedAttentionConfig, TryIntoDType,
 };
 
 use super::Pipeline;
@@ -358,22 +358,39 @@ impl ModelKind {
 }
 
 pub trait DeviceMappedModelLoader {
-    fn per_layer_size_in_bytes(&self, config: &str, dtype: DType) -> Result<usize> {
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        unimplemented!("eventually this method will be required")
+    }
+    fn per_layer_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
         unimplemented!("eventually this method will be required")
     }
     fn num_layers(&self, config: &str) -> Result<usize> {
         unimplemented!("eventually this method will be required")
     }
 
+    /// weight_pack_factor only applies to quantized weights.
     fn get_device_layers(
         &self,
         config: &str,
         devices: &[Device],
         dtype: DType,
+        weight_pack_factor: usize,
     ) -> Result<DeviceMapMetadata> {
-        let per_layer_size_in_bytes = self.per_layer_size_in_bytes(config, dtype)?;
+        let per_layer_size_in_bytes =
+            self.per_layer_size_in_bytes(config, dtype, weight_pack_factor)?;
         let num_layers = self.num_layers(config)?;
-        let mut remaining_to_map = per_layer_size_in_bytes * num_layers;
+        let mut remaining_to_map = per_layer_size_in_bytes * num_layers
+            + self.non_mapped_size_in_bytes(config, dtype, weight_pack_factor)?;
 
         // Always add the CPU as fallback
         let devices = [devices, &[Device::Cpu]].concat();
@@ -400,7 +417,7 @@ pub trait DeviceMappedModelLoader {
                 device_capacity / per_layer_size_in_bytes
             };
 
-            // CPU mappings are automaticall handled by the traditional device mapper, we can just leave them out here.
+            // CPU mappings are automatically handled by the traditional device mapper, we can just leave them out here.
             if !device.is_cpu() {
                 device_layers.push(DeviceLayerMapMetadata {
                     ordinal: current_ordinal,
@@ -411,9 +428,20 @@ pub trait DeviceMappedModelLoader {
 
             current_layer += layers_on_device;
             remaining_to_map -= per_layer_size_in_bytes * layers_on_device;
+            if current_ordinal - 1 == 0 {
+                remaining_to_map -=
+                    self.non_mapped_size_in_bytes(config, dtype, weight_pack_factor)?;
+            }
         }
         if remaining_to_map > 0 {
-            anyhow::bail!("This model does not fit on the devices {devices:?} and CPU memoru, and exceeds total capacity by {}MB", remaining_to_map / (1024*1024));
+            anyhow::bail!(
+                "This model does not fit on the devices {:?}, and exceeds total capacity by {}MB",
+                devices
+                    .iter()
+                    .map(|dev| dev.device_pretty_repr())
+                    .collect::<Vec<_>>(),
+                remaining_to_map / (1024 * 1024)
+            );
         }
 
         Ok(DeviceMapMetadata::from_num_device_layers(device_layers))

@@ -109,7 +109,7 @@ impl DeviceMapSetting {
                 if n_device_layers + n_host_layers != model_layers {
                     candle_core::bail!("Expected the total number of GPU ({n_device_layers}) and host layers ({n_host_layers}) to sum to the number of model hidden layers ({model_layers})");
                 }
-                info!("Model has {model_layers} repeating layers.");
+                once_log_info(format!("Model has {model_layers} repeating layers."));
 
                 // Handle multi-GPU mapping here
                 let mut combined = Vec::with_capacity(model_layers);

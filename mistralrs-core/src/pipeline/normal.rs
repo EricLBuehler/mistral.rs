@@ -278,12 +278,22 @@ impl Loader for NormalLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
+        // If auto, convert to Map
         if let DeviceMapSetting::Auto = mapper.clone() {
             let devices = device_map::get_all_similar_devices(&device)?;
             // Initial dtype
             let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
-            // If auto, convert to Map
-            let new = self.inner.get_device_layers(&config, &devices, dtype)?;
+
+            let mut weight_pack_factor = 1;
+            // ISQ or UQFF: quantized path
+            if let Some(isq) = in_situ_quant {
+                weight_pack_factor = isq.pack_factor(dtype);
+            } else if self.config.from_uqff.is_some() {
+                todo!()
+            }
+            let new = self
+                .inner
+                .get_device_layers(&config, &devices, dtype, weight_pack_factor)?;
             mapper = DeviceMapSetting::Map(new);
         }
 
