@@ -18,9 +18,10 @@ use crate::{
     serde_default_fn,
     utils::log::once_log_info,
     xlora_models::NonGranularState,
+    DeviceLayerMapMetadata, MemoryUsage,
 };
-use anyhow::Result;
-use candle_core::{Device, Tensor};
+use anyhow::{Context, Result};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 
 use mistralrs_quant::QuantizedConfig;
@@ -34,6 +35,8 @@ use crate::{
     models,
     xlora_models::{self, XLoraConfig},
 };
+
+use super::DeviceMappedModelLoader;
 
 pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     #[allow(clippy::too_many_arguments)]
@@ -87,7 +90,7 @@ pub struct NormalLoadingMetadata {
     pub real_device: Device,
 }
 
-pub trait NormalModelLoader: IsqModelLoader + Send + Sync {
+pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
     fn load(
         &self,
         config: &str,
@@ -296,6 +299,18 @@ impl IsqModelLoader for AutoLoader {
     }
 }
 
+impl DeviceMappedModelLoader for AutoLoader {
+    fn get_device_layers(
+        &self,
+        config: &str,
+        ordinals: &[usize],
+        dtype: DType,
+        base_device: &Device,
+    ) -> Result<(Vec<DeviceLayerMapMetadata>, Vec<Device>)> {
+        Self::get_loader(config)?.get_device_layers(config, ordinals, dtype, base_device)
+    }
+}
+
 serde_default_fn!(bool, word_emb_default, false);
 
 // ======================== Mistral loader
@@ -413,6 +428,8 @@ impl IsqModelLoader for MistralLoader {
         ])
     }
 }
+
+impl DeviceMappedModelLoader for MistralLoader {}
 
 // ======================== Gemma loader
 
@@ -542,6 +559,8 @@ impl IsqModelLoader for GemmaLoader {
     }
 }
 
+impl DeviceMappedModelLoader for GemmaLoader {}
+
 // ======================== Llama loader
 
 #[derive(Deserialize)]
@@ -664,6 +683,46 @@ impl IsqModelLoader for LlamaLoader {
     }
 }
 
+impl DeviceMappedModelLoader for LlamaLoader {
+    fn per_layer_size_in_bytes(&self, config: &str, dtype: DType) -> Result<usize> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q;
+            let k_proj = size_in * size_kv;
+            let v_proj = size_in * size_kv;
+            let o_proj = size_q * size_in;
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size;
+            let up_proj = h_size * i_size;
+            let down_proj = i_size * h_size;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        Ok(per_layer_elems * dtype.size_in_bytes())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        Ok(cfg.num_hidden_layers)
+    }
+}
+
 // ======================== Mixtral loader
 
 #[derive(Deserialize)]
@@ -783,6 +842,8 @@ impl IsqModelLoader for MixtralLoader {
     }
 }
 
+impl DeviceMappedModelLoader for MixtralLoader {}
+
 // ======================== Phi2 loader
 
 #[derive(Deserialize)]
@@ -900,6 +961,8 @@ impl IsqModelLoader for Phi2Loader {
         ])
     }
 }
+
+impl DeviceMappedModelLoader for Phi2Loader {}
 
 // ======================== Phi3 loader
 
@@ -1024,6 +1087,8 @@ impl IsqModelLoader for Phi3Loader {
     }
 }
 
+impl DeviceMappedModelLoader for Phi3Loader {}
+
 // ======================== Qwen2 loader
 
 #[derive(Deserialize)]
@@ -1130,6 +1195,8 @@ impl IsqModelLoader for Qwen2Loader {
         ])
     }
 }
+
+impl DeviceMappedModelLoader for Qwen2Loader {}
 
 // ======================== Gemma2 loader
 
@@ -1264,6 +1331,8 @@ impl IsqModelLoader for Gemma2Loader {
     }
 }
 
+impl DeviceMappedModelLoader for Gemma2Loader {}
+
 // ======================== Starcoder2 loader
 
 #[derive(Deserialize, Debug)]
@@ -1380,6 +1449,8 @@ impl IsqModelLoader for Starcoder2Loader {
         ])
     }
 }
+
+impl DeviceMappedModelLoader for Starcoder2Loader {}
 
 // ======================== Phi3 loader
 
@@ -1519,6 +1590,8 @@ impl IsqModelLoader for Phi3_5MoELoader {
         ])
     }
 }
+
+impl DeviceMappedModelLoader for Phi3_5MoELoader {}
 
 /// [`NormalLoader`] for a DeepSeekV2 model.
 ///
@@ -1688,3 +1761,5 @@ impl IsqModelLoader for DeepSeekV2Loader {
         Ok(data)
     }
 }
+
+impl DeviceMappedModelLoader for DeepSeekV2Loader {}

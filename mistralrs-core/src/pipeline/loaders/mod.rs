@@ -10,9 +10,9 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use as_any::AsAny;
-use candle_core::Device;
+use candle_core::{DType, Device};
 use mistralrs_quant::IsqType;
 use tokio::sync::Mutex;
 
@@ -33,8 +33,8 @@ pub use diffusion_loaders::{
 };
 
 use crate::{
-    lora::LoraConfig, xlora_models::XLoraConfig, DeviceMapMetadata, Ordering, PagedAttentionConfig,
-    TryIntoDType,
+    lora::LoraConfig, xlora_models::XLoraConfig, DeviceLayerMapMetadata, DeviceMapMetadata,
+    MemoryUsage, Ordering, PagedAttentionConfig, TryIntoDType,
 };
 
 use super::Pipeline;
@@ -354,6 +354,76 @@ impl ModelKind {
             }
             AnyMoe { target } => target.adapted_kind(),
         }
+    }
+}
+
+pub trait DeviceMappedModelLoader {
+    fn per_layer_size_in_bytes(&self, config: &str, dtype: DType) -> Result<usize> {
+        unimplemented!("eventually this method will be required")
+    }
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        unimplemented!("eventually this method will be required")
+    }
+
+    fn get_device_layers(
+        &self,
+        config: &str,
+        ordinals: &[usize],
+        dtype: DType,
+        base_device: &Device,
+    ) -> Result<(Vec<DeviceLayerMapMetadata>, Vec<Device>)> {
+        let per_layer_size_in_bytes = self.per_layer_size_in_bytes(config, dtype)?;
+        let num_layers = self.num_layers(config)?;
+        let mut remaining_to_map = per_layer_size_in_bytes * num_layers;
+
+        let mut devices = Vec::new();
+        for ordinal in ordinals {
+            let dev = match base_device {
+                Device::Cuda(_) => Device::new_cuda(*ordinal)?,
+                Device::Metal(_) => Device::new_metal(*ordinal)?,
+                Device::Cpu => Device::Cpu,
+            };
+            devices.push(dev);
+        }
+        // Always add the CPU as fallback
+        devices.push(Device::Cpu);
+
+        let mut per_layer_avail = Vec::new();
+        for dev in devices {
+            let usage = MemoryUsage.get_memory_available(&dev)?;
+            per_layer_avail.push((usage, dev));
+        }
+
+        let mut mappings = Vec::new();
+        let mut used_devices = Vec::new();
+
+        let mut current_ordinal = 0;
+        let mut current_layer = 0;
+        while remaining_to_map > 0 && !per_layer_avail.is_empty() {
+            let (device_capacity, device) = per_layer_avail
+                .pop()
+                .context("No more devices to map to. The model does not fit on this system.")?;
+            let layers_on_device = if device_capacity >= remaining_to_map {
+                num_layers - current_layer
+            } else {
+                device_capacity / per_layer_size_in_bytes
+            };
+
+            mappings.push(DeviceLayerMapMetadata {
+                ordinal: current_ordinal,
+                layers: layers_on_device,
+            });
+            used_devices.push(device);
+
+            current_layer += layers_on_device;
+            current_ordinal += 1;
+            remaining_to_map -= per_layer_size_in_bytes * layers_on_device;
+        }
+        if remaining_to_map > 0 {
+            anyhow::bail!("This model does not fit on the devices with ordinals {ordinals:?} and CPU memoru, and exceeds total capacity by {}MB", remaining_to_map / (1024*1024));
+        }
+
+        Ok((mappings, used_devices))
     }
 }
 

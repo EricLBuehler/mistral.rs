@@ -346,6 +346,11 @@ impl Loader for NormalLoader {
             AttentionImplementation::Eager
         };
 
+        let (device_mem, devices) = self
+            .inner
+            .get_device_layers(&config, &[0], dtype, &device)?;
+        dbg!(&device_mem, &devices);
+
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
                 paths,
