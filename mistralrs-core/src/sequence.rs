@@ -15,6 +15,7 @@ use crate::{
 };
 use candle_core::Tensor;
 use std::{
+    cmp::max,
     fmt::Display,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -705,8 +706,8 @@ impl Sequence {
 
         get_mut_group!(self).total_time += now - self.timestamp;
 
-        get_mut_group!(self).total_prompt_toks += self.prompt_len;
-        get_mut_group!(self).total_toks += self.len();
+        get_mut_group!(self).total_prompt_toks = self.prompt_len;
+        get_mut_group!(self).total_toks = self.len();
     }
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
@@ -749,6 +750,7 @@ impl Sequence {
 
     pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
         get_mut_group!(self).chat_streaming_chunks.push(chunk);
+        self.update_time_info();
     }
 
     pub fn add_streaming_completion_chunk_choice_to_group(&self, chunk: CompletionChunkChoice) {
