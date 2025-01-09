@@ -21,7 +21,7 @@ use crate::{
         deserialize_tensor, serialize_tensor, version_is_compatible, BitWiseOp, LeftshiftOp,
         HQFF_VERSION,
     },
-    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[cfg(feature = "cuda")]
@@ -503,7 +503,7 @@ impl HqqLayer {
             [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
             _ => w.t()?,
         };
-        let res = xs.matmul(&w)?;
+        let res = MatMul.matmul(&xs, &w)?;
         if let Some(ref bias) = self.bias {
             res + bias
         } else {

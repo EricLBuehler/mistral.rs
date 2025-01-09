@@ -14,11 +14,12 @@ use candle_core::quantized::ggml_file;
 use candle_core::quantized::QMatMul;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
+use mistralrs_quant::MatMul;
 use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
+use crate::layers::{CausalMasker, QRmsNorm, Sdpa};
 use crate::pipeline::{extract_logits, Cache, EitherCache};
 use crate::{DeviceMapSetting, Topology};
 

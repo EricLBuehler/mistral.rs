@@ -13,7 +13,7 @@ use std::{any::Any, ops::Mul};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    layers::{repeat_kv, Activation, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, Activation, CausalMasker, MatMul, QLinear, RmsNorm},
     models::mistral::Model as Mistral,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -411,7 +411,7 @@ impl Attention {
             .transpose(1, 2)?;
 
         let attn_weights =
-            (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
+            (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
 
         let attn_weights = CausalMasker.apply_mask_one_and_zero(
             &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
@@ -419,7 +419,7 @@ impl Attention {
             &self.neg_inf,
         )?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let mut attn_output = attn_weights.matmul(&v.contiguous()?)?;
+        let mut attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
@@ -767,7 +767,7 @@ impl PerceiverAttention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let attn_weights = (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)?
+        let attn_weights = (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)?
             / (self.head_dim as f64).sqrt())?;
 
         let attn_weights = CausalMasker.apply_mask_one_and_zero(
@@ -776,7 +776,7 @@ impl PerceiverAttention {
             &self.neg_inf,
         )?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let mut attn_output = attn_weights.matmul(&v.contiguous()?)?;
+        let mut attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;

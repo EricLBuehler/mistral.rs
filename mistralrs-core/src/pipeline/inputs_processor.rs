@@ -55,11 +55,11 @@ pub mod text_models_inputs_processor {
 
     use anyhow::Result;
     use candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
+    use mistralrs_quant::set_use_matmul_via_f16;
     use tokenizers::Tokenizer;
 
     use crate::{
         device_map::DeviceMapper,
-        layers::set_use_matmul_via_f16,
         paged_attention::{BlockEngine, _PAD_SLOT_ID},
         sequence::Sequence,
     };

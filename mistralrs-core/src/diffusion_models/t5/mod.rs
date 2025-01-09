@@ -8,7 +8,7 @@ use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, VarBui
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::layers::clamp_for_f16;
+use crate::layers::{clamp_for_f16, MatMul};
 
 fn default_relative_attention_max_distance() -> usize {
     128
@@ -377,7 +377,7 @@ impl T5Attention {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
         // TODO: Use flash_attn.
-        let scores = { q.matmul(&k.t()?)? };
+        let scores = { MatMul.matmul(&q, &k.t()?)? };
         let scores = match mask {
             None => scores,
             Some(mask) => masked_fill(
@@ -450,7 +450,7 @@ impl T5Attention {
         };
 
         let attn_weights = { candle_nn::ops::softmax_last_dim(&scores)? };
-        let attn_output = attn_weights.matmul(&v)?;
+        let attn_output = MatMul.matmul(&attn_weights, &v)?;
         let attn_output = attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.inner_dim))?;

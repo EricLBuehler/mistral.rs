@@ -6,7 +6,7 @@ use candle_nn::{
 use std::ops::Mul;
 
 use crate::{
-    layers::{Activation, CausalMasker},
+    layers::{Activation, CausalMasker, MatMul},
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -261,7 +261,7 @@ impl Attention {
             .transpose(1, 2)?;
 
         let attn_weights =
-            (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
+            (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
 
         let mut attn_weights = CausalMasker.apply_mask_one_and_zero(
             &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
@@ -269,7 +269,7 @@ impl Attention {
             &self.neg_inf,
         )?;
         attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = attn_weights.matmul(&v.contiguous()?)?;
+        let attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
         attn_output
             .transpose(1, 2)?

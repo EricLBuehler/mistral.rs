@@ -243,8 +243,6 @@ impl MistralRsBuilder {
     }
 }
 
-pub(crate) static INHIBIT_GEMM_F16: AtomicBool = AtomicBool::new(false);
-
 #[cfg(feature = "cuda")]
 fn set_gemm_reduced_precision_f16() {
     use candle_core::{DType, Device, Tensor};

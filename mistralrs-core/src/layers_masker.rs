@@ -3,8 +3,9 @@
 use std::ops::Add;
 
 use candle_core::{DType, Device, Result, Tensor, WithDType};
+use mistralrs_quant::get_use_matmul_via_f16;
 
-use crate::{cublaslt::CUBLASLT_HANDLE, layers::get_use_matmul_via_f16, pipeline::KvCache};
+use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::KvCache};
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 pub struct CausalMasker;
