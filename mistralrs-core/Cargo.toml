@@ -59,7 +59,6 @@ derive_more = { version = "0.99.17", default-features = false, features = [
 ] }
 akin = "0.4.0"
 variantly = "0.4.0"
-buildstructor.workspace = true
 tracing-subscriber.workspace = true
 derive-new = "0.7.0"
 itertools = "0.13.0"

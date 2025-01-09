@@ -139,9 +139,7 @@ where
 // NOTE: Intended to be built via fluent API in a single line, cannot conditionally append params.
 // `.adapter(Adapter<' >)` or for conditional usage `.and_adapter(Option<Adapter<' >)` can be used.
 // Otherwise omitting an `.adapter()` call prior to calling `build()` is ok, defaults to `None`.
-#[buildstructor::buildstructor]
 impl<'a, Q: QuantParams> ModelParams<'a, Q> {
-    #[builder]
     pub fn new<'b: 'a>(quant: Q, adapter: Option<Adapter<'b>>) -> Self {
         match adapter {
             None => Self::Quantized((quant, NoAdapter {}).into()),
