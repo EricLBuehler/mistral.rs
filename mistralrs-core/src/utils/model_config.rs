@@ -1,8 +1,10 @@
-use super::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
+use super::varbuilder_utils::{
+    from_mmaped_safetensors, load_preload_adapters, DeviceForLoadTensor,
+};
 use anyhow::Result;
 use candle_core::{quantized::ggml_file, DType};
 use candle_nn::VarBuilder;
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
@@ -76,9 +78,11 @@ impl<'a> Adapter<'a> {
                 .collect::<Vec<_>>(),
             Some(candle_core::DType::F32),
             device,
+            vec![None],
             silent,
             None,
             |_| true,
+            Arc::new(|_| DeviceForLoadTensor::Base),
         )?;
 
         Ok(Self {

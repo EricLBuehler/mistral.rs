@@ -56,57 +56,101 @@ impl TensorLoaderBackend for PickleBackend {
     }
 }
 
+pub enum DeviceForLoadTensor {
+    Base,
+    Idx(usize),
+}
+
 /// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
 ///
 /// # Predicate semantics:
 /// - If `regexes` is specified, this will be used in `make_dummy_predicate` based on `.any`
 /// - Otherwise, only include keys for which predicate evaluates to true.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn from_mmaped_safetensors<'a>(
     paths: Vec<PathBuf>,
     xlora_paths: Vec<PathBuf>,
     dtype: Option<DType>,
-    device: &Device,
+    base_device: &Device,
+    layer_devices: Vec<Option<Device>>,
     silent: bool,
     make_dummy_regexes: Option<Arc<Vec<Regex>>>,
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
+    get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
 ) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
     #[allow(clippy::type_complexity)]
     let mut handles: Vec<JoinHandle<Result<HashMap<String, Tensor>>>> = Vec::new();
 
     for path in paths {
-        let device = device.clone();
+        let base_device = base_device.clone();
+        let layer_devices = layer_devices.clone();
+        let get_device_for_tensor = get_device_for_tensor.clone();
         if let Some(regexes) = make_dummy_regexes.clone() {
             let predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(move || {
                 let loader = Common::new();
-                loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |key| {
-                    regexes.iter().any(|r| r.is_match(key))
-                })
+                loader.load_tensors_from_path(
+                    &path,
+                    &base_device,
+                    layer_devices,
+                    get_device_for_tensor,
+                    dtype,
+                    silent,
+                    predicate,
+                    |key| regexes.iter().any(|r| r.is_match(key)),
+                )
             })));
         } else {
             let predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(move || {
                 let loader = Common::new();
-                loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |_| false)
+                loader.load_tensors_from_path(
+                    &path,
+                    &base_device,
+                    layer_devices,
+                    get_device_for_tensor,
+                    dtype,
+                    silent,
+                    predicate,
+                    |_| false,
+                )
             })));
         }
     }
     for (i, path) in xlora_paths.into_iter().enumerate() {
-        let device = device.clone();
+        let base_device = base_device.clone();
+        let layer_devices = layer_devices.clone();
+        let get_device_for_tensor = get_device_for_tensor.clone();
         if let Some(regexes) = make_dummy_regexes.clone() {
             let predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(move || {
                 let loader = XLora::new(i + 1);
-                loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |key| {
-                    regexes.iter().any(|r| r.is_match(key))
-                })
+                loader.load_tensors_from_path(
+                    &path,
+                    &base_device,
+                    layer_devices,
+                    get_device_for_tensor,
+                    dtype,
+                    silent,
+                    predicate,
+                    |key| regexes.iter().any(|r| r.is_match(key)),
+                )
             })));
         } else {
             let predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(move || {
                 let loader = XLora::new(i + 1);
-                loader.load_tensors_from_path(&path, &device, dtype, silent, predicate, |_| false)
+                loader.load_tensors_from_path(
+                    &path,
+                    &base_device,
+                    layer_devices,
+                    get_device_for_tensor,
+                    dtype,
+                    silent,
+                    predicate,
+                    |_| false,
+                )
             })));
         }
     }
@@ -123,7 +167,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     Ok(VarBuilder::from_tensors(
         ws,
         dtype.unwrap_or(DType::F16),
-        device,
+        base_device,
     ))
 }
 
@@ -140,6 +184,8 @@ pub(crate) fn load_preload_adapters<'a>(
             let loaded_tensors = loader.load_tensors_from_path(
                 path,
                 device,
+                vec![None],
+                Arc::new(|_| DeviceForLoadTensor::Base),
                 Some(dtype),
                 silent,
                 |_| true,
@@ -162,10 +208,13 @@ pub(crate) fn load_preload_adapters<'a>(
 
 // Presently this logic only needs to diverge for X-LoRA support via `get_name_key_pairs()`
 trait LoadTensors {
+    #[allow(clippy::too_many_arguments)]
     fn load_tensors_from_path(
         &self,
         path: &PathBuf,
-        device: &Device,
+        base_device: &Device,
+        layer_devices: Vec<Option<Device>>,
+        get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
         dtype: Option<DType>,
         is_silent: bool,
         predicate: impl Fn(String) -> bool,
@@ -198,8 +247,14 @@ trait LoadTensors {
         if !iter.is_empty() {
             for (load_name, key_name) in iter.into_iter().with_progress(is_silent) {
                 if !make_dummy_predicate(&load_name) {
+                    let dev = match get_device_for_tensor(load_name.clone()) {
+                        DeviceForLoadTensor::Base => base_device,
+                        DeviceForLoadTensor::Idx(i) => {
+                            layer_devices[i].as_ref().unwrap_or(base_device)
+                        }
+                    };
                     // If making a dummy, don't add the tensor. `mistralrs_quant` handles this!
-                    let tensor = tensors.load_name(&load_name, device, dtype)?;
+                    let tensor = tensors.load_name(&load_name, dev, dtype)?;
 
                     loaded_tensors.insert(key_name, tensor);
                 }

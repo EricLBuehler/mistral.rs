@@ -29,6 +29,7 @@ use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
+use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
@@ -412,6 +413,7 @@ impl Loader for NormalLoader {
                 paths,
                 Some(dtype),
                 &load_device,
+                layer_devices.clone(),
                 config,
                 self.inner,
                 self.config.use_flash_attn,
@@ -429,6 +431,7 @@ impl Loader for NormalLoader {
                 paths,
                 Some(dtype),
                 &load_device,
+                layer_devices.clone(),
                 config,
                 self.inner,
                 self.config.use_flash_attn,
@@ -443,6 +446,7 @@ impl Loader for NormalLoader {
                 paths,
                 dtype,
                 &load_device,
+                layer_devices.clone(),
                 config,
                 self.inner,
                 self.config.use_flash_attn,
@@ -944,6 +948,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
                 vec![],
                 Some(dtype),
                 dev,
+                vec![None],
                 silent,
                 None,
                 move |key| {
@@ -960,6 +965,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
                         false
                     }
                 },
+                Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
             vbs.push(vb);
         }
@@ -995,9 +1001,11 @@ impl AnyMoePipelineMixin for NormalPipeline {
                 vec![],
                 Some(dtype),
                 dev,
+                vec![None],
                 silent,
                 None,
                 |_| true,
+                Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
             info!(
                 "Loaded gating layers from `{}`",

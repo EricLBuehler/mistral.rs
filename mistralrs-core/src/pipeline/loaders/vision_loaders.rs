@@ -14,11 +14,13 @@ use serde::Deserialize;
 
 use super::{DeviceMappedModelLoader, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
+use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
+use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
@@ -82,6 +84,26 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     ) -> Arc<dyn Processor + Send + Sync>;
     fn supports_paged_attention(&self) -> bool;
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer>;
+    fn get_device_for_tensor(
+        &self,
+        _config: &str,
+        _mapper: &dyn DeviceMapper,
+    ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
+        let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
+        let closure = move |name: String| {
+            if let Some(captures) = re.captures(&name) {
+                captures
+                    .get(1)
+                    .and_then(|m| m.as_str().parse::<usize>().ok())
+                    .map(DeviceForLoadTensor::Idx)
+                    .unwrap_or(DeviceForLoadTensor::Base)
+            } else {
+                DeviceForLoadTensor::Base
+            }
+        };
+
+        Ok(Arc::new(closure))
+    }
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]

@@ -22,6 +22,7 @@ use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalMod
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
+use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
@@ -336,6 +337,7 @@ impl Loader for VisionLoader {
                 paths,
                 Some(dtype),
                 &load_device,
+                layer_devices.clone(),
                 config,
                 self.inner,
                 self.config.use_flash_attn,
@@ -814,6 +816,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 vec![],
                 Some(dtype),
                 dev,
+                vec![None],
                 silent,
                 None,
                 move |key| {
@@ -830,6 +833,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
                         false
                     }
                 },
+                Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
             vbs.push(vb);
         }
@@ -865,9 +869,11 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 vec![],
                 Some(dtype),
                 dev,
+                vec![None],
                 silent,
                 None,
                 |_| true,
+                Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
             info!(
                 "Loaded gating layers from `{}`",
