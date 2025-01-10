@@ -289,7 +289,7 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -481,7 +481,7 @@ impl DeviceMappedModelLoader for Idefics2Loader {
 
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1088,7 +1088,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
             let cfg = &config.text_config;
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1131,13 +1131,19 @@ impl DeviceMappedModelLoader for VLlamaLoader {
                 let post_attention_layernorm = cfg.hidden_size + cfg.hidden_size;
 
                 let head_dim = cfg.hidden_size / cfg.num_attention_heads;
-                let q_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim;
-                let k_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim;
-                let v_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim;
-                let o_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim;
+                let q_proj =
+                    cfg.hidden_size * cfg.num_attention_heads * head_dim / weight_pack_factor;
+                let k_proj =
+                    cfg.hidden_size * cfg.num_attention_heads * head_dim / weight_pack_factor;
+                let v_proj =
+                    cfg.hidden_size * cfg.num_attention_heads * head_dim / weight_pack_factor;
+                let o_proj =
+                    cfg.hidden_size * cfg.num_attention_heads * head_dim / weight_pack_factor;
 
-                let fc1 = cfg.hidden_size * cfg.intermediate_size + cfg.intermediate_size;
-                let fc2 = cfg.intermediate_size * cfg.hidden_size + cfg.hidden_size;
+                let fc1 = cfg.hidden_size * cfg.intermediate_size
+                    + cfg.intermediate_size / weight_pack_factor;
+                let fc2 =
+                    cfg.intermediate_size * cfg.hidden_size + cfg.hidden_size / weight_pack_factor;
 
                 input_layernorm
                     + post_attention_layernorm
@@ -1303,7 +1309,7 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         let text_elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };

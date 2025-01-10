@@ -504,7 +504,7 @@ impl DeviceMappedModelLoader for MistralLoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -697,7 +697,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -888,7 +888,7 @@ impl DeviceMappedModelLoader for LlamaLoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1072,7 +1072,7 @@ impl DeviceMappedModelLoader for MixtralLoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1258,7 +1258,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1441,7 +1441,7 @@ impl DeviceMappedModelLoader for Phi3Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1608,7 +1608,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1806,7 +1806,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1992,7 +1992,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -2194,7 +2194,7 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -2435,7 +2435,7 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
