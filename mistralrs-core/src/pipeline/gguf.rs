@@ -354,7 +354,7 @@ impl Loader for GGUFLoader {
         let arch = model.arch();
 
         // If auto, convert to Map
-        let num_layers = model.get_metadata()["block_count"].to_u32()? as usize;
+        let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
         if let DeviceMapSetting::Auto = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
 

@@ -234,7 +234,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
         Ok(size_in_bytes)
     }
     fn num_layers(&self, _config: &str) -> Result<usize> {
-        Ok(self.model.get_metadata()["block_count"].to_u32()? as usize)
+        Ok(self.model.get_metadata()[&format!("{}.block_count", self.arch)].to_u32()? as usize)
     }
     fn per_layer_size_in_bytes(
         &self,
