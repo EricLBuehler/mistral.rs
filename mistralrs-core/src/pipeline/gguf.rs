@@ -9,7 +9,7 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
     ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
-use crate::device_map::DeviceMapper;
+use crate::device_map::{self, DeviceMapper};
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
@@ -20,10 +20,12 @@ use crate::paged_attention::{
 };
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 use crate::pipeline::get_chat_template;
+use crate::pipeline::loaders::DeviceMappedModelLoader;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::utils::gguf_metadata::GgufDeviceMapLoaderInner;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
@@ -41,7 +43,7 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
@@ -351,9 +353,43 @@ impl Loader for GGUFLoader {
         model.print_metadata()?;
         let arch = model.arch();
 
+        // If auto, convert to Map
+        let num_layers = model.get_metadata()["block_count"].to_u32()? as usize;
         if let DeviceMapSetting::Auto = mapper.clone() {
-            warn!("GGUF models do not support automatic device mapping, disabling it");
-            mapper = DeviceMapSetting::dummy();
+            let devices = device_map::get_all_similar_devices(device)?;
+
+            let model = GgufDeviceMapLoaderInner {
+                model: &model,
+                arch,
+            };
+            let dtype = DType::F32;
+
+            let per_layer_size_in_bytes =
+                model.per_layer_size_in_bytes("this is a dummy config!", dtype, 1)?;
+            let non_mapped_size_in_bytes =
+                model.non_mapped_size_in_bytes("this is a dummy config!", dtype, 1)?;
+            let total_model_size_in_bytes = per_layer_size_in_bytes
+                * model.num_layers("this is a dummy config!")?
+                + non_mapped_size_in_bytes;
+
+            let new = model.get_device_layers(
+                "this is a dummy config!",
+                num_layers,
+                per_layer_size_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                &devices,
+            )?;
+            mapper = DeviceMapSetting::Map(new);
+        }
+
+        let pipeline_mapper =
+            mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
+        let mapper = mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
+        let mut layer_devices = Vec::new();
+        for layer in 0..num_layers {
+            let device = mapper.device_for(layer, false).cloned();
+            layer_devices.push(device);
         }
 
         let GgufTokenizerConversion {
@@ -397,7 +433,7 @@ impl Loader for GGUFLoader {
             // Base config (quantization only):
             let quant = ModelConfig::ParamsGGUF(
                 model,
-                (device, mapper.clone(), self.config.topology.as_ref()).into(),
+                (device, mapper).into(),
                 if paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention
                 } else {
@@ -439,24 +475,6 @@ impl Loader for GGUFLoader {
             },
             _ => unreachable!(),
         };
-
-        let num_hidden_layers = match model {
-            Model::Llama(ref model) => model.cache.normal().0.len(),
-            Model::Phi2(ref model) => model.cache.normal().0.len(),
-            Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
-            Model::Phi3(ref model) => model.cache.normal().0.len(),
-            Model::XLoraPhi3(ref model) => model.cache.full().lock().len(),
-            Model::Starcoder2(ref model) => model.cache.normal().0.len(),
-            Model::Qwen2(ref model) => model.cache.normal().0.len(),
-        };
-
-        let mapper =
-            mapper.into_mapper(num_hidden_layers, device, self.config.topology.as_ref())?;
-        let mut layer_devices = Vec::new();
-        for layer in 0..num_hidden_layers {
-            let device = mapper.device_for(layer, false).cloned();
-            layer_devices.push(device);
-        }
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let model_config: &dyn ModelConfigLike = &model_config_metadata;
@@ -557,7 +575,7 @@ impl Loader for GGUFLoader {
                 prompt_batchsize: self.config.prompt_batchsize,
                 model_metadata: Some(Arc::new(model_config_metadata)),
             }),
-            mapper,
+            mapper: pipeline_mapper,
         })))
     }
 

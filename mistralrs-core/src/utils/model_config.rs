@@ -5,12 +5,12 @@ use candle_nn::VarBuilder;
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
+    device_map::DeviceMapper,
     gguf::Content,
     lora::{LoraConfig, Ordering},
     paged_attention::AttentionImplementation,
     pipeline::ModelPaths,
     xlora_models::XLoraConfig,
-    DeviceMapSetting, Topology,
 };
 
 #[derive(derive_more::From)]
@@ -23,8 +23,7 @@ pub struct FileGGML {
 #[derive(derive_more::From)]
 pub struct Device<'a> {
     device: &'a candle_core::Device,
-    pub mapper: DeviceMapSetting,
-    pub topology: Option<&'a Topology>,
+    pub mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 pub struct Adapter<'a> {
@@ -164,8 +163,7 @@ pub trait FromGGUF {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         ct: Content<'_, R>,
         device: &candle_core::Device,
-        mapper: DeviceMapSetting,
-        topology: Option<&Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self, candle_core::Error>
@@ -198,8 +196,7 @@ pub trait FromAdapterGGUF {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        mapper: DeviceMapSetting,
-        topology: Option<&Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
         dtype: DType,
     ) -> Result<Self, candle_core::Error>
@@ -248,42 +245,18 @@ impl Config<ParamsGGML, Adapter<'_>> {
 impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, NoAdapter> {
     pub fn try_into_model<T: FromGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let ParamsGGUF(
-            ct,
-            Device {
-                device,
-                mapper,
-                topology,
-            },
-            attention_implementation,
-            dtype,
-        ) = self.quant;
+        let ParamsGGUF(ct, Device { device, mapper }, attention_implementation, dtype) = self.quant;
 
         // Forwards all structured fields above into the required flattened param sequence:
-        T::from_gguf(
-            ct,
-            device,
-            mapper,
-            topology,
-            attention_implementation,
-            dtype,
-        )
+        T::from_gguf(ct, device, mapper, attention_implementation, dtype)
     }
 }
 
 impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, Adapter<'_>> {
     pub fn try_into_model<T: FromAdapterGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let ParamsGGUF(
-            ct,
-            Device {
-                device,
-                mapper,
-                topology,
-            },
-            _attention_implementation,
-            dtype,
-        ) = self.quant;
+        let ParamsGGUF(ct, Device { device, mapper }, _attention_implementation, dtype) =
+            self.quant;
 
         let Adapter {
             xlora_config,
@@ -302,7 +275,6 @@ impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, Adapter<'_>> {
             ordering,
             xlora_config,
             mapper,
-            topology,
             &preload_adapters,
             dtype,
         )
