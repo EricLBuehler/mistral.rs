@@ -11,6 +11,7 @@ use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
@@ -175,14 +176,17 @@ impl Loader for DiffusionLoader {
                     .iter()
                     .zip(self.inner.force_cpu_vb())
                     .map(|(path, force_cpu)| {
+                        let dev = if force_cpu { &Device::Cpu } else { device };
                         from_mmaped_safetensors(
                             vec![path.clone()],
                             Vec::new(),
                             Some(dtype),
-                            if force_cpu { &Device::Cpu } else { device },
+                            dev,
+                            vec![None],
                             silent,
                             None,
                             |_| true,
+                            Arc::new(|_| DeviceForLoadTensor::Base),
                         )
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;

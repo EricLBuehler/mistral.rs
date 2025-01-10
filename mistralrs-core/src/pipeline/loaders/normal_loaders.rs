@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
+    sync::Arc,
 };
 
 use crate::{
@@ -16,7 +17,7 @@ use crate::{
         EitherCache, IsqModel,
     },
     serde_default_fn,
-    utils::log::once_log_info,
+    utils::{log::once_log_info, varbuilder_utils::DeviceForLoadTensor},
     xlora_models::NonGranularState,
     DeviceMapMetadata,
 };
@@ -115,6 +116,26 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
     /// Get total num_hidden_layers for the layers which will be device mapped.
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize>;
+    fn get_device_for_tensor(
+        &self,
+        _config: &str,
+        _mapper: &dyn DeviceMapper,
+    ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
+        let closure = |name: String| {
+            let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
+            if let Some(captures) = re.captures(&name) {
+                captures
+                    .get(1)
+                    .and_then(|m| m.as_str().parse::<usize>().ok())
+                    .map(DeviceForLoadTensor::Idx)
+                    .unwrap_or(DeviceForLoadTensor::Base)
+            } else {
+                DeviceForLoadTensor::Base
+            }
+        };
+
+        Ok(Arc::new(closure))
+    }
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
