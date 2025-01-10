@@ -885,7 +885,13 @@
 <a href="#884" id="884">884</a>
 <a href="#885" id="885">885</a>
 <a href="#886" id="886">886</a>
-<a href="#887" id="887">887</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#887" id="887">887</a>
+<a href="#888" id="888">888</a>
+<a href="#889" id="889">889</a>
+<a href="#890" id="890">890</a>
+<a href="#891" id="891">891</a>
+<a href="#892" id="892">892</a>
+<a href="#893" id="893">893</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -909,6 +915,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher_v2::PrefixCacheManagerV2;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
+<span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::preprocessor_config::PreProcessorConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig;
@@ -1223,6 +1230,7 @@
                 paths,
                 <span class="prelude-val">Some</span>(dtype),
                 <span class="kw-2">&amp;</span>load_device,
+                layer_devices.clone(),
                 config,
                 <span class="self">self</span>.inner,
                 <span class="self">self</span>.config.use_flash_attn,
@@ -1701,6 +1709,7 @@
                 <span class="macro">vec!</span>[],
                 <span class="prelude-val">Some</span>(dtype),
                 dev,
+                <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
                 silent,
                 <span class="prelude-val">None</span>,
                 <span class="kw">move </span>|key| {
@@ -1717,6 +1726,7 @@
                         <span class="bool-val">false
                     </span>}
                 },
+                Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
             )<span class="question-mark">?</span>;
             vbs.push(vb);
         }
@@ -1752,9 +1762,11 @@
                 <span class="macro">vec!</span>[],
                 <span class="prelude-val">Some</span>(dtype),
                 dev,
+                <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
                 silent,
                 <span class="prelude-val">None</span>,
                 |<span class="kw">_</span>| <span class="bool-val">true</span>,
+                Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
             )<span class="question-mark">?</span>;
             <span class="macro">info!</span>(
                 <span class="string">"Loaded gating layers from `{}`"</span>,

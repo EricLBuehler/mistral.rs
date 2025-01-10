@@ -1569,7 +1569,29 @@
 <a href="#1568" id="1568">1568</a>
 <a href="#1569" id="1569">1569</a>
 <a href="#1570" id="1570">1570</a>
-<a href="#1571" id="1571">1571</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#1571" id="1571">1571</a>
+<a href="#1572" id="1572">1572</a>
+<a href="#1573" id="1573">1573</a>
+<a href="#1574" id="1574">1574</a>
+<a href="#1575" id="1575">1575</a>
+<a href="#1576" id="1576">1576</a>
+<a href="#1577" id="1577">1577</a>
+<a href="#1578" id="1578">1578</a>
+<a href="#1579" id="1579">1579</a>
+<a href="#1580" id="1580">1580</a>
+<a href="#1581" id="1581">1581</a>
+<a href="#1582" id="1582">1582</a>
+<a href="#1583" id="1583">1583</a>
+<a href="#1584" id="1584">1584</a>
+<a href="#1585" id="1585">1585</a>
+<a href="#1586" id="1586">1586</a>
+<a href="#1587" id="1587">1587</a>
+<a href="#1588" id="1588">1588</a>
+<a href="#1589" id="1589">1589</a>
+<a href="#1590" id="1590">1590</a>
+<a href="#1591" id="1591">1591</a>
+<a href="#1592" id="1592">1592</a>
+<a href="#1593" id="1593">1593</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -1585,11 +1607,13 @@
 
 <span class="kw">use super</span>::{DeviceMappedModelLoader, NormalLoadingMetadata};
 <span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeBaseModelMixin;
+<span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::layers::Conv3dConfig;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::isq::IsqModelLoader;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
+<span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::clip::ClipConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2::{Config <span class="kw">as </span>Idefics2Config, Idefics2};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2_input_processor::Idefics2Processor;
@@ -1653,6 +1677,26 @@
     ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt;;
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>prefixer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>VisionPromptPrefixer&gt;;
+    <span class="kw">fn </span>get_device_for_tensor(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>Fn(String) -&gt; DeviceForLoadTensor + Send + Sync + <span class="lifetime">'static</span>&gt;&gt; {
+        <span class="kw">let </span>re = Regex::new(<span class="string">r"\.layers\.(\d+)\."</span>).unwrap();
+        <span class="kw">let </span>closure = <span class="kw">move </span>|name: String| {
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(captures) = re.captures(<span class="kw-2">&amp;</span>name) {
+                captures
+                    .get(<span class="number">1</span>)
+                    .and_then(|m| m.as_str().parse::&lt;usize&gt;().ok())
+                    .map(DeviceForLoadTensor::Idx)
+                    .unwrap_or(DeviceForLoadTensor::Base)
+            } <span class="kw">else </span>{
+                DeviceForLoadTensor::Base
+            }
+        };
+
+        <span class="prelude-val">Ok</span>(Arc::new(closure))
+    }
 }
 
 <span class="attr">#[cfg_attr(feature = <span class="string">"pyo3_macros"</span>, pyclass(eq, eq_int))]

@@ -250,7 +250,62 @@
 <a href="#249" id="249">249</a>
 <a href="#250" id="250">250</a>
 <a href="#251" id="251">251</a>
-<a href="#252" id="252">252</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a>
+<a href="#285" id="285">285</a>
+<a href="#286" id="286">286</a>
+<a href="#287" id="287">287</a>
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a></pre></div><pre class="rust"><code><span class="doccomment">//! Utilities for creating a VarBuilder from a VarMap loaded from tensor storage formats.
 
 </span><span class="kw">use </span>std::{
     collections::HashMap,
@@ -308,57 +363,101 @@
     }
 }
 
+<span class="kw">pub enum </span>DeviceForLoadTensor {
+    Base,
+    Idx(usize),
+}
+
 <span class="doccomment">/// Load tensors into a VarBuilder backed by a VarMap using MmapedSafetensors.
 /// Set `silent` to not show a progress bar.
 ///
 /// # Predicate semantics:
 /// - If `regexes` is specified, this will be used in `make_dummy_predicate` based on `.any`
 /// - Otherwise, only include keys for which predicate evaluates to true.
+</span><span class="attr">#[allow(clippy::too_many_arguments)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>from_mmaped_safetensors&lt;<span class="lifetime">'a</span>&gt;(
     paths: Vec&lt;PathBuf&gt;,
     xlora_paths: Vec&lt;PathBuf&gt;,
     dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
-    device: <span class="kw-2">&amp;</span>Device,
+    base_device: <span class="kw-2">&amp;</span>Device,
+    layer_devices: Vec&lt;<span class="prelude-ty">Option</span>&lt;Device&gt;&gt;,
     silent: bool,
     make_dummy_regexes: <span class="prelude-ty">Option</span>&lt;Arc&lt;Vec&lt;Regex&gt;&gt;&gt;,
     predicate: <span class="kw">impl </span>Fn(String) -&gt; bool + Send + Sync + Clone + <span class="lifetime">'static</span>,
+    get_device_for_tensor: Arc&lt;<span class="kw">dyn </span>Fn(String) -&gt; DeviceForLoadTensor + Send + Sync + <span class="lifetime">'static</span>&gt;,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;VarBuilderArgs&lt;<span class="lifetime">'a</span>, Box&lt;<span class="kw">dyn </span>SimpleBackend&gt;&gt;&gt; {
     <span class="attr">#[allow(clippy::type_complexity)]
     </span><span class="kw">let </span><span class="kw-2">mut </span>handles: Vec&lt;JoinHandle&lt;<span class="prelude-ty">Result</span>&lt;HashMap&lt;String, Tensor&gt;&gt;&gt;&gt; = Vec::new();
 
     <span class="kw">for </span>path <span class="kw">in </span>paths {
-        <span class="kw">let </span>device = device.clone();
+        <span class="kw">let </span>base_device = base_device.clone();
+        <span class="kw">let </span>layer_devices = layer_devices.clone();
+        <span class="kw">let </span>get_device_for_tensor = get_device_for_tensor.clone();
         <span class="kw">if let </span><span class="prelude-val">Some</span>(regexes) = make_dummy_regexes.clone() {
             <span class="kw">let </span>predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(<span class="kw">move </span>|| {
                 <span class="kw">let </span>loader = Common::new();
-                loader.load_tensors_from_path(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>device, dtype, silent, predicate, |key| {
-                    regexes.iter().any(|r| r.is_match(key))
-                })
+                loader.load_tensors_from_path(
+                    <span class="kw-2">&amp;</span>path,
+                    <span class="kw-2">&amp;</span>base_device,
+                    layer_devices,
+                    get_device_for_tensor,
+                    dtype,
+                    silent,
+                    predicate,
+                    |key| regexes.iter().any(|r| r.is_match(key)),
+                )
             })));
         } <span class="kw">else </span>{
             <span class="kw">let </span>predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(<span class="kw">move </span>|| {
                 <span class="kw">let </span>loader = Common::new();
-                loader.load_tensors_from_path(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>device, dtype, silent, predicate, |<span class="kw">_</span>| <span class="bool-val">false</span>)
+                loader.load_tensors_from_path(
+                    <span class="kw-2">&amp;</span>path,
+                    <span class="kw-2">&amp;</span>base_device,
+                    layer_devices,
+                    get_device_for_tensor,
+                    dtype,
+                    silent,
+                    predicate,
+                    |<span class="kw">_</span>| <span class="bool-val">false</span>,
+                )
             })));
         }
     }
     <span class="kw">for </span>(i, path) <span class="kw">in </span>xlora_paths.into_iter().enumerate() {
-        <span class="kw">let </span>device = device.clone();
+        <span class="kw">let </span>base_device = base_device.clone();
+        <span class="kw">let </span>layer_devices = layer_devices.clone();
+        <span class="kw">let </span>get_device_for_tensor = get_device_for_tensor.clone();
         <span class="kw">if let </span><span class="prelude-val">Some</span>(regexes) = make_dummy_regexes.clone() {
             <span class="kw">let </span>predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(<span class="kw">move </span>|| {
                 <span class="kw">let </span>loader = XLora::new(i + <span class="number">1</span>);
-                loader.load_tensors_from_path(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>device, dtype, silent, predicate, |key| {
-                    regexes.iter().any(|r| r.is_match(key))
-                })
+                loader.load_tensors_from_path(
+                    <span class="kw-2">&amp;</span>path,
+                    <span class="kw-2">&amp;</span>base_device,
+                    layer_devices,
+                    get_device_for_tensor,
+                    dtype,
+                    silent,
+                    predicate,
+                    |key| regexes.iter().any(|r| r.is_match(key)),
+                )
             })));
         } <span class="kw">else </span>{
             <span class="kw">let </span>predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(<span class="kw">move </span>|| {
                 <span class="kw">let </span>loader = XLora::new(i + <span class="number">1</span>);
-                loader.load_tensors_from_path(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>device, dtype, silent, predicate, |<span class="kw">_</span>| <span class="bool-val">false</span>)
+                loader.load_tensors_from_path(
+                    <span class="kw-2">&amp;</span>path,
+                    <span class="kw-2">&amp;</span>base_device,
+                    layer_devices,
+                    get_device_for_tensor,
+                    dtype,
+                    silent,
+                    predicate,
+                    |<span class="kw">_</span>| <span class="bool-val">false</span>,
+                )
             })));
         }
     }
@@ -375,7 +474,7 @@
     </span><span class="prelude-val">Ok</span>(VarBuilder::from_tensors(
         ws,
         dtype.unwrap_or(DType::F16),
-        device,
+        base_device,
     ))
 }
 
@@ -392,6 +491,8 @@
             <span class="kw">let </span>loaded_tensors = loader.load_tensors_from_path(
                 path,
                 device,
+                <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
+                Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
                 <span class="prelude-val">Some</span>(dtype),
                 silent,
                 |<span class="kw">_</span>| <span class="bool-val">true</span>,
@@ -414,10 +515,13 @@
 
 <span class="comment">// Presently this logic only needs to diverge for X-LoRA support via `get_name_key_pairs()`
 </span><span class="kw">trait </span>LoadTensors {
-    <span class="kw">fn </span>load_tensors_from_path(
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">fn </span>load_tensors_from_path(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         path: <span class="kw-2">&amp;</span>PathBuf,
-        device: <span class="kw-2">&amp;</span>Device,
+        base_device: <span class="kw-2">&amp;</span>Device,
+        layer_devices: Vec&lt;<span class="prelude-ty">Option</span>&lt;Device&gt;&gt;,
+        get_device_for_tensor: Arc&lt;<span class="kw">dyn </span>Fn(String) -&gt; DeviceForLoadTensor + Send + Sync + <span class="lifetime">'static</span>&gt;,
         dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
         is_silent: bool,
         predicate: <span class="kw">impl </span>Fn(String) -&gt; bool,
@@ -450,8 +554,14 @@
         <span class="kw">if </span>!iter.is_empty() {
             <span class="kw">for </span>(load_name, key_name) <span class="kw">in </span>iter.into_iter().with_progress(is_silent) {
                 <span class="kw">if </span>!make_dummy_predicate(<span class="kw-2">&amp;</span>load_name) {
+                    <span class="kw">let </span>dev = <span class="kw">match </span>get_device_for_tensor(load_name.clone()) {
+                        DeviceForLoadTensor::Base =&gt; base_device,
+                        DeviceForLoadTensor::Idx(i) =&gt; {
+                            layer_devices[i].as_ref().unwrap_or(base_device)
+                        }
+                    };
                     <span class="comment">// If making a dummy, don't add the tensor. `mistralrs_quant` handles this!
-                    </span><span class="kw">let </span>tensor = tensors.load_name(<span class="kw-2">&amp;</span>load_name, device, dtype)<span class="question-mark">?</span>;
+                    </span><span class="kw">let </span>tensor = tensors.load_name(<span class="kw-2">&amp;</span>load_name, dev, dtype)<span class="question-mark">?</span>;
 
                     loaded_tensors.insert(key_name, tensor);
                 }

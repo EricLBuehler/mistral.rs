@@ -338,7 +338,11 @@
 <a href="#337" id="337">337</a>
 <a href="#338" id="338">338</a>
 <a href="#339" id="339">339</a>
-<a href="#340" id="340">340</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 <span class="kw">use super</span>::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
     DiffusionModel, DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult,
@@ -351,6 +355,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher_v2::PrefixCacheManagerV2;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
+<span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 <span class="kw">use crate</span>::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
 <span class="kw">use </span>anyhow::Result;
@@ -515,14 +520,17 @@
                     .iter()
                     .zip(<span class="self">self</span>.inner.force_cpu_vb())
                     .map(|(path, force_cpu)| {
+                        <span class="kw">let </span>dev = <span class="kw">if </span>force_cpu { <span class="kw-2">&amp;</span>Device::Cpu } <span class="kw">else </span>{ device };
                         from_mmaped_safetensors(
                             <span class="macro">vec!</span>[path.clone()],
                             Vec::new(),
                             <span class="prelude-val">Some</span>(dtype),
-                            <span class="kw">if </span>force_cpu { <span class="kw-2">&amp;</span>Device::Cpu } <span class="kw">else </span>{ device },
+                            dev,
+                            <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
                             silent,
                             <span class="prelude-val">None</span>,
                             |<span class="kw">_</span>| <span class="bool-val">true</span>,
+                            Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
                         )
                     })
                     .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;

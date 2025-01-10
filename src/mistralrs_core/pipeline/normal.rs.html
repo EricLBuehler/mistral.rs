@@ -1015,7 +1015,15 @@
 <a href="#1014" id="1014">1014</a>
 <a href="#1015" id="1015">1015</a>
 <a href="#1016" id="1016">1016</a>
-<a href="#1017" id="1017">1017</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1017" id="1017">1017</a>
+<a href="#1018" id="1018">1018</a>
+<a href="#1019" id="1019">1019</a>
+<a href="#1020" id="1020">1020</a>
+<a href="#1021" id="1021">1021</a>
+<a href="#1022" id="1022">1022</a>
+<a href="#1023" id="1023">1023</a>
+<a href="#1024" id="1024">1024</a>
+<a href="#1025" id="1025">1025</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
@@ -1046,6 +1054,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher_v2::PrefixCacheManagerV2;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
+<span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
 <span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
 <span class="kw">use crate</span>::{
@@ -1429,6 +1438,7 @@
                 paths,
                 <span class="prelude-val">Some</span>(dtype),
                 <span class="kw-2">&amp;</span>load_device,
+                layer_devices.clone(),
                 config,
                 <span class="self">self</span>.inner,
                 <span class="self">self</span>.config.use_flash_attn,
@@ -1446,6 +1456,7 @@
                 paths,
                 <span class="prelude-val">Some</span>(dtype),
                 <span class="kw-2">&amp;</span>load_device,
+                layer_devices.clone(),
                 config,
                 <span class="self">self</span>.inner,
                 <span class="self">self</span>.config.use_flash_attn,
@@ -1460,6 +1471,7 @@
                 paths,
                 dtype,
                 <span class="kw-2">&amp;</span>load_device,
+                layer_devices.clone(),
                 config,
                 <span class="self">self</span>.inner,
                 <span class="self">self</span>.config.use_flash_attn,
@@ -1961,6 +1973,7 @@
                 <span class="macro">vec!</span>[],
                 <span class="prelude-val">Some</span>(dtype),
                 dev,
+                <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
                 silent,
                 <span class="prelude-val">None</span>,
                 <span class="kw">move </span>|key| {
@@ -1977,6 +1990,7 @@
                         <span class="bool-val">false
                     </span>}
                 },
+                Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
             )<span class="question-mark">?</span>;
             vbs.push(vb);
         }
@@ -2012,9 +2026,11 @@
                 <span class="macro">vec!</span>[],
                 <span class="prelude-val">Some</span>(dtype),
                 dev,
+                <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
                 silent,
                 <span class="prelude-val">None</span>,
                 |<span class="kw">_</span>| <span class="bool-val">true</span>,
+                Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
             )<span class="question-mark">?</span>;
             <span class="macro">info!</span>(
                 <span class="string">"Loaded gating layers from `{}`"</span>,

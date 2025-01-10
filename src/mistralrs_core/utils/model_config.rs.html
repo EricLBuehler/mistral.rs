@@ -334,11 +334,17 @@
 <a href="#333" id="333">333</a>
 <a href="#334" id="334">334</a>
 <a href="#335" id="335">335</a>
-<a href="#336" id="336">336</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::varbuilder_utils::{from_mmaped_safetensors, load_preload_adapters};
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::varbuilder_utils::{
+    from_mmaped_safetensors, load_preload_adapters, DeviceForLoadTensor,
+};
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{quantized::ggml_file, DType};
 <span class="kw">use </span>candle_nn::VarBuilder;
-<span class="kw">use </span>std::{collections::HashMap, path::PathBuf};
+<span class="kw">use </span>std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
@@ -412,9 +418,11 @@
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             <span class="prelude-val">Some</span>(candle_core::DType::F32),
             device,
+            <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
             silent,
             <span class="prelude-val">None</span>,
             |<span class="kw">_</span>| <span class="bool-val">true</span>,
+            Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
         )<span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{

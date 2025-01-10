@@ -371,7 +371,12 @@
 <a href="#370" id="370">370</a>
 <a href="#371" id="371">371</a>
 <a href="#372" id="372">372</a>
-<a href="#373" id="373">373</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">use crate</span>::{
     utils::{debug::DeviceRepr, log::once_log_info},
@@ -576,6 +581,7 @@
     <span class="doccomment">/// Set non mapped layer device. This is for ISQ + device mapping support
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
     </span><span class="kw">fn </span>set_nm_device&lt;<span class="lifetime">'a</span>&gt;(<span class="kw-2">&amp;</span><span class="self">self</span>, varbuilder: VarBuilder&lt;<span class="lifetime">'a</span>&gt;, loading_isq: bool) -&gt; VarBuilder&lt;<span class="lifetime">'a</span>&gt;;
+    <span class="kw">fn </span>num_device_mapping_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
 
     <span class="comment">// === IMMEDIATELY AFTER INIT ===
     </span><span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt;;
@@ -636,6 +642,9 @@
             .try_into_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>.mappings.iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
             .map_err(candle_core::Error::msg)
     }
+    <span class="kw">fn </span>num_device_mapping_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.mappings.len()
+    }
 }
 
 <span class="attr">#[derive(Debug)]
@@ -659,12 +668,9 @@
             varbuilder.set_device(<span class="self">self</span>.nm_device.clone())
         }
     }
-    <span class="kw">fn </span>device_for(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw">_</span>: usize, loading_isq: bool) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Device&gt; {
-        <span class="kw">if </span>loading_isq {
-            <span class="kw">return </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device);
-        }
-        <span class="prelude-val">None
-    </span>}
+    <span class="kw">fn </span>device_for(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw">_</span>: usize, _loading_isq: bool) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Device&gt; {
+        <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device)
+    }
     <span class="kw">fn </span>get_unique_devices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Device&gt; {
         <span class="macro">vec!</span>[<span class="self">self</span>.nm_device.clone()]
     }
@@ -687,6 +693,10 @@
             .try_into_dtype(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device])
             .map_err(candle_core::Error::msg)
     }
+    <span class="kw">fn </span>num_device_mapping_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="comment">// Effectively one layer
+        </span><span class="number">1
+    </span>}
 }
 
 <span class="doccomment">/// Get all devices on the same device type but different ordinals

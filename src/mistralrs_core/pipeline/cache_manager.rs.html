@@ -751,7 +751,27 @@
 <a href="#750" id="750">750</a>
 <a href="#751" id="751">751</a>
 <a href="#752" id="752">752</a>
-<a href="#753" id="753">753</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor, D};
 
@@ -1142,7 +1162,18 @@
         </span><span class="kw">let </span>template_cache_dim = pipeline.cache().normal().<span class="number">0</span>[<span class="number">0</span>].k.dim;
         <span class="kw">let </span>template_cache_msl = pipeline.cache().normal().<span class="number">0</span>[<span class="number">0</span>].k.max_seq_len;
 
-        <span class="kw">for </span>layer <span class="kw">in </span>pipeline.cache().normal().<span class="number">0</span>.iter_mut() {
+        <span class="kw">let </span>layer_devices = <span class="kw">if let </span><span class="prelude-val">Some</span>(device_mapper) = pipeline.device_mapper() {
+            <span class="kw">let </span><span class="kw-2">mut </span>layer_devices = Vec::new();
+            <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..device_mapper.num_device_mapping_layers() {
+                <span class="kw">let </span>device = device_mapper.device_for(layer, <span class="bool-val">false</span>).cloned();
+                layer_devices.push(device.expect(<span class="string">"Internal bug, layer out of range!"</span>));
+            }
+            <span class="prelude-val">Some</span>(layer_devices)
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
+
+        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span>pipeline.cache().normal().<span class="number">0</span>.iter_mut().enumerate() {
             <span class="kw">if </span>!load_preallocated_cache {
                 layer.reset();
                 <span class="kw">continue</span>;
@@ -1151,8 +1182,17 @@
             <span class="kw">let </span><span class="kw-2">mut </span>k_caches = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>v_caches = Vec::new();
             <span class="kw">for </span>seq <span class="kw">in </span>seqs.iter_mut() {
-                <span class="kw">let </span>(k_preallocated_cache, v_preallocated_cache) =
+                <span class="kw">let </span>(<span class="kw-2">mut </span>k_preallocated_cache, <span class="kw-2">mut </span>v_preallocated_cache) =
                     (<span class="kw-2">*</span>seq.preallocated_cache().as_ref().unwrap()).clone();
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(layer_devices) = <span class="kw-2">&amp;</span>layer_devices {
+                    <span class="kw">let </span>layer_dev = <span class="kw-2">&amp;</span>layer_devices[layer_idx];
+                    k_preallocated_cache = k_preallocated_cache
+                        .to_device(layer_dev)
+                        .expect(<span class="string">"Could not prepare cache"</span>);
+                    v_preallocated_cache = v_preallocated_cache
+                        .to_device(layer_dev)
+                        .expect(<span class="string">"Could not prepare cache"</span>);
+                }
                 k_caches.push(k_preallocated_cache);
                 v_caches.push(v_preallocated_cache);
             }

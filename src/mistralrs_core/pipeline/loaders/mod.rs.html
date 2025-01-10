@@ -498,7 +498,12 @@
 <a href="#497" id="497">497</a>
 <a href="#498" id="498">498</a>
 <a href="#499" id="499">499</a>
-<a href="#500" id="500">500</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
 <span class="kw">mod </span>normal_loaders;
 <span class="kw">mod </span>vision_loaders;
 
@@ -889,8 +894,8 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>per_layer_avail = Vec::new();
         <span class="kw">for </span>dev <span class="kw">in </span>devices.clone() {
-            <span class="kw">let </span>usage = MemoryUsage.get_memory_available(<span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>;
-            per_layer_avail.push((usage, dev));
+            <span class="kw">let </span>avail = MemoryUsage.get_memory_available(<span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>;
+            per_layer_avail.push((avail, dev));
         }
         <span class="comment">// Reverse so we don't use the cpu first!
         </span>per_layer_avail.reverse();
@@ -903,8 +908,13 @@
             <span class="kw">let </span>(device_capacity, device) = per_layer_avail
                 .pop()
                 .context(<span class="string">"No more devices to map to. The model does not fit on this system."</span>)<span class="question-mark">?</span>;
+            <span class="comment">// All usage of 90% of the memory as a maximum.
+            </span><span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+            </span><span class="kw">let </span>device_capacity = (device_capacity <span class="kw">as </span>f64 * <span class="number">0.90</span>) <span class="kw">as </span>usize;
             <span class="kw">let </span>layers_on_device = <span class="kw">if </span>device_capacity &gt;= remaining_to_map {
                 num_layers - current_layer
+            } <span class="kw">else if </span>current_ordinal == <span class="number">0 </span>{
+                (device_capacity - non_mapped_size_in_bytes) / per_layer_size_in_bytes
             } <span class="kw">else </span>{
                 device_capacity / per_layer_size_in_bytes
             };
