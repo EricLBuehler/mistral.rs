@@ -203,6 +203,7 @@ pub trait DeviceMapper: Debug {
     /// Set non mapped layer device. This is for ISQ + device mapping support
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
     fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a>;
+    fn num_device_mapping_layers(&self) -> usize;
 
     // === IMMEDIATELY AFTER INIT ===
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType>;
@@ -263,6 +264,9 @@ impl DeviceMapper for LayerDeviceMapper {
             .try_into_dtype(&self.mappings.iter().collect::<Vec<_>>())
             .map_err(candle_core::Error::msg)
     }
+    fn num_device_mapping_layers(&self) -> usize {
+        self.mappings.len()
+    }
 }
 
 #[derive(Debug)]
@@ -286,11 +290,8 @@ impl DeviceMapper for DummyDeviceMapper {
             varbuilder.set_device(self.nm_device.clone())
         }
     }
-    fn device_for(&self, _: usize, loading_isq: bool) -> Option<&Device> {
-        if loading_isq {
-            return Some(&self.nm_device);
-        }
-        None
+    fn device_for(&self, _: usize, _loading_isq: bool) -> Option<&Device> {
+        Some(&self.nm_device)
     }
     fn get_unique_devices(&self) -> Vec<Device> {
         vec![self.nm_device.clone()]
@@ -313,6 +314,10 @@ impl DeviceMapper for DummyDeviceMapper {
         dtype
             .try_into_dtype(&[&self.nm_device])
             .map_err(candle_core::Error::msg)
+    }
+    fn num_device_mapping_layers(&self) -> usize {
+        // Effectively one layer
+        1
     }
 }
 
