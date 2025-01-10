@@ -77,11 +77,32 @@ impl MemoryUsage {
                 Ok(usize::try_from(sys.free_memory())? * KB_TO_BYTES)
             }
             #[cfg(feature = "cuda")]
-            Device::Cuda(_) => {
+            Device::Cuda(dev) => {
                 use candle_core::cuda_backend::WrapErr;
-                Ok(candle_core::cuda::cudarc::driver::result::mem_get_info()
+                use candle_core::{backend::BackendDevice, DeviceLocation};
+
+                let DeviceLocation::Cuda { gpu_id } = dev.location() else {
+                    candle_core::bail!("device and location do match")
+                };
+
+                let current_device = cudarc::runtime::result::device::get().map_err(|e| {
+                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
+                })?;
+
+                cudarc::runtime::result::device::set(gpu_id as i32).map_err(|e| {
+                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
+                })?;
+
+                let avail_mem = candle_core::cuda::cudarc::driver::result::mem_get_info()
                     .w()?
-                    .0)
+                    .0;
+
+                // Back to what we started with
+                cudarc::runtime::result::device::set(current_device).map_err(|e| {
+                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
+                })?;
+
+                Ok(avail_mem)
             }
             #[cfg(not(feature = "cuda"))]
             Device::Cuda(_) => {
@@ -100,11 +121,32 @@ impl MemoryUsage {
                 Ok(usize::try_from(sys.total_memory())? * KB_TO_BYTES)
             }
             #[cfg(feature = "cuda")]
-            Device::Cuda(_) => {
+            Device::Cuda(dev) => {
                 use candle_core::cuda_backend::WrapErr;
-                Ok(candle_core::cuda::cudarc::driver::result::mem_get_info()
+                use candle_core::{backend::BackendDevice, DeviceLocation};
+
+                let DeviceLocation::Cuda { gpu_id } = dev.location() else {
+                    candle_core::bail!("device and location do match")
+                };
+
+                let current_device = cudarc::runtime::result::device::get().map_err(|e| {
+                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
+                })?;
+
+                cudarc::runtime::result::device::set(gpu_id as i32).map_err(|e| {
+                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
+                })?;
+
+                let total_mem = candle_core::cuda::cudarc::driver::result::mem_get_info()
                     .w()?
-                    .1)
+                    .1;
+
+                // Back to what we started with
+                cudarc::runtime::result::device::set(current_device).map_err(|e| {
+                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
+                })?;
+
+                Ok(total_mem)
             }
             #[cfg(not(feature = "cuda"))]
             Device::Cuda(_) => {
