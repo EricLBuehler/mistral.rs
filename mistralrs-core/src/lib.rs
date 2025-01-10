@@ -245,6 +245,8 @@ impl MistralRsBuilder {
 
 #[cfg(feature = "cuda")]
 fn set_gemm_reduced_precision_f16() {
+    use mistralrs_quant::INHIBIT_GEMM_F16;
+
     use candle_core::{DType, Device, Tensor};
 
     // NOTE(EricLBuehler): When we support multi-GPU inference, we should check for each gpu here
