@@ -3759,7 +3759,7 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg = Phi2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
-            <span class="kw">let </span>input_layernorm = cfg.hidden_size;
+            <span class="kw">let </span>input_layernorm = cfg.hidden_size + cfg.hidden_size;
 
             <span class="kw">let </span>size_in = cfg.hidden_size;
             <span class="kw">let </span>size_q = cfg.head_dim() * cfg.num_attention_heads;
@@ -4479,7 +4479,7 @@
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
-            <span class="kw">let </span>norm = cfg.hidden_size;
+            <span class="kw">let </span>norm = cfg.hidden_size + cfg.hidden_size;
             embed_tokens + lm_head + norm
         };
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
@@ -4493,8 +4493,8 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg = Starcoder2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
-            <span class="kw">let </span>input_layernorm = cfg.hidden_size;
-            <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size;
+            <span class="kw">let </span>input_layernorm = cfg.hidden_size + cfg.hidden_size;
+            <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size + cfg.hidden_size;
 
             <span class="kw">let </span>size_in = cfg.hidden_size;
             <span class="kw">let </span>size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
@@ -4506,8 +4506,8 @@
 
             <span class="kw">let </span>h_size = cfg.hidden_size;
             <span class="kw">let </span>i_size = cfg.intermediate_size;
-            <span class="kw">let </span>fc1 = h_size * i_size / weight_pack_factor;
-            <span class="kw">let </span>fc2 = h_size * i_size / weight_pack_factor;
+            <span class="kw">let </span>fc1 = h_size * i_size / weight_pack_factor + <span class="macro">bias_if!</span>(cfg.use_bias, i_size);
+            <span class="kw">let </span>fc2 = h_size * i_size / weight_pack_factor + <span class="macro">bias_if!</span>(cfg.use_bias, h_size);
 
             input_layernorm
                 + post_attention_layernorm

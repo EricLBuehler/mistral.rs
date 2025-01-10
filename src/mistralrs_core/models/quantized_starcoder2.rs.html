@@ -413,11 +413,7 @@
 <a href="#412" id="412">412</a>
 <a href="#413" id="413">413</a>
 <a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a>
-<a href="#416" id="416">416</a>
-<a href="#417" id="417">417</a>
-<a href="#418" id="418">418</a>
-<a href="#419" id="419">419</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#415" id="415">415</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::sync::Arc;
@@ -433,7 +429,6 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::ContentMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::progress::NiceProgressBar;
-<span class="kw">use crate</span>::{DeviceMapSetting, Topology};
 <span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::quantized::QTensor;
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -626,8 +621,7 @@
     <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
         <span class="kw-2">mut </span>ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
         device: <span class="kw-2">&amp;</span>Device,
-        mapper: DeviceMapSetting,
-        topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'_ </span>Topology&gt;,
+        mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -656,8 +650,6 @@
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>output = QMatMul::from_qtensor(ct.tensor(<span class="string">"output.weight"</span>, device)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
-
-        <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device, topology)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..block_count {

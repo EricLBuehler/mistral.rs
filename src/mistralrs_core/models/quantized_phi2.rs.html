@@ -385,12 +385,7 @@
 <a href="#384" id="384">384</a>
 <a href="#385" id="385">385</a>
 <a href="#386" id="386">386</a>
-<a href="#387" id="387">387</a>
-<a href="#388" id="388">388</a>
-<a href="#389" id="389">389</a>
-<a href="#390" id="390">390</a>
-<a href="#391" id="391">391</a>
-<a href="#392" id="392">392</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#387" id="387">387</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
@@ -419,8 +414,6 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::ContentMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::progress::NiceProgressBar;
-<span class="kw">use </span><span class="kw">crate</span>::DeviceMapSetting;
-<span class="kw">use </span><span class="kw">crate</span>::Topology;
 
 <span class="kw">pub const </span>MAX_SEQ_LEN: usize = <span class="number">4096</span>;
 
@@ -617,8 +610,7 @@
     <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
         <span class="kw-2">mut </span>ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
         device: <span class="kw-2">&amp;</span>Device,
-        mapper: DeviceMapSetting,
-        topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'_ </span>Topology&gt;,
+        mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -649,8 +641,6 @@
         <span class="kw">let </span>output = QLinear::new(<span class="kw-2">&amp;mut </span>ct, <span class="string">"output"</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
         <span class="kw">let </span>head_dim = embedding_length / head_count;
-
-        <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device, topology)<span class="question-mark">?</span>;
 
         <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..block_count, <span class="string">"Loading repeating layers"</span>) {
             <span class="kw">let </span>prefix = <span class="macro">format!</span>(<span class="string">"blk.{layer_idx}"</span>);

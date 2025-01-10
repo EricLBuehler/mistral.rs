@@ -1013,11 +1013,7 @@
 <a href="#1012" id="1012">1012</a>
 <a href="#1013" id="1013">1013</a>
 <a href="#1014" id="1014">1014</a>
-<a href="#1015" id="1015">1015</a>
-<a href="#1016" id="1016">1016</a>
-<a href="#1017" id="1017">1017</a>
-<a href="#1018" id="1018">1018</a>
-<a href="#1019" id="1019">1019</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1015" id="1015">1015</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::sync::Arc;
@@ -1040,7 +1036,6 @@
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, QRmsNorm, Sdpa};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache, EitherCache};
-<span class="kw">use crate</span>::{DeviceMapSetting, Topology};
 
 <span class="kw">use </span><span class="kw">super</span>::classifier::XLoraClassifier;
 <span class="kw">use super</span>::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -1508,8 +1503,7 @@
         vb: <span class="kw-2">&amp;</span>VarBuilder,
         ordering: <span class="kw-2">&amp;</span>Ordering,
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
-        mapper: DeviceMapSetting,
-        topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'_ </span>Topology&gt;,
+        mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
         preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
         dtype: DType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -1552,8 +1546,6 @@
         </span>};
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
-
-        <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device, topology)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
         <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..block_count {

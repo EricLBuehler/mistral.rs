@@ -432,12 +432,7 @@
 <a href="#431" id="431">431</a>
 <a href="#432" id="432">432</a>
 <a href="#433" id="433">433</a>
-<a href="#434" id="434">434</a>
-<a href="#435" id="435">435</a>
-<a href="#436" id="436">436</a>
-<a href="#437" id="437">437</a>
-<a href="#438" id="438">438</a>
-<a href="#439" id="439">439</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#434" id="434">434</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::sync::Arc;
@@ -457,8 +452,6 @@
 <span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::ContentMetadata;
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::progress::NiceProgressBar;
-<span class="kw">use </span><span class="kw">crate</span>::DeviceMapSetting;
-<span class="kw">use </span><span class="kw">crate</span>::Topology;
 <span class="kw">const </span>MAX_SEQ_LEN: u32 = <span class="number">4096</span>;
 
 <span class="kw">struct </span>Mlp {
@@ -658,8 +651,7 @@
     <span class="kw">fn </span>from_gguf&lt;R: std::io::Seek + std::io::Read&gt;(
         <span class="kw-2">mut </span>ct: Content&lt;<span class="lifetime">'_</span>, R&gt;,
         device: <span class="kw-2">&amp;</span>Device,
-        mapper: DeviceMapSetting,
-        topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'_ </span>Topology&gt;,
+        mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
@@ -689,8 +681,6 @@
             ct.tensor(<span class="string">"output.weight"</span>, device)<span class="question-mark">?
         </span>};
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(block_count);
-
-        <span class="kw">let </span>mapper = mapper.into_mapper(block_count, device, topology)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>head_dim = key_length;
         <span class="kw">if </span>key_length != value_length {

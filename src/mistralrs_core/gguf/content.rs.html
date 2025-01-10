@@ -188,12 +188,22 @@
 <a href="#187" id="187">187</a>
 <a href="#188" id="188">188</a>
 <a href="#189" id="189">189</a>
-<a href="#190" id="190">190</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fs};
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fs};
 
 <span class="kw">use </span>anyhow::Context;
 <span class="kw">use </span>candle_core::{
     quantized::{
-        gguf_file::{<span class="self">self</span>, Value},
+        gguf_file::{<span class="self">self</span>, TensorInfo, Value},
         QTensor,
     },
     Device, <span class="prelude-ty">Result</span>,
@@ -303,6 +313,16 @@
         <span class="self">self</span>.arch
     }
 
+    <span class="doccomment">/// Retrieve a tensor info, searching through each content.
+    </span><span class="kw">pub fn </span>tensor_info(<span class="kw-2">&amp;</span><span class="self">self</span>, name: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="kw-2">&amp;</span>TensorInfo&gt; {
+        <span class="kw">for </span>ct <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.contents {
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(tensor_info) = ct.tensor_infos.get(name) {
+                <span class="kw">return </span><span class="prelude-val">Ok</span>(tensor_info);
+            }
+        }
+        <span class="macro">candle_core::bail!</span>(<span class="string">"Cannot find tensor info for {name}"</span>)
+    }
+
     <span class="doccomment">/// Retrieve a tensor, searching through each content.
     </span><span class="kw">pub fn </span>tensor(<span class="kw-2">&amp;mut </span><span class="self">self</span>, name: <span class="kw-2">&amp;</span>str, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;QTensor&gt; {
         <span class="kw">for </span>(ct, reader) <span class="kw">in </span><span class="self">self</span>.contents.iter().zip(<span class="self">self</span>.readers.iter_mut()) {
@@ -314,7 +334,7 @@
     }
 
     <span class="doccomment">/// Check for a tensor, searching through each content.
-    </span><span class="kw">pub fn </span>has_tensor(<span class="kw-2">&amp;mut </span><span class="self">self</span>, name: <span class="kw-2">&amp;</span>str) -&gt; bool {
+    </span><span class="kw">pub fn </span>has_tensor(<span class="kw-2">&amp;</span><span class="self">self</span>, name: <span class="kw-2">&amp;</span>str) -&gt; bool {
         <span class="kw">for </span>ct <span class="kw">in </span><span class="self">self</span>.contents.iter() {
             <span class="kw">if </span>ct.tensor_infos.contains_key(name) {
                 <span class="kw">return </span><span class="bool-val">true</span>;
