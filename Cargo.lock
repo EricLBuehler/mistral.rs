@@ -2374,7 +2374,6 @@ dependencies = [
  "mistralrs-paged-attn",
  "mistralrs-quant",
  "mistralrs-vision",
- "mistralrs_cudarc_fork",
  "objc",
  "once_cell",
  "pyo3",

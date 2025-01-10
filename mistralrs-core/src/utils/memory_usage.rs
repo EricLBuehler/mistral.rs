@@ -78,6 +78,7 @@ impl MemoryUsage {
             }
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
+                use candle_core::cuda::cudarc;
                 use candle_core::cuda_backend::WrapErr;
                 use candle_core::{backend::BackendDevice, DeviceLocation};
 
@@ -85,22 +86,25 @@ impl MemoryUsage {
                     candle_core::bail!("device and location do match")
                 };
 
-                let current_device = cudarc::runtime::result::device::get().map_err(|e| {
-                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
-                })?;
+                let original_ctx = dev.cu_primary_ctx();
 
-                cudarc::runtime::result::device::set(gpu_id as i32).map_err(|e| {
-                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
-                })?;
+                let avail_mem = {
+                    let cu_device = cudarc::driver::result::device::get(gpu_id as i32).w()?;
 
-                let avail_mem = candle_core::cuda::cudarc::driver::result::mem_get_info()
-                    .w()?
-                    .0;
+                    // primary context initialization, can fail with OOM
+                    let cu_primary_ctx =
+                        unsafe { cudarc::driver::result::primary_ctx::retain(cu_device) }.w()?;
 
-                // Back to what we started with
-                cudarc::runtime::result::device::set(current_device).map_err(|e| {
-                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
-                })?;
+                    unsafe { cudarc::driver::result::ctx::set_current(cu_primary_ctx) }.unwrap();
+
+                    let res = cudarc::driver::result::mem_get_info().w()?.0;
+
+                    unsafe { cudarc::driver::result::primary_ctx::release(cu_device) }.unwrap();
+
+                    res
+                };
+
+                unsafe { cudarc::driver::result::ctx::set_current(*original_ctx) }.unwrap();
 
                 Ok(avail_mem)
             }
@@ -122,6 +126,7 @@ impl MemoryUsage {
             }
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
+                use candle_core::cuda::cudarc;
                 use candle_core::cuda_backend::WrapErr;
                 use candle_core::{backend::BackendDevice, DeviceLocation};
 
@@ -129,22 +134,25 @@ impl MemoryUsage {
                     candle_core::bail!("device and location do match")
                 };
 
-                let current_device = cudarc::runtime::result::device::get().map_err(|e| {
-                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
-                })?;
+                let original_ctx = dev.cu_primary_ctx();
 
-                cudarc::runtime::result::device::set(gpu_id as i32).map_err(|e| {
-                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
-                })?;
+                let total_mem = {
+                    let cu_device = cudarc::driver::result::device::get(gpu_id as i32).w()?;
 
-                let total_mem = candle_core::cuda::cudarc::driver::result::mem_get_info()
-                    .w()?
-                    .1;
+                    // primary context initialization, can fail with OOM
+                    let cu_primary_ctx =
+                        unsafe { cudarc::driver::result::primary_ctx::retain(cu_device) }.w()?;
 
-                // Back to what we started with
-                cudarc::runtime::result::device::set(current_device).map_err(|e| {
-                    candle_core::Error::msg(e.error_string().unwrap().to_str().unwrap().to_string())
-                })?;
+                    unsafe { cudarc::driver::result::ctx::set_current(cu_primary_ctx) }.unwrap();
+
+                    let res = cudarc::driver::result::mem_get_info().w()?.1;
+
+                    unsafe { cudarc::driver::result::primary_ctx::release(cu_device) }.unwrap();
+
+                    res
+                };
+
+                unsafe { cudarc::driver::result::ctx::set_current(*original_ctx) }.unwrap();
 
                 Ok(total_mem)
             }

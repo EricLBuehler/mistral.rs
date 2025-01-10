@@ -82,13 +82,12 @@ llguidance = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97
 toktrie_hf_tokenizers = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc" }
 objc = { version = "0.2.7", optional = true }
 metal = { workspace = true, optional = true }
-cudarc = { workspace = true, optional = true }
 yoke = "0.7.5"
 memmap2 = "0.9.5"
 
 [features]
 pyo3_macros = ["pyo3"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "dep:cudarc", "mistralrs-quant/cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda", "float8/mistralrs_cudarc_fork"]
+cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "mistralrs-quant/cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda", "float8/mistralrs_cudarc_fork"]
 cudnn = ["candle-core/cudnn"]
 metal = ["candle-core/metal", "candle-nn/metal", "mistralrs-quant/metal", "dep:objc", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/metal", "dep:metal"]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
