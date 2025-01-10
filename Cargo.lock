@@ -2367,6 +2367,7 @@ dependencies = [
  "itertools 0.13.0",
  "llguidance",
  "lrtable",
+ "memmap2",
  "metal",
  "minijinja",
  "minijinja-contrib",
@@ -2404,6 +2405,7 @@ dependencies = [
  "uuid 1.11.0",
  "variantly",
  "vob",
+ "yoke",
 ]
 
 [[package]]

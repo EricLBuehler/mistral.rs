@@ -120,21 +120,26 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         &self,
         _config: &str,
         _mapper: &dyn DeviceMapper,
+        loading_isq: bool,
     ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
-        let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
-        let closure = move |name: String| {
-            if let Some(captures) = re.captures(&name) {
-                captures
-                    .get(1)
-                    .and_then(|m| m.as_str().parse::<usize>().ok())
-                    .map(DeviceForLoadTensor::Idx)
-                    .unwrap_or(DeviceForLoadTensor::Base)
-            } else {
-                DeviceForLoadTensor::Base
-            }
-        };
+        if loading_isq {
+            Ok(Arc::new(|_| DeviceForLoadTensor::Base))
+        } else {
+            let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
+            let closure = move |name: String| {
+                if let Some(captures) = re.captures(&name) {
+                    captures
+                        .get(1)
+                        .and_then(|m| m.as_str().parse::<usize>().ok())
+                        .map(DeviceForLoadTensor::Idx)
+                        .unwrap_or(DeviceForLoadTensor::Base)
+                } else {
+                    DeviceForLoadTensor::Base
+                }
+            };
 
-        Ok(Arc::new(closure))
+            Ok(Arc::new(closure))
+        }
     }
 }
 

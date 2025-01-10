@@ -402,7 +402,8 @@ macro_rules! normal_model_loader {
         } else {
             None
         };
-        let get_device_for_tensor = $loader.get_device_for_tensor(&$config, &*$mapper)?;
+        let get_device_for_tensor =
+            $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
 
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
@@ -454,7 +455,8 @@ macro_rules! vision_normal_model_loader {
         } else {
             None
         };
-        let get_device_for_tensor = $loader.get_device_for_tensor(&$config, &*$mapper)?;
+        let get_device_for_tensor =
+            $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
 
         let vb = from_mmaped_safetensors(
             $paths.get_weight_filenames().to_vec(),
@@ -500,7 +502,8 @@ macro_rules! xlora_model_loader {
     ) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
-        let get_device_for_tensor = $loader.get_device_for_tensor(&$config, &*$mapper)?;
+        let get_device_for_tensor =
+            $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
 
         let vb = from_mmaped_safetensors(
             safetensors_paths
@@ -557,7 +560,8 @@ macro_rules! lora_model_loader {
         $real_device:expr
     ) => {{
         let safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
-        let get_device_for_tensor = $loader.get_device_for_tensor(&$config, &*$mapper)?;
+        let get_device_for_tensor =
+            $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
 
         let vb = from_mmaped_safetensors(
             safetensors_paths

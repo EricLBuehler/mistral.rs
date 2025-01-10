@@ -654,7 +654,10 @@ impl MLlamaTextModel {
                 MLlamaDecoderLayer::SelfAttn(attn) => {
                     hidden_states = attn.forward(
                         &hidden_states,
-                        self_mask.as_ref(),
+                        self_mask
+                            .as_ref()
+                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
                         seqlen_offsets,
                         start_offsets_kernel.clone(),
                         &mut cache[i],
@@ -669,8 +672,14 @@ impl MLlamaTextModel {
                     }
                     hidden_states = attn.forward(
                         &hidden_states,
-                        cross_attn_states,
-                        cross_attention_mask,
+                        cross_attn_states
+                            .as_ref()
+                            .map(|x| x.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
+                        cross_attention_mask
+                            .as_ref()
+                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
                         full_text_row_masked_out_mask,
                     )?;
                 }

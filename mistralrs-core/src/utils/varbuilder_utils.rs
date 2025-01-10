@@ -7,15 +7,14 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use candle_core::{
-    pickle::PthTensors, safetensors::MmapedSafetensors, DType, Device, Result, Tensor,
-};
+use candle_core::{pickle::PthTensors, DType, Device, Result, Tensor};
 use candle_nn::{
     var_builder::{SimpleBackend, VarBuilderArgs},
     VarBuilder,
 };
 use regex::Regex;
 
+use super::safetensors::MmapedSafetensors;
 use crate::lora::LoraConfig;
 use crate::utils::progress::IterWithProgress;
 use derive_new::new;
@@ -35,8 +34,8 @@ impl TensorLoaderBackend for SafetensorBackend {
             .map(|(name, _)| name)
             .collect::<Vec<_>>()
     }
-    fn load_name(&self, name: &str, device: &Device, _dtype: Option<DType>) -> Result<Tensor> {
-        self.0.load(name, device)
+    fn load_name(&self, name: &str, device: &Device, dtype: Option<DType>) -> Result<Tensor> {
+        self.0.load(name, device, dtype)
     }
 }
 
@@ -227,7 +226,7 @@ trait LoadTensors {
             .expect("Expected to convert")
         {
             "safetensors" => Box::new(SafetensorBackend(unsafe {
-                candle_core::safetensors::MmapedSafetensors::new(path)?
+                MmapedSafetensors::new(path)?
             })),
             "pth" | "pt" | "bin" => Box::new(PickleBackend(
                 candle_core::pickle::PthTensors::new(path, None)?
