@@ -673,7 +673,7 @@
         <span class="prelude-val">Ok</span>(size_in_bytes)
     }
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">self</span>.model.get_metadata()[<span class="string">"block_count"</span>].to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize)
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.model.get_metadata()[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{}.block_count"</span>, <span class="self">self</span>.arch)].to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize)
     }
     <span class="kw">fn </span>per_layer_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,

@@ -1176,7 +1176,7 @@
         <span class="kw">let </span>arch = model.arch();
 
         <span class="comment">// If auto, convert to Map
-        </span><span class="kw">let </span>num_layers = model.get_metadata()[<span class="string">"block_count"</span>].to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        </span><span class="kw">let </span>num_layers = model.get_metadata()[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.block_count"</span>)].to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
         <span class="kw">if let </span>DeviceMapSetting::Auto = mapper.clone() {
             <span class="kw">let </span>devices = device_map::get_all_similar_devices(device)<span class="question-mark">?</span>;
 

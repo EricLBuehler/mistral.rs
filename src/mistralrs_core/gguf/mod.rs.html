@@ -52,8 +52,8 @@
 
 <span class="kw">pub const </span>GGUF_MULTI_FILE_DELIMITER: <span class="kw-2">&amp;</span>str = <span class="string">" "</span>;
 
-<span class="attr">#[derive(Debug, EnumString, Clone, Copy)]
-#[strum(serialize_all = <span class="string">"kebab-case"</span>)]
+<span class="attr">#[derive(Debug, EnumString, Clone, Copy, strum::Display)]
+#[strum(serialize_all = <span class="string">"lowercase"</span>)]
 </span><span class="kw">pub enum </span>GGUFArchitecture {
     Llama,
     Mpt,
