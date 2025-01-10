@@ -77,7 +77,7 @@ impl<'a> Adapter<'a> {
                 .map(|(_, x)| (*x).to_owned())
                 .collect::<Vec<_>>(),
             Some(candle_core::DType::F32),
-            &device,
+            device,
             vec![None],
             silent,
             None,

@@ -67,6 +67,7 @@ pub enum DeviceForLoadTensor {
 /// # Predicate semantics:
 /// - If `regexes` is specified, this will be used in `make_dummy_predicate` based on `.any`
 /// - Otherwise, only include keys for which predicate evaluates to true.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn from_mmaped_safetensors<'a>(
     paths: Vec<PathBuf>,
     xlora_paths: Vec<PathBuf>,
@@ -207,6 +208,7 @@ pub(crate) fn load_preload_adapters<'a>(
 
 // Presently this logic only needs to diverge for X-LoRA support via `get_name_key_pairs()`
 trait LoadTensors {
+    #[allow(clippy::too_many_arguments)]
     fn load_tensors_from_path(
         &self,
         path: &PathBuf,
