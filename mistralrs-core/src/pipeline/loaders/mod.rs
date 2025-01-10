@@ -394,8 +394,6 @@ pub trait DeviceMappedModelLoader {
         // Reverse so we don't use the cpu first!
         per_layer_avail.reverse();
 
-        dbg!((non_mapped_size_in_bytes) / (1024 * 1024));
-
         let mut device_layers = Vec::new();
 
         let mut current_ordinal = 0;
@@ -406,8 +404,7 @@ pub trait DeviceMappedModelLoader {
                 .context("No more devices to map to. The model does not fit on this system.")?;
             // All usage of 90% of the memory as a maximum.
             #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-            let device_capacity = (device_capacity as f64 * 0.80) as usize;
-            dbg!((device_capacity) / (1024 * 1024));
+            let device_capacity = (device_capacity as f64 * 0.90) as usize;
             let layers_on_device = if device_capacity >= remaining_to_map {
                 num_layers - current_layer
             } else if current_ordinal == 0 {

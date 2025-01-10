@@ -161,38 +161,6 @@ fn naive_sdpa(
         let mask = match mask {
             Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => mask.squeeze(0)?,
             Some(mask) if mask.rank() == 2 => mask.clone(),
-            Some(m) if (m.rank() == 3 && m.dims()[0] != 1) && m.rank() == 4 => {
-                let bs = q.dim(0)?;
-                let n_attn_heads = q.dim(1)?;
-                let attention_bias = match mask {
-                    Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => {
-                        mask.unsqueeze(0)?.repeat((bs, n_attn_heads, 1, 1))?
-                    }
-                    Some(mask) if mask.rank() == 3 => mask.unsqueeze(0)?,
-                    Some(mask) if mask.rank() == 2 => {
-                        mask.unsqueeze(0)?
-                            .unsqueeze(0)?
-                            .repeat((bs, n_attn_heads, 1, 1))?
-                    }
-                    Some(mask) if mask.rank() == 4 => mask.clone(),
-                    _ => candle_core::bail!("unsupported mask {mask:?}"),
-                };
-                let mut att = attention_bias;
-
-                q.matmul_with_alpha_beta(
-                    &k.t()?,
-                    &mut att,
-                    Some((sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)) as f64),
-                )?;
-
-                if let Some(softcap) = sdpa_params.softcap {
-                    att = (att.tanh()? * softcap as f64)?;
-                }
-
-                candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
-
-                return MatMul.matmul(&att, v);
-            }
             _ => candle_core::bail!("unsupported mask {mask:?}"),
         };
 
