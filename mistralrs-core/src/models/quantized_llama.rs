@@ -23,8 +23,6 @@ use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapSetting;
-use crate::Topology;
 const MAX_SEQ_LEN: u32 = 4096;
 
 struct Mlp {
@@ -412,8 +410,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
         device: &Device,
-        mapper: DeviceMapSetting,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self> {
@@ -446,8 +443,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
             ct.tensor("output.weight", device)?
         };
         let mut layers = Vec::with_capacity(block_count);
-
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         let head_dim = key_length;
         if key_length != value_length {

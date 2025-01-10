@@ -21,7 +21,6 @@ use tracing::info;
 use crate::device_map::DeviceMapper;
 use crate::layers::{CausalMasker, QRmsNorm, Sdpa};
 use crate::pipeline::{extract_logits, Cache, EitherCache};
-use crate::{DeviceMapSetting, Topology};
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -489,8 +488,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        mapper: DeviceMapSetting,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
         dtype: DType,
     ) -> Result<Self> {
@@ -533,8 +531,6 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         };
         let mut layers = Vec::with_capacity(block_count);
         let mut count = 0;
-
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         let mut ropes = HashMap::new();
         for layer_idx in 0..block_count {

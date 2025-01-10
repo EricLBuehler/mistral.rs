@@ -1250,7 +1250,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
     ) -> Result<usize> {
         let cfg = Phi2BasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
-            let input_layernorm = cfg.hidden_size;
+            let input_layernorm = cfg.hidden_size + cfg.hidden_size;
 
             let size_in = cfg.hidden_size;
             let size_q = cfg.head_dim() * cfg.num_attention_heads;
@@ -1970,7 +1970,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
             } else {
                 0
             };
-            let norm = cfg.hidden_size;
+            let norm = cfg.hidden_size + cfg.hidden_size;
             embed_tokens + lm_head + norm
         };
         Ok(elems * dtype.size_in_bytes())
@@ -1984,8 +1984,8 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
     ) -> Result<usize> {
         let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
-            let input_layernorm = cfg.hidden_size;
-            let post_attention_layernorm = cfg.hidden_size;
+            let input_layernorm = cfg.hidden_size + cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size + cfg.hidden_size;
 
             let size_in = cfg.hidden_size;
             let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
@@ -1997,8 +1997,8 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
 
             let h_size = cfg.hidden_size;
             let i_size = cfg.intermediate_size;
-            let fc1 = h_size * i_size / weight_pack_factor;
-            let fc2 = h_size * i_size / weight_pack_factor;
+            let fc1 = h_size * i_size / weight_pack_factor + bias_if!(cfg.use_bias, i_size);
+            let fc2 = h_size * i_size / weight_pack_factor + bias_if!(cfg.use_bias, h_size);
 
             input_layernorm
                 + post_attention_layernorm
