@@ -1591,7 +1591,12 @@
 <a href="#1590" id="1590">1590</a>
 <a href="#1591" id="1591">1591</a>
 <a href="#1592" id="1592">1592</a>
-<a href="#1593" id="1593">1593</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#1593" id="1593">1593</a>
+<a href="#1594" id="1594">1594</a>
+<a href="#1595" id="1595">1595</a>
+<a href="#1596" id="1596">1596</a>
+<a href="#1597" id="1597">1597</a>
+<a href="#1598" id="1598">1598</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -1681,21 +1686,26 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _config: <span class="kw-2">&amp;</span>str,
         _mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+        loading_isq: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>Fn(String) -&gt; DeviceForLoadTensor + Send + Sync + <span class="lifetime">'static</span>&gt;&gt; {
-        <span class="kw">let </span>re = Regex::new(<span class="string">r"\.layers\.(\d+)\."</span>).unwrap();
-        <span class="kw">let </span>closure = <span class="kw">move </span>|name: String| {
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(captures) = re.captures(<span class="kw-2">&amp;</span>name) {
-                captures
-                    .get(<span class="number">1</span>)
-                    .and_then(|m| m.as_str().parse::&lt;usize&gt;().ok())
-                    .map(DeviceForLoadTensor::Idx)
-                    .unwrap_or(DeviceForLoadTensor::Base)
-            } <span class="kw">else </span>{
-                DeviceForLoadTensor::Base
-            }
-        };
+        <span class="kw">if </span>loading_isq {
+            <span class="prelude-val">Ok</span>(Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base))
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>re = Regex::new(<span class="string">r"\.layers\.(\d+)\."</span>).unwrap();
+            <span class="kw">let </span>closure = <span class="kw">move </span>|name: String| {
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(captures) = re.captures(<span class="kw-2">&amp;</span>name) {
+                    captures
+                        .get(<span class="number">1</span>)
+                        .and_then(|m| m.as_str().parse::&lt;usize&gt;().ok())
+                        .map(DeviceForLoadTensor::Idx)
+                        .unwrap_or(DeviceForLoadTensor::Base)
+                } <span class="kw">else </span>{
+                    DeviceForLoadTensor::Base
+                }
+            };
 
-        <span class="prelude-val">Ok</span>(Arc::new(closure))
+            <span class="prelude-val">Ok</span>(Arc::new(closure))
+        }
     }
 }
 

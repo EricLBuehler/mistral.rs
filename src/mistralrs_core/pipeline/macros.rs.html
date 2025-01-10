@@ -601,7 +601,11 @@
 <a href="#600" id="600">600</a>
 <a href="#601" id="601">601</a>
 <a href="#602" id="602">602</a>
-<a href="#603" id="603">603</a></pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a></pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> api_dir_list {
     (<span class="macro-nonterminal">$api</span>:expr, <span class="macro-nonterminal">$model_id</span>:expr) =&gt; {
@@ -1005,7 +1009,8 @@
         } <span class="kw">else </span>{
             <span class="prelude-val">None
         </span>};
-        <span class="kw">let </span>get_device_for_tensor = <span class="macro-nonterminal">$loader</span>.get_device_for_tensor(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>, <span class="kw-2">&amp;*</span><span class="macro-nonterminal">$mapper</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>get_device_for_tensor =
+            <span class="macro-nonterminal">$loader</span>.get_device_for_tensor(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>, <span class="kw-2">&amp;*</span><span class="macro-nonterminal">$mapper</span>, <span class="macro-nonterminal">$loading_isq</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>vb = from_mmaped_safetensors(
             <span class="macro-nonterminal">$paths</span>.get_weight_filenames().to_vec(),
@@ -1057,7 +1062,8 @@
         } <span class="kw">else </span>{
             <span class="prelude-val">None
         </span>};
-        <span class="kw">let </span>get_device_for_tensor = <span class="macro-nonterminal">$loader</span>.get_device_for_tensor(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>, <span class="kw-2">&amp;*</span><span class="macro-nonterminal">$mapper</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>get_device_for_tensor =
+            <span class="macro-nonterminal">$loader</span>.get_device_for_tensor(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>, <span class="kw-2">&amp;*</span><span class="macro-nonterminal">$mapper</span>, <span class="macro-nonterminal">$loading_isq</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>vb = from_mmaped_safetensors(
             <span class="macro-nonterminal">$paths</span>.get_weight_filenames().to_vec(),
@@ -1103,7 +1109,8 @@
     ) =&gt; {{
         <span class="kw">let </span><span class="kw-2">mut </span>safetensors_paths = <span class="macro-nonterminal">$paths</span>.get_weight_filenames().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         safetensors_paths.push(<span class="macro-nonterminal">$paths</span>.get_classifier_path().as_ref().unwrap());
-        <span class="kw">let </span>get_device_for_tensor = <span class="macro-nonterminal">$loader</span>.get_device_for_tensor(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>, <span class="kw-2">&amp;*</span><span class="macro-nonterminal">$mapper</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>get_device_for_tensor =
+            <span class="macro-nonterminal">$loader</span>.get_device_for_tensor(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>, <span class="kw-2">&amp;*</span><span class="macro-nonterminal">$mapper</span>, <span class="macro-nonterminal">$loading_isq</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>vb = from_mmaped_safetensors(
             safetensors_paths
@@ -1160,7 +1167,8 @@
         <span class="macro-nonterminal">$real_device</span>:expr
     ) =&gt; {{
         <span class="kw">let </span>safetensors_paths = <span class="macro-nonterminal">$paths</span>.get_weight_filenames().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-        <span class="kw">let </span>get_device_for_tensor = <span class="macro-nonterminal">$loader</span>.get_device_for_tensor(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>, <span class="kw-2">&amp;*</span><span class="macro-nonterminal">$mapper</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>get_device_for_tensor =
+            <span class="macro-nonterminal">$loader</span>.get_device_for_tensor(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>, <span class="kw-2">&amp;*</span><span class="macro-nonterminal">$mapper</span>, <span class="macro-nonterminal">$loading_isq</span>)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>vb = from_mmaped_safetensors(
             safetensors_paths
