@@ -121,8 +121,8 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         _config: &str,
         _mapper: &dyn DeviceMapper,
     ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
-        let closure = |name: String| {
-            let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
+        let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
+        let closure = move |name: String| {
             if let Some(captures) = re.captures(&name) {
                 captures
                     .get(1)
