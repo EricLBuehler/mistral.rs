@@ -364,12 +364,12 @@ pub trait DeviceMappedModelLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize>;
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize>;
+    ) -> Result<Vec<usize>>;
     fn num_layers(&self, config: &str) -> Result<usize>;
 
     /// weight_pack_factor only applies to quantized weights.
@@ -377,12 +377,13 @@ pub trait DeviceMappedModelLoader {
         &self,
         _config: &str,
         num_layers: usize,
-        per_layer_size_in_bytes: usize,
+        mut layer_sizes_in_bytes: Vec<usize>,
         non_mapped_size_in_bytes: usize,
         total_model_size_in_bytes: usize,
         devices: &[Device],
     ) -> Result<DeviceMapMetadata> {
         let mut remaining_to_map = total_model_size_in_bytes;
+
         // Always add the CPU as fallback
         let devices = [devices, &[Device::Cpu]].concat();
 
@@ -393,6 +394,9 @@ pub trait DeviceMappedModelLoader {
         }
         // Reverse so we don't use the cpu first!
         per_layer_avail.reverse();
+
+        // Reverse layer sizes so we can pop
+        layer_sizes_in_bytes.reverse();
 
         let mut device_layers = Vec::new();
 
@@ -405,12 +409,29 @@ pub trait DeviceMappedModelLoader {
             // All usage of 90% of the memory as a maximum.
             #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
             let device_capacity = (device_capacity as f64 * 0.90) as usize;
+
             let layers_on_device = if device_capacity >= remaining_to_map {
+                remaining_to_map = 0;
+
                 num_layers - current_layer
-            } else if current_ordinal == 0 {
-                (device_capacity - non_mapped_size_in_bytes) / per_layer_size_in_bytes
             } else {
-                device_capacity / per_layer_size_in_bytes
+                let mut used_capacity = 0;
+                let mut layers_on_device = 0;
+
+                if current_ordinal == 0 {
+                    used_capacity += non_mapped_size_in_bytes;
+                }
+
+                while let Some(&last) = layer_sizes_in_bytes.last() {
+                    if used_capacity + last > device_capacity {
+                        break;
+                    }
+                    used_capacity += layer_sizes_in_bytes.pop().unwrap();
+                    layers_on_device += 1;
+                }
+
+                remaining_to_map = remaining_to_map.saturating_sub(used_capacity);
+                layers_on_device
             };
 
             // CPU mappings are automatically handled by the traditional device mapper, we can just leave them out here.
@@ -423,11 +444,6 @@ pub trait DeviceMappedModelLoader {
             }
 
             current_layer += layers_on_device;
-            remaining_to_map =
-                remaining_to_map.saturating_sub(per_layer_size_in_bytes * layers_on_device);
-            if current_ordinal - 1 == 0 {
-                remaining_to_map = remaining_to_map.saturating_sub(non_mapped_size_in_bytes);
-            }
         }
         if remaining_to_map > 0 {
             anyhow::bail!(

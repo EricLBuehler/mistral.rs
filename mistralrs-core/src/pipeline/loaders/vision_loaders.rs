@@ -342,12 +342,12 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg: Phi3Config = serde_json::from_str(config)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -372,7 +372,10 @@ impl DeviceMappedModelLoader for Phi3VLoader {
                 + gate_up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -583,12 +586,12 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg: Idefics2Config = serde_json::from_str(config)?;
         let cfg = cfg.text_config;
         let per_layer_elems = {
@@ -619,7 +622,10 @@ impl DeviceMappedModelLoader for Idefics2Loader {
                 + up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -740,12 +746,12 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let per_layer_elems = {
             let cfg = &cfg.text_config;
@@ -776,7 +782,10 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
                 + up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.text_config.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -897,12 +906,12 @@ impl DeviceMappedModelLoader for LLaVALoader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let per_layer_elems = {
             let cfg = &cfg.text_config;
@@ -933,7 +942,10 @@ impl DeviceMappedModelLoader for LLaVALoader {
                 + up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.text_config.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -1169,43 +1181,58 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let config: MLlamaConfig = serde_json::from_str(config)?;
         let cfg = &config.text_config;
-        let per_layer_elems = {
-            let input_layernorm = cfg.hidden_size;
-            let post_attention_layernorm = cfg.hidden_size;
 
-            let size_in = cfg.hidden_size;
-            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
-            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-            let q_proj = size_in * size_q / weight_pack_factor;
-            let k_proj = size_in * size_kv / weight_pack_factor;
-            let v_proj = size_in * size_kv / weight_pack_factor;
-            let o_proj = size_q * size_in / weight_pack_factor;
+        let mut layer_sizes = Vec::new();
 
-            let h_size = cfg.hidden_size;
-            let i_size = cfg.intermediate_size;
-            let gate_proj = h_size * i_size / weight_pack_factor;
-            let up_proj = h_size * i_size / weight_pack_factor;
-            let down_proj = i_size * h_size / weight_pack_factor;
+        for i in 0..cfg.num_hidden_layers {
+            let weight_pack_factor = if cfg.cross_attention_layers.contains(&i) {
+                // No isq for cross attention
+                1
+            } else {
+                weight_pack_factor
+            };
 
-            input_layernorm
-                + post_attention_layernorm
-                + q_proj
-                + k_proj
-                + v_proj
-                + o_proj
-                + gate_proj
-                + up_proj
-                + down_proj
-        };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+            let per_layer_elems = {
+                let input_layernorm = cfg.hidden_size;
+                let post_attention_layernorm = cfg.hidden_size;
+
+                let size_in = cfg.hidden_size;
+                let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+                let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+                let q_proj = size_in * size_q / weight_pack_factor;
+                let k_proj = size_in * size_kv / weight_pack_factor;
+                let v_proj = size_in * size_kv / weight_pack_factor;
+                let o_proj = size_q * size_in / weight_pack_factor;
+
+                let h_size = cfg.hidden_size;
+                let i_size = cfg.intermediate_size;
+                let gate_proj = h_size * i_size / weight_pack_factor;
+                let up_proj = h_size * i_size / weight_pack_factor;
+                let down_proj = i_size * h_size / weight_pack_factor;
+
+                input_layernorm
+                    + post_attention_layernorm
+                    + q_proj
+                    + k_proj
+                    + v_proj
+                    + o_proj
+                    + gate_proj
+                    + up_proj
+                    + down_proj
+            };
+
+            layer_sizes.push(per_layer_elems * dtype.size_in_bytes());
+        }
+
+        Ok(layer_sizes)
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -1364,12 +1391,12 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -1399,7 +1426,10 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
                 + up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -1558,12 +1588,12 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg: Idefics3Config = serde_json::from_str(config)?;
         let cfg = cfg.text_config;
         let per_layer_elems = {
@@ -1594,7 +1624,10 @@ impl DeviceMappedModelLoader for Idefics3Loader {
                 + up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
