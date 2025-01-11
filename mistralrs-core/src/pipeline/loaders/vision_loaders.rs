@@ -1152,10 +1152,10 @@ impl DeviceMappedModelLoader for VLlamaLoader {
                 let o_proj =
                     cfg.hidden_size * cfg.num_attention_heads * head_dim / weight_pack_factor;
 
-                let fc1 = cfg.hidden_size * cfg.intermediate_size
-                    + cfg.intermediate_size / weight_pack_factor;
-                let fc2 =
-                    cfg.intermediate_size * cfg.hidden_size + cfg.hidden_size / weight_pack_factor;
+                let fc1 = (cfg.hidden_size * cfg.intermediate_size) / weight_pack_factor
+                    + cfg.intermediate_size;
+                let fc2 = (cfg.intermediate_size * cfg.hidden_size) / weight_pack_factor
+                    + cfg.hidden_size;
 
                 input_layernorm
                     + post_attention_layernorm
@@ -1178,7 +1178,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         };
 
         let elems = text_elems + vision_elems;
-        Ok(elems * dtype.size_in_bytes())
+        Ok(elems * dtype.size_in_bytes() + 3*1024*1024*1024)
     }
 
     fn layer_sizes_in_bytes(
