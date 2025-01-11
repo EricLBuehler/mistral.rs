@@ -287,7 +287,7 @@ impl Loader for NormalLoader {
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
-            let (per_layer_size_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+            let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(serialized) = &*self.from_uqff.read().unwrap() {
                     let parent = serialized
                         .parent()
@@ -317,37 +317,41 @@ impl Loader for NormalLoader {
 
                     // This is not completely correct but hopefully close enough.
                     // For example, the norms are not necessarily correctly done.
-                    (size_per_layer, res_total_size, ser_total_size)
+                    (
+                        vec![size_per_layer; self.inner.num_layers(&config)?],
+                        res_total_size,
+                        ser_total_size,
+                    )
                 } else if let Some(isq) = in_situ_quant {
                     let weight_pack_factor = isq.pack_factor(dtype);
-                    let per_layer_size_in_bytes =
+                    let layer_sizes_in_bytes =
                         self.inner
-                            .per_layer_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
                     let non_mapped_size_in_bytes =
                         self.inner
                             .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
-                        per_layer_size_in_bytes,
+                        layer_sizes_in_bytes,
                         non_mapped_size_in_bytes,
-                        per_layer_size_in_bytes * self.inner.num_layers(&config)?
-                            + non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 } else {
-                    let per_layer_size_in_bytes =
-                        self.inner.per_layer_size_in_bytes(&config, dtype, 1)?;
+                    let layer_sizes_in_bytes =
+                        self.inner.layer_sizes_in_bytes(&config, dtype, 1)?;
                     let non_mapped_size_in_bytes =
                         self.inner.non_mapped_size_in_bytes(&config, dtype, 1)?;
+                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
                     (
-                        per_layer_size_in_bytes,
+                        layer_sizes_in_bytes,
                         non_mapped_size_in_bytes,
-                        per_layer_size_in_bytes * self.inner.num_layers(&config)?
-                            + non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 };
             let new = self.inner.get_device_layers(
                 &config,
                 self.inner.num_layers(&config)?,
-                per_layer_size_in_bytes,
+                layer_sizes_in_bytes,
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 &devices,

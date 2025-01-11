@@ -19,7 +19,6 @@ use crate::{
     serde_default_fn,
     utils::{log::once_log_info, varbuilder_utils::DeviceForLoadTensor},
     xlora_models::NonGranularState,
-    DeviceMapMetadata,
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -347,31 +346,13 @@ impl DeviceMappedModelLoader for AutoLoader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         Self::get_loader(config)?.num_layers(config)
     }
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
-        Self::get_loader(config)?.per_layer_size_in_bytes(config, dtype, weight_pack_factor)
-    }
-    fn get_device_layers(
-        &self,
-        config: &str,
-        num_layers: usize,
-        per_layer_size_in_bytes: usize,
-        non_mapped_size_in_bytes: usize,
-        total_model_size_in_bytes: usize,
-        devices: &[Device],
-    ) -> Result<DeviceMapMetadata> {
-        Self::get_loader(config)?.get_device_layers(
-            config,
-            num_layers,
-            per_layer_size_in_bytes,
-            non_mapped_size_in_bytes,
-            total_model_size_in_bytes,
-            devices,
-        )
+    ) -> Result<Vec<usize>> {
+        Self::get_loader(config)?.layer_sizes_in_bytes(config, dtype, weight_pack_factor)
     }
 }
 
@@ -504,7 +485,7 @@ impl DeviceMappedModelLoader for MistralLoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -514,12 +495,12 @@ impl DeviceMappedModelLoader for MistralLoader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg = MistralBasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -549,7 +530,10 @@ impl DeviceMappedModelLoader for MistralLoader {
                 + up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -697,7 +681,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -707,12 +691,12 @@ impl DeviceMappedModelLoader for GemmaLoader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg = GemmaBasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -746,7 +730,10 @@ impl DeviceMappedModelLoader for GemmaLoader {
                 + up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -888,7 +875,7 @@ impl DeviceMappedModelLoader for LlamaLoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -898,12 +885,12 @@ impl DeviceMappedModelLoader for LlamaLoader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg = LlamaBasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -933,7 +920,10 @@ impl DeviceMappedModelLoader for LlamaLoader {
                 + up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -1072,7 +1062,7 @@ impl DeviceMappedModelLoader for MixtralLoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1082,12 +1072,12 @@ impl DeviceMappedModelLoader for MixtralLoader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg = MixtralBasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -1120,7 +1110,10 @@ impl DeviceMappedModelLoader for MixtralLoader {
                 + o_proj
                 + moe_block
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -1258,7 +1251,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1268,12 +1261,12 @@ impl DeviceMappedModelLoader for Phi2Loader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg = Phi2BasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size + cfg.hidden_size;
@@ -1298,7 +1291,10 @@ impl DeviceMappedModelLoader for Phi2Loader {
 
             input_layernorm + q_proj + k_proj + v_proj + o_proj + q_norm + k_norm + fc1 + fc2
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -1441,7 +1437,7 @@ impl DeviceMappedModelLoader for Phi3Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1451,12 +1447,12 @@ impl DeviceMappedModelLoader for Phi3Loader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg = Phi3BasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -1481,7 +1477,10 @@ impl DeviceMappedModelLoader for Phi3Loader {
                 + gate_up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -1608,7 +1607,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1618,12 +1617,12 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg = LlamaBasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -1653,7 +1652,10 @@ impl DeviceMappedModelLoader for Qwen2Loader {
                 + up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -1806,7 +1808,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -1816,12 +1818,12 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg = Gemma2BasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -1855,7 +1857,10 @@ impl DeviceMappedModelLoader for Gemma2Loader {
                 + up_proj
                 + down_proj
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -1992,7 +1997,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -2002,12 +2007,12 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size + cfg.hidden_size;
@@ -2035,7 +2040,10 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
                 + fc1
                 + fc2
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -2194,7 +2202,7 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -2204,12 +2212,12 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -2246,7 +2254,10 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
                 + o_proj
                 + moe_block
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -2435,7 +2446,7 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } else {
                 0
             };
@@ -2445,12 +2456,12 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         Ok(elems * dtype.size_in_bytes())
     }
 
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
@@ -2525,7 +2536,10 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
                 + o_proj
                 + moe_block
         };
-        Ok(per_layer_elems * dtype.size_in_bytes())
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {

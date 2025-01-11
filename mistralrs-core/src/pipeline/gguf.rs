@@ -364,18 +364,17 @@ impl Loader for GGUFLoader {
             };
             let dtype = DType::F32;
 
-            let per_layer_size_in_bytes =
-                model.per_layer_size_in_bytes("this is a dummy config!", dtype, 1)?;
+            let layer_sizes_in_bytes =
+                model.layer_sizes_in_bytes("this is a dummy config!", dtype, 1)?;
             let non_mapped_size_in_bytes =
                 model.non_mapped_size_in_bytes("this is a dummy config!", dtype, 1)?;
-            let total_model_size_in_bytes = per_layer_size_in_bytes
-                * model.num_layers("this is a dummy config!")?
-                + non_mapped_size_in_bytes;
+            let total_model_size_in_bytes =
+                layer_sizes_in_bytes.iter().sum::<usize>() + non_mapped_size_in_bytes;
 
             let new = model.get_device_layers(
                 "this is a dummy config!",
                 num_layers,
-                per_layer_size_in_bytes,
+                layer_sizes_in_bytes,
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 &devices,

@@ -236,12 +236,12 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
     fn num_layers(&self, _config: &str) -> Result<usize> {
         Ok(self.model.get_metadata()[&format!("{}.block_count", self.arch)].to_u32()? as usize)
     }
-    fn per_layer_size_in_bytes(
+    fn layer_sizes_in_bytes(
         &self,
-        _config: &str,
+        config: &str,
         _dtype: DType,
         _weight_pack_factor: usize,
-    ) -> Result<usize> {
+    ) -> Result<Vec<usize>> {
         let size_in_bytes = match self.arch {
             GGUFArchitecture::Llama => {
                 let attn_norm =
@@ -434,6 +434,6 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             }
             _ => unimplemented!(),
         };
-        Ok(size_in_bytes)
+        Ok(vec![size_in_bytes; self.num_layers(config)?])
     }
 }

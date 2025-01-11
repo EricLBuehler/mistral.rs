@@ -680,7 +680,10 @@ impl MLlamaTextModel {
                             .as_ref()
                             .map(|m| m.to_device(hidden_states.device()).unwrap())
                             .as_ref(),
-                        full_text_row_masked_out_mask,
+                        full_text_row_masked_out_mask
+                            .as_ref()
+                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
                     )?;
                 }
             }
