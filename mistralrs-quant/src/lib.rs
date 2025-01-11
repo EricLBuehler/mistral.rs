@@ -160,7 +160,13 @@ impl MatMul {
         }
         #[cfg(not(feature = "accelerate"))]
         {
-            if !get_use_matmul_via_f16() {
+            if a.device().is_cpu() {
+                let original_dtype = a.dtype();
+                return a
+                    .to_dtype(DType::F16)?
+                    .matmul(&b.to_dtype(DType::F16)?)?
+                    .to_dtype(original_dtype);
+            } else if !get_use_matmul_via_f16() {
                 return a.matmul(b);
             }
             let original_dtype = a.dtype();

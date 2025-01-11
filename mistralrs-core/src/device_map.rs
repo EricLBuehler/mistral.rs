@@ -119,7 +119,11 @@ impl DeviceMapSetting {
                 {
                     combined.extend(vec![device.clone(); n_device_layers]);
                 } else {
-                    let original_seed = device.get_current_seed()?;
+                    let original_seed = if !device.is_cpu() {
+                        Some(device.get_current_seed()?)
+                    } else {
+                        None
+                    };
                     for DeviceLayerMapMetadata { ordinal, layers } in
                         device_layers.as_ref().unwrap()
                     {
@@ -128,7 +132,9 @@ impl DeviceMapSetting {
                             Device::Cuda(_) => Device::cuda_if_available(*ordinal)?,
                             Device::Metal(_) => Device::new_metal(*ordinal)?,
                         };
-                        dev.set_seed(original_seed)?;
+                        if !device.is_cpu() {
+                            dev.set_seed(original_seed.unwrap())?;
+                        }
                         combined.extend(vec![dev; *layers]);
                     }
                 }
