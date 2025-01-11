@@ -3,8 +3,6 @@ use std::process::Command;
 use candle_core::{Device, Result};
 use sysinfo::System;
 
-const KB_TO_BYTES: usize = 1024;
-
 fn get_available_memory_vm_stat() -> Result<usize> {
     // Execute the `vm_stat` command
     let output = Command::new("vm_stat")
@@ -74,7 +72,7 @@ impl MemoryUsage {
             Device::Cpu => {
                 let mut sys = System::new_all();
                 sys.refresh_cpu();
-                Ok(usize::try_from(sys.free_memory())? * KB_TO_BYTES)
+                Ok(usize::try_from(sys.available_memory())?)
             }
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
@@ -122,7 +120,7 @@ impl MemoryUsage {
             Device::Cpu => {
                 let mut sys = System::new_all();
                 sys.refresh_cpu();
-                Ok(usize::try_from(sys.total_memory())? * KB_TO_BYTES)
+                Ok(usize::try_from(sys.total_memory())?)
             }
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
