@@ -87,7 +87,7 @@ fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     }
 }
 
-fn supports_attn_softmax() -> bool {
+fn supports_attn_softmax() -> Result<bool> {
     #[cfg(feature = "metal")]
     {
         use std::sync::atomic::Ordering;
@@ -141,11 +141,11 @@ fn supports_attn_softmax() -> bool {
             }
         };
         // Attn softmax is only supported for metal >= 310
-        version >= 310
+        Ok(version >= 310)
     }
 
     #[cfg(not(feature = "metal"))]
-    true
+    Ok(true)
 }
 
 /// Computes softmax(QK^T*sqrt(d_k))V
@@ -158,7 +158,7 @@ fn naive_sdpa(
 ) -> Result<Tensor> {
     // Use faster softmax if mask is rank 2 or it's rank 3 and bs 1
     if mask.is_some_and(|mask| mask.rank() == 2 || (mask.rank() == 3 && mask.dims()[0] == 1))
-        && supports_attn_softmax()
+        && supports_attn_softmax()?
     {
         let mask = match mask {
             Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => mask.squeeze(0)?,
@@ -262,7 +262,7 @@ impl Sdpa {
         if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
             if mask
                 .is_some_and(|mask| mask.rank() == 2 || (mask.rank() == 3 && mask.dims()[0] == 1))
-                && supports_attn_softmax()
+                && supports_attn_softmax()?
             {
                 return naive_sdpa(q, &k, &v, mask, sdpa_params);
             }
