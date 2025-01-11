@@ -1023,7 +1023,11 @@
 <a href="#1022" id="1022">1022</a>
 <a href="#1023" id="1023">1023</a>
 <a href="#1024" id="1024">1024</a>
-<a href="#1025" id="1025">1025</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1025" id="1025">1025</a>
+<a href="#1026" id="1026">1026</a>
+<a href="#1027" id="1027">1027</a>
+<a href="#1028" id="1028">1028</a>
+<a href="#1029" id="1029">1029</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
@@ -1312,7 +1316,7 @@
 
             <span class="comment">// ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
-            </span><span class="kw">let </span>(per_layer_size_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+            </span><span class="kw">let </span>(layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(serialized) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
                     <span class="kw">let </span>parent = serialized
                         .parent()
@@ -1342,37 +1346,41 @@
 
                     <span class="comment">// This is not completely correct but hopefully close enough.
                     // For example, the norms are not necessarily correctly done.
-                    </span>(size_per_layer, res_total_size, ser_total_size)
+                    </span>(
+                        <span class="macro">vec!</span>[size_per_layer; <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>],
+                        res_total_size,
+                        ser_total_size,
+                    )
                 } <span class="kw">else if let </span><span class="prelude-val">Some</span>(isq) = in_situ_quant {
                     <span class="kw">let </span>weight_pack_factor = isq.pack_factor(dtype);
-                    <span class="kw">let </span>per_layer_size_in_bytes =
+                    <span class="kw">let </span>layer_sizes_in_bytes =
                         <span class="self">self</span>.inner
-                            .per_layer_size_in_bytes(<span class="kw-2">&amp;</span>config, dtype, weight_pack_factor)<span class="question-mark">?</span>;
+                            .layer_sizes_in_bytes(<span class="kw-2">&amp;</span>config, dtype, weight_pack_factor)<span class="question-mark">?</span>;
                     <span class="kw">let </span>non_mapped_size_in_bytes =
                         <span class="self">self</span>.inner
                             .non_mapped_size_in_bytes(<span class="kw-2">&amp;</span>config, dtype, weight_pack_factor)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>layer_sizes_sum = layer_sizes_in_bytes.iter().sum::&lt;usize&gt;();
                     (
-                        per_layer_size_in_bytes,
+                        layer_sizes_in_bytes,
                         non_mapped_size_in_bytes,
-                        per_layer_size_in_bytes * <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?
-                            </span>+ non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 } <span class="kw">else </span>{
-                    <span class="kw">let </span>per_layer_size_in_bytes =
-                        <span class="self">self</span>.inner.per_layer_size_in_bytes(<span class="kw-2">&amp;</span>config, dtype, <span class="number">1</span>)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>layer_sizes_in_bytes =
+                        <span class="self">self</span>.inner.layer_sizes_in_bytes(<span class="kw-2">&amp;</span>config, dtype, <span class="number">1</span>)<span class="question-mark">?</span>;
                     <span class="kw">let </span>non_mapped_size_in_bytes =
                         <span class="self">self</span>.inner.non_mapped_size_in_bytes(<span class="kw-2">&amp;</span>config, dtype, <span class="number">1</span>)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>layer_sizes_sum = layer_sizes_in_bytes.iter().sum::&lt;usize&gt;();
                     (
-                        per_layer_size_in_bytes,
+                        layer_sizes_in_bytes,
                         non_mapped_size_in_bytes,
-                        per_layer_size_in_bytes * <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?
-                            </span>+ non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 };
             <span class="kw">let </span>new = <span class="self">self</span>.inner.get_device_layers(
                 <span class="kw-2">&amp;</span>config,
                 <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
-                per_layer_size_in_bytes,
+                layer_sizes_in_bytes,
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 <span class="kw-2">&amp;</span>devices,

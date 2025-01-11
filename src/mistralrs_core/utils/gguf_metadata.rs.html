@@ -675,12 +675,12 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">self</span>.model.get_metadata()[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{}.block_count"</span>, <span class="self">self</span>.arch)].to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize)
     }
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        _config: <span class="kw-2">&amp;</span>str,
+        config: <span class="kw-2">&amp;</span>str,
         _dtype: DType,
         _weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>size_in_bytes = <span class="kw">match </span><span class="self">self</span>.arch {
             GGUFArchitecture::Llama =&gt; {
                 <span class="kw">let </span>attn_norm =
@@ -873,7 +873,7 @@
             }
             <span class="kw">_ </span>=&gt; <span class="macro">unimplemented!</span>(),
         };
-        <span class="prelude-val">Ok</span>(size_in_bytes)
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[size_in_bytes; <span class="self">self</span>.num_layers(config)<span class="question-mark">?</span>])
     }
 }
 </code></pre></div></section></main></body></html>

@@ -2533,7 +2533,21 @@
 <a href="#2532" id="2532">2532</a>
 <a href="#2533" id="2533">2533</a>
 <a href="#2534" id="2534">2534</a>
-<a href="#2535" id="2535">2535</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#2535" id="2535">2535</a>
+<a href="#2536" id="2536">2536</a>
+<a href="#2537" id="2537">2537</a>
+<a href="#2538" id="2538">2538</a>
+<a href="#2539" id="2539">2539</a>
+<a href="#2540" id="2540">2540</a>
+<a href="#2541" id="2541">2541</a>
+<a href="#2542" id="2542">2542</a>
+<a href="#2543" id="2543">2543</a>
+<a href="#2544" id="2544">2544</a>
+<a href="#2545" id="2545">2545</a>
+<a href="#2546" id="2546">2546</a>
+<a href="#2547" id="2547">2547</a>
+<a href="#2548" id="2548">2548</a>
+<a href="#2549" id="2549">2549</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
@@ -2554,7 +2568,6 @@
     serde_default_fn,
     utils::{log::once_log_info, varbuilder_utils::DeviceForLoadTensor},
     xlora_models::NonGranularState,
-    DeviceMapMetadata,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{DType, Device, Tensor};
@@ -2882,31 +2895,13 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.num_layers(config)
     }
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.per_layer_size_in_bytes(config, dtype, weight_pack_factor)
-    }
-    <span class="kw">fn </span>get_device_layers(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        config: <span class="kw-2">&amp;</span>str,
-        num_layers: usize,
-        per_layer_size_in_bytes: usize,
-        non_mapped_size_in_bytes: usize,
-        total_model_size_in_bytes: usize,
-        devices: <span class="kw-2">&amp;</span>[Device],
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;DeviceMapMetadata&gt; {
-        <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.get_device_layers(
-            config,
-            num_layers,
-            per_layer_size_in_bytes,
-            non_mapped_size_in_bytes,
-            total_model_size_in_bytes,
-            devices,
-        )
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
+        <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.layer_sizes_in_bytes(config, dtype, weight_pack_factor)
     }
 }
 
@@ -3039,7 +3034,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -3049,12 +3044,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg = MistralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
@@ -3084,7 +3079,10 @@
                 + up_proj
                 + down_proj
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -3232,7 +3230,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -3242,12 +3240,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg = GemmaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
@@ -3281,7 +3279,10 @@
                 + up_proj
                 + down_proj
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -3423,7 +3424,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -3433,12 +3434,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg = LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
@@ -3468,7 +3469,10 @@
                 + up_proj
                 + down_proj
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -3607,7 +3611,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -3617,12 +3621,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg = MixtralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
@@ -3655,7 +3659,10 @@
                 + o_proj
                 + moe_block
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -3793,7 +3800,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -3803,12 +3810,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg = Phi2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size + cfg.hidden_size;
@@ -3833,7 +3840,10 @@
 
             input_layernorm + q_proj + k_proj + v_proj + o_proj + q_norm + k_norm + fc1 + fc2
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -3976,7 +3986,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -3986,12 +3996,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg = Phi3BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
@@ -4016,7 +4026,10 @@
                 + gate_up_proj
                 + down_proj
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -4143,7 +4156,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -4153,12 +4166,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg = LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
@@ -4188,7 +4201,10 @@
                 + up_proj
                 + down_proj
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -4341,7 +4357,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -4351,12 +4367,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg = Gemma2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
@@ -4390,7 +4406,10 @@
                 + up_proj
                 + down_proj
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -4527,7 +4546,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -4537,12 +4556,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg = Starcoder2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size + cfg.hidden_size;
@@ -4570,7 +4589,10 @@
                 + fc1
                 + fc2
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -4729,7 +4751,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -4739,12 +4761,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg = Phi3_5MoEBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
@@ -4781,7 +4803,10 @@
                 + o_proj
                 + moe_block
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -4970,7 +4995,7 @@
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size
             } <span class="kw">else </span>{
                 <span class="number">0
             </span>};
@@ -4980,12 +5005,12 @@
         <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
     }
 
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg: <span class="kw">crate</span>::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
@@ -5060,7 +5085,10 @@
                 + o_proj
                 + moe_block
         };
-        <span class="prelude-val">Ok</span>(per_layer_elems * dtype.size_in_bytes())
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {

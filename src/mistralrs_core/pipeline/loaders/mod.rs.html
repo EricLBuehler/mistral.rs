@@ -503,7 +503,22 @@
 <a href="#502" id="502">502</a>
 <a href="#503" id="503">503</a>
 <a href="#504" id="504">504</a>
-<a href="#505" id="505">505</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
 <span class="kw">mod </span>normal_loaders;
 <span class="kw">mod </span>vision_loaders;
 
@@ -869,12 +884,12 @@
         dtype: DType,
         weight_pack_factor: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
-    <span class="kw">fn </span>per_layer_size_in_bytes(
+    <span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt;;
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
 
     <span class="doccomment">/// weight_pack_factor only applies to quantized weights.
@@ -882,7 +897,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _config: <span class="kw-2">&amp;</span>str,
         num_layers: usize,
-        per_layer_size_in_bytes: usize,
+        <span class="kw-2">mut </span>layer_sizes_in_bytes: Vec&lt;usize&gt;,
         non_mapped_size_in_bytes: usize,
         total_model_size_in_bytes: usize,
         devices: <span class="kw-2">&amp;</span>[Device],
@@ -900,6 +915,9 @@
         <span class="comment">// Reverse so we don't use the cpu first!
         </span>per_layer_avail.reverse();
 
+        <span class="comment">// Reverse layer sizes so we can pop
+        </span>layer_sizes_in_bytes.reverse();
+
         <span class="kw">let </span><span class="kw-2">mut </span>device_layers = Vec::new();
 
         <span class="kw">let </span><span class="kw-2">mut </span>current_ordinal = <span class="number">0</span>;
@@ -911,12 +929,29 @@
             <span class="comment">// All usage of 90% of the memory as a maximum.
             </span><span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
             </span><span class="kw">let </span>device_capacity = (device_capacity <span class="kw">as </span>f64 * <span class="number">0.90</span>) <span class="kw">as </span>usize;
+
             <span class="kw">let </span>layers_on_device = <span class="kw">if </span>device_capacity &gt;= remaining_to_map {
+                remaining_to_map = <span class="number">0</span>;
+
                 num_layers - current_layer
-            } <span class="kw">else if </span>current_ordinal == <span class="number">0 </span>{
-                (device_capacity - non_mapped_size_in_bytes) / per_layer_size_in_bytes
             } <span class="kw">else </span>{
-                device_capacity / per_layer_size_in_bytes
+                <span class="kw">let </span><span class="kw-2">mut </span>used_capacity = <span class="number">0</span>;
+                <span class="kw">let </span><span class="kw-2">mut </span>layers_on_device = <span class="number">0</span>;
+
+                <span class="kw">if </span>current_ordinal == <span class="number">0 </span>{
+                    used_capacity += non_mapped_size_in_bytes;
+                }
+
+                <span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>last) = layer_sizes_in_bytes.last() {
+                    <span class="kw">if </span>used_capacity + last &gt; device_capacity {
+                        <span class="kw">break</span>;
+                    }
+                    used_capacity += layer_sizes_in_bytes.pop().unwrap();
+                    layers_on_device += <span class="number">1</span>;
+                }
+
+                remaining_to_map = remaining_to_map.saturating_sub(used_capacity);
+                layers_on_device
             };
 
             <span class="comment">// CPU mappings are automatically handled by the traditional device mapper, we can just leave them out here.
@@ -929,11 +964,6 @@
             }
 
             current_layer += layers_on_device;
-            remaining_to_map =
-                remaining_to_map.saturating_sub(per_layer_size_in_bytes * layers_on_device);
-            <span class="kw">if </span>current_ordinal - <span class="number">1 </span>== <span class="number">0 </span>{
-                remaining_to_map = remaining_to_map.saturating_sub(non_mapped_size_in_bytes);
-            }
         }
         <span class="kw">if </span>remaining_to_map &gt; <span class="number">0 </span>{
             <span class="macro">anyhow::bail!</span>(
