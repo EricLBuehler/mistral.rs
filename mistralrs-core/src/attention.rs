@@ -247,7 +247,7 @@ impl Sdpa {
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
         let (_, _, _, k_head_dim) = k.dims4()?;
         let (_, _, _, v_head_dim) = v.dims4()?;
-        if sdpa_params.use_flash_attn {
+        if sdpa_params.use_flash_attn && !q.device().is_cpu() {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
