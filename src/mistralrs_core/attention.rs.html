@@ -587,7 +587,7 @@
         <span class="kw">let </span>(b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()<span class="question-mark">?</span>;
         <span class="kw">let </span>(<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, k_head_dim) = k.dims4()<span class="question-mark">?</span>;
         <span class="kw">let </span>(<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, v_head_dim) = v.dims4()<span class="question-mark">?</span>;
-        <span class="kw">if </span>sdpa_params.use_flash_attn {
+        <span class="kw">if </span>sdpa_params.use_flash_attn &amp;&amp; q.device().is_cuda() {
             <span class="comment">// flash-attn expects (b_sz, seq_len, nheads, head_dim)
             </span><span class="kw">let </span>q = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
             <span class="kw">let </span>k = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;

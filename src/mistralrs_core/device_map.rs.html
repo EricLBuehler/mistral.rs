@@ -376,7 +376,13 @@
 <a href="#375" id="375">375</a>
 <a href="#376" id="376">376</a>
 <a href="#377" id="377">377</a>
-<a href="#378" id="378">378</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">use crate</span>::{
     utils::{debug::DeviceRepr, log::once_log_info},
@@ -497,7 +503,11 @@
                 {
                     combined.extend(<span class="macro">vec!</span>[device.clone(); n_device_layers]);
                 } <span class="kw">else </span>{
-                    <span class="kw">let </span>original_seed = device.get_current_seed()<span class="question-mark">?</span>;
+                    <span class="kw">let </span>original_seed = <span class="kw">if </span>!device.is_cpu() {
+                        <span class="prelude-val">Some</span>(device.get_current_seed()<span class="question-mark">?</span>)
+                    } <span class="kw">else </span>{
+                        <span class="prelude-val">None
+                    </span>};
                     <span class="kw">for </span>DeviceLayerMapMetadata { ordinal, layers } <span class="kw">in
                         </span>device_layers.as_ref().unwrap()
                     {
@@ -506,7 +516,9 @@
                             Device::Cuda(<span class="kw">_</span>) =&gt; Device::cuda_if_available(<span class="kw-2">*</span>ordinal)<span class="question-mark">?</span>,
                             Device::Metal(<span class="kw">_</span>) =&gt; Device::new_metal(<span class="kw-2">*</span>ordinal)<span class="question-mark">?</span>,
                         };
-                        dev.set_seed(original_seed)<span class="question-mark">?</span>;
+                        <span class="kw">if </span>!device.is_cpu() {
+                            dev.set_seed(original_seed.unwrap())<span class="question-mark">?</span>;
+                        }
                         combined.extend(<span class="macro">vec!</span>[dev; <span class="kw-2">*</span>layers]);
                     }
                 }

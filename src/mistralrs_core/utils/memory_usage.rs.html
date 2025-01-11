@@ -162,14 +162,10 @@
 <a href="#161" id="161">161</a>
 <a href="#162" id="162">162</a>
 <a href="#163" id="163">163</a>
-<a href="#164" id="164">164</a>
-<a href="#165" id="165">165</a>
-<a href="#166" id="166">166</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::process::Command;
+<a href="#164" id="164">164</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::process::Command;
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>sysinfo::System;
-
-<span class="kw">const </span>KB_TO_BYTES: usize = <span class="number">1024</span>;
 
 <span class="kw">fn </span>get_available_memory_vm_stat() -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
     <span class="comment">// Execute the `vm_stat` command
@@ -240,7 +236,7 @@
             Device::Cpu =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>sys = System::new_all();
                 sys.refresh_cpu();
-                <span class="prelude-val">Ok</span>(usize::try_from(sys.free_memory())<span class="question-mark">? </span>* KB_TO_BYTES)
+                <span class="prelude-val">Ok</span>(usize::try_from(sys.available_memory())<span class="question-mark">?</span>)
             }
             <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
             </span>Device::Cuda(dev) =&gt; {
@@ -288,7 +284,7 @@
             Device::Cpu =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>sys = System::new_all();
                 sys.refresh_cpu();
-                <span class="prelude-val">Ok</span>(usize::try_from(sys.total_memory())<span class="question-mark">? </span>* KB_TO_BYTES)
+                <span class="prelude-val">Ok</span>(usize::try_from(sys.total_memory())<span class="question-mark">?</span>)
             }
             <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
             </span>Device::Cuda(dev) =&gt; {
