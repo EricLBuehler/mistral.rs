@@ -166,21 +166,19 @@ fn naive_sdpa(
             _ => candle_core::bail!("unsupported mask {mask:?}"),
         };
 
-        let mut att = MatMul.matmul(q, &k.t()?).unwrap();
-        dbg!(&att, &mask);
+        let mut att = MatMul.matmul(q, &k.t()?)?;
 
         candle_nn::ops::inplace_attn_softmax_last_dim(
             &mut att,
             &mask,
             sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0),
-        )
-        .unwrap();
+        )?;
 
         if let Some(softcap) = sdpa_params.softcap {
             att = (att.tanh()? * softcap as f64)?;
         }
 
-        Ok(MatMul.matmul(&att, v).unwrap())
+        MatMul.matmul(&att, v)
     } else if let Some(mask) = mask {
         let mut att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
         if let Some(softcap) = sdpa_params.softcap {

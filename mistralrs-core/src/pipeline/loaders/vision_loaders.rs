@@ -1178,7 +1178,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         };
 
         let elems = text_elems + vision_elems;
-        Ok(elems * dtype.size_in_bytes() + 3*1024*1024*1024)
+        Ok(elems * dtype.size_in_bytes())
     }
 
     fn layer_sizes_in_bytes(

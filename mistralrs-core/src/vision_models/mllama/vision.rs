@@ -387,7 +387,7 @@ impl MLlamaVisionEncoder {
         let mut hidden_states = Vec::new();
         for (i, layer) in self.layers.iter().enumerate() {
             if intermediate_layers_indices.is_some_and(|indices: &[usize]| indices.contains(&i)) {
-                hidden_states.push(hidden_state.to_device(&Device::Cpu)?);
+                hidden_states.push(hidden_state.clone());
             }
             hidden_state = layer.forward(&hidden_state, attention_mask)?;
         }
@@ -633,7 +633,7 @@ impl MLlamaVisionModel {
 
         // Collect intermediate layer outputs from encoder output
         let mut intermediate_hidden_states =
-            Tensor::stack(&all_intermediate_hidden_states, D::Minus1)?.to_device(hidden_state.device())?;
+            Tensor::stack(&all_intermediate_hidden_states, D::Minus1)?;
         drop(all_intermediate_hidden_states);
 
         hidden_state = self.layernorm_post.forward(&hidden_state)?;
