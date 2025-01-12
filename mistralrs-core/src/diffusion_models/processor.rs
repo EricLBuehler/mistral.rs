@@ -6,6 +6,7 @@ use indexmap::IndexMap;
 use tokenizers::Tokenizer;
 
 use crate::{
+    device_map::DeviceMapper,
     pipeline::{
         text_models_inputs_processor::PagedAttentionMeta, InputProcessorOutput, InputsProcessor,
         InputsProcessorType, MessagesAction, Processor,
@@ -69,6 +70,7 @@ impl InputsProcessor for DiffusionInputsProcessor {
         _other_config: Option<Arc<dyn Any>>,
         _paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
+        _mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
         let mut make_value = if prompt_batchsize.is_some() {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(

@@ -6,13 +6,13 @@ use std::sync::Arc;
 use candle_core::quantized::ggml_file;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, RotaryEmbedding};
+use candle_nn::{Embedding, Module};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 use crate::attention::SdpaParams;
 use crate::device_map::DeviceMapper;
 use crate::gguf::Content;
-use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
+use crate::layers::{CausalMasker, MatMul, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::extract_logits;
@@ -23,8 +23,6 @@ use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapMetadata;
-use crate::Topology;
 const MAX_SEQ_LEN: u32 = 4096;
 
 struct Mlp {
@@ -135,6 +133,7 @@ struct LayerWeights {
     rotary: Arc<RotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+    dtype: DType,
 }
 
 impl LayerWeights {
@@ -149,9 +148,15 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
 
-        let q = MatMul.qmethod_matmul(x, &*self.attention_wq)?;
-        let k = MatMul.qmethod_matmul(x, &*self.attention_wk)?;
-        let v = MatMul.qmethod_matmul(x, &*self.attention_wv)?;
+        let q = MatMul
+            .qmethod_matmul(x, &*self.attention_wq)?
+            .to_dtype(self.dtype)?;
+        let k = MatMul
+            .qmethod_matmul(x, &*self.attention_wk)?
+            .to_dtype(self.dtype)?;
+        let v = MatMul
+            .qmethod_matmul(x, &*self.attention_wv)?
+            .to_dtype(self.dtype)?;
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
@@ -212,7 +217,7 @@ impl LayerWeights {
             y.reshape(&[b_sz, seq_len, n_embd])?
         };
 
-        let y = MatMul.qmethod_matmul(&y, &*self.attention_wo)?;
+        let y = MatMul.qmethod_matmul(&y.to_dtype(x.dtype())?, &*self.attention_wo)?;
         Ok(y)
     }
 }
@@ -226,10 +231,11 @@ pub struct ModelWeights {
     pub cache: EitherCache,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
+    dtype: DType,
 }
 
 impl ModelConfig::FromGGML for ModelWeights {
-    fn from_ggml(mut ct: ggml_file::Content, gqa: usize) -> Result<Self> {
+    fn from_ggml(mut ct: ggml_file::Content, gqa: usize, dtype: DType) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new_partial(
             10000.,
@@ -238,7 +244,7 @@ impl ModelConfig::FromGGML for ModelWeights {
             MAX_SEQ_LEN as usize,
             &ct.device,
             false,
-            DType::F32,
+            dtype,
         )?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
@@ -307,6 +313,7 @@ impl ModelConfig::FromGGML for ModelWeights {
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
                 },
+                dtype,
             })
         }
         Ok(Self {
@@ -324,6 +331,7 @@ impl ModelConfig::FromGGML for ModelWeights {
             )),
             max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
             mapper: None,
+            dtype,
         })
     }
 }
@@ -402,9 +410,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
         device: &Device,
-        mapper: DeviceMapMetadata,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         attention_mechanism: AttentionImplementation,
+        dtype: DType,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
@@ -436,8 +444,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
         };
         let mut layers = Vec::with_capacity(block_count);
 
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
-
         let head_dim = key_length;
         if key_length != value_length {
             candle_core::bail!(
@@ -456,7 +462,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     max_seq_len,
                     device,
                     false,
-                    DType::F32,
+                    dtype,
                 )?),
             );
         }
@@ -632,6 +638,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
                 },
+                dtype,
             })
         }
         Ok(Self {
@@ -646,6 +653,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
             max_seq_len,
             mapper: Some(mapper),
+            dtype,
         })
     }
 }
@@ -667,7 +675,7 @@ impl ModelWeights {
                 .as_ref()
                 .map(|(_, _)| &start_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
-            DType::F32,
+            self.dtype,
             self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {

@@ -188,8 +188,8 @@ impl Attention {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
-                    &k,
-                    &v,
+                    &k.contiguous()?,
+                    &v.contiguous()?,
                     attention_mask,
                     Some(key_cache),
                     Some(value_cache),
@@ -197,16 +197,15 @@ impl Attention {
                     None,
                 )?,
                 None => {
-                    let mut input_metadata = PagedAttentionInputMetadata {
-                        block_tables: None,
-                        context_lens: None,
-                        max_context_len: None,
-                        slot_mappings: Tensor::new(&[0f32], q.device())?,
-                    };
+                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
+                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
+                    let mut input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    // Sanity check.
+                    assert!(attention_mask.is_some());
                     paged_attn.forward(
                         &q,
-                        &k,
-                        &v,
+                        &k.contiguous()?,
+                        &v.contiguous()?,
                         attention_mask,
                         None,
                         None,
@@ -535,7 +534,8 @@ impl Model {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
-                head_dim: None,
+                k_head_dim: None,
+                v_head_dim: None,
             },
         })
     }

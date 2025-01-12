@@ -1,5 +1,5 @@
 use mistralrs_core::{
-    initialize_logging, AnyMoeConfig, AnyMoeLoader, DefaultSchedulerMethod, DeviceMapMetadata,
+    initialize_logging, AnyMoeConfig, AnyMoeLoader, DefaultSchedulerMethod, DeviceMapSetting,
     Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig, SchedulerConfig,
 };
 
@@ -81,9 +81,7 @@ impl AnyMoeModelBuilder {
             &self.base.dtype,
             &best_device(self.base.force_cpu)?,
             !self.base.with_logging,
-            self.base
-                .device_mapping
-                .unwrap_or(DeviceMapMetadata::dummy()),
+            self.base.device_mapping.unwrap_or(DeviceMapSetting::Auto),
             self.base.isq,
             self.base.paged_attn_cfg,
         )?;

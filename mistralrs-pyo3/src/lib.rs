@@ -21,14 +21,14 @@ use candle_core::{Device, Result};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams,
-    DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse,
-    ImageGenerationResponseFormat, LlguidanceGrammar, Loader, MemoryGpuConfig, MistralRs,
-    MistralRsBuilder, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
-    PagedAttentionConfig, Request as _Request, RequestMessage, Response, ResponseOk,
-    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
-    TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
+    DiffusionGenerationParams, DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
+    ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
+    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
+    TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
@@ -434,6 +434,7 @@ impl Runner {
         pa_ctxt_len = None,
         pa_blk_size = None,
         no_paged_attn = false,
+        paged_attn = false,
         prompt_batchsize = None,
         seed = None,
     ))]
@@ -454,6 +455,7 @@ impl Runner {
         pa_ctxt_len: Option<usize>,
         pa_blk_size: Option<usize>,
         no_paged_attn: bool,
+        paged_attn: bool,
         prompt_batchsize: Option<usize>,
         seed: Option<u64>,
     ) -> PyApiResult<Self> {
@@ -555,10 +557,9 @@ impl Runner {
             Some(device_layers) => {
                 if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
                     let layers = device_layers[0].parse::<usize>().unwrap();
-                    DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
-                        ordinal: 0,
-                        layers,
-                    }])
+                    DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
+                        DeviceLayerMapMetadata { ordinal: 0, layers },
+                    ]))
                 } else {
                     let mut mapping = Vec::new();
                     for layer in device_layers {
@@ -582,10 +583,18 @@ impl Runner {
                             layers: num,
                         });
                     }
-                    DeviceMapMetadata::from_num_device_layers(mapping)
+                    DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
                 }
             }
-            None => DeviceMapMetadata::dummy(),
+            None => DeviceMapSetting::Auto,
+        };
+
+        let no_paged_attn = if device.is_cuda() {
+            no_paged_attn
+        } else if device.is_metal() {
+            !paged_attn
+        } else {
+            true
         };
 
         // Allocate 0.5 GB of CPU memory just as a placeholder.
@@ -615,7 +624,7 @@ impl Runner {
                 (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
                     block_size,
                     512,
-                    MemoryGpuConfig::Amount(m),
+                    MemoryGpuConfig::MbAmount(m),
                 )?),
                 (block_size, Some(_m), Some(f), None, true, false) => Some(
                     PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::Utilization(f))?,

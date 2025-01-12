@@ -5,9 +5,10 @@
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, VarBuilder};
-use float8::F8E4M3;
 use serde::Deserialize;
 use std::sync::Arc;
+
+use crate::layers::{clamp_for_f16, MatMul};
 
 fn default_relative_attention_max_distance() -> usize {
     128
@@ -376,7 +377,7 @@ impl T5Attention {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
         // TODO: Use flash_attn.
-        let scores = { q.matmul(&k.t()?)? };
+        let scores = { MatMul.matmul(&q, &k.t()?)? };
         let scores = match mask {
             None => scores,
             Some(mask) => masked_fill(
@@ -449,7 +450,7 @@ impl T5Attention {
         };
 
         let attn_weights = { candle_nn::ops::softmax_last_dim(&scores)? };
-        let attn_output = attn_weights.matmul(&v)?;
+        let attn_output = MatMul.matmul(&attn_weights, &v)?;
         let attn_output = attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.inner_dim))?;
@@ -601,54 +602,6 @@ impl T5LayerCrossAttention {
         };
         Ok(())
     }
-}
-
-trait TensorInfExtend {
-    fn is_inf(&self) -> Result<Self>
-    where
-        Self: Sized;
-    fn any(&self) -> Result<bool>;
-}
-
-impl TensorInfExtend for Tensor {
-    fn is_inf(&self) -> Result<Self> {
-        self.broadcast_eq(&Tensor::new(f64::INFINITY, self.device())?.to_dtype(self.dtype())?)
-    }
-
-    fn any(&self) -> Result<bool> {
-        let sum = self.sum_all()?;
-        match self.dtype() {
-            DType::U8 => Ok(sum.to_scalar::<u8>()? == 0),
-            DType::U32 => Ok(sum.to_scalar::<u32>()? == 0),
-            DType::I16 => Ok(sum.to_scalar::<i16>()? == 0),
-            DType::I32 => Ok(sum.to_scalar::<i32>()? == 0),
-            DType::I64 => Ok(sum.to_scalar::<i64>()? == 0),
-            DType::F16 => Ok(sum.to_scalar::<half::f16>()? == half::f16::from_f32_const(0.)),
-            DType::BF16 => Ok(sum.to_scalar::<half::bf16>()? == half::bf16::from_f32_const(0.)),
-            DType::F32 => Ok(sum.to_scalar::<f32>()? == 0.),
-            DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
-            DType::F8E4M3 => Ok(sum.to_scalar::<F8E4M3>()? == F8E4M3::ZERO),
-        }
-    }
-}
-
-fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
-    let mut max = match xs.dtype() {
-        DType::U8 => u8::MAX as f64 - 1000.,
-        DType::U32 => u32::MAX as f64 - 1000.,
-        DType::I16 => i16::MAX as f64 - 1000.,
-        DType::I32 => i32::MAX as f64 - 1000.,
-        DType::I64 => i64::MAX as f64 - 1000.,
-        DType::F16 => half::f16::MAX.to_f64_const() - 1000.,
-        DType::BF16 => half::bf16::MAX.to_f64_const() - 1000.,
-        DType::F32 => f32::MAX as f64 - 1000.,
-        DType::F64 => f64::MAX - 1000.,
-        DType::F8E4M3 => F8E4M3::MAX.to_f64() - 1000.,
-    };
-    if xs.is_inf()?.any()? {
-        max -= 1000.;
-    }
-    xs.clamp(-max, max)
 }
 
 #[derive(Debug, Clone)]

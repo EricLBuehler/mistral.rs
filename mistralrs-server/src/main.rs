@@ -9,9 +9,9 @@ use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, IsqType,
-    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
-    PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
@@ -104,6 +104,7 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     prefix_cache_n: usize,
 
+    /// Note: this is deprecated in favor of automatic device mapping.
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
@@ -115,32 +116,36 @@ struct Args {
     in_situ_quant: Option<IsqType>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
-    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
     /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
     /// If this is not set and the device is CUDA, it will default to `0.9`.
-    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem-usage")]
     paged_attn_gpu_mem_usage: Option<f32>,
 
-    /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold)
-    /// when using PagedAttention, which is only supported on CUDA and is always automatically activated.
+    /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
     #[arg(long = "pa-ctxt-len")]
     paged_ctxt_len: Option<usize>,
 
     /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
-    /// PagedAttention is only supported on CUDA and is always automatically activated.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     #[arg(long = "pa-blk-size")]
     paged_attn_block_size: Option<usize>,
 
-    /// Disable PagedAttention on CUDA.
+    /// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
     #[arg(long = "no-paged-attn", default_value_t = false)]
     no_paged_attn: bool,
+
+    /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
+    #[arg(long = "paged-attn", default_value_t = false)]
+    paged_attn: bool,
 
     /// Enable server throughput logging, supported in the server and with interactive mode
     #[arg(long = "throughput", default_value_t = false)]
@@ -149,6 +154,10 @@ struct Args {
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
     prompt_batchsize: Option<usize>,
+
+    /// Use CPU only
+    #[arg(long)]
+    cpu: bool,
 }
 
 #[utoipa::path(
@@ -273,6 +282,17 @@ async fn main() -> Result<()> {
     let mut args = Args::parse();
     initialize_logging();
 
+    let setting_server = if !args.interactive_mode {
+        let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
+        let ip = args.serve_ip.unwrap_or_else(|| "0.0.0.0".to_string());
+
+        // Create listener early to validate address before model loading
+        let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
+        Some((listener, ip, port))
+    } else {
+        None
+    };
+
     #[cfg(not(feature = "flash-attn"))]
     let use_flash_attn = false;
     #[cfg(feature = "flash-attn")]
@@ -303,7 +323,12 @@ async fn main() -> Result<()> {
     #[cfg(feature = "metal")]
     let device = Device::new_metal(0)?;
     #[cfg(not(feature = "metal"))]
-    let device = Device::cuda_if_available(0)?;
+    let device = if args.cpu {
+        args.no_paged_attn = true;
+        Device::Cpu
+    } else {
+        Device::cuda_if_available(0)?
+    };
 
     if let Some(seed) = args.seed {
         device.set_seed(seed)?;
@@ -329,10 +354,9 @@ async fn main() -> Result<()> {
     let mapper = if let Some(device_layers) = args.num_device_layers {
         if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
             let layers = device_layers[0].parse::<usize>().unwrap();
-            DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
-                ordinal: 0,
-                layers,
-            }])
+            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
+                DeviceLayerMapMetadata { ordinal: 0, layers },
+            ]))
         } else {
             let mut mapping = Vec::new();
             for layer in device_layers {
@@ -356,10 +380,18 @@ async fn main() -> Result<()> {
                     layers: num,
                 });
             }
-            DeviceMapMetadata::from_num_device_layers(mapping)
+            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapMetadata::dummy()
+        DeviceMapSetting::Auto
+    };
+
+    let no_paged_attn = if device.is_cuda() {
+        args.no_paged_attn
+    } else if device.is_metal() {
+        !args.paged_attn
+    } else {
+        true
     };
 
     // Allocate 0.5 GB of CPU memory just as a placeholder.
@@ -370,7 +402,7 @@ async fn main() -> Result<()> {
         args.paged_attn_gpu_mem_usage,
         args.paged_ctxt_len,
         paged_attn_supported(),
-        args.no_paged_attn,
+        no_paged_attn,
     ) {
         (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
@@ -390,7 +422,7 @@ async fn main() -> Result<()> {
         (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            MemoryGpuConfig::Amount(m),
+            MemoryGpuConfig::MbAmount(m),
         )?),
         (block_size, Some(_m), Some(f), None, true, false) => {
             info!("Both memory size, and usage were specified, defaulting to the usage value.");
@@ -467,18 +499,11 @@ async fn main() -> Result<()> {
     };
     let mistralrs = builder.build();
 
-    let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
-
     let app = get_router(mistralrs);
-
-    let ip = if let Some(ref ip) = args.serve_ip {
-        ip.to_string()
-    } else {
-        "0.0.0.0".to_string()
+    if let Some((listener, ip, port)) = setting_server {
+        info!("Serving on http://{ip}:{}.", port);
+        axum::serve(listener, app).await?;
     };
-    let listener = tokio::net::TcpListener::bind(format!("{ip}:{}", port)).await?;
-    info!("Serving on http://{ip}:{}.", port);
-    axum::serve(listener, app).await?;
 
     Ok(())
 }

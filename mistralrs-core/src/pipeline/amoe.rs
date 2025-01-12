@@ -19,13 +19,14 @@ use tracing::{info, warn};
 
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
+    device_map::DeviceMapper,
     get_mut_arcmutex,
-    prefix_cacher::PrefixCacheManager,
+    prefix_cacher_v2::PrefixCacheManagerV2,
     sampler::Sampler,
     sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
-    DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
-    Pipeline, Response, TokenSource, TryIntoDType,
+    DeviceMapSetting, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig, Pipeline,
+    Response, TokenSource, TryIntoDType,
 };
 
 use super::{
@@ -57,7 +58,7 @@ impl Loader for AnyMoeLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
@@ -99,7 +100,7 @@ impl Loader for AnyMoeLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
@@ -244,6 +245,9 @@ impl MetadataMixin for AnyMoePipeline {
     fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        None
+    }
 }
 
 #[async_trait::async_trait]
@@ -260,7 +264,7 @@ impl Pipeline for AnyMoePipeline {
         &self,
         seqs: &mut [&mut Sequence],
         logits: Vec<Tensor>,
-        prefix_cacher: &mut PrefixCacheManager,
+        prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
@@ -463,12 +467,13 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         true, // Always a prompt
                         metadata.is_xlora,
                         &device,
-                        metadata.has_no_kv_cache,
+                        metadata.no_kv_cache,
                         None,
                         false,
                         input_processor_cfg.clone(),
                         None, // TODO: get block tables/handle it for PagedAttention
                         None, // TODO: prompt chunking doesn't work.
+                        None,
                     )
                     .nth(0)
                     .unwrap();

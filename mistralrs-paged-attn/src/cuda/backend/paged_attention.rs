@@ -1,5 +1,5 @@
-use crate::ffi;
-use crate::ffi::{paged_attention_v1, paged_attention_v2};
+use crate::cuda::ffi;
+use crate::cuda::ffi::{paged_attention_v1, paged_attention_v2};
 use candle::backend::BackendStorage;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::cuda_backend::WrapErr;

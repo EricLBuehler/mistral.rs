@@ -21,7 +21,7 @@ use crate::{
         deserialize_tensor, serialize_tensor, version_is_compatible, BitWiseOp, LeftshiftOp,
         HQFF_VERSION,
     },
-    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[cfg(feature = "cuda")]
@@ -503,7 +503,7 @@ impl HqqLayer {
             [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
             _ => w.t()?,
         };
-        let res = xs.matmul(&w)?;
+        let res = MatMul.matmul(xs, &w)?;
         if let Some(ref bias) = self.bias {
             res + bias
         } else {
@@ -558,6 +558,10 @@ impl QuantMethod for HqqLayer {
                 }
             }
         }
+    }
+
+    fn dequantize_w(&self) -> Result<Tensor> {
+        self.dequantize()
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
@@ -630,6 +634,10 @@ impl QuantMethod for HqqLayer {
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         // Use 1 because we quantize on the GPU
         Some(1.try_into().unwrap())
+    }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
     }
 }
 

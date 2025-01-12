@@ -5,6 +5,7 @@ pub(crate) mod memory_usage;
 pub(crate) mod model_config;
 pub(crate) mod normal;
 pub(crate) mod progress;
+pub(crate) mod safetensors;
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;
 pub(crate) mod unvarbuilder;
@@ -211,12 +212,12 @@ macro_rules! serde_default_fn {
     };
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 pub const fn paged_attn_supported() -> bool {
     true
 }
 
-#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 pub const fn paged_attn_supported() -> bool {
     false
 }

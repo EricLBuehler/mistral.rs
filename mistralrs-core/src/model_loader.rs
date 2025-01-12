@@ -85,13 +85,13 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::Lora { dtype, .. }
         | ModelSelected::XLora { dtype, .. }
         | ModelSelected::VisionPlain { dtype, .. }
-        | ModelSelected::DiffusionPlain { dtype, .. } => Ok(*dtype),
-        ModelSelected::GGUF { .. }
-        | ModelSelected::LoraGGUF { .. }
-        | ModelSelected::GGML { .. }
-        | ModelSelected::LoraGGML { .. }
-        | ModelSelected::XLoraGGUF { .. }
-        | ModelSelected::XLoraGGML { .. } => Ok(ModelDType::Auto),
+        | ModelSelected::DiffusionPlain { dtype, .. }
+        | ModelSelected::GGML { dtype, .. }
+        | ModelSelected::GGUF { dtype, .. }
+        | ModelSelected::XLoraGGUF { dtype, .. }
+        | ModelSelected::XLoraGGML { dtype, .. }
+        | ModelSelected::LoraGGUF { dtype, .. }
+        | ModelSelected::LoraGGML { dtype, .. } => Ok(*dtype),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -222,6 +222,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -244,6 +245,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             order,
             tgt_non_granular_index,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -275,6 +277,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             adapters_model_id,
             order,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -304,6 +307,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_filename,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -328,6 +332,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tgt_non_granular_index,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -360,6 +365,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             order,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,

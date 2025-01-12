@@ -12,30 +12,32 @@ use super::{
     PreProcessingMixin,
 };
 use super::{
-    AutoLoader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader,
-    NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
+    AutoLoader, DeepSeekV2Loader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader,
+    MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
+    Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
+use crate::device_map::{self, DeviceMapper};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::get_chat_template;
-use crate::pipeline::isq::UqffFullSer;
+use crate::pipeline::isq::{UqffFullSer, UQFF_RESIDUAL_SAFETENSORS};
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
-use crate::prefix_cacher::PrefixCacheManager;
+use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
 use crate::utils::tokenizer::get_tokenizer;
+use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapMetadata, PagedAttentionConfig, Pipeline,
+    normal_model_loader, xlora_model_loader, DeviceMapSetting, PagedAttentionConfig, Pipeline,
     Topology, TryIntoDType,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
@@ -68,6 +70,7 @@ pub struct NormalPipeline {
     generation_config: Option<PathBuf>,
     config: String,
     imatrix: Option<PathBuf>,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -200,6 +203,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::Gemma2) => Box::new(Gemma2Loader),
             Some(NormalLoaderType::Starcoder2) => Box::new(Starcoder2Loader),
             Some(NormalLoaderType::Phi3_5MoE) => Box::new(Phi3_5MoELoader),
+            Some(NormalLoaderType::DeepSeekV2) => Box::new(DeepSeekV2Loader),
             None => Box::new(AutoLoader),
         };
         Ok(Box::new(NormalLoader {
@@ -229,7 +233,7 @@ impl Loader for NormalLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -269,35 +273,107 @@ impl Loader for NormalLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mut mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
-        mut paged_attn_config: Option<PagedAttentionConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
-        // Otherwise, the device mapper will print it
-        if mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map()))
-        {
-            info!(
-                "Loading model `{}` on {}.",
-                self.get_id(),
-                device.device_pretty_repr()
-            );
-        } else if paged_attn_config.is_some() {
-            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
-            paged_attn_config = None;
+
+        // If auto, convert to Map
+        if let DeviceMapSetting::Auto = mapper.clone() {
+            let devices = device_map::get_all_similar_devices(device)?;
+            // Initial dtype
+            let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
+
+            // ISQ or UQFF: quantized path
+            // Match logic below where UQFF has priority
+            let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+                if let Some(serialized) = &*self.from_uqff.read().unwrap() {
+                    let parent = serialized
+                        .parent()
+                        .context("Target UQFF path must have a filename!")?;
+                    let residual = parent.join(UQFF_RESIDUAL_SAFETENSORS);
+
+                    let ser_total_size = {
+                        let ser_artifacts = unsafe {
+                            candle_core::safetensors::MmapedSafetensors::new(serialized)?
+                        };
+                        ser_artifacts
+                            .tensors()
+                            .iter()
+                            .map(|(_, t)| t.data().len())
+                            .sum::<usize>()
+                    };
+                    let res_total_size = {
+                        let res_artifacts =
+                            unsafe { candle_core::safetensors::MmapedSafetensors::new(residual)? };
+                        res_artifacts
+                            .tensors()
+                            .iter()
+                            .map(|(_, t)| t.data().len())
+                            .sum::<usize>()
+                    };
+                    let size_per_layer = ser_total_size / self.inner.num_layers(&config)?;
+
+                    // This is not completely correct but hopefully close enough.
+                    // For example, the norms are not necessarily correctly done.
+                    (
+                        vec![size_per_layer; self.inner.num_layers(&config)?],
+                        res_total_size,
+                        ser_total_size,
+                    )
+                } else if let Some(isq) = in_situ_quant {
+                    let weight_pack_factor = isq.pack_factor(dtype);
+                    let layer_sizes_in_bytes =
+                        self.inner
+                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner
+                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                    (
+                        layer_sizes_in_bytes,
+                        non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
+                    )
+                } else {
+                    let layer_sizes_in_bytes =
+                        self.inner.layer_sizes_in_bytes(&config, dtype, 1)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner.non_mapped_size_in_bytes(&config, dtype, 1)?;
+                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                    (
+                        layer_sizes_in_bytes,
+                        non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
+                    )
+                };
+            let new = self.inner.get_device_layers(
+                &config,
+                self.inner.num_layers(&config)?,
+                layer_sizes_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                &devices,
+            )?;
+            mapper = DeviceMapSetting::Map(new);
         }
 
+        let pipeline_mapper = mapper.into_mapper(
+            self.inner.get_total_device_mapping_num_layers(&config)?,
+            device,
+            self.config.topology.as_ref(),
+        )?;
         let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
             self.config.topology.as_ref(),
         )?;
+        let mut layer_devices = Vec::new();
+        for layer in 0..self.inner.get_total_device_mapping_num_layers(&config)? {
+            let device = mapper.device_for(layer, false).cloned();
+            layer_devices.push(device);
+        }
         let dtype = mapper.get_min_dtype(dtype)?;
 
         info!(
@@ -341,6 +417,7 @@ impl Loader for NormalLoader {
                 paths,
                 Some(dtype),
                 &load_device,
+                layer_devices.clone(),
                 config,
                 self.inner,
                 self.config.use_flash_attn,
@@ -358,6 +435,7 @@ impl Loader for NormalLoader {
                 paths,
                 Some(dtype),
                 &load_device,
+                layer_devices.clone(),
                 config,
                 self.inner,
                 self.config.use_flash_attn,
@@ -372,6 +450,7 @@ impl Loader for NormalLoader {
                 paths,
                 dtype,
                 &load_device,
+                layer_devices.clone(),
                 config,
                 self.inner,
                 self.config.use_flash_attn,
@@ -431,8 +510,16 @@ impl Loader for NormalLoader {
                 let chunk_len = chunk.len();
 
                 let start = Instant::now();
-                let inputs =
-                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None)?;
+                let inputs = make_prompt_chunk(
+                    0,
+                    vec![chunk],
+                    &[0],
+                    &load_device,
+                    None,
+                    false,
+                    None,
+                    Some(pipeline_mapper.as_ref()),
+                )?;
                 let _ = model.forward(
                     &inputs.input,
                     &inputs.positions,
@@ -523,7 +610,8 @@ impl Loader for NormalLoader {
                 model.config(),
                 device,
             )?;
-            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            let cache_engine =
+                CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -553,7 +641,8 @@ impl Loader for NormalLoader {
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 tok_env: Some(tok_env),
-                has_no_kv_cache: self.no_kv_cache,
+                no_kv_cache: self.no_kv_cache,
+                no_prefix_cache: is_xlora,
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: self.kind.clone(),
@@ -572,6 +661,7 @@ impl Loader for NormalLoader {
             generation_config: paths.get_gen_conf_filename().cloned(),
             config,
             imatrix: self.config.imatrix.clone(),
+            mapper: pipeline_mapper,
         })))
     }
 
@@ -689,6 +779,9 @@ impl MetadataMixin for NormalPipeline {
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
     }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        Some(&*self.mapper)
+    }
 }
 
 #[async_trait::async_trait]
@@ -726,6 +819,33 @@ impl Pipeline for NormalPipeline {
             }
             (None, None) => None,
         };
+        #[cfg(feature = "metal")]
+        let logits = objc::rc::autoreleasepool(|| match self.model.is_xlora() {
+            false => self.model.forward(
+                &input_ids,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+                position_ids,
+                paged_attn_meta,
+                &flash_meta,
+            ),
+            true => self.model.xlora_forward(
+                &input_ids,
+                input_ids_full.as_ref().unwrap_or(&input_ids),
+                &seqlen_offsets,
+                seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
+                seqlen_offsets_kernel.clone(),
+                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
+                self.no_kv_cache,
+                &self.non_granular_state,
+                context_lens,
+                position_ids,
+                &flash_meta,
+                flash_meta_full.as_ref().unwrap_or(&flash_meta),
+            ),
+        })?;
+        #[cfg(not(feature = "metal"))]
         let logits = match self.model.is_xlora() {
             false => self.model.forward(
                 &input_ids,
@@ -761,7 +881,7 @@ impl Pipeline for NormalPipeline {
         &self,
         seqs: &mut [&mut Sequence],
         logits: Vec<Tensor>,
-        prefix_cacher: &mut PrefixCacheManager,
+        prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
@@ -832,6 +952,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
                 vec![],
                 Some(dtype),
                 dev,
+                vec![None],
                 silent,
                 None,
                 move |key| {
@@ -848,6 +969,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
                         false
                     }
                 },
+                Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
             vbs.push(vb);
         }
@@ -883,9 +1005,11 @@ impl AnyMoePipelineMixin for NormalPipeline {
                 vec![],
                 Some(dtype),
                 dev,
+                vec![None],
                 silent,
                 None,
                 |_| true,
+                Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
             info!(
                 "Loaded gating layers from `{}`",

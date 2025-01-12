@@ -27,8 +27,8 @@ use crate::{
 };
 
 // Match files against these, avoids situations like `consolidated.safetensors`
-const SAFETENSOR_MATCH: &str = r"model-\d{5}-of-\d{5}.safetensors\b";
-const QUANT_SAFETENSOR_MATCH: &str = r"model.safetensors\b";
+const SAFETENSOR_MATCH: &str = r"model-\d+-of-\d+\.safetensors\b";
+const QUANT_SAFETENSOR_MATCH: &str = r"model\.safetensors\b";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 pub(crate) struct XLoraPaths {
@@ -381,7 +381,6 @@ pub(crate) fn get_chat_template(
     } else {
         panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there. If you are running a GGUF model, it probably does not contain a chat template.");
     };
-
     let mut template: ChatTemplate = match chat_template_ovrd {
         Some(chat_template) => {
             // In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
@@ -496,9 +495,7 @@ mod tests {
             "model-00006-of-00006.safetensors",
         ];
         let negative_ids = [
-            "model-000001-of-00001.safetensors",
             "model-0000a-of-00002.safetensors",
-            "model-000-of-00003.safetensors",
             "consolidated.safetensors",
         ];
         for id in positive_ids {

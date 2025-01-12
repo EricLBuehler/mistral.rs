@@ -5,14 +5,15 @@ use super::{
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
+use crate::device_map::DeviceMapper;
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
-use crate::prefix_cacher::PrefixCacheManager;
+use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
+use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-use crate::{DeviceMapMetadata, PagedAttentionConfig, Pipeline, TryIntoDType};
+use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
@@ -24,7 +25,7 @@ use std::io;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::warn;
 
 pub struct DiffusionPipeline {
     model: Box<dyn DiffusionModel + Send + Sync>,
@@ -87,7 +88,7 @@ impl Loader for DiffusionLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -128,7 +129,7 @@ impl Loader for DiffusionLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -139,15 +140,8 @@ impl Loader for DiffusionLoader {
             .expect("Path downcast failed.")
             .0;
 
-        // Otherwise, the device mapper will print it
-        if mapper.is_dummy() {
-            info!(
-                "Loading model `{}` on {}.",
-                self.get_id(),
-                device.device_pretty_repr()
-            );
-        } else {
-            anyhow::bail!("Device mapping is not supported for Diffusion models.");
+        if matches!(mapper, DeviceMapSetting::Map(_)) {
+            anyhow::bail!("Device mapping is not supported for diffusion models.")
         }
 
         if in_situ_quant.is_some() {
@@ -182,14 +176,17 @@ impl Loader for DiffusionLoader {
                     .iter()
                     .zip(self.inner.force_cpu_vb())
                     .map(|(path, force_cpu)| {
+                        let dev = if force_cpu { &Device::Cpu } else { device };
                         from_mmaped_safetensors(
                             vec![path.clone()],
                             Vec::new(),
                             Some(dtype),
-                            if force_cpu { &Device::Cpu } else { device },
+                            dev,
+                            vec![None],
                             silent,
                             None,
                             |_| true,
+                            Arc::new(|_| DeviceForLoadTensor::Base),
                         )
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
@@ -218,10 +215,11 @@ impl Loader for DiffusionLoader {
                 max_seq_len,
                 tok_env: None,
                 is_xlora: false,
+                no_prefix_cache: false,
                 num_hidden_layers: 1, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
                 eos_tok: vec![],
                 kind: self.kind.clone(),
-                has_no_kv_cache: true, // NOTE(EricLBuehler): no cache for these.
+                no_kv_cache: true, // NOTE(EricLBuehler): no cache for these.
                 activation_dtype: dtype,
                 sliding_window: None,
                 cache_config: None,
@@ -296,6 +294,9 @@ impl MetadataMixin for DiffusionPipeline {
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         None
     }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        None
+    }
 }
 
 #[async_trait::async_trait]
@@ -329,7 +330,7 @@ impl Pipeline for DiffusionPipeline {
         &self,
         _seqs: &mut [&mut Sequence],
         _logits: Vec<Tensor>,
-        _prefix_cacher: &mut PrefixCacheManager,
+        _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
         _srng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {

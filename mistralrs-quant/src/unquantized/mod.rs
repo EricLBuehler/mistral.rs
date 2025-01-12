@@ -14,7 +14,7 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
-    FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, QuantMethod, QuantMethodConfig,
+    FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul, QuantMethod, QuantMethodConfig,
     QuantizedSerde, QuantizedSerdeType,
 };
 
@@ -43,6 +43,10 @@ impl QuantMethod for UnquantLinear {
                 stats: None,
             }),
         }
+    }
+
+    fn dequantize_w(&self) -> Result<Tensor> {
+        Ok(self.w.clone())
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
@@ -95,13 +99,27 @@ impl QuantMethod for UnquantLinear {
                     out.to_dtype(a.dtype())
                 }
                 DeviceLocation::Cpu => {
-                    let mut out = b.contiguous()?;
-                    a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
-                    Ok(out)
+                    #[cfg(feature = "accelerate")]
+                    {
+                        let original_dtype = a.dtype();
+                        let mut out = b.contiguous()?.to_dtype(DType::F32)?;
+                        a.to_dtype(DType::F32)?.matmul_with_alpha_beta(
+                            &w.t()?.to_dtype(DType::F32)?,
+                            &mut out,
+                            None,
+                        )?;
+                        out.to_dtype(original_dtype)
+                    }
+                    #[cfg(not(feature = "accelerate"))]
+                    {
+                        let mut out = b.contiguous()?;
+                        a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
+                        Ok(out)
+                    }
                 }
             }
         } else {
-            a.matmul(&w.t()?)
+            MatMul.matmul(a, &w.t()?)
         }
     }
 
@@ -268,6 +286,10 @@ impl QuantMethod for UnquantLinear {
         } else {
             candle_core::bail!("`{}` does not support tracking stats.", self.name())
         }
+    }
+
+    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(self.clone())
     }
 }
 

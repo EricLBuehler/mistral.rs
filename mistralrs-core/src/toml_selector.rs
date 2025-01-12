@@ -134,6 +134,10 @@ pub enum TomlModelSelected {
         /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
         quantized_filename: String,
 
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
+
         /// Path to a topology YAML file.
         topology: Option<String>,
     },
@@ -163,6 +167,10 @@ pub enum TomlModelSelected {
         /// This makes the maximum running sequences 1.
         tgt_non_granular_index: Option<usize>,
 
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
+
         /// Path to a topology YAML file.
         topology: Option<String>,
     },
@@ -188,6 +196,10 @@ pub enum TomlModelSelected {
         /// Ordering JSON file
         order: String,
 
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
+
         /// Path to a topology YAML file.
         topology: Option<String>,
     },
@@ -208,6 +220,10 @@ pub enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
 
         /// Path to a topology YAML file.
         topology: Option<String>,
@@ -239,6 +255,10 @@ pub enum TomlModelSelected {
         #[serde(default = "default_one")]
         gqa: usize,
 
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
+
         /// Path to a topology YAML file.
         topology: Option<String>,
     },
@@ -264,6 +284,10 @@ pub enum TomlModelSelected {
         /// GQA value
         #[serde(default = "default_one")]
         gqa: usize,
+
+        /// Model data type. Defaults to `auto`.
+        #[serde(default = "default_dtype")]
+        dtype: ModelDType,
 
         /// Path to a topology YAML file.
         topology: Option<String>,
@@ -366,13 +390,13 @@ pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
         TomlModelSelected::Plain { dtype, .. }
         | TomlModelSelected::Lora { dtype, .. }
         | TomlModelSelected::XLora { dtype, .. }
-        | TomlModelSelected::VisionPlain { dtype, .. } => dtype,
-        TomlModelSelected::GGUF { .. }
-        | TomlModelSelected::LoraGGUF { .. }
-        | TomlModelSelected::GGML { .. }
-        | TomlModelSelected::LoraGGML { .. }
-        | TomlModelSelected::XLoraGGUF { .. }
-        | TomlModelSelected::XLoraGGML { .. } => ModelDType::Auto,
+        | TomlModelSelected::VisionPlain { dtype, .. }
+        | TomlModelSelected::GGUF { dtype, .. }
+        | TomlModelSelected::GGML { dtype, .. }
+        | TomlModelSelected::XLoraGGUF { dtype, .. }
+        | TomlModelSelected::XLoraGGML { dtype, .. }
+        | TomlModelSelected::LoraGGUF { dtype, .. }
+        | TomlModelSelected::LoraGGML { dtype, .. } => dtype,
     }
 }
 
@@ -480,6 +504,7 @@ fn loader_from_selected(
             quantized_model_id,
             quantized_filename,
             topology,
+            dtype: _,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             Some(tok_model_id),
@@ -502,6 +527,7 @@ fn loader_from_selected(
             order,
             tgt_non_granular_index,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -532,6 +558,7 @@ fn loader_from_selected(
             adapters_model_id,
             order,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -559,6 +586,7 @@ fn loader_from_selected(
             quantized_filename,
             gqa,
             topology,
+            dtype: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -581,6 +609,7 @@ fn loader_from_selected(
             tgt_non_granular_index,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -611,6 +640,7 @@ fn loader_from_selected(
             order,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,

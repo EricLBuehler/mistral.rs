@@ -14,7 +14,6 @@ use crate::pipeline::{EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::{DeviceMapMetadata, Topology};
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
@@ -59,6 +58,7 @@ struct LayerWeights {
     rotary_emb: Arc<RotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+    dtype: DType,
 }
 
 impl LayerWeights {
@@ -73,9 +73,15 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, q_len, hidden_size) = x.dims3()?;
 
-        let q = MatMul.qmethod_matmul(x, &*self.attn_q)?;
-        let k = MatMul.qmethod_matmul(x, &*self.attn_k)?;
-        let v = MatMul.qmethod_matmul(x, &*self.attn_v)?;
+        let q = MatMul
+            .qmethod_matmul(x, &*self.attn_q)?
+            .to_dtype(self.dtype)?;
+        let k = MatMul
+            .qmethod_matmul(x, &*self.attn_k)?
+            .to_dtype(self.dtype)?;
+        let v = MatMul
+            .qmethod_matmul(x, &*self.attn_v)?
+            .to_dtype(self.dtype)?;
 
         let mut q = q.reshape((b_sz * q_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * q_len, self.n_kv_head, self.head_dim))?;
@@ -136,7 +142,7 @@ impl LayerWeights {
             y.reshape(&[b_sz, q_len, hidden_size])?
         };
 
-        MatMul.qmethod_matmul(&y, &*self.attn_output)
+        MatMul.qmethod_matmul(&y.to_dtype(x.dtype())?, &*self.attn_output)
     }
 }
 
@@ -149,6 +155,7 @@ pub struct ModelWeights {
     pub device: Device,
     pub cache: EitherCache,
     pub max_seq_len: usize,
+    dtype: DType,
 }
 
 // starcoder2 `llm` fields:
@@ -199,9 +206,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
         device: &Device,
-        mapper: DeviceMapMetadata,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         attention_mechanism: AttentionImplementation,
+        dtype: DType,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
@@ -229,8 +236,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let output = QMatMul::from_qtensor(ct.tensor("output.weight", device)?)?;
         let mut layers = Vec::with_capacity(block_count);
 
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
-
         let mut ropes = HashMap::new();
         for layer_idx in 0..block_count {
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
@@ -242,7 +247,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     context_window,
                     device,
                     true,
-                    DType::F32,
+                    dtype,
                 )?),
             );
         }
@@ -343,6 +348,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
                 },
+                dtype,
             })
         }
         Ok(Self {
@@ -354,6 +360,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             device: device.clone(),
             cache: EitherCache::Normal(NormalCache::new(block_count, context_window)),
             max_seq_len: context_window,
+            dtype,
         })
     }
 }
@@ -375,7 +382,7 @@ impl ModelWeights {
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
-            DType::F32,
+            self.dtype,
             self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
@@ -402,7 +409,6 @@ impl ModelWeights {
             let ys = layer.mlp.forward(&ys)?;
             xs = (ys + residual)?
         }
-        let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.output_norm)?.i((.., seq_len - 1, ..))?;
         MatMul.qmatmul(&xs, &self.output)
     }

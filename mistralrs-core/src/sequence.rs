@@ -165,6 +165,7 @@ pub struct Sequence {
     prompt: String,
     sequence_stepping_type: SeqStepType,
     pub(crate) return_raw_logits: bool,
+    token_offset: usize,
 
     // Image generation
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
@@ -190,8 +191,8 @@ pub struct Sequence {
     draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
 
-    // Preallocated KV cache
-    seq_preallocated_cache: Option<Tensor>,
+    // Preallocated KV cache (k,v)
+    seq_preallocated_cache: Option<(Tensor, Tensor)>,
 
     // Mutables
     tokens: Vec<u32>,
@@ -280,8 +281,8 @@ impl Sequence {
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
-        // Preallocated KV cache
-        seq_preallocated_cache: Option<Tensor>,
+        // Preallocated KV cache (k,v)
+        seq_preallocated_cache: Option<(Tensor, Tensor)>,
         //
         return_raw_logits: bool,
     ) -> Self {
@@ -348,6 +349,7 @@ impl Sequence {
             cached_img_thw: None,
             cached_vid_thw: None,
             return_raw_logits,
+            token_offset: 0,
         }
     }
 
@@ -382,6 +384,19 @@ impl Sequence {
         self
     }
 
+    pub fn prefill_v2(
+        mut self,
+        cache: Vec<Option<KvCache>>,
+        toks: Vec<u32>,
+        offset: usize,
+    ) -> Self {
+        self.normal_cache = cache;
+        self.prefill_prompt_toks = Some(toks);
+        self.set_state(SequenceState::RunningPrefillPrompt);
+        self.token_offset = offset;
+        self
+    }
+
     /// This is the number of tokens. If the KV cache is Some, then it will use that.
     pub fn len(&self) -> usize {
         if let Some(toks) = &self.prefill_prompt_toks {
@@ -412,9 +427,7 @@ impl Sequence {
     pub fn is_running(&self) -> bool {
         matches!(
             *self.state.read().unwrap(),
-            SequenceState::RunningCompletion
-                | SequenceState::RunningPrompt
-                | SequenceState::RunningPrefillPrompt
+            SequenceState::RunningCompletion | SequenceState::RunningPrompt // | SequenceState::RunningPrefillPrompt
         )
     }
 
@@ -460,6 +473,10 @@ impl Sequence {
         self.prompt = new;
     }
 
+    pub fn token_offset(&self) -> usize {
+        self.token_offset
+    }
+
     /// This will also set prompt_len
     pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
         self.tokens.clone_from(&toks);
@@ -482,7 +499,7 @@ impl Sequence {
         &self.completion_bytes
     }
 
-    pub fn preallocated_cache(&self) -> Option<&Tensor> {
+    pub fn preallocated_cache(&self) -> Option<&(Tensor, Tensor)> {
         self.seq_preallocated_cache.as_ref()
     }
 
@@ -566,7 +583,7 @@ impl Sequence {
         self.cumulative_logprob += tok.logprob;
         self.tokens.push(tok.token);
         self.logprobs.push(tok);
-        self.prefill_prompt_toks = None;
+        self.reset_prefill_toks();
     }
 
     pub fn responder(&self) -> Sender<Response> {

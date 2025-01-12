@@ -24,6 +24,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Gemma2`
 - `Starcoder2`
 - `Phi3_5MoE`
+- `DeepseekV2`
 
 ### ISQ Organization
 - `Default`

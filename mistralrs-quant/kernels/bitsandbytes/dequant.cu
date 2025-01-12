@@ -150,8 +150,6 @@ __global__ void kDequantizeBlockwise(float *code, unsigned char * A, float * abs
           {
             vals[j*2] = dDequantizeNF4(qvals[j] >> 4)* local_abs_max;
             vals[j*2 + 1] = dDequantizeNF4(qvals[j] & 0x0F)* local_abs_max;
-            // vals[j*2] = 10000;
-            // vals[j*2 + 1] = 10000;
           }
           break;
     }

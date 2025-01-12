@@ -49,6 +49,45 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## Streaming example
+//! ```no_run
+//! use anyhow::Result;
+//! use mistralrs::{
+//!     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder, Response
+//! };
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct".to_string())
+//!         .with_isq(IsqType::Q8_0)
+//!         .with_logging()
+//!         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+//!         .build()
+//!         .await?;
+//!
+//!     let messages = TextMessages::new()
+//!         .add_message(
+//!             TextMessageRole::System,
+//!             "You are an AI agent with a specialty in programming.",
+//!         )
+//!         .add_message(
+//!             TextMessageRole::User,
+//!             "Hello! How are you? Please write generic binary search function in Rust.",
+//!         );
+//!
+//!     let mut stream = model.stream_chat_request(messages).await?;
+//!
+//!     while let Some(chunk) = stream.next().await {
+//!         if let Response::Chunk(chunk) = chunk{
+//!             print!("{}", chunk.choices[0].delta.content);
+//!         }
+//!         // Handle the error cases.
+//!
+//!     }
+//!     Ok(())
+//! }
+//! ```
 
 mod anymoe;
 mod diffusion_model;

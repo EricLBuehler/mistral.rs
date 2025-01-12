@@ -11,26 +11,28 @@ use super::{
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
 };
+use crate::device_map::{self, DeviceMapper};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
+use crate::pipeline::isq::UQFF_RESIDUAL_SAFETENSORS;
 use crate::pipeline::llg::build_tok_env;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
-use crate::prefix_cacher::PrefixCacheManager;
+use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
 use crate::utils::tokenizer::get_tokenizer;
+use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
-    AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
+    AnyMoeExpertType, DeviceMapSetting, Ordering, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
@@ -45,7 +47,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::info;
 
 pub struct VisionPipeline {
     model: Box<dyn VisionModel + Send + Sync>,
@@ -58,6 +60,7 @@ pub struct VisionPipeline {
     topology: Option<Topology>,
     silent: bool,
     prefixer: Arc<dyn VisionPromptPrefixer>,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 
     // For full UQFF serialization
     template_filename: Option<PathBuf>,
@@ -155,7 +158,7 @@ impl Loader for VisionLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -195,33 +198,94 @@ impl Loader for VisionLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mut mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
-        // Otherwise, the device mapper will print it
-        if mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map()))
-        {
-            info!(
-                "Loading model `{}` on {}.",
-                self.get_id(),
-                device.device_pretty_repr()
-            );
-        } else if paged_attn_config.is_some() {
-            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
+        if !self.inner.supports_paged_attention() {
             paged_attn_config = None;
         }
 
-        if !self.inner.supports_paged_attention() {
-            paged_attn_config = None;
+        // If auto, convert to Map
+        if let DeviceMapSetting::Auto = mapper.clone() {
+            let devices = device_map::get_all_similar_devices(device)?;
+            // Initial dtype
+            let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
+
+            // ISQ or UQFF: quantized path
+            // Match logic below where UQFF has priority
+            let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+                if let Some(serialized) = &*self.from_uqff.read().unwrap() {
+                    let parent = serialized
+                        .parent()
+                        .context("Target UQFF path must have a filename!")?;
+                    let residual = parent.join(UQFF_RESIDUAL_SAFETENSORS);
+
+                    let ser_total_size = {
+                        let ser_artifacts = unsafe {
+                            candle_core::safetensors::MmapedSafetensors::new(serialized)?
+                        };
+                        ser_artifacts
+                            .tensors()
+                            .iter()
+                            .map(|(_, t)| t.data().len())
+                            .sum::<usize>()
+                    };
+                    let res_total_size = {
+                        let res_artifacts =
+                            unsafe { candle_core::safetensors::MmapedSafetensors::new(residual)? };
+                        res_artifacts
+                            .tensors()
+                            .iter()
+                            .map(|(_, t)| t.data().len())
+                            .sum::<usize>()
+                    };
+                    let size_per_layer = ser_total_size / self.inner.num_layers(&config)?;
+
+                    // This is not completely correct but hopefully close enough.
+                    // For example, the norms are not necessarily correctly done.
+                    (
+                        vec![size_per_layer; self.inner.num_layers(&config)?],
+                        res_total_size,
+                        ser_total_size + res_total_size,
+                    )
+                } else if let Some(isq) = in_situ_quant {
+                    let weight_pack_factor = isq.pack_factor(dtype);
+                    let layer_sizes_in_bytes =
+                        self.inner
+                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner
+                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                    (
+                        layer_sizes_in_bytes,
+                        non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
+                    )
+                } else {
+                    let layer_sizes_in_bytes =
+                        self.inner.layer_sizes_in_bytes(&config, dtype, 1)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner.non_mapped_size_in_bytes(&config, dtype, 1)?;
+                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                    (
+                        layer_sizes_in_bytes,
+                        non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
+                    )
+                };
+            let new = self.inner.get_device_layers(
+                &config,
+                self.inner.num_layers(&config)?,
+                layer_sizes_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                &devices,
+            )?;
+            mapper = DeviceMapSetting::Map(new);
         }
 
         info!(
@@ -229,12 +293,21 @@ impl Loader for VisionLoader {
             self.inner
                 .get_config_repr(&config, self.config.use_flash_attn)?
         );
-
+        let pipeline_mapper = mapper.into_mapper(
+            self.inner.get_total_device_mapping_num_layers(&config)?,
+            device,
+            self.config.topology.as_ref(),
+        )?;
         let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
             self.config.topology.as_ref(),
         )?;
+        let mut layer_devices = Vec::new();
+        for layer in 0..self.inner.get_total_device_mapping_num_layers(&config)? {
+            let device = mapper.device_for(layer, false).cloned();
+            layer_devices.push(device);
+        }
         let dtype = mapper.get_min_dtype(dtype)?;
 
         let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
@@ -264,6 +337,7 @@ impl Loader for VisionLoader {
                 paths,
                 Some(dtype),
                 &load_device,
+                layer_devices.clone(),
                 config,
                 self.inner,
                 self.config.use_flash_attn,
@@ -349,7 +423,7 @@ impl Loader for VisionLoader {
 
                 let start = Instant::now();
                 let inputs =
-                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None)?;
+                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None, None)?;
                 let _ = model.forward(
                     &inputs.input,
                     None, // NOTE: We ONLY calibrate the text bits of these models!!
@@ -435,7 +509,8 @@ impl Loader for VisionLoader {
                 model.config(),
                 device,
             )?;
-            let cache_engine = CacheEngine::new(model.config(), &cache_config, dtype, device)?;
+            let cache_engine =
+                CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -462,7 +537,8 @@ impl Loader for VisionLoader {
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: self.kind.clone(),
-                has_no_kv_cache: false,
+                no_kv_cache: false,
+                no_prefix_cache: true, // TODO: evaluate. Do vision models need to not have prefix caching?
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,
@@ -480,6 +556,7 @@ impl Loader for VisionLoader {
             config,
             processor_filename: paths.get_processor_config().clone(),
             preprocessor_filename: paths.get_preprocessor_config().clone(),
+            mapper: pipeline_mapper,
         })))
     }
 
@@ -590,6 +667,9 @@ impl MetadataMixin for VisionPipeline {
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         Some(self.tokenizer.clone())
     }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        Some(&*self.mapper)
+    }
 }
 
 #[async_trait::async_trait]
@@ -625,6 +705,21 @@ impl Pipeline for VisionPipeline {
             }
             (None, None) => None,
         };
+        #[cfg(feature = "metal")]
+        let logits = objc::rc::autoreleasepool(|| {
+            self.model.forward(
+                &input_ids,
+                pixel_values,
+                &seqlen_offsets,
+                seqlen_offsets_kernel,
+                context_lens,
+                position_ids,
+                model_specific_args,
+                paged_attn_meta,
+                &flash_meta,
+            )
+        })?;
+        #[cfg(not(feature = "metal"))]
         let logits = self.model.forward(
             &input_ids,
             pixel_values,
@@ -646,7 +741,7 @@ impl Pipeline for VisionPipeline {
         &self,
         seqs: &mut [&mut Sequence],
         logits: Vec<Tensor>,
-        prefix_cacher: &mut PrefixCacheManager,
+        prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
@@ -721,6 +816,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 vec![],
                 Some(dtype),
                 dev,
+                vec![None],
                 silent,
                 None,
                 move |key| {
@@ -737,6 +833,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
                         false
                     }
                 },
+                Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
             vbs.push(vb);
         }
@@ -772,9 +869,11 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 vec![],
                 Some(dtype),
                 dev,
+                vec![None],
                 silent,
                 None,
                 |_| true,
+                Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
             info!(
                 "Loaded gating layers from `{}`",

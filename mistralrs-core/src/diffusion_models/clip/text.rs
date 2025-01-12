@@ -5,6 +5,8 @@ use candle_nn as nn;
 use candle_nn::Module;
 use serde::Deserialize;
 
+use crate::layers::MatMul;
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub enum Activation {
     #[serde(rename = "quick_gelu")]
@@ -130,7 +132,7 @@ impl ClipAttention {
             .shape(&self.v_proj.forward(xs)?, seq_len, bsz)?
             .reshape(proj_shape)?
             .to_dtype(DType::F32)?;
-        let attn_weights = query_states.matmul(&key_states.transpose(1, 2)?)?;
+        let attn_weights = MatMul.matmul(&query_states, &key_states.transpose(1, 2)?)?;
 
         let src_len = key_states.dim(1)?;
 
@@ -145,7 +147,9 @@ impl ClipAttention {
 
         let attn_weights = candle_nn::ops::softmax(&attn_weights, D::Minus1)?;
 
-        let attn_output = attn_weights.matmul(&value_states)?.to_dtype(in_dtype)?;
+        let attn_output = MatMul
+            .matmul(&attn_weights, &value_states)?
+            .to_dtype(in_dtype)?;
         let attn_output = attn_output
             .reshape((bsz, self.num_attention_heads, seq_len, self.head_dim))?
             .transpose(1, 2)?

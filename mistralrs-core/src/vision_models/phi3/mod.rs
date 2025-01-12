@@ -27,7 +27,7 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        Cache, EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, VisionModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -37,19 +37,19 @@ use crate::{
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct EmbedLayerConfig {
-    hd_transform_order: Option<String>,
-    projection_cls: Option<String>,
-    use_hd_transform: Option<bool>,
-    with_learnable_separator: Option<bool>,
+    pub hd_transform_order: Option<String>,
+    pub projection_cls: Option<String>,
+    pub use_hd_transform: Option<bool>,
+    pub with_learnable_separator: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct ImageProcessorConfig {
-    image_dim_out: usize,
-    name: String,
-    num_img_tokens: usize,
-    layer_idx: Option<isize>,
-    type_feature: Option<String>,
+    pub image_dim_out: usize,
+    pub name: String,
+    pub num_img_tokens: usize,
+    pub layer_idx: Option<isize>,
+    pub type_feature: Option<String>,
 }
 
 serde_default_fn!(bool, d_flash_attn, false);
@@ -218,7 +218,7 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         position_ids: &[usize],
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -268,8 +268,8 @@ impl Attention {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
-                    &k,
-                    &v,
+                    &k.contiguous()?,
+                    &v.contiguous()?,
                     attention_mask,
                     Some(key_cache),
                     Some(value_cache),
@@ -277,16 +277,15 @@ impl Attention {
                     None,
                 )?,
                 None => {
-                    let mut input_metadata = PagedAttentionInputMetadata {
-                        block_tables: None,
-                        context_lens: None,
-                        max_context_len: None,
-                        slot_mappings: Tensor::new(&[0f32], q.device())?,
-                    };
+                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
+                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
+                    let mut input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    // Sanity check.
+                    assert!(attention_mask.is_some());
                     paged_attn.forward(
                         &q,
-                        &k,
-                        &v,
+                        &k.contiguous()?,
+                        &v.contiguous()?,
                         attention_mask,
                         None,
                         None,
@@ -296,14 +295,8 @@ impl Attention {
                 }
             },
             None => {
-                let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
-                    kv_cache,
-                    k,
-                    v,
-                    attention_mask,
-                    self.sliding_window,
-                    true,
-                )?;
+                let (k, v, attn_mask) =
+                    kv_cache.append_sliding_window(&k, &v, attention_mask, self.sliding_window)?;
 
                 Sdpa.run_attention(
                     &q,
@@ -474,7 +467,7 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         position_ids: &[usize],
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -537,6 +530,17 @@ pub struct ImageEmbedding {
     tensors: Vec<(String, Tensor)>,
 }
 
+pub(crate) const PHI3V_CLIP_CONFIG: ClipConfig = ClipConfig {
+    hidden_act: Activation::QuickGelu,
+    hidden_size: 1024,
+    image_size: 336,
+    intermediate_size: 4096,
+    num_attention_heads: 16,
+    num_channels: 3,
+    num_hidden_layers: 24,
+    patch_size: 14,
+};
+
 impl ImageEmbedding {
     fn new(
         config: &Config,
@@ -555,19 +559,8 @@ impl ImageEmbedding {
         let num_img_tokens = config.img_processor.num_img_tokens;
 
         // CLIP image processor here...
-        let image_processor = ClipVisionTransformer::new(
-            vb.pp("img_processor.vision_model"),
-            &ClipConfig {
-                hidden_act: Activation::QuickGelu,
-                hidden_size: 1024,
-                image_size: 336,
-                intermediate_size: 4096,
-                num_attention_heads: 16,
-                num_channels: 3,
-                num_hidden_layers: 24,
-                patch_size: 14,
-            },
-        )?;
+        let image_processor =
+            ClipVisionTransformer::new(vb.pp("img_processor.vision_model"), &PHI3V_CLIP_CONFIG)?;
 
         // High dim transform
         let use_hd_transform = embed_config.use_hd_transform.unwrap_or(false);
@@ -1054,7 +1047,10 @@ impl Model {
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
             sliding_window: cfg.sliding_window,
@@ -1065,7 +1061,8 @@ impl Model {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
-                head_dim: None,
+                k_head_dim: None,
+                v_head_dim: None,
             },
         })
     }
@@ -1088,7 +1085,7 @@ impl Model {
         } else {
             self.embed_tokens.forward(input_ids)?
         };
-        let mut cache = self.cache.full().lock();
+        let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
             metadata

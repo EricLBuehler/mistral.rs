@@ -195,10 +195,6 @@ impl KvCache {
                 if let Some(mut mask) = mask.cloned() {
                     let mask_len = mask.dim(1)?;
                     mask = mask.narrow(1, mask_len - (sliding_window - 1), sliding_window - 1)?;
-                    mask = Tensor::cat(
-                        &[&mask, &mask.narrow(1, mask_len - 1, 1)?.ones_like()?],
-                        D::Minus1,
-                    )?;
                     return Ok((k, v, Some(mask)));
                 }
             }
@@ -393,7 +389,18 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         let template_cache_dim = pipeline.cache().normal().0[0].k.dim;
         let template_cache_msl = pipeline.cache().normal().0[0].k.max_seq_len;
 
-        for layer in pipeline.cache().normal().0.iter_mut() {
+        let layer_devices = if let Some(device_mapper) = pipeline.device_mapper() {
+            let mut layer_devices = Vec::new();
+            for layer in 0..device_mapper.num_device_mapping_layers() {
+                let device = device_mapper.device_for(layer, false).cloned();
+                layer_devices.push(device.expect("Internal bug, layer out of range!"));
+            }
+            Some(layer_devices)
+        } else {
+            None
+        };
+
+        for (layer_idx, layer) in pipeline.cache().normal().0.iter_mut().enumerate() {
             if !load_preallocated_cache {
                 layer.reset();
                 continue;
@@ -402,8 +409,19 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
             let mut k_caches = Vec::new();
             let mut v_caches = Vec::new();
             for seq in seqs.iter_mut() {
-                k_caches.push((**seq.preallocated_cache().as_ref().unwrap()).clone());
-                v_caches.push((**seq.preallocated_cache().as_ref().unwrap()).clone());
+                let (mut k_preallocated_cache, mut v_preallocated_cache) =
+                    (*seq.preallocated_cache().as_ref().unwrap()).clone();
+                if let Some(layer_devices) = &layer_devices {
+                    let layer_dev = &layer_devices[layer_idx];
+                    k_preallocated_cache = k_preallocated_cache
+                        .to_device(layer_dev)
+                        .expect("Could not prepare cache");
+                    v_preallocated_cache = v_preallocated_cache
+                        .to_device(layer_dev)
+                        .expect("Could not prepare cache");
+                }
+                k_caches.push(k_preallocated_cache);
+                v_caches.push(v_preallocated_cache);
             }
             let k_cache = if k_caches.len() > 1 {
                 Tensor::cat(&k_caches, 0).unwrap()
@@ -680,7 +698,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
             seqs,
             SeqCache::Normal,
         );
-        if pipeline.get_metadata().is_xlora && !pipeline.get_metadata().has_no_kv_cache {
+        if pipeline.get_metadata().is_xlora && !pipeline.get_metadata().no_kv_cache {
             clone_in_cache(
                 pipeline.get_metadata().num_hidden_layers,
                 &mut pipeline.cache().full().xlora_lock(),
@@ -718,7 +736,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for FullCach
             seqs,
             SeqCache::Normal,
         );
-        if pipeline.get_metadata().is_xlora && !pipeline.get_metadata().has_no_kv_cache {
+        if pipeline.get_metadata().is_xlora && !pipeline.get_metadata().no_kv_cache {
             clone_out_cache(
                 pipeline.get_metadata().num_hidden_layers,
                 &mut pipeline.cache().full().xlora_lock(),

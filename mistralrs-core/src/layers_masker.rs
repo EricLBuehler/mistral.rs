@@ -3,8 +3,9 @@
 use std::ops::Add;
 
 use candle_core::{DType, Device, Result, Tensor, WithDType};
+use mistralrs_quant::get_use_matmul_via_f16;
 
-use crate::{cublaslt::CUBLASLT_HANDLE, layers::get_use_matmul_via_f16, pipeline::KvCache};
+use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::KvCache};
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 pub struct CausalMasker;
@@ -221,7 +222,7 @@ impl CausalMasker {
     }
 
     #[deprecated(
-        since = "0.3.4",
+        since = "0.3.5",
         note = "use `make_causal_mask_matrix_as_attn_bias` instead. This is incompatible with `Sdpa`."
     )]
     pub fn make_causal_mask_as_attn_bias(
@@ -272,7 +273,7 @@ impl CausalMasker {
     }
 
     #[deprecated(
-        since = "0.3.4",
+        since = "0.3.5",
         note = "use `make_causal_mask_matrix_with_sliding_window_as_attn_bias` instead. This is incompatible with `Sdpa`."
     )]
     pub fn make_causal_mask_with_sliding_window_as_attn_bias(

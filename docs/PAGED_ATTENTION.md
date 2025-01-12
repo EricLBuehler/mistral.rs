@@ -1,6 +1,8 @@
 # PagedAttention in mistral.rs
 
-Mistral.rs supports PagedAttention ([paper here](https://arxiv.org/abs/2309.06180)) to accelerate both normal inference and batched inference on CUDA devices on Unix-like platforms such as WSL, Linux, or Mac.
+Mistral.rs supports PagedAttention ([paper here](https://arxiv.org/abs/2309.06180)) to accelerate both normal inference and batched inference on:
+- CUDA (Unix-like platforms such as WSL, Linux)
+- Metal
 
 Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and block size. This enables you to have fine-tuned control over the available context length, by configuring the available memory for KV cache. When using a CUDA device, PagedAttention is actiated by default but can be disabled with `no_paged_attn` for Python or `no-paged-attn` for the CLI tools.
 
@@ -9,6 +11,8 @@ Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and bl
 > Note: if OOM occurs (this can be caused by a variety of factors including adapter activation, re-ISQ, and others), it is likely because the PagedAttention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount or usage percentage (recommended) or disable paged attention entirely for a dynamically allocated cache.
 
 > Note: Paged Attention is not enabled on Windows platforms, only Unix-based platforms.
+
+> Note: In the CLI and Python API, Paged Attention is disabled by default for Metal. It can be enabled with the `--paged-attn`/`paged_attn` flags.
 
 **There are more features being added to this:**
 - GGML model support 

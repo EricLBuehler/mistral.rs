@@ -13,6 +13,7 @@ use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
+    device_map::DeviceMapper,
     get_mut_arcmutex,
     pipeline::{
         sampling::{
@@ -20,10 +21,9 @@ use crate::{
         },
         AdapterInstruction,
     },
-    prefix_cacher::PrefixCacheManager,
+    prefix_cacher_v2::PrefixCacheManagerV2,
     sequence::{Sequence, SequenceRecognizer},
-    DeviceMapMetadata, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource,
-    TryIntoDType,
+    DeviceMapSetting, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource, TryIntoDType,
 };
 
 use super::{
@@ -49,7 +49,7 @@ impl Loader for SpeculativeLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
@@ -96,7 +96,7 @@ impl Loader for SpeculativeLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
@@ -313,6 +313,9 @@ impl MetadataMixin for SpeculativePipeline {
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
     }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        None
+    }
 }
 
 #[async_trait::async_trait]
@@ -328,7 +331,7 @@ impl Pipeline for SpeculativePipeline {
         &self,
         _seqs: &mut [&mut Sequence],
         _logits: Vec<Tensor>,
-        _prefix_cacher: &mut PrefixCacheManager,
+        _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<()> {
@@ -339,7 +342,7 @@ impl Pipeline for SpeculativePipeline {
         input_seqs: &mut [&mut Sequence],
         is_prompt: bool,
         _return_raw_logits: bool,
-        prefix_cacher: &mut PrefixCacheManager,
+        prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata<'_>,
@@ -414,8 +417,7 @@ impl Pipeline for SpeculativePipeline {
                 for i in 0..self.gamma {
                     let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
                     let device = get_mut_arcmutex!(self.draft).device();
-                    let has_no_kv_cache =
-                        get_mut_arcmutex!(self.draft).get_metadata().has_no_kv_cache;
+                    let no_kv_cache = get_mut_arcmutex!(self.draft).get_metadata().no_kv_cache;
                     let inputs = self
                         .get_processor()
                         .inputs_processor()
@@ -425,12 +427,13 @@ impl Pipeline for SpeculativePipeline {
                             is_prompt && i == 0, // Only prompt (no kv cache) if first
                             is_xlora,
                             &device,
-                            has_no_kv_cache,
+                            no_kv_cache,
                             None,
                             false,
                             None,
                             None, // TODO: get block tables/handle it
                             None, // TODO: do we support???
+                            None, // TODO: device mapping
                         )
                         .nth(0)
                         .unwrap()
@@ -487,9 +490,7 @@ impl Pipeline for SpeculativePipeline {
                 // ========= Run the model ============
                 let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
                 let device = get_mut_arcmutex!(self.target).device();
-                let has_no_kv_cache = get_mut_arcmutex!(self.target)
-                    .get_metadata()
-                    .has_no_kv_cache;
+                let no_kv_cache = get_mut_arcmutex!(self.target).get_metadata().no_kv_cache;
                 let inputs = self
                     .get_processor()
                     .inputs_processor()
@@ -499,12 +500,13 @@ impl Pipeline for SpeculativePipeline {
                         true, // use the "prefill" tokens
                         is_xlora,
                         &device,
-                        has_no_kv_cache,
+                        no_kv_cache,
                         Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
                         false,
                         None,
                         None, // TODO: get block tables/handle it
                         None, // TODO: do we support???
+                        None, // TODO: device mapping
                     )
                     .nth(0)
                     .unwrap()

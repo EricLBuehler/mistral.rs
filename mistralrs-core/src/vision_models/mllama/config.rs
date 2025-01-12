@@ -5,7 +5,7 @@ use mistralrs_quant::QuantizedConfig;
 use crate::serde_default_fn;
 
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
-pub(super) enum VisionActivation {
+pub(crate) enum VisionActivation {
     QuickGelu,
     #[serde(alias = "gelu")]
     Gelu,
@@ -32,25 +32,25 @@ serde_default_fn!(usize, d_attn_heads, 16);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct MLlamaVisionConfig {
-    pub(super) hidden_size: usize,
-    pub(super) hidden_act: VisionActivation,
-    pub(super) num_hidden_layers: usize,
-    pub(super) num_global_layers: usize,
+    pub(crate) hidden_size: usize,
+    pub(crate) hidden_act: VisionActivation,
+    pub(crate) num_hidden_layers: usize,
+    pub(crate) num_global_layers: usize,
     #[serde(default = "d_attn_heads")]
-    pub(super) num_attention_heads: usize,
-    pub(super) num_channels: usize,
-    pub(super) intermediate_size: usize,
-    pub(super) vision_output_dim: usize,
-    pub(super) image_size: usize,
-    pub(super) patch_size: usize,
-    pub(super) norm_eps: f64,
-    pub(super) max_num_tiles: usize,
-    pub(super) intermediate_layers_indices: Vec<usize>,
-    pub(super) supported_aspect_ratios: Vec<(usize, usize)>,
+    pub(crate) num_attention_heads: usize,
+    pub(crate) num_channels: usize,
+    pub(crate) intermediate_size: usize,
+    pub(crate) vision_output_dim: usize,
+    pub(crate) image_size: usize,
+    pub(crate) patch_size: usize,
+    pub(crate) norm_eps: f64,
+    pub(crate) max_num_tiles: usize,
+    pub(crate) intermediate_layers_indices: Vec<usize>,
+    pub(crate) supported_aspect_ratios: Vec<(usize, usize)>,
 }
 
 impl MLlamaVisionConfig {
-    pub(super) fn max_aspect_ratio_id(&self) -> usize {
+    pub(crate) fn max_aspect_ratio_id(&self) -> usize {
         self.supported_aspect_ratios.len()
     }
 }

@@ -491,7 +491,6 @@ mod tests {
         assert_eq!(c, [[4, 8], [12, 16], [20, 24]]);
     }
 
-
     #[cfg(feature = "metal")]
     #[test]
     fn test_leftshift_metal() {

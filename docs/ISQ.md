@@ -1,6 +1,6 @@
 # In situ quantization
 
-In situ quantization works by quantizing non GGUF or GGML models in-place. This allows you to take advantage of flash attention, and reduces memory footprint when running the model. Currently, all layers which would be `Linear` are able to be quantized.
+In situ quantization works by quantizing models inplace, with the chief benefit being reduced memory footprint when running the model. This enables larger model to be run on devices which would not fit the full weights, and may increase model inference performance.
 
 An API is exposed on the Python and Rust APIs which provide the ability to dynamically re-ISQ models at runtime.
 
@@ -25,7 +25,9 @@ To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md)
 
 When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
 
-For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ organization parameter in all APIs.
+For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ "organization" parameter in all APIs. The following models support MoQE:
+- [Phi 3.5 MoE](PHI3.5MOE.md)
+- [DeepseekV2](DEEPSEEKV2.md)
 
 ## Accuracy
 

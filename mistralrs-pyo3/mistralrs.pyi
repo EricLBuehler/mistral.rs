@@ -79,6 +79,7 @@ class Architecture(Enum):
     Gemma2 = "gemma2"
     Starcoder2 = "starcoder2"
     Phi3_5MoE = "phi3.5moe"
+    DeepseekV2 = "deepseekv2"
 
 @dataclass
 class VisionArchitecture(Enum):
@@ -249,6 +250,7 @@ class Runner:
         pa_gpu_mem: int | float | None = None,
         pa_blk_size: int | None = None,
         no_paged_attn: bool = False,
+        paged_attn: bool = False,
         prompt_batchsize: int | None = None,
         seed: int | None = None,
     ) -> None:
@@ -270,22 +272,23 @@ class Runner:
             It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
         - `num_device_layers` sets the number of layers to load and run on each device.
             Each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
-            the corresponding number of layers.
+            the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
         - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
         - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
         - `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
-            PagedAttention is only supported on CUDA and is always automatically activated.
+            PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
             The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
         - `pa_gpu_mem_usage`: Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
             If this is not set and the device is CUDA, it will default to `0.9`.
-            PagedAttention is only supported on CUDA and is always automatically activated.
+            PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
             The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
-        - `pa_ctxt_len`: Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold)
-            when using PagedAttention, which is only supported on CUDA and is always automatically activated.
+        - `pa_ctxt_len`: Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
+            PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
             The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
         - `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
-            it will default to 32. PagedAttention is only supported on CUDA and is always automatically activated.
-        - `no_paged_attn` disables PagedAttention on CUDA
+            it will default to 32. PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+        - `no_paged_attn` disables PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
+        - `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
         - `prompt_batchsize` Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
         - `seed`, used to ensure reproducible random number generation.
         """

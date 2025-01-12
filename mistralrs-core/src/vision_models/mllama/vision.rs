@@ -10,7 +10,10 @@ use candle_nn::{
 use mistralrs_quant::QuantMethod;
 
 use crate::{
-    attention::SdpaParams, layers::Sdpa, pipeline::IsqModel, utils::unvarbuilder::UnVarBuilder,
+    attention::SdpaParams,
+    layers::{GetFloatInfo, Sdpa},
+    pipeline::IsqModel,
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 use super::{MLlamaVisionConfig, VisionActivation};
@@ -387,7 +390,6 @@ impl MLlamaVisionEncoder {
                 hidden_states.push(hidden_state.clone());
             }
             hidden_state = layer.forward(&hidden_state, attention_mask)?;
-            hidden_state.device().synchronize()?;
         }
         Ok((hidden_state, hidden_states))
     }
@@ -418,7 +420,7 @@ fn _prepare_aspect_ratio_attention_mask(
     num_patches: usize,
     target_length: usize,
     dtype: DType,
-    num_attn_heads: usize,
+    _num_attn_heads: usize,
 ) -> Result<Tensor> {
     let (bs, max_num_tiles) = aspect_ratio_mask.dims2()?;
     let mut attention_mask = aspect_ratio_mask
@@ -442,13 +444,13 @@ fn _prepare_aspect_ratio_attention_mask(
 
     // Reshape to 2d and create 4d attn mask
     // (batch_size, 1, max_num_tiles * target_length, max_num_tiles * target_length)
+    let neg_inf_value = dtype.finfo()?.min;
     attention_mask = attention_mask.reshape((bs, max_num_tiles * target_length, 1))?;
-    attention_mask =
-        attention_mask.matmul(&attention_mask.transpose(D::Minus1, D::Minus2)?.mul(-1e15)?)?;
-    attention_mask
-        .unsqueeze(1)?
-        .contiguous()?
-        .repeat((1, num_attn_heads, 1, 1))
+    attention_mask.matmul(
+        &attention_mask
+            .transpose(D::Minus1, D::Minus2)?
+            .mul(neg_inf_value)?,
+    )
 }
 
 pub(super) struct MLlamaVisionModel {
@@ -616,6 +618,9 @@ impl MLlamaVisionModel {
             hidden_state.dtype(),
             self.num_attn_heads,
         )?;
+        if attention_mask.dim(0)? != 1 {
+            attention_mask = attention_mask.unsqueeze(1)?;
+        }
 
         // Apply encoder
         hidden_state = hidden_state.reshape((bs * num_concurrent_media, (), dim))?;

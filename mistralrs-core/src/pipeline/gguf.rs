@@ -9,6 +9,7 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
     ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
+use crate::device_map::{self, DeviceMapper};
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
@@ -17,18 +18,19 @@ use crate::lora::Ordering;
 use crate::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
 };
-use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkTok, GenerationConfig};
+use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 use crate::pipeline::get_chat_template;
+use crate::pipeline::loaders::DeviceMappedModelLoader;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
-use crate::prefix_cacher::PrefixCacheManager;
+use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
+use crate::utils::gguf_metadata::GgufDeviceMapLoaderInner;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, PagedAttentionConfig,
+    get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths, PagedAttentionConfig,
     Pipeline, Topology, TryIntoDType,
 };
 use crate::{
@@ -74,6 +76,7 @@ pub struct GGUFPipeline {
     model_id: String,
     non_granular_state: Option<NonGranularState>,
     metadata: Arc<GeneralMetadata>,
+    mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
 
 /// Loader for a GGUF model.
@@ -299,7 +302,7 @@ impl Loader for GGUFLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -327,35 +330,17 @@ impl Loader for GGUFLoader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _: &dyn TryIntoDType,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mut mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
-        mut paged_attn_config: Option<PagedAttentionConfig>,
+        paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
             );
-        }
-        // Otherwise, the device mapper will print it
-        if mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map()))
-        {
-            info!(
-                "Loading model `{}` on {}.",
-                self.get_id(),
-                device.device_pretty_repr()
-            );
-        } else if paged_attn_config.is_some() {
-            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
-            paged_attn_config = None;
         }
 
         let mut readers = Vec::new();
@@ -367,6 +352,44 @@ impl Loader for GGUFLoader {
         let model = Content::from_readers(&mut readers)?;
         model.print_metadata()?;
         let arch = model.arch();
+
+        // If auto, convert to Map
+        let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
+        if let DeviceMapSetting::Auto = mapper.clone() {
+            let devices = device_map::get_all_similar_devices(device)?;
+
+            let model = GgufDeviceMapLoaderInner {
+                model: &model,
+                arch,
+            };
+            let dtype = DType::F32;
+
+            let layer_sizes_in_bytes =
+                model.layer_sizes_in_bytes("this is a dummy config!", dtype, 1)?;
+            let non_mapped_size_in_bytes =
+                model.non_mapped_size_in_bytes("this is a dummy config!", dtype, 1)?;
+            let total_model_size_in_bytes =
+                layer_sizes_in_bytes.iter().sum::<usize>() + non_mapped_size_in_bytes;
+
+            let new = model.get_device_layers(
+                "this is a dummy config!",
+                num_layers,
+                layer_sizes_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                &devices,
+            )?;
+            mapper = DeviceMapSetting::Map(new);
+        }
+
+        let pipeline_mapper =
+            mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
+        let mapper = mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
+        let mut layer_devices = Vec::new();
+        for layer in 0..num_layers {
+            let device = mapper.device_for(layer, false).cloned();
+            layer_devices.push(device);
+        }
 
         let GgufTokenizerConversion {
             tokenizer,
@@ -403,17 +426,19 @@ impl Loader for GGUFLoader {
         };
 
         let model_config_metadata: ContentConfig = (&model).into();
+        let internal_dtype = dtype.try_into_dtype(&[device]).unwrap();
 
         let model_config = {
             // Base config (quantization only):
             let quant = ModelConfig::ParamsGGUF(
                 model,
-                (device, mapper, self.config.topology.as_ref()).into(),
+                (device, mapper).into(),
                 if paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention
                 } else {
                     AttentionImplementation::Eager
                 },
+                internal_dtype,
             );
 
             // With optional adapter config:
@@ -424,10 +449,7 @@ impl Loader for GGUFLoader {
                 )?);
             }
 
-            ModelConfig::ModelParams::builder()
-                .quant(quant)
-                .and_adapter(adapter)
-                .build()
+            ModelConfig::ModelParams::new(quant, adapter)
         };
 
         // Config into model:
@@ -459,11 +481,17 @@ impl Loader for GGUFLoader {
                 paged_attn_config.mem_gpu,
                 paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
-                DType::F32,
+                internal_dtype,
                 model_config,
                 device,
             )?;
-            let cache_engine = CacheEngine::new(model_config, &cache_config, DType::F32, device)?;
+            let cache_engine = CacheEngine::new(
+                model_config,
+                &cache_config,
+                internal_dtype,
+                device,
+                layer_devices,
+            )?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -505,13 +533,13 @@ impl Loader for GGUFLoader {
         };
 
         if chat_template.bos_token.is_none() && bos.is_some() {
-            chat_template.bos_token = Some(BeginEndUnkTok(Either::Left(bos.unwrap())));
+            chat_template.bos_token = Some(BeginEndUnkPadTok(Either::Left(bos.unwrap())));
         }
         if chat_template.eos_token.is_none() && eos.is_some() {
-            chat_template.eos_token = Some(BeginEndUnkTok(Either::Left(eos.unwrap())));
+            chat_template.eos_token = Some(BeginEndUnkPadTok(Either::Left(eos.unwrap())));
         }
         if chat_template.unk_token.is_none() && unk.is_some() {
-            chat_template.unk_token = Some(BeginEndUnkTok(Either::Left(unk.unwrap())));
+            chat_template.unk_token = Some(BeginEndUnkPadTok(Either::Left(unk.unwrap())));
         }
 
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
@@ -533,18 +561,20 @@ impl Loader for GGUFLoader {
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 tok_env: Some(tok_env),
-                has_no_kv_cache: self.no_kv_cache,
+                no_kv_cache: self.no_kv_cache,
+                no_prefix_cache: false,
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
-                activation_dtype: DType::F32,
+                activation_dtype: internal_dtype,
                 sliding_window: None,
                 cache_config,
                 cache_engine,
                 prompt_batchsize: self.config.prompt_batchsize,
                 model_metadata: Some(Arc::new(model_config_metadata)),
             }),
+            mapper: pipeline_mapper,
         })))
     }
 
@@ -672,6 +702,9 @@ impl MetadataMixin for GGUFPipeline {
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
     }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        Some(&*self.mapper)
+    }
 }
 
 #[async_trait::async_trait]
@@ -773,7 +806,7 @@ impl Pipeline for GGUFPipeline {
         &self,
         seqs: &mut [&mut Sequence],
         logits: Vec<Tensor>,
-        prefix_cacher: &mut PrefixCacheManager,
+        prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
