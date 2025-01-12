@@ -7,13 +7,16 @@ Automatic device mapping works by prioritizing loading models into GPU memory, a
 Models architectures such as vision models which greatly benefit from GPU acceleration also automatically prioritize keeping those
 components on the GPU.
 
-## When the model does not fit on 1 GPU
+### When the model does not fit on 1 GPU
 If the model does not fit on 1 GPU, it will be loaded onto any other GPUs detected and any residual parts onto the CPU.
 
-Some memory is reserved for runtime (KV cache allocation, activations, etc), which can be controlled with the `mb_resrv_per_gpu` parameters (CLI/Python) or the `MbReservePerGpu` enum (Rust).
+Some memory is reserved for runtime (KV cache allocation, activations, etc), which can be controlled with the `mb_resrv_per_gpu` parameter (CLI/Python) or the `MbReservePerGpu` enum (Rust).
 
-## When the model fits on 1 GPU
-If the whole model fits on one GPU then no addition memory is reserved as described above.
+### When the model fits on 1 GPU
+If the whole model fits on one GPU then no addition memory is reserved as described above. Memory can still be reserved (triggering possible CPU offloading)
+with the `mb_resrv_per_gpu` parameters (CLI/Python) or the `MbReservePerGpu` enum (Rust). 
+
+---
 
 If you want to manually device map the model (not recommended), please continue reading.
 

@@ -408,27 +408,29 @@ pub trait DeviceMappedModelLoader {
         // Always add the CPU as fallback
         let devices = [devices, &[Device::Cpu]].concat();
 
-        let mut mb_resrv_per_gpu = match mb_resrv_per_gpu {
+        let mut mb_resrv_per_gpu_val = match mb_resrv_per_gpu {
             MbReservePerGpu::ModelDefault => self.model_default_mb_resrv_per_gpu(config)?.get(),
             MbReservePerGpu::Set(mb_free) => mb_free.get(),
         };
 
         // Special case: if everything fits on one device, don't reserve.
         let avail_first_dev = MemoryUsage.get_memory_available(&devices[0])?;
-        if remaining_to_map < avail_first_dev {
-            mb_resrv_per_gpu = 0;
+        if remaining_to_map < avail_first_dev
+            && !matches!(mb_resrv_per_gpu, MbReservePerGpu::Set(_))
+        {
+            mb_resrv_per_gpu_val = 0;
         } else {
-            info!("Reserving {mb_resrv_per_gpu}MB on each GPU for KV cache and activations.");
+            info!("Reserving {mb_resrv_per_gpu_val}MB on each GPU for KV cache and activations.");
         }
 
         let mut per_layer_avail = Vec::new();
         for dev in devices.clone() {
             let mut avail = MemoryUsage.get_memory_available(&dev)?;
             if !dev.is_cpu() {
-                if mb_to_b!(mb_resrv_per_gpu) >= avail {
-                    anyhow::bail!("Memory available on {} ({}MB) is < the requested memory to reserve on each gpu ({}MB)", b_to_mb!(avail), dev.device_pretty_repr(), mb_resrv_per_gpu);
+                if mb_to_b!(mb_resrv_per_gpu_val) >= avail {
+                    anyhow::bail!("Memory available on {} ({}MB) is < the requested memory to reserve on each gpu ({}MB)", b_to_mb!(avail), dev.device_pretty_repr(), mb_resrv_per_gpu_val);
                 }
-                avail -= mb_resrv_per_gpu;
+                avail -= mb_resrv_per_gpu_val;
             }
             per_layer_avail.push((avail, dev));
         }
@@ -505,7 +507,7 @@ pub trait DeviceMappedModelLoader {
 ///
 /// # Example
 /// ```no_run
-/// use mistralrs_core::{Loader, TokenSource, DeviceMapSetting, ModelDType};
+/// use mistralrs_core::{Loader, TokenSource, DeviceMapSetting, MbReservePerGpu, ModelDType};
 /// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
@@ -515,7 +517,7 @@ pub trait DeviceMappedModelLoader {
 ///     &ModelDType::Auto,
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
-///     DeviceMapSetting::Auto,
+///     DeviceMapSetting::Auto(MbReservePerGpu::ModelDefault),
 ///     None,
 ///     None,
 /// ).unwrap();
