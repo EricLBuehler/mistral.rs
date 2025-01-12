@@ -508,6 +508,7 @@ impl Loader for VisionLoader {
                 dtype,
                 model.config(),
                 device,
+                &layer_devices,
             )?;
             let cache_engine =
                 CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;

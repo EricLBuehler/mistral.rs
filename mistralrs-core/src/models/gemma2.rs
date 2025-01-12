@@ -600,6 +600,7 @@ impl Model {
             sliding_window: cfg.sliding_window,
             final_logit_softcapping: cfg.final_logit_softcapping,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
