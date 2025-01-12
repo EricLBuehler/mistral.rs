@@ -430,7 +430,7 @@ pub trait DeviceMappedModelLoader {
                 if mb_to_b!(mb_resrv_per_gpu_val) >= avail {
                     anyhow::bail!("Memory available on {} ({}MB) is < the requested memory to reserve on each gpu ({}MB)", b_to_mb!(avail), dev.device_pretty_repr(), mb_resrv_per_gpu_val);
                 }
-                avail -= mb_resrv_per_gpu_val;
+                avail -= mb_to_b!(mb_resrv_per_gpu_val);
             }
             per_layer_avail.push((avail, dev));
         }
