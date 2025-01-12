@@ -49,11 +49,12 @@ impl futures::Stream for Streamer {
         }
         match self.rx.try_recv() {
             Ok(resp) => match resp {
-                Response::ModelError(msg, _) => {
+                Response::CompletionModelError(msg, _) => {
                     MistralRs::maybe_log_error(
                         self.state.clone(),
                         &ModelErrorMessage(msg.to_string()),
                     );
+                    self.is_done = true;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))
                 }
                 Response::ValidationError(e) => {
@@ -72,9 +73,9 @@ impl futures::Stream for Streamer {
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
                 Response::Chunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::ModelError(_, _) => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             },
             Err(_) => Poll::Pending,
