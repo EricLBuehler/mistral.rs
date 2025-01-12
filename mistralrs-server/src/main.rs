@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{self, Method},
@@ -10,15 +10,18 @@ use clap::Parser;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
     parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    DeviceMapSetting, IsqType, Loader, LoaderBuilder, MbReservePerGpu, MemoryGpuConfig, MistralRs,
+    MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
     StopTokens,
 };
 use serde::{Deserialize, Serialize};
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{
+    num::{NonZero, NonZeroUsize},
+    sync::Arc,
+};
 
 mod chat_completion;
 mod completions;
@@ -111,7 +114,12 @@ struct Args {
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
-    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    /// Memory in MB to reserve on each GPU for activations. If not specified, this is set to a default for the model.
+    /// If the whole model fits on one GPU then no memory is reserved.
+    #[arg(short, long, value_parser)]
+    mb_resrv_per_gpu: Option<usize>,
+
+    /// In-situ quantization to apply.
     #[arg(long = "isq", value_parser = parse_isq_value)]
     in_situ_quant: Option<IsqType>,
 
@@ -383,7 +391,13 @@ async fn main() -> Result<()> {
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapSetting::Auto
+        let mb_resrv_per_gpu = match args.mb_resrv_per_gpu {
+            Some(mb_resrv_per_gpu) => MbReservePerGpu::Set(
+                NonZero::new(mb_resrv_per_gpu).context("`mb_resrv_per_gpu` must be > 0")?,
+            ),
+            None => MbReservePerGpu::ModelDefault,
+        };
+        DeviceMapSetting::Auto(mb_resrv_per_gpu)
     };
 
     let no_paged_attn = if device.is_cuda() {

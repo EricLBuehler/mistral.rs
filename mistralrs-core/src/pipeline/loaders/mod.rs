@@ -5,6 +5,7 @@ mod vision_loaders;
 use std::{
     collections::HashMap,
     fmt::{self, Debug},
+    num::NonZero,
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -22,6 +23,7 @@ pub use normal_loaders::{
     Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 
+use tracing::info;
 pub use vision_loaders::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2VLLoader,
     VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
@@ -33,8 +35,9 @@ pub use diffusion_loaders::{
 };
 
 use crate::{
-    lora::LoraConfig, utils::debug::DeviceRepr, xlora_models::XLoraConfig, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, MemoryUsage, Ordering, PagedAttentionConfig, TryIntoDType,
+    device_map::MbReservePerGpu, lora::LoraConfig, utils::debug::DeviceRepr,
+    xlora_models::XLoraConfig, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
+    MemoryUsage, Ordering, PagedAttentionConfig, TryIntoDType,
 };
 
 use super::Pipeline;
@@ -357,6 +360,17 @@ impl ModelKind {
     }
 }
 
+macro_rules! mb_to_b {
+    ($x:expr) => {
+        $x * 1024 * 1024
+    };
+}
+macro_rules! b_to_mb {
+    ($x:expr) => {
+        $x / (1024 * 1024)
+    };
+}
+
 pub trait DeviceMappedModelLoader {
     fn non_mapped_size_in_bytes(
         &self,
@@ -372,24 +386,50 @@ pub trait DeviceMappedModelLoader {
     ) -> Result<Vec<usize>>;
     fn num_layers(&self, config: &str) -> Result<usize>;
 
+    /// The default is 4GB free per GPU.
+    fn model_default_mb_resrv_per_gpu(&self, _config: &str) -> Result<NonZero<usize>> {
+        Ok((4 * 1024).try_into()?)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     /// weight_pack_factor only applies to quantized weights.
     fn get_device_layers(
         &self,
-        _config: &str,
+        config: &str,
         num_layers: usize,
         mut layer_sizes_in_bytes: Vec<usize>,
         non_mapped_size_in_bytes: usize,
         total_model_size_in_bytes: usize,
         devices: &[Device],
+        mb_resrv_per_gpu: &MbReservePerGpu,
     ) -> Result<DeviceMapMetadata> {
         let mut remaining_to_map = total_model_size_in_bytes;
 
         // Always add the CPU as fallback
         let devices = [devices, &[Device::Cpu]].concat();
 
+        let mut mb_resrv_per_gpu = match mb_resrv_per_gpu {
+            MbReservePerGpu::ModelDefault => self.model_default_mb_resrv_per_gpu(config)?.get(),
+            MbReservePerGpu::Set(mb_free) => mb_free.get(),
+        };
+
+        // Special case: if everything fits on one device, don't reserve.
+        let avail_first_dev = MemoryUsage.get_memory_available(&devices[0])?;
+        if remaining_to_map < avail_first_dev {
+            mb_resrv_per_gpu = 0;
+        } else {
+            info!("Reserving {mb_resrv_per_gpu}MB on each GPU for KV cache and activations.");
+        }
+
         let mut per_layer_avail = Vec::new();
         for dev in devices.clone() {
-            let avail = MemoryUsage.get_memory_available(&dev)?;
+            let mut avail = MemoryUsage.get_memory_available(&dev)?;
+            if !dev.is_cpu() {
+                if mb_to_b!(mb_resrv_per_gpu) >= avail {
+                    anyhow::bail!("Memory available on {} ({}MB) is < the requested memory to reserve on each gpu ({}MB)", b_to_mb!(avail), dev.device_pretty_repr(), mb_resrv_per_gpu);
+                }
+                avail -= mb_resrv_per_gpu;
+            }
             per_layer_avail.push((avail, dev));
         }
         // Reverse so we don't use the cpu first!

@@ -355,7 +355,7 @@ impl Loader for GGUFLoader {
 
         // If auto, convert to Map
         let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
-        if let DeviceMapSetting::Auto = mapper.clone() {
+        if let DeviceMapSetting::Auto(mb_resrv_per_gpu) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
 
             let model = GgufDeviceMapLoaderInner {
@@ -378,6 +378,7 @@ impl Loader for GGUFLoader {
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 &devices,
+                &mb_resrv_per_gpu,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }

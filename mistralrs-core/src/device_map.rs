@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, num::NonZero};
 
 use crate::{
     utils::{debug::DeviceRepr, log::once_log_info},
@@ -16,9 +16,19 @@ pub struct DeviceLayerMapMetadata {
 }
 
 #[derive(Debug, Clone)]
+/// MB of memory to reserve per GPU - explicit or use a model default.
+/// - If the whole model fits on one GPU then no memory is reserved.
+pub enum MbReservePerGpu {
+    ModelDefault,
+    Set(NonZero<usize>),
+}
+
+#[derive(Debug, Clone)]
 pub enum DeviceMapSetting {
+    /// Manual device mapping.
     Map(DeviceMapMetadata),
-    Auto,
+    /// Automatic device mapping (recommended).
+    Auto(MbReservePerGpu),
 }
 
 #[derive(Debug, Default, Deserialize, Clone)]
@@ -181,7 +191,7 @@ impl DeviceMapSetting {
                     nm_device: device.clone(),
                 }))
             }
-            Self::Auto => {
+            Self::Auto(_) => {
                 candle_core::bail!(".into_mapper does not work on Auto device map, convert it to a Map with DeviceMappedModelLoader::get_device_layers")
             }
         }

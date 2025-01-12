@@ -1,6 +1,7 @@
 use mistralrs_core::{
     initialize_logging, AnyMoeConfig, AnyMoeLoader, DefaultSchedulerMethod, DeviceMapSetting,
-    Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig, SchedulerConfig,
+    Loader, MbReservePerGpu, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
+    SchedulerConfig,
 };
 
 use crate::{best_device, Model, TextModelBuilder};
@@ -81,7 +82,9 @@ impl AnyMoeModelBuilder {
             &self.base.dtype,
             &best_device(self.base.force_cpu)?,
             !self.base.with_logging,
-            self.base.device_mapping.unwrap_or(DeviceMapSetting::Auto),
+            self.base
+                .device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(MbReservePerGpu::ModelDefault)),
             self.base.isq,
             self.base.paged_attn_cfg,
         )?;

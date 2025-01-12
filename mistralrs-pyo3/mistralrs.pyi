@@ -245,6 +245,7 @@ class Runner:
         which_draft: Which | None = None,
         chat_template: str | None = None,
         num_device_layers: list[str] | None = None,
+        mb_resrv_per_gpu: int | None = None,
         in_situ_quant: str | None = None,
         anymoe_config: AnyMoeConfig | None = None,
         pa_gpu_mem: int | float | None = None,
@@ -273,7 +274,9 @@ class Runner:
         - `num_device_layers` sets the number of layers to load and run on each device.
             Each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
             the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
-        - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
+        - `mb_resrv_per_gpu` sets memory in MB to reserve on each GPU for activations. If not specified, this is set to a default for the model.
+            If the whole model fits on one GPU then no memory is reserved.
+        - `in_situ_quant` sets the optional in-situ quantization for a model.
         - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
         - `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
             PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.

@@ -67,7 +67,9 @@ impl XLoraModelBuilder {
             &self.text_model.dtype,
             &best_device(self.text_model.force_cpu)?,
             !self.text_model.with_logging,
-            DeviceMapSetting::Auto,
+            self.text_model
+                .device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(MbReservePerGpu::ModelDefault)),
             self.text_model.isq,
             self.text_model.paged_attn_cfg,
         )?;

@@ -1,13 +1,15 @@
+use anyhow::Context;
 use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
     get_model_dtype, initialize_logging, paged_attn_supported, parse_isq_value, Constraint,
     DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
-    DrySamplingParams, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
+    DrySamplingParams, IsqType, Loader, LoaderBuilder, MbReservePerGpu, MemoryGpuConfig, MistralRs,
     MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
     Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
+use std::num::NonZero;
 use std::sync::Arc;
 use std::{fmt::Display, num::NonZeroUsize};
 use tokio::sync::mpsc::channel;
@@ -297,7 +299,12 @@ struct Args {
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
-    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    /// Memory to reserve on each GPU for activations. If not specified, this is set to a default for the model.
+    /// If the whole model fits on one GPU then no memory is reserved.
+    #[arg(short, long, value_parser)]
+    mb_resrv_per_gpu: Option<usize>,
+
+    /// In-situ quantization to apply.
     #[arg(long = "isq", value_parser = parse_isq_value)]
     in_situ_quant: Option<IsqType>,
 
@@ -418,7 +425,13 @@ fn main() -> anyhow::Result<()> {
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapSetting::Auto
+        let mb_resrv_per_gpu = match args.mb_resrv_per_gpu {
+            Some(mb_resrv_per_gpu) => MbReservePerGpu::Set(
+                NonZero::new(mb_resrv_per_gpu).context("`mb_resrv_per_gpu` must be > 0")?,
+            ),
+            None => MbReservePerGpu::ModelDefault,
+        };
+        DeviceMapSetting::Auto(mb_resrv_per_gpu)
     };
 
     // Allocate 0.5 GB of CPU memory just as a placeholder.

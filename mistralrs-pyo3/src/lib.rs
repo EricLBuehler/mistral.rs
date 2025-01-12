@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::{
     cell::RefCell,
     collections::HashMap,
-    num::NonZeroUsize,
+    num::{NonZero, NonZeroUsize},
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -25,10 +25,11 @@ use mistralrs_core::{
     DiffusionGenerationParams, DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
     ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
-    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
-    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
-    TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    MbReservePerGpu, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder,
+    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage,
+    Response, ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader,
+    StopTokens, TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder,
+    VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
@@ -427,6 +428,7 @@ impl Runner {
         which_draft = None,
         chat_template = None,
         num_device_layers = None,
+        mb_resrv_per_gpu = None,
         in_situ_quant = None,
         anymoe_config = None,
         pa_gpu_mem = None,
@@ -448,6 +450,7 @@ impl Runner {
         which_draft: Option<Which>,
         chat_template: Option<String>,
         num_device_layers: Option<Vec<String>>,
+        mb_resrv_per_gpu: Option<usize>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
         pa_gpu_mem: Option<usize>,
@@ -586,7 +589,15 @@ impl Runner {
                     DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
                 }
             }
-            None => DeviceMapSetting::Auto,
+            None => {
+                let mb_resrv_per_gpu = match mb_resrv_per_gpu {
+                    Some(mb_resrv_per_gpu) => MbReservePerGpu::Set(
+                        NonZero::new(mb_resrv_per_gpu).context("`mb_resrv_per_gpu` must be > 0")?,
+                    ),
+                    None => MbReservePerGpu::ModelDefault,
+                };
+                DeviceMapSetting::Auto(mb_resrv_per_gpu)
+            }
         };
 
         let no_paged_attn = if device.is_cuda() {
