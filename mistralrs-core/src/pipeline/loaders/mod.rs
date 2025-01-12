@@ -453,8 +453,8 @@ pub trait DeviceMappedModelLoader {
                     .rev()
                     .map(|(avail, dev)| format!(
                         "{} (avail: {}MB)",
+                        dev.device_pretty_repr(),
                         avail / (1024 * 1024),
-                        dev.device_pretty_repr()
                     ))
                     .collect::<Vec<_>>(),
                 remaining_to_map / (1024 * 1024)
