@@ -518,7 +518,12 @@
 <a href="#517" id="517">517</a>
 <a href="#518" id="518">518</a>
 <a href="#519" id="519">519</a>
-<a href="#520" id="520">520</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
 <span class="kw">mod </span>normal_loaders;
 <span class="kw">mod </span>vision_loaders;
 
@@ -968,9 +973,14 @@
         <span class="kw">if </span>remaining_to_map &gt; <span class="number">0 </span>{
             <span class="macro">anyhow::bail!</span>(
                 <span class="string">"This model does not fit on the devices {:?}, and exceeds total capacity by {}MB"</span>,
-                devices
+                per_layer_avail
                     .iter()
-                    .map(|dev| dev.device_pretty_repr())
+                    .rev()
+                    .map(|(avail, dev)| <span class="macro">format!</span>(
+                        <span class="string">"{} (avail: {}MB)"</span>,
+                        dev.device_pretty_repr(),
+                        avail / (<span class="number">1024 </span>* <span class="number">1024</span>),
+                    ))
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                 remaining_to_map / (<span class="number">1024 </span>* <span class="number">1024</span>)
             );
