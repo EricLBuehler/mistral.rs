@@ -304,7 +304,8 @@
 <a href="#303" id="303">303</a>
 <a href="#304" id="304">304</a>
 <a href="#305" id="305">305</a>
-<a href="#306" id="306">306</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>std::{
     env,
     error::Error,
@@ -355,11 +356,12 @@
         }
         <span class="kw">match </span><span class="self">self</span>.rx.try_recv() {
             <span class="prelude-val">Ok</span>(resp) =&gt; <span class="kw">match </span>resp {
-                Response::ModelError(msg, <span class="kw">_</span>) =&gt; {
+                Response::CompletionModelError(msg, <span class="kw">_</span>) =&gt; {
                     MistralRs::maybe_log_error(
                         <span class="self">self</span>.state.clone(),
                         <span class="kw-2">&amp;</span>ModelErrorMessage(msg.to_string()),
                     );
+                    <span class="self">self</span>.is_done = <span class="bool-val">true</span>;
                     Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(Event::default().data(msg))))
                 }
                 Response::ValidationError(e) =&gt; {
@@ -378,9 +380,9 @@
                 }
                 Response::Done(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::CompletionDone(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
-                Response::CompletionModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::Chunk(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+                Response::ModelError(<span class="kw">_</span>, <span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
             },
             <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; Poll::Pending,

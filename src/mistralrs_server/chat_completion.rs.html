@@ -420,7 +420,8 @@
 <a href="#419" id="419">419</a>
 <a href="#420" id="420">420</a>
 <a href="#421" id="421">421</a>
-<a href="#422" id="422">422</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
 <span class="kw">use </span>std::{
     collections::HashMap,
     env,
@@ -483,6 +484,7 @@
                         <span class="self">self</span>.state.clone(),
                         <span class="kw-2">&amp;</span>ModelErrorMessage(msg.to_string()),
                     );
+                    <span class="self">self</span>.is_done = <span class="bool-val">true</span>;
                     Poll::Ready(<span class="prelude-val">Some</span>(<span class="prelude-val">Ok</span>(Event::default().data(msg))))
                 }
                 Response::ValidationError(e) =&gt; {
