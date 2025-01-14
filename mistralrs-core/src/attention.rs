@@ -156,13 +156,12 @@ fn naive_sdpa(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    // Use faster softmax if mask is rank 2 or it's rank 3 and bs 1
-    if mask.is_some_and(|mask| mask.rank() == 2 || (mask.rank() == 3 && mask.dims()[0] == 1))
-        && supports_attn_softmax()?
-    {
+    q.device().synchronize()?;
+
+    // Use faster softmax if mask is rank 2 or it's rank 3
+    if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && supports_attn_softmax()? {
         let mask = match mask {
-            Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => mask.squeeze(0)?,
-            Some(mask) if mask.rank() == 2 => mask.clone(),
+            Some(mask) if mask.rank() == 3 || mask.rank() == 2 => mask.clone(),
             _ => candle_core::bail!("unsupported mask {mask:?}"),
         };
 
@@ -259,14 +258,11 @@ impl Sdpa {
 
         let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
-        if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
-            if mask
-                .is_some_and(|mask| mask.rank() == 2 || (mask.rank() == 3 && mask.dims()[0] == 1))
-                && supports_attn_softmax()?
-            {
-                return naive_sdpa(q, &k, &v, mask, sdpa_params);
-            }
+        return naive_sdpa(q, &k, &v, mask, sdpa_params);
 
+        // TODO: bench?
+        #[allow(unused)]
+        if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
             if !get_use_matmul_via_f16() {
                 #[cfg(feature = "cuda")]
                 {

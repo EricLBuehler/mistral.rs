@@ -1,15 +1,13 @@
-use anyhow::Context;
 use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
     get_model_dtype, initialize_logging, paged_attn_supported, parse_isq_value, Constraint,
     DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
-    DrySamplingParams, IsqType, Loader, LoaderBuilder, MbReservePerGpu, MemoryGpuConfig, MistralRs,
+    DrySamplingParams, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
     MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
     Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
-use std::num::NonZero;
 use std::sync::Arc;
 use std::{fmt::Display, num::NonZeroUsize};
 use tokio::sync::mpsc::channel;
@@ -293,16 +291,12 @@ struct Args {
     #[arg(long, short, default_value_t = 5)]
     repetitions: usize,
 
+    /// NOTE: This can be ommited to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
-
-    /// Memory to reserve on each GPU for activations. If not specified, this is set to a default for the model.
-    /// If the whole model fits on one GPU then no memory is reserved.
-    #[arg(short, long, value_parser)]
-    mb_resrv_per_gpu: Option<usize>,
 
     /// In-situ quantization to apply.
     #[arg(long = "isq", value_parser = parse_isq_value)]
@@ -425,13 +419,7 @@ fn main() -> anyhow::Result<()> {
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        let mb_resrv_per_gpu = match args.mb_resrv_per_gpu {
-            Some(mb_resrv_per_gpu) => MbReservePerGpu::Set(
-                NonZero::new(mb_resrv_per_gpu).context("`mb_resrv_per_gpu` must be > 0")?,
-            ),
-            None => MbReservePerGpu::ModelDefault,
-        };
-        DeviceMapSetting::Auto(mb_resrv_per_gpu)
+        DeviceMapSetting::Auto
     };
 
     // Allocate 0.5 GB of CPU memory just as a placeholder.

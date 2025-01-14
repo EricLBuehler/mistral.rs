@@ -93,7 +93,7 @@ impl DiffusionModelBuilder {
             &self.dtype,
             &best_device(self.force_cpu)?,
             !self.with_logging,
-            DeviceMapSetting::Auto(MbReservePerGpu::ModelDefault),
+            DeviceMapSetting::Auto,
             None,
             None,
         )?;

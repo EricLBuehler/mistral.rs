@@ -8,6 +8,7 @@ use std::fs;
 use tracing::warn;
 
 use crate::gguf::Content;
+use crate::pipeline::AutoDeviceMapParams;
 use crate::pipeline::DeviceMappedModelLoader;
 use crate::GGUFArchitecture;
 
@@ -160,6 +161,18 @@ pub struct GgufDeviceMapLoaderInner<'a, 'f> {
 }
 
 impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
+    fn max_act_size_elems(&self, _config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+        let num_heads = self.model.get_metadata()[&format!("{}.attention.head_count", self.arch)]
+            .to_u32()? as usize;
+        Ok(max_batch_size * num_heads * max_seq_len * max_seq_len)
+    }
     fn non_mapped_size_in_bytes(
         &self,
         _config: &str,

@@ -1,6 +1,7 @@
-use std::{fmt::Debug, num::NonZero};
+use std::fmt::Debug;
 
 use crate::{
+    pipeline::AutoDeviceMapParams,
     utils::{debug::DeviceRepr, log::once_log_info},
     Topology, TryIntoDType,
 };
@@ -16,19 +17,11 @@ pub struct DeviceLayerMapMetadata {
 }
 
 #[derive(Debug, Clone)]
-/// MB of memory to reserve per GPU - explicit or use a model default.
-/// - If the whole model fits on one GPU then no memory is reserved.
-pub enum MbReservePerGpu {
-    ModelDefault,
-    Set(NonZero<usize>),
-}
-
-#[derive(Debug, Clone)]
 pub enum DeviceMapSetting {
     /// Manual device mapping.
     Map(DeviceMapMetadata),
     /// Automatic device mapping (recommended).
-    Auto(MbReservePerGpu),
+    Auto(AutoDeviceMapParams),
 }
 
 #[derive(Debug, Default, Deserialize, Clone)]

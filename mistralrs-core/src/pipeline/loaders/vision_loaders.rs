@@ -18,6 +18,7 @@ use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
+use crate::pipeline::loaders::AutoDeviceMapParams;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
@@ -279,6 +280,10 @@ impl IsqModelLoader for Phi3VLoader {
 }
 
 impl DeviceMappedModelLoader for Phi3VLoader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        todo!()
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -471,6 +476,10 @@ impl IsqModelLoader for Idefics2Loader {
 }
 
 impl DeviceMappedModelLoader for Idefics2Loader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        todo!()
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -716,6 +725,10 @@ impl IsqModelLoader for LLaVANextLoader {
 }
 
 impl DeviceMappedModelLoader for LLaVANextLoader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        todo!()
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -876,6 +889,10 @@ impl IsqModelLoader for LLaVALoader {
 }
 
 impl DeviceMappedModelLoader for LLaVALoader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        todo!()
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -1089,6 +1106,36 @@ impl IsqModelLoader for VLlamaLoader {
 }
 
 impl DeviceMappedModelLoader for VLlamaLoader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+        };
+
+        let config: MLlamaConfig = serde_json::from_str(config)?;
+
+        let max_vision_attn = {
+            let cfg = &config.vision_config;
+            let num_patches = (cfg.image_size / cfg.patch_size).pow(2) + 1;
+            let num_padding_patches = (8 - (num_patches as isize % 8)) % 8;
+            let img_seq_len =
+                cfg.max_num_tiles * (num_patches as isize + num_padding_patches) as usize;
+
+            (max_batch_size * max_num_images) * cfg.num_attention_heads * img_seq_len * img_seq_len
+        };
+        let max_text_attn = {
+            let cfg = &config.text_config;
+            max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
+        };
+
+        Ok(max_text_attn.max(max_vision_attn))
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -1326,6 +1373,10 @@ impl IsqModelLoader for Qwen2VLLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen2VLLoader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        todo!()
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -1525,6 +1576,10 @@ impl IsqModelLoader for Idefics3Loader {
 }
 
 impl DeviceMappedModelLoader for Idefics3Loader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        todo!()
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,

@@ -36,7 +36,7 @@ use crate::{
     xlora_models::{self, XLoraConfig},
 };
 
-use super::DeviceMappedModelLoader;
+use super::{AutoDeviceMapParams, DeviceMappedModelLoader};
 
 pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     #[allow(clippy::too_many_arguments)]
@@ -354,6 +354,13 @@ impl DeviceMappedModelLoader for AutoLoader {
     ) -> Result<Vec<usize>> {
         Self::get_loader(config)?.layer_sizes_in_bytes(config, dtype, weight_pack_factor)
     }
+    fn max_act_size_elems(
+        &self,
+        config: &str,
+        params: &super::AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Self::get_loader(config)?.max_act_size_elems(config, params)
+    }
 }
 
 serde_default_fn!(bool, word_emb_default, false);
@@ -475,6 +482,20 @@ impl IsqModelLoader for MistralLoader {
 }
 
 impl DeviceMappedModelLoader for MistralLoader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg = MistralBasicConfig::deserialize(config, false)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -671,6 +692,20 @@ impl IsqModelLoader for GemmaLoader {
 }
 
 impl DeviceMappedModelLoader for GemmaLoader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg = GemmaBasicConfig::deserialize(config, false)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -865,6 +900,20 @@ impl IsqModelLoader for LlamaLoader {
 }
 
 impl DeviceMappedModelLoader for LlamaLoader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -1052,6 +1101,20 @@ impl IsqModelLoader for MixtralLoader {
 }
 
 impl DeviceMappedModelLoader for MixtralLoader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg = MixtralBasicConfig::deserialize(config, false)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -1241,6 +1304,20 @@ impl IsqModelLoader for Phi2Loader {
 }
 
 impl DeviceMappedModelLoader for Phi2Loader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg = Phi2BasicConfig::deserialize(config, false)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -1427,6 +1504,20 @@ impl IsqModelLoader for Phi3Loader {
 }
 
 impl DeviceMappedModelLoader for Phi3Loader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg = Phi3BasicConfig::deserialize(config, false)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -1597,13 +1688,27 @@ impl IsqModelLoader for Qwen2Loader {
 }
 
 impl DeviceMappedModelLoader for Qwen2Loader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg = Qwen2BasicConfig::deserialize(config, false)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize> {
-        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let cfg = Qwen2BasicConfig::deserialize(config, false)?;
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
@@ -1623,7 +1728,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
-        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let cfg = Qwen2BasicConfig::deserialize(config, false)?;
         let per_layer_elems = {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
@@ -1659,7 +1764,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let cfg = Qwen2BasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
     }
 }
@@ -1798,6 +1903,20 @@ impl IsqModelLoader for Gemma2Loader {
 }
 
 impl DeviceMappedModelLoader for Gemma2Loader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg = Gemma2BasicConfig::deserialize(config, false)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -1987,6 +2106,20 @@ impl IsqModelLoader for Starcoder2Loader {
 }
 
 impl DeviceMappedModelLoader for Starcoder2Loader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -2192,6 +2325,20 @@ impl IsqModelLoader for Phi3_5MoELoader {
 }
 
 impl DeviceMappedModelLoader for Phi3_5MoELoader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -2436,6 +2583,20 @@ impl IsqModelLoader for DeepSeekV2Loader {
 }
 
 impl DeviceMappedModelLoader for DeepSeekV2Loader {
+    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,

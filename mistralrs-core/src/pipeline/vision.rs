@@ -209,7 +209,7 @@ impl Loader for VisionLoader {
         }
 
         // If auto, convert to Map
-        if let DeviceMapSetting::Auto(mb_resrv_per_gpu) = mapper.clone() {
+        if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype
             let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
@@ -277,6 +277,8 @@ impl Loader for VisionLoader {
                         layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 };
+            let max_act_size_in_bytes =
+                self.inner.max_act_size_elems(&config, &params)? * dtype.size_in_bytes();
             let new = self.inner.get_device_layers(
                 &config,
                 self.inner.num_layers(&config)?,
@@ -284,7 +286,7 @@ impl Loader for VisionLoader {
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 &devices,
-                &mb_resrv_per_gpu,
+                max_act_size_in_bytes,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }

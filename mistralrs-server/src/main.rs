@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{self, Method},
@@ -10,18 +10,15 @@ use clap::Parser;
 use mistralrs_core::{
     get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
     parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, IsqType, Loader, LoaderBuilder, MbReservePerGpu, MemoryGpuConfig, MistralRs,
-    MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder,
+    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
 };
 use openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
     StopTokens,
 };
 use serde::{Deserialize, Serialize};
-use std::{
-    num::{NonZero, NonZeroUsize},
-    sync::Arc,
-};
+use std::{num::NonZeroUsize, sync::Arc};
 
 mod chat_completion;
 mod completions;
@@ -107,17 +104,12 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     prefix_cache_n: usize,
 
-    /// Note: this is deprecated in favor of automatic device mapping.
+    /// NOTE: This can be ommited to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
-
-    /// Memory in MB to reserve on each GPU for activations. If not specified, this is set to a default for the model.
-    /// If the whole model fits on one GPU then no memory is reserved.
-    #[arg(short, long, value_parser)]
-    mb_resrv_per_gpu: Option<usize>,
 
     /// In-situ quantization to apply.
     #[arg(long = "isq", value_parser = parse_isq_value)]
@@ -391,13 +383,7 @@ async fn main() -> Result<()> {
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        let mb_resrv_per_gpu = match args.mb_resrv_per_gpu {
-            Some(mb_resrv_per_gpu) => MbReservePerGpu::Set(
-                NonZero::new(mb_resrv_per_gpu).context("`mb_resrv_per_gpu` must be > 0")?,
-            ),
-            None => MbReservePerGpu::ModelDefault,
-        };
-        DeviceMapSetting::Auto(mb_resrv_per_gpu)
+        DeviceMapSetting::Auto
     };
 
     let no_paged_attn = if device.is_cuda() {

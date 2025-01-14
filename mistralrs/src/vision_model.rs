@@ -194,8 +194,7 @@ impl VisionModelBuilder {
             &self.dtype,
             &best_device(self.force_cpu)?,
             !self.with_logging,
-            self.device_mapping
-                .unwrap_or(DeviceMapSetting::Auto(MbReservePerGpu::ModelDefault)),
+            self.device_mapping.unwrap_or(DeviceMapSetting::Auto),
             self.isq,
             None,
         )?;

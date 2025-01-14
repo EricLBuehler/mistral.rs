@@ -51,7 +51,7 @@ impl GgufLoraModelBuilder {
             !self.gguf_model.with_logging,
             self.gguf_model
                 .device_mapping
-                .unwrap_or(DeviceMapSetting::Auto(MbReservePerGpu::ModelDefault)),
+                .unwrap_or(DeviceMapSetting::Auto),
             None,
             self.gguf_model.paged_attn_cfg,
         )?;
