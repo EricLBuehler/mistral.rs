@@ -562,7 +562,19 @@
 <a href="#561" id="561">561</a>
 <a href="#562" id="562">562</a>
 <a href="#563" id="563">563</a>
-<a href="#564" id="564">564</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
@@ -887,9 +899,13 @@
     </span><span class="attr">#[arg(long = <span class="string">"pa-blk-size"</span>)]
     </span>paged_attn_block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
-    <span class="doccomment">/// Disable PagedAttention on CUDA.
-    </span><span class="attr">#[arg(long = <span class="string">"no_paged_attn"</span>, default_value_t = <span class="bool-val">false</span>)]
+    <span class="doccomment">/// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
+    </span><span class="attr">#[arg(long = <span class="string">"no-paged-attn"</span>, default_value_t = <span class="bool-val">false</span>)]
     </span>no_paged_attn: bool,
+
+    <span class="doccomment">/// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
+    </span><span class="attr">#[arg(long = <span class="string">"paged-attn"</span>, default_value_t = <span class="bool-val">false</span>)]
+    </span>paged_attn: bool,
 
     <span class="doccomment">/// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     </span><span class="attr">#[arg(long = <span class="string">"prompt-batchsize"</span>)]
@@ -985,6 +1001,14 @@
         DeviceMapSetting::Auto
     };
 
+    <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() {
+        args.no_paged_attn
+    } <span class="kw">else if </span>device.is_metal() {
+        !args.paged_attn
+    } <span class="kw">else </span>{
+        <span class="bool-val">true
+    </span>};
+
     <span class="comment">// Allocate 0.5 GB of CPU memory just as a placeholder.
     // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
     </span><span class="kw">let </span>cache_config = <span class="kw">match </span>(
@@ -993,7 +1017,7 @@
         args.paged_attn_gpu_mem_usage,
         args.paged_ctxt_len,
         paged_attn_supported(),
-        args.no_paged_attn,
+        no_paged_attn,
     ) {
         (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
             block_size,
