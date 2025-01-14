@@ -323,9 +323,13 @@ struct Args {
     #[arg(long = "pa-blk-size")]
     paged_attn_block_size: Option<usize>,
 
-    /// Disable PagedAttention on CUDA.
-    #[arg(long = "no_paged_attn", default_value_t = false)]
+    /// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
+    #[arg(long = "no-paged-attn", default_value_t = false)]
     no_paged_attn: bool,
+
+    /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
+    #[arg(long = "paged-attn", default_value_t = false)]
+    paged_attn: bool,
 
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
@@ -421,6 +425,14 @@ fn main() -> anyhow::Result<()> {
         DeviceMapSetting::Auto
     };
 
+    let no_paged_attn = if device.is_cuda() {
+        args.no_paged_attn
+    } else if device.is_metal() {
+        !args.paged_attn
+    } else {
+        true
+    };
+
     // Allocate 0.5 GB of CPU memory just as a placeholder.
     // Nothing happens here as we have no `swap_out`, see `_preempt_by_swap`.
     let cache_config = match (
@@ -429,7 +441,7 @@ fn main() -> anyhow::Result<()> {
         args.paged_attn_gpu_mem_usage,
         args.paged_ctxt_len,
         paged_attn_supported(),
-        args.no_paged_attn,
+        no_paged_attn,
     ) {
         (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
