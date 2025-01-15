@@ -281,7 +281,31 @@ impl IsqModelLoader for Phi3VLoader {
 
 impl DeviceMappedModelLoader for Phi3VLoader {
     fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
-        todo!()
+        // NOTE: we ignore max_num_images although it can only be one...
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images: _,
+        } = params
+        else {
+            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Phi3Config = serde_json::from_str(config)?;
+
+        let max_vision_attn = {
+            let vcfg = &PHI3V_CLIP_CONFIG;
+
+            let num_patches = (vcfg.image_size / vcfg.patch_size).pow(2);
+            let img_seq_len = num_patches + 1;
+
+            max_batch_size * cfg.num_attention_heads * img_seq_len * img_seq_len
+        };
+        let max_text_attn =
+            { max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len };
+
+        Ok(max_text_attn.max(max_vision_attn))
     }
 
     fn non_mapped_size_in_bytes(
