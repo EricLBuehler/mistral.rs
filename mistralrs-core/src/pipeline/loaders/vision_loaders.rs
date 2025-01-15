@@ -794,6 +794,7 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
 
         let config: LLaVAConfig = serde_json::from_str(config)?;
 
+        #[allow(clippy::cast_possible_truncation)]
         let img_seq_len =
             llava_next_inputs_processor::LLaVANextInputProcessor::get_num_image_tokens(
                 &config,

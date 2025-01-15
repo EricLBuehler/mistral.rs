@@ -51,7 +51,7 @@ impl GgufLoraModelBuilder {
             !self.gguf_model.with_logging,
             self.gguf_model
                 .device_mapping
-                .unwrap_or(DeviceMapSetting::Auto),
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             None,
             self.gguf_model.paged_attn_cfg,
         )?;

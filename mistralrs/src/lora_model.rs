@@ -57,7 +57,7 @@ impl LoraModelBuilder {
             !self.text_model.with_logging,
             self.text_model
                 .device_mapping
-                .unwrap_or(DeviceMapSetting::Auto),
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             self.text_model.isq,
             self.text_model.paged_attn_cfg,
         )?;

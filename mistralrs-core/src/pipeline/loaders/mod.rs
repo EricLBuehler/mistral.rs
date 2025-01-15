@@ -377,6 +377,32 @@ pub enum AutoDeviceMapParams {
     },
 }
 
+impl AutoDeviceMapParams {
+    pub const DEFAULT_MAX_SEQ_LEN: usize = 16 * 1024;
+    pub const DEFAULT_MAX_BATCH_SIZE: usize = 1;
+    pub const DEFAULT_MAX_NUM_IMAGES: usize = 1;
+    pub const DEFAULT_MAX_IMAGE_LENGTH: usize = 2 * 1024;
+
+    pub fn default_text() -> Self {
+        Self::Text {
+            max_seq_len: Self::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: Self::DEFAULT_MAX_BATCH_SIZE,
+        }
+    }
+
+    pub fn default_vision() -> Self {
+        Self::Vision {
+            max_seq_len: Self::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: Self::DEFAULT_MAX_BATCH_SIZE,
+            max_num_images: Self::DEFAULT_MAX_NUM_IMAGES,
+            max_image_shape: (
+                Self::DEFAULT_MAX_IMAGE_LENGTH,
+                Self::DEFAULT_MAX_IMAGE_LENGTH,
+            ),
+        }
+    }
+}
+
 pub trait DeviceMappedModelLoader {
     fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize>;
     fn non_mapped_size_in_bytes(

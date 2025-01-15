@@ -8,10 +8,11 @@ use axum::{
 use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
+    paged_attn_supported, parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
+    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
+    TokenSource,
 };
 use openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
@@ -300,6 +301,7 @@ async fn main() -> Result<()> {
 
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let dtype = get_model_dtype(&args.model)?;
+    let auto_device_map_params = get_auto_device_map_params(&args.model)?;
 
     if tgt_non_granular_index.is_some() {
         args.max_seqs = 1;
@@ -383,7 +385,7 @@ async fn main() -> Result<()> {
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapSetting::Auto
+        DeviceMapSetting::Auto(auto_device_map_params)
     };
 
     let no_paged_attn = if device.is_cuda() {
