@@ -1425,7 +1425,31 @@ impl IsqModelLoader for Qwen2VLLoader {
 
 impl DeviceMappedModelLoader for Qwen2VLLoader {
     fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
-        todo!()
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
+
+        let max_vision_attn = {
+            let cfg = &cfg.vision_config;
+            let grid_t = max_num_images / cfg.temporal_patch_size;
+            let grid_h = max_image_shape.0 / cfg.patch_size;
+            let grid_w = max_image_shape.1 / cfg.patch_size;
+            let img_seq_len = grid_t * grid_h * grid_w;
+
+            (max_batch_size * max_num_images) * cfg.num_heads * img_seq_len * img_seq_len
+        };
+        let max_text_attn =
+            { max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len };
+
+        Ok(max_text_attn.max(max_vision_attn))
     }
 
     fn non_mapped_size_in_bytes(
