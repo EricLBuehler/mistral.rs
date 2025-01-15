@@ -501,7 +501,34 @@ impl IsqModelLoader for Idefics2Loader {
 
 impl DeviceMappedModelLoader for Idefics2Loader {
     fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
-        todo!()
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images: _,
+        } = params
+        else {
+            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Idefics2Config = serde_json::from_str(config)?;
+
+        let max_vision_attn = {
+            let num_patches = (cfg.vision_config.image_size / cfg.vision_config.patch_size).pow(2);
+            let img_seq_len = num_patches + 1;
+            // do_image_splitting = true
+            let images_factor = 5;
+
+            (max_batch_size)
+                * images_factor
+                * cfg.vision_config.num_attention_heads
+                * img_seq_len
+                * img_seq_len
+        };
+        let max_text_attn =
+            { max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len };
+
+        Ok(max_text_attn.max(max_vision_attn))
     }
 
     fn non_mapped_size_in_bytes(
@@ -1601,7 +1628,34 @@ impl IsqModelLoader for Idefics3Loader {
 
 impl DeviceMappedModelLoader for Idefics3Loader {
     fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
-        todo!()
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images: _,
+        } = params
+        else {
+            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Idefics2Config = serde_json::from_str(config)?;
+
+        let max_vision_attn = {
+            let num_patches = (cfg.vision_config.image_size / cfg.vision_config.patch_size).pow(2);
+            let img_seq_len = num_patches + 1;
+            // do_image_splitting = true
+            let images_factor = 5;
+
+            (max_batch_size)
+                * images_factor
+                * cfg.vision_config.num_attention_heads
+                * img_seq_len
+                * img_seq_len
+        };
+        let max_text_attn =
+            { max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len };
+
+        Ok(max_text_attn.max(max_vision_attn))
     }
 
     fn non_mapped_size_in_bytes(
