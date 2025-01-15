@@ -488,7 +488,7 @@ impl DeviceMappedModelLoader for MistralLoader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg = MistralBasicConfig::deserialize(config, false)?;
@@ -698,7 +698,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg = GemmaBasicConfig::deserialize(config, false)?;
@@ -906,7 +906,7 @@ impl DeviceMappedModelLoader for LlamaLoader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg = LlamaBasicConfig::deserialize(config, false)?;
@@ -1107,7 +1107,7 @@ impl DeviceMappedModelLoader for MixtralLoader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg = MixtralBasicConfig::deserialize(config, false)?;
@@ -1310,7 +1310,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg = Phi2BasicConfig::deserialize(config, false)?;
@@ -1510,7 +1510,7 @@ impl DeviceMappedModelLoader for Phi3Loader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg = Phi3BasicConfig::deserialize(config, false)?;
@@ -1694,7 +1694,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg = Qwen2BasicConfig::deserialize(config, false)?;
@@ -1909,7 +1909,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg = Gemma2BasicConfig::deserialize(config, false)?;
@@ -2112,7 +2112,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
@@ -2331,7 +2331,7 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
@@ -2589,7 +2589,7 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
 
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;

@@ -105,7 +105,7 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     prefix_cache_n: usize,
 
-    /// NOTE: This can be ommited to use automatic device mapping!
+    /// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.

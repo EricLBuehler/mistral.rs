@@ -289,7 +289,7 @@ impl DeviceMappedModelLoader for Phi3VLoader {
             max_num_images: _,
         } = params
         else {
-            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
         let cfg: Phi3Config = serde_json::from_str(config)?;
@@ -510,7 +510,7 @@ impl DeviceMappedModelLoader for Idefics2Loader {
             max_num_images: _,
         } = params
         else {
-            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
         let cfg: Idefics2Config = serde_json::from_str(config)?;
@@ -789,7 +789,7 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
         let config: LLaVAConfig = serde_json::from_str(config)?;
@@ -985,7 +985,7 @@ impl DeviceMappedModelLoader for LLaVALoader {
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
         let config: LLaVAConfig = serde_json::from_str(config)?;
@@ -1231,7 +1231,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
         let config: MLlamaConfig = serde_json::from_str(config)?;
@@ -1506,7 +1506,7 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
             max_num_images,
         } = params
         else {
-            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
@@ -1739,7 +1739,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
             max_num_images: _,
         } = params
         else {
-            anyhow::bail!("Expeted vision AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
         let cfg: Idefics2Config = serde_json::from_str(config)?;

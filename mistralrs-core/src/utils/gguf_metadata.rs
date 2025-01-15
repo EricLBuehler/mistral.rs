@@ -167,7 +167,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             max_batch_size,
         } = params
         else {
-            anyhow::bail!("Expeted text AutoDeviceMapParams for this model!")
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
         };
         let num_heads = self.model.get_metadata()[&format!("{}.attention.head_count", self.arch)]
             .to_u32()? as usize;
