@@ -19,6 +19,23 @@ These parameters do not translate to hard limits during runtime, they only contr
 > [!NOTE]
 > The maximum sequence length is also used to ensure that a KV cache will fit for with and without PagedAttention.
 
+## Examples
+- Python
+    - Text models [text_auto_device_map.py](../examples/python/text_auto_device_map.py)
+    - Vision models [vision_auto_device_map.py](../examples/python/vision_auto_device_map.py)
+- Rust
+    - Text models [text_auto_device_map/main.rs](../mistralrs/examples/text_auto_device_map/main.rs)
+    - Vision models [vision_auto_device_map/main.rs](../mistralrs/examples/vision_auto_device_map/main.rs)
+- Server
+    - Text models: 
+    ```
+    ./mistralrs-server -i --isq q4k plain -m meta-llama/Llama-3.3-70B-Instruct --max-seq-len 4096 --max-batch-size 2
+    ```
+    - Vision models:
+    ```
+    ./mistralrs-server -i --isq q4k vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct --max-seq-len 4096 --max-batch-size 2 --max-num-images 2 --max-image-length 1024
+    ```
+
 ---
 
 If you want to manually device map the model (not recommended), please continue reading.
