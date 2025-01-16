@@ -587,13 +587,11 @@ pub trait DeviceMappedModelLoader {
         // Reverse layer sizes so we can pop
         layer_sizes_in_bytes.reverse();
 
-        remaining_to_map += non_mapped_max_act_size_in_bytes + mapped_max_act_size_in_bytes;
-        remaining_to_map += mapped_max_act_size_in_bytes * per_layer_avail.len();
-
         let mut device_layers = Vec::new();
 
         let mut current_ordinal = 0;
         let mut current_layer = 0;
+        let per_layer_avail_cpy = per_layer_avail.clone();
         while remaining_to_map > 0 && !per_layer_avail.is_empty() {
             let (device_capacity, device) = per_layer_avail
                 .pop()
@@ -603,16 +601,30 @@ pub trait DeviceMappedModelLoader {
             let device_capacity = (device_capacity as f64 * 0.90) as usize;
 
             // Algorithm is to check the following:
-            // 1) if the mapped activations plus remaining fits on the nth device
-            // 2) common case, iteratively find the optimal amount of layers to put on the nth device
+            // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
+            // 2) if the mapped activations plus remaining fits on the nth device
+            // 3) common case, iteratively find the optimal amount of layers to put on the nth device
             //   - if this is the first dev: must hold the non-mapped act and non-mapped model
             //   - otherwise, must hold the mapped act
-            let layers_on_device = if device_capacity >= remaining_to_map {
+            #[allow(clippy::if_same_then_else)]
+            let layers_on_device = if current_ordinal == 0
+                && device_capacity
+                    >= remaining_to_map
+                        + non_mapped_max_act_size_in_bytes
+                        + mapped_max_act_size_in_bytes
+            {
+                remaining_to_map = 0;
+
+                num_layers - current_layer
+            } else if current_ordinal != 0
+                && device_capacity >= remaining_to_map + mapped_max_act_size_in_bytes
+            {
                 remaining_to_map = 0;
 
                 num_layers - current_layer
             } else {
                 let mut used_capacity = 0;
+                let mut used_capacity_no_act = 0;
                 let mut layers_on_device = 0;
 
                 if current_ordinal == 0 {
@@ -625,13 +637,15 @@ pub trait DeviceMappedModelLoader {
                     if used_capacity + last > device_capacity {
                         break;
                     }
-                    used_capacity += layer_sizes_in_bytes.pop().unwrap();
+                    let last = layer_sizes_in_bytes.pop().unwrap();
+                    used_capacity += last;
+                    used_capacity_no_act += last;
                     layers_on_device += 1;
                 }
 
                 // Do not reduce amount to map if this device can't fit any
                 if layers_on_device > 0 {
-                    remaining_to_map = remaining_to_map.saturating_sub(used_capacity);
+                    remaining_to_map = remaining_to_map.saturating_sub(used_capacity_no_act);
                 }
                 layers_on_device
             };
@@ -650,7 +664,7 @@ pub trait DeviceMappedModelLoader {
         if remaining_to_map > 0 {
             anyhow::bail!(
                 "This model does not fit on the devices {:?}, and exceeds total capacity by {}MB. Auto device mapping params: {params}",
-                per_layer_avail
+                per_layer_avail_cpy
                     .iter()
                     .rev()
                     .map(|(avail, dev)| format!(
