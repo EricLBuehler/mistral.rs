@@ -25,7 +25,7 @@ use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::gguf_metadata::GgufDeviceMapLoaderInner;
+use crate::utils::gguf_metadata::{ContentConfig, GgufDeviceMapLoaderInner};
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
@@ -251,55 +251,6 @@ impl GGUFLoader {
     }
 }
 
-struct ContentConfig {
-    max_seq_len: usize,
-    hidden_size: usize,
-    num_attn_heads: usize,
-    num_kv_heads: usize,
-    num_layers: usize,
-}
-
-#[allow(clippy::cast_possible_truncation)]
-impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConfig {
-    fn from(value: &Content<'a, R>) -> Self {
-        let metadata = value.get_metadata();
-        let arch = metadata["general.architecture"].to_string().unwrap();
-        Self {
-            max_seq_len: metadata[&format!("{arch}.context_length")]
-                .to_u64()
-                .unwrap() as usize,
-            hidden_size: metadata[&format!("{arch}.embedding_length")]
-                .to_u64()
-                .unwrap() as usize,
-            num_attn_heads: metadata[&format!("{arch}.attention.head_count")]
-                .to_u64()
-                .unwrap() as usize,
-            num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
-                .to_u64()
-                .unwrap() as usize,
-            num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
-        }
-    }
-}
-
-impl ModelConfigLike for ContentConfig {
-    fn max_seq_len(&self) -> usize {
-        self.max_seq_len
-    }
-    fn hidden_size(&self) -> usize {
-        self.hidden_size
-    }
-    fn num_attn_heads(&self) -> usize {
-        self.num_attn_heads
-    }
-    fn num_kv_heads(&self) -> usize {
-        self.num_kv_heads
-    }
-    fn num_layers(&self) -> usize {
-        self.num_layers
-    }
-}
-
 impl Loader for GGUFLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
@@ -388,6 +339,7 @@ impl Loader for GGUFLoader {
                 &devices,
                 dtype,
                 &params,
+                paged_attn_config.as_ref(),
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -495,6 +447,7 @@ impl Loader for GGUFLoader {
                 model_config,
                 device,
                 &layer_devices,
+                silent,
             )?;
             let cache_engine = CacheEngine::new(
                 model_config,

@@ -8,9 +8,59 @@ use std::fs;
 use tracing::warn;
 
 use crate::gguf::Content;
+use crate::paged_attention::ModelConfigLike;
 use crate::pipeline::AutoDeviceMapParams;
 use crate::pipeline::DeviceMappedModelLoader;
 use crate::GGUFArchitecture;
+
+pub struct ContentConfig {
+    max_seq_len: usize,
+    hidden_size: usize,
+    num_attn_heads: usize,
+    num_kv_heads: usize,
+    num_layers: usize,
+}
+
+#[allow(clippy::cast_possible_truncation)]
+impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConfig {
+    fn from(value: &Content<'a, R>) -> Self {
+        let metadata = value.get_metadata();
+        let arch = metadata["general.architecture"].to_string().unwrap();
+        Self {
+            max_seq_len: metadata[&format!("{arch}.context_length")]
+                .to_u64()
+                .unwrap() as usize,
+            hidden_size: metadata[&format!("{arch}.embedding_length")]
+                .to_u64()
+                .unwrap() as usize,
+            num_attn_heads: metadata[&format!("{arch}.attention.head_count")]
+                .to_u64()
+                .unwrap() as usize,
+            num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
+                .to_u64()
+                .unwrap() as usize,
+            num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
+        }
+    }
+}
+
+impl ModelConfigLike for ContentConfig {
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+    fn hidden_size(&self) -> usize {
+        self.hidden_size
+    }
+    fn num_attn_heads(&self) -> usize {
+        self.num_attn_heads
+    }
+    fn num_kv_heads(&self) -> usize {
+        self.num_kv_heads
+    }
+    fn num_layers(&self) -> usize {
+        self.num_layers
+    }
+}
 
 pub struct ContentMetadata<'a> {
     pub path_prefix: &'a str,
@@ -460,5 +510,9 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             _ => unimplemented!(),
         };
         Ok(vec![size_in_bytes; self.num_layers(config)?])
+    }
+    fn model_config(&self, _config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let model_config_metadata: ContentConfig = self.model.into();
+        Ok(Box::new(model_config_metadata))
     }
 }

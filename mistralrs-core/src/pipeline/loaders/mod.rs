@@ -33,8 +33,12 @@ pub use diffusion_loaders::{
 };
 
 use crate::{
-    lora::LoraConfig, utils::debug::DeviceRepr, xlora_models::XLoraConfig, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, MemoryUsage, Ordering, PagedAttentionConfig, TryIntoDType,
+    lora::LoraConfig,
+    paged_attention::{calculate_cache_config, ModelConfigLike},
+    utils::debug::DeviceRepr,
+    xlora_models::XLoraConfig,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryGpuConfig, MemoryUsage,
+    Ordering, PagedAttentionConfig, TryIntoDType,
 };
 
 use super::Pipeline;
@@ -426,6 +430,32 @@ impl AutoDeviceMapParams {
     }
 }
 
+fn calculate_key_block_shape(
+    model_config: &dyn ModelConfigLike,
+    dtype: DType,
+    block_size: usize,
+) -> (usize, usize, usize, usize) {
+    let element_size = dtype.size_in_bytes();
+    let x = 16 / element_size;
+    (
+        model_config.num_kv_heads(),
+        model_config.k_head_dim() / x,
+        block_size,
+        x,
+    )
+}
+
+fn calculate_value_block_shape(
+    model_config: &dyn ModelConfigLike,
+    block_size: usize,
+) -> (usize, usize, usize) {
+    (
+        model_config.num_kv_heads(),
+        model_config.v_head_dim(),
+        block_size,
+    )
+}
+
 pub trait DeviceMappedModelLoader {
     /// Maximum activation size of non-mapped parts of this model.
     /// Useful for the vision models which may prefer to keep the vison components on the GPU.
@@ -440,7 +470,6 @@ pub trait DeviceMappedModelLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize>;
-
     /// weight_pack_factor only applies to quantized weights.
     fn non_mapped_size_in_bytes(
         &self,
@@ -456,6 +485,7 @@ pub trait DeviceMappedModelLoader {
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>>;
     fn num_layers(&self, config: &str) -> Result<usize>;
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;
 
     #[allow(clippy::too_many_arguments)]
     fn get_device_layers(
@@ -468,6 +498,7 @@ pub trait DeviceMappedModelLoader {
         devices: &[Device],
         dtype: DType,
         params: &AutoDeviceMapParams,
+        paged_attn_config: Option<&PagedAttentionConfig>,
     ) -> Result<DeviceMapMetadata> {
         let mapped_max_act_size_in_bytes =
             self.mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
@@ -476,12 +507,79 @@ pub trait DeviceMappedModelLoader {
 
         let mut remaining_to_map = total_model_size_in_bytes;
 
+        let max_seq_len = match params {
+            AutoDeviceMapParams::Text { max_seq_len, .. }
+            | AutoDeviceMapParams::Vision { max_seq_len, .. } => *max_seq_len,
+        };
+        let max_batch_size = match params {
+            AutoDeviceMapParams::Text { max_batch_size, .. }
+            | AutoDeviceMapParams::Vision { max_batch_size, .. } => *max_batch_size,
+        };
+
+        let model_cfg = self.model_config(config)?;
+        let paged_attn_size_elems = match paged_attn_config {
+            Some(paged_attn_config) => {
+                let cache_config = calculate_cache_config(
+                    MemoryGpuConfig::ContextSize(max_seq_len),
+                    0,
+                    Some(paged_attn_config.block_size.unwrap_or(32)),
+                    dtype,
+                    &*model_cfg,
+                    &devices[0],
+                    &devices.iter().map(|x| Some(x.clone())).collect::<Vec<_>>(),
+                    true,
+                )?;
+
+                let key_block_shape =
+                    calculate_key_block_shape(&*model_cfg, dtype, cache_config.block_size);
+                let key_block_size = cache_config.num_gpu_blocks
+                    * key_block_shape.0
+                    * key_block_shape.1
+                    * key_block_shape.2
+                    * key_block_shape.3;
+
+                let value_block_shape = calculate_value_block_shape(
+                    &*self.model_config(config)?,
+                    cache_config.block_size,
+                );
+                let value_block_size = cache_config.num_gpu_blocks
+                    * value_block_shape.0
+                    * value_block_shape.1
+                    * value_block_shape.2;
+
+                key_block_size + value_block_size
+            }
+            None => {
+                // Non-paged KV cache
+                let key_block_shape = [
+                    max_batch_size,
+                    model_cfg.num_kv_heads(),
+                    max_seq_len,
+                    model_cfg.k_head_dim(),
+                ];
+                let value_block_shape = [
+                    max_batch_size,
+                    model_cfg.num_kv_heads(),
+                    max_seq_len,
+                    model_cfg.v_head_dim(),
+                ];
+
+                key_block_shape.into_iter().product::<usize>()
+                    + value_block_shape.iter().product::<usize>()
+            }
+        };
+        let paged_attn_size_in_bytes =
+            paged_attn_size_elems * model_cfg.num_layers() * dtype.size_in_bytes();
+        dbg!(paged_attn_size_in_bytes);
+
         // Always add the CPU as fallback
         let devices = [devices, &[Device::Cpu]].concat();
 
         let mut per_layer_avail = Vec::new();
         for dev in devices.clone() {
-            let avail = MemoryUsage.get_memory_available(&dev)?;
+            let avail = MemoryUsage
+                .get_memory_available(&dev)?
+                .wrapping_sub(paged_attn_size_in_bytes);
             per_layer_avail.push((avail, dev));
         }
         // Reverse so we don't use the cpu first!

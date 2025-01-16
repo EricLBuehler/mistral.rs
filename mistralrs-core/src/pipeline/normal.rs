@@ -358,6 +358,7 @@ impl Loader for NormalLoader {
                 &devices,
                 dtype,
                 &params,
+                paged_attn_config.as_ref(),
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -613,6 +614,7 @@ impl Loader for NormalLoader {
                 model.config(),
                 device,
                 &layer_devices,
+                silent,
             )?;
             let cache_engine =
                 CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;

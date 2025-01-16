@@ -52,7 +52,7 @@ impl MemoryUsage {
             Device::Metal(dev) => {
                 let max = dev.recommended_max_working_set_size();
                 let alloc = dev.current_allocated_size();
-                let avail = max - alloc;
+                let avail = max.saturating_sub(alloc);
 
                 Ok(avail as usize)
             }

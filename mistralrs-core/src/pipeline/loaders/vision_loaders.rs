@@ -16,7 +16,7 @@ use super::{DeviceMappedModelLoader, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
-use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
@@ -445,6 +445,23 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         let cfg: Phi3Config = serde_json::from_str(config)?;
         Ok(cfg.num_hidden_layers)
     }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Phi3Config = serde_json::from_str(config)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.head_dim()),
+            v_head_dim: Some(cfg.head_dim()),
+        };
+
+        Ok(Box::new(cfg))
+    }
 }
 
 // ======================== Idefics 2 loader
@@ -757,6 +774,23 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         let cfg: Idefics2Config = serde_json::from_str(config)?;
         Ok(cfg.text_config.num_hidden_layers)
     }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Idefics2Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
+    }
 }
 
 // ======================== LLaVANext Loader
@@ -987,6 +1021,24 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         Ok(cfg.text_config.num_hidden_layers)
     }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: LLaVAConfig = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
+    }
 }
 
 // ======================== LLaVA Loader
@@ -1208,6 +1260,24 @@ impl DeviceMappedModelLoader for LLaVALoader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: LLaVAConfig = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -1565,6 +1635,24 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         let config: MLlamaConfig = serde_json::from_str(config)?;
         Ok(config.text_config.num_hidden_layers)
     }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: MLlamaConfig = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
+    }
 }
 
 // ======================== Qwen2VL Loader
@@ -1830,6 +1918,24 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
         Ok(cfg.num_hidden_layers)
     }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Idefics2Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
+    }
 }
 
 // ======================== Idefics 3 loader
@@ -2089,5 +2195,22 @@ impl DeviceMappedModelLoader for Idefics3Loader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg: Idefics3Config = serde_json::from_str(config)?;
         Ok(cfg.text_config.num_hidden_layers)
+    }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Idefics2Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
     }
 }

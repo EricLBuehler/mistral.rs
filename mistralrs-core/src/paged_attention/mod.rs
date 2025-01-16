@@ -88,6 +88,7 @@ macro_rules! ctxt_to_blocks {
 }
 
 /// Memory values are in MBs or a percentage in [0,1]. Specify block size or the default is 32.
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
     mem_gpu: MemoryGpuConfig,
     mem_cpu: usize,
@@ -96,6 +97,7 @@ pub fn calculate_cache_config(
     config: &dyn ModelConfigLike,
     device: &Device,
     layer_devices: &[Option<Device>],
+    silent: bool,
 ) -> anyhow::Result<CacheConfig> {
     let block_size = block_size.unwrap_or(32);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
@@ -128,14 +130,16 @@ pub fn calculate_cache_config(
         ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
     let mem_gpu = min_mem_gpu.min(mem_for_toks);
 
-    info!("Allocating {mem_gpu} MB for PagedAttention KV cache");
-
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     let num_cpu_blocks = mb_to_blocks!(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
     if num_gpu_blocks == 0 {
         anyhow::bail!("Num GPU blocks is 0. This means there is not enough memory. Either reduce the memory amount/utilization/context size or disable PagedAttention.");
     }
-    info!("Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens", num_gpu_blocks*block_size);
+
+    if !silent {
+        info!("Allocating {mem_gpu} MB for PagedAttention KV cache",);
+        info!("Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens", num_gpu_blocks*block_size);
+    }
     Ok(CacheConfig {
         block_size,
         num_gpu_blocks,

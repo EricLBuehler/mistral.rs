@@ -10,7 +10,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{Activation, Llama3RopeConfig, PhiRopeScalingConfig},
     lora::{LoraConfig, Ordering},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
     pipeline::{
         isq::IsqModelLoader,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -368,6 +368,9 @@ impl DeviceMappedModelLoader for AutoLoader {
     ) -> Result<usize> {
         Ok(0)
     }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        Self::get_loader(config)?.model_config(config)
+    }
 }
 
 serde_default_fn!(bool, word_emb_default, false);
@@ -576,8 +579,25 @@ impl DeviceMappedModelLoader for MistralLoader {
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+        let cfg = MistralBasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = MistralBasicConfig::deserialize(config, false)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.head_dim()),
+            v_head_dim: Some(cfg.head_dim()),
+        };
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -804,6 +824,23 @@ impl DeviceMappedModelLoader for GemmaLoader {
         let cfg = GemmaBasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
     }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = GemmaBasicConfig::deserialize(config, false)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: Some(cfg.head_dim),
+            v_head_dim: Some(cfg.head_dim),
+        };
+
+        Ok(Box::new(cfg))
+    }
 }
 
 // ======================== Llama loader
@@ -1018,6 +1055,22 @@ impl DeviceMappedModelLoader for LlamaLoader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg = LlamaBasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
+    }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = LlamaBasicConfig::deserialize(config, false)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -1234,6 +1287,23 @@ impl DeviceMappedModelLoader for MixtralLoader {
         let cfg = MixtralBasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
     }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = MixtralBasicConfig::deserialize(config, false)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
+    }
 }
 
 // ======================== Phi2 loader
@@ -1439,6 +1509,23 @@ impl DeviceMappedModelLoader for Phi2Loader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg = Phi2BasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = Phi2BasicConfig::deserialize(config, false)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads(),
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: Some(cfg.head_dim()),
+            v_head_dim: Some(cfg.head_dim()),
+        };
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -1651,6 +1738,23 @@ impl DeviceMappedModelLoader for Phi3Loader {
         let cfg = Phi3BasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
     }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = Phi3BasicConfig::deserialize(config, false)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.head_dim()),
+            v_head_dim: Some(cfg.head_dim()),
+        };
+
+        Ok(Box::new(cfg))
+    }
 }
 
 // ======================== Qwen2 loader
@@ -1850,6 +1954,23 @@ impl DeviceMappedModelLoader for Qwen2Loader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg = Qwen2BasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = Qwen2BasicConfig::deserialize(config, false)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: Some(cfg.sliding_window),
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -2081,6 +2202,22 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         let cfg = Gemma2BasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
     }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = Gemma2BasicConfig::deserialize(config, false)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: Some(cfg.sliding_window),
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
+    }
 }
 
 // ======================== Starcoder2 loader
@@ -2288,6 +2425,23 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -2527,6 +2681,23 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
         Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: Some(cfg.head_dim()),
+            v_head_dim: Some(cfg.head_dim()),
+        };
+
+        Ok(Box::new(cfg))
     }
 }
 
@@ -2834,5 +3005,22 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_attention_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: Some(cfg.qk_rope_head_dim + cfg.qk_nope_head_dim),
+            v_head_dim: Some(cfg.v_head_dim),
+        };
+
+        Ok(Box::new(cfg))
     }
 }
