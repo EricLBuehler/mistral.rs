@@ -64,68 +64,7 @@
 <a href="#63" id="63">63</a>
 <a href="#64" id="64">64</a>
 <a href="#65" id="65">65</a>
-<a href="#66" id="66">66</a>
-<a href="#67" id="67">67</a>
-<a href="#68" id="68">68</a>
-<a href="#69" id="69">69</a>
-<a href="#70" id="70">70</a>
-<a href="#71" id="71">71</a>
-<a href="#72" id="72">72</a>
-<a href="#73" id="73">73</a>
-<a href="#74" id="74">74</a>
-<a href="#75" id="75">75</a>
-<a href="#76" id="76">76</a>
-<a href="#77" id="77">77</a>
-<a href="#78" id="78">78</a>
-<a href="#79" id="79">79</a>
-<a href="#80" id="80">80</a>
-<a href="#81" id="81">81</a>
-<a href="#82" id="82">82</a>
-<a href="#83" id="83">83</a>
-<a href="#84" id="84">84</a>
-<a href="#85" id="85">85</a>
-<a href="#86" id="86">86</a>
-<a href="#87" id="87">87</a>
-<a href="#88" id="88">88</a>
-<a href="#89" id="89">89</a>
-<a href="#90" id="90">90</a>
-<a href="#91" id="91">91</a>
-<a href="#92" id="92">92</a>
-<a href="#93" id="93">93</a>
-<a href="#94" id="94">94</a>
-<a href="#95" id="95">95</a>
-<a href="#96" id="96">96</a>
-<a href="#97" id="97">97</a>
-<a href="#98" id="98">98</a>
-<a href="#99" id="99">99</a>
-<a href="#100" id="100">100</a>
-<a href="#101" id="101">101</a>
-<a href="#102" id="102">102</a>
-<a href="#103" id="103">103</a>
-<a href="#104" id="104">104</a>
-<a href="#105" id="105">105</a>
-<a href="#106" id="106">106</a>
-<a href="#107" id="107">107</a>
-<a href="#108" id="108">108</a>
-<a href="#109" id="109">109</a>
-<a href="#110" id="110">110</a>
-<a href="#111" id="111">111</a>
-<a href="#112" id="112">112</a>
-<a href="#113" id="113">113</a>
-<a href="#114" id="114">114</a>
-<a href="#115" id="115">115</a>
-<a href="#116" id="116">116</a>
-<a href="#117" id="117">117</a>
-<a href="#118" id="118">118</a>
-<a href="#119" id="119">119</a>
-<a href="#120" id="120">120</a>
-<a href="#121" id="121">121</a>
-<a href="#122" id="122">122</a>
-<a href="#123" id="123">123</a>
-<a href="#124" id="124">124</a>
-<a href="#125" id="125">125</a>
-<a href="#126" id="126">126</a>
-<a href="#127" id="127">127</a></pre></div><pre class="rust"><code><span class="doccomment">/// The higher-level manager of the blocks allocated. Operations performed by the block engine do
+<a href="#66" id="66">66</a></pre></div><pre class="rust"><code><span class="doccomment">/// The higher-level manager of the blocks allocated. Operations performed by the block engine do
 /// not directly change memory.
 </span><span class="kw">mod </span>block_engine;
 <span class="kw">mod </span>block_engine_sequence;
@@ -147,9 +86,6 @@
 <span class="kw">pub use </span>scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
 };
-
-<span class="kw">use </span><span class="kw">crate</span>::MemoryUsage;
-<span class="kw">use </span>tracing::info;
 
 <span class="doccomment">/// All memory counts in MB. Default for block size is 32.
 </span><span class="attr">#[derive(Clone, Copy)]
@@ -182,74 +118,16 @@
     ContextSize(usize),
 }
 
-<span class="comment">// See `pagedattention.cu` CALL_V1_LAUNCHER_BLOCK_SIZE
-</span><span class="kw">const </span>SUPPORTED_BLOCK_SIZE: <span class="kw-2">&amp;</span>[usize] = <span class="kw-2">&amp;</span>[<span class="number">8</span>, <span class="number">16</span>, <span class="number">32</span>];
-
-<span class="kw">const </span>SIZE_IN_MB: usize = <span class="number">1024 </span>* <span class="number">1024</span>;
-
-<span class="macro">macro_rules!</span> mb_to_blocks {
-    (<span class="macro-nonterminal">$mb_size</span>:expr, <span class="macro-nonterminal">$dtype_size</span>:expr, <span class="macro-nonterminal">$block_size</span>:expr, <span class="macro-nonterminal">$config</span>:expr) =&gt; {
-        <span class="macro-nonterminal">$mb_size
-            </span>/ <span class="macro-nonterminal">$dtype_size
-            </span>/ <span class="macro-nonterminal">$block_size
-            </span>/ <span class="macro-nonterminal">$config</span>.num_kv_heads()
-            / (<span class="macro-nonterminal">$config</span>.hidden_size() / <span class="macro-nonterminal">$config</span>.num_attn_heads())
-            / <span class="macro-nonterminal">$config</span>.num_layers()
-            / <span class="number">2
-    </span>};
-}
-
-<span class="macro">macro_rules!</span> ctxt_to_blocks {
-    (<span class="macro-nonterminal">$context_len</span>:expr, <span class="macro-nonterminal">$dtype_size</span>:expr, <span class="macro-nonterminal">$block_size</span>:expr, <span class="macro-nonterminal">$config</span>:expr) =&gt; {
-        <span class="macro-nonterminal">$context_len
-            </span>* <span class="macro-nonterminal">$dtype_size
-            </span>* <span class="macro-nonterminal">$config</span>.num_kv_heads()
-            * (<span class="macro-nonterminal">$config</span>.hidden_size() / <span class="macro-nonterminal">$config</span>.num_attn_heads())
-            * <span class="macro-nonterminal">$config</span>.num_layers()
-            * <span class="number">2
-    </span>};
-}
-
 <span class="doccomment">/// Memory values are in MBs or a percentage in [0,1]. Specify block size or the default is 32.
 </span><span class="kw">pub fn </span>calculate_cache_config(
-    mem_gpu: MemoryGpuConfig,
-    mem_cpu: usize,
-    block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-    dtype: DType,
-    config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike,
-    device: <span class="kw-2">&amp;</span>Device,
+    _mem_gpu: MemoryGpuConfig,
+    _mem_cpu: usize,
+    _block_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    _dtype: DType,
+    _config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike,
+    _device: <span class="kw-2">&amp;</span>Device,
+    _layer_devices: <span class="kw-2">&amp;</span>[<span class="prelude-ty">Option</span>&lt;Device&gt;],
 ) -&gt; anyhow::Result&lt;CacheConfig&gt; {
-    <span class="kw">let </span>block_size = block_size.unwrap_or(<span class="number">32</span>);
-    <span class="kw">if </span>!SUPPORTED_BLOCK_SIZE.contains(<span class="kw-2">&amp;</span>block_size) {
-        <span class="macro">anyhow::bail!</span>(<span class="string">"Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}"</span>);
-    }
-    <span class="kw">let </span>dtype_size = dtype.size_in_bytes();
-
-    <span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-    </span><span class="kw">let </span>mem_gpu = <span class="kw">match </span>mem_gpu {
-        MemoryGpuConfig::MbAmount(v) =&gt; v,
-        MemoryGpuConfig::Utilization(f) =&gt; {
-            <span class="kw">let </span>free = MemoryUsage.get_memory_available(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32;
-            <span class="kw">let </span>total = MemoryUsage.get_total_memory(device)<span class="question-mark">? </span><span class="kw">as </span>f32 / SIZE_IN_MB <span class="kw">as </span>f32;
-            <span class="kw">let </span>used = total - free;
-            (total * f - used) <span class="kw">as </span>usize
-        }
-        MemoryGpuConfig::ContextSize(toks) =&gt; {
-            <span class="macro">ctxt_to_blocks!</span>(toks, dtype_size, block_size, config) / SIZE_IN_MB
-        }
-    };
-    <span class="macro">info!</span>(<span class="string">"Allocating {mem_gpu} MB for PagedAttention KV cache"</span>);
-
-    <span class="kw">let </span>num_gpu_blocks = <span class="macro">mb_to_blocks!</span>(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
-    <span class="kw">let </span>num_cpu_blocks = <span class="macro">mb_to_blocks!</span>(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
-    <span class="kw">if </span>num_gpu_blocks == <span class="number">0 </span>{
-        <span class="macro">anyhow::bail!</span>(<span class="string">"Num GPU blocks is 0. This means there is not enough memory. Either reduce the memory amount/utilization/context size or disable PagedAttention."</span>);
-    }
-    <span class="macro">info!</span>(<span class="string">"Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens"</span>, num_gpu_blocks<span class="kw-2">*</span>block_size);
-    <span class="prelude-val">Ok</span>(CacheConfig {
-        block_size,
-        num_gpu_blocks,
-        num_cpu_blocks,
-    })
+    <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot calculate cache config when not using PagedAttention."</span>)
 }
 </code></pre></div></section></main></body></html>

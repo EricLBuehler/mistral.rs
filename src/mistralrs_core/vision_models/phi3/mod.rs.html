@@ -1334,7 +1334,8 @@
 <a href="#1333" id="1333">1333</a>
 <a href="#1334" id="1334">1334</a>
 <a href="#1335" id="1335">1335</a>
-<a href="#1336" id="1336">1336</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1336" id="1336">1336</a>
+<a href="#1337" id="1337">1337</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3_inputs_processor;
 
@@ -2392,6 +2393,7 @@
             sliding_window: cfg.sliding_window,
             embed_tokens,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,

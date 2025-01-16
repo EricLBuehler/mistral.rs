@@ -743,7 +743,8 @@
 <a href="#742" id="742">742</a>
 <a href="#743" id="743">743</a>
 <a href="#744" id="744">744</a>
-<a href="#745" id="745">745</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
 </span><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -1216,6 +1217,7 @@
             mapper,
             rope_parameters,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,

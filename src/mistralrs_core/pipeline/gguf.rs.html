@@ -819,7 +819,15 @@
 <a href="#818" id="818">818</a>
 <a href="#819" id="819">819</a>
 <a href="#820" id="820">820</a>
-<a href="#821" id="821">821</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -1073,6 +1081,7 @@
 }
 
 <span class="kw">struct </span>ContentConfig {
+    max_seq_len: usize,
     hidden_size: usize,
     num_attn_heads: usize,
     num_kv_heads: usize,
@@ -1085,6 +1094,9 @@
         <span class="kw">let </span>metadata = value.get_metadata();
         <span class="kw">let </span>arch = metadata[<span class="string">"general.architecture"</span>].to_string().unwrap();
         <span class="self">Self </span>{
+            max_seq_len: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.context_length"</span>)]
+                .to_u64()
+                .unwrap() <span class="kw">as </span>usize,
             hidden_size: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.embedding_length"</span>)]
                 .to_u64()
                 .unwrap() <span class="kw">as </span>usize,
@@ -1100,6 +1112,9 @@
 }
 
 <span class="kw">impl </span>ModelConfigLike <span class="kw">for </span>ContentConfig {
+    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="self">self</span>.max_seq_len
+    }
     <span class="kw">fn </span>hidden_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
         <span class="self">self</span>.hidden_size
     }
@@ -1305,6 +1320,7 @@
                 internal_dtype,
                 model_config,
                 device,
+                <span class="kw-2">&amp;</span>layer_devices,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>cache_engine = CacheEngine::new(
                 model_config,

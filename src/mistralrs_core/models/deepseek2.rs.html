@@ -1086,7 +1086,8 @@
 <a href="#1085" id="1085">1085</a>
 <a href="#1086" id="1086">1086</a>
 <a href="#1087" id="1087">1087</a>
-<a href="#1088" id="1088">1088</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1088" id="1088">1088</a>
+<a href="#1089" id="1089">1089</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1892,6 +1893,7 @@
             device: normal_loading_metadata.real_device.clone(),
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_attention_heads,

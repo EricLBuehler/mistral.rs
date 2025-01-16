@@ -891,7 +891,8 @@
 <a href="#890" id="890">890</a>
 <a href="#891" id="891">891</a>
 <a href="#892" id="892">892</a>
-<a href="#893" id="893">893</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -1401,6 +1402,7 @@
                 dtype,
                 model.config(),
                 device,
+                <span class="kw-2">&amp;</span>layer_devices,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>cache_engine =
                 CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device, layer_devices)<span class="question-mark">?</span>;
