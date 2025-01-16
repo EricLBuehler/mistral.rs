@@ -514,7 +514,7 @@ pub trait DeviceMappedModelLoader {
 ///
 /// # Example
 /// ```no_run
-/// use mistralrs_core::{Loader, TokenSource, DeviceMapSetting, MbReservePerGpu, ModelDType};
+/// use mistralrs_core::{Loader, TokenSource, DeviceMapSetting, AutoDeviceMapParams, ModelDType};
 /// use candle_core::Device;
 ///
 /// let loader: Box<dyn Loader> = todo!();
@@ -524,7 +524,7 @@ pub trait DeviceMappedModelLoader {
 ///     &ModelDType::Auto,
 ///     &Device::cuda_if_available(0).unwrap(),
 ///     false,
-///     DeviceMapSetting::Auto,
+///     DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
 ///     None,
 ///     None,
 /// ).unwrap();
