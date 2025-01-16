@@ -1,4 +1,5 @@
 pub trait ModelConfigLike {
+    fn max_seq_len(&self) -> usize;
     fn num_layers(&self) -> usize;
     fn hidden_size(&self) -> usize;
     fn num_kv_heads(&self) -> usize;
@@ -13,6 +14,7 @@ pub trait ModelConfigLike {
 
 #[derive(Clone)]
 pub struct ModelConfigMetadata {
+    pub max_seq_len: usize,
     pub num_layers: usize,
     pub hidden_size: usize,
     pub num_kv_heads: usize,
@@ -23,6 +25,9 @@ pub struct ModelConfigMetadata {
 }
 
 impl ModelConfigLike for ModelConfigMetadata {
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
     fn hidden_size(&self) -> usize {
         self.hidden_size
     }

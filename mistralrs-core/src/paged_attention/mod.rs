@@ -95,6 +95,7 @@ pub fn calculate_cache_config(
     dtype: DType,
     config: &dyn ModelConfigLike,
     device: &Device,
+    layer_devices: &[Option<Device>],
 ) -> anyhow::Result<CacheConfig> {
     let block_size = block_size.unwrap_or(32);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
@@ -102,19 +103,31 @@ pub fn calculate_cache_config(
     }
     let dtype_size = dtype.size_in_bytes();
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-    let mem_gpu = match mem_gpu {
-        MemoryGpuConfig::MbAmount(v) => v,
-        MemoryGpuConfig::Utilization(f) => {
-            let free = MemoryUsage.get_memory_available(device)? as f32 / SIZE_IN_MB as f32;
-            let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
-            let used = total - free;
-            (total * f - used) as usize
-        }
-        MemoryGpuConfig::ContextSize(toks) => {
-            ctxt_to_blocks!(toks, dtype_size, block_size, config) / SIZE_IN_MB
-        }
-    };
+    let mut min_mem_gpu = usize::MAX;
+    for dev in layer_devices {
+        let device = dev.as_ref().unwrap_or(device);
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        let mem_gpu = match mem_gpu {
+            MemoryGpuConfig::MbAmount(v) => v,
+            MemoryGpuConfig::Utilization(f) => {
+                let free = MemoryUsage.get_memory_available(device)? as f32 / SIZE_IN_MB as f32;
+                let total = MemoryUsage.get_total_memory(device)? as f32 / SIZE_IN_MB as f32;
+                let used = total - free;
+                (total * f - used) as usize
+            }
+            MemoryGpuConfig::ContextSize(toks) => {
+                ctxt_to_blocks!(toks, dtype_size, block_size, config) / SIZE_IN_MB
+            }
+        };
+        min_mem_gpu = min_mem_gpu.min(mem_gpu);
+    }
+
+    // Cap at kv cache for max seq len
+    let mem_for_toks =
+        ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
+    let mem_gpu = min_mem_gpu.min(mem_for_toks);
+
     info!("Allocating {mem_gpu} MB for PagedAttention KV cache");
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
