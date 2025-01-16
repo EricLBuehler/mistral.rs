@@ -11,7 +11,7 @@ To control the mapping across devices, you can set the following maximum paramet
 
 - maximum sequence length
 - maximum batch size
-- (vision models) maximum image size
+- (vision models) maximum image length (length refers to the edge length)
 - (vision models) maximum number of images
 
 These parameters do not translate to hard limits during runtime, they only control the mapping.
