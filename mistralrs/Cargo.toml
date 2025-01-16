@@ -158,3 +158,11 @@ required-features = []
 [[example]]
 name = "deepseekv2"
 required-features = []
+
+[[example]]
+name = "text_auto_device_map"
+required-features = []
+
+[[example]]
+name = "vision_auto_device_map"
+required-features = []
