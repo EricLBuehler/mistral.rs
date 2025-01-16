@@ -502,7 +502,25 @@ pub trait DeviceMappedModelLoader {
             #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
             let device_capacity = (device_capacity as f64 * 0.90) as usize;
 
-            let layers_on_device = if device_capacity >= remaining_to_map {
+            // Algorithm is to check the following:
+            // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
+            // 2) if the mapped activations plus remaining fits on the nth device
+            // 3) common case, iteratively find the optimal amount of layers to put on the nth device
+            //   - if this is the first dev: must hold the non-mapped act and non-mapped model
+            //   - otherwise, must hold the mapped act
+            #[allow(clippy::if_same_then_else)]
+            let layers_on_device = if current_ordinal == 0
+                && device_capacity
+                    >= remaining_to_map
+                        + non_mapped_max_act_size_in_bytes
+                        + mapped_max_act_size_in_bytes
+            {
+                remaining_to_map = 0;
+
+                num_layers - current_layer
+            } else if current_ordinal != 0
+                && device_capacity >= remaining_to_map + mapped_max_act_size_in_bytes
+            {
                 remaining_to_map = 0;
 
                 num_layers - current_layer
@@ -524,7 +542,10 @@ pub trait DeviceMappedModelLoader {
                     layers_on_device += 1;
                 }
 
-                remaining_to_map = remaining_to_map.saturating_sub(used_capacity);
+                // Do not reduce amount to map if this device can't fit any
+                if layers_on_device > 0 {
+                    remaining_to_map = remaining_to_map.saturating_sub(used_capacity);
+                }
                 layers_on_device
             };
 

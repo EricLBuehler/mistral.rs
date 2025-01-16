@@ -179,10 +179,10 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(

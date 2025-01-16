@@ -363,10 +363,10 @@ impl DeviceMappedModelLoader for AutoLoader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 }
 
@@ -508,10 +508,10 @@ impl DeviceMappedModelLoader for MistralLoader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -729,10 +729,10 @@ impl DeviceMappedModelLoader for GemmaLoader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -948,10 +948,10 @@ impl DeviceMappedModelLoader for LlamaLoader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -1160,10 +1160,10 @@ impl DeviceMappedModelLoader for MixtralLoader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -1374,10 +1374,10 @@ impl DeviceMappedModelLoader for Phi2Loader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -1585,10 +1585,10 @@ impl DeviceMappedModelLoader for Phi3Loader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -1780,10 +1780,10 @@ impl DeviceMappedModelLoader for Qwen2Loader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -2006,10 +2006,10 @@ impl DeviceMappedModelLoader for Gemma2Loader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -2220,10 +2220,10 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -2450,10 +2450,10 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
@@ -2719,10 +2719,10 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        self.mapped_max_act_size_elems(config, params)
+        Ok(0)
     }
 
     fn non_mapped_size_in_bytes(
