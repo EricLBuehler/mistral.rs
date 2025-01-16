@@ -570,7 +570,6 @@ pub trait DeviceMappedModelLoader {
         };
         let paged_attn_size_in_bytes =
             paged_attn_size_elems * model_cfg.num_layers() * dtype.size_in_bytes();
-        dbg!(paged_attn_size_in_bytes);
 
         // Always add the CPU as fallback
         let devices = [devices, &[Device::Cpu]].concat();

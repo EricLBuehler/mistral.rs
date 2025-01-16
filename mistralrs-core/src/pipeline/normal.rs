@@ -275,7 +275,7 @@ impl Loader for NormalLoader {
         silent: bool,
         mut mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
@@ -379,6 +379,12 @@ impl Loader for NormalLoader {
             layer_devices.push(device);
         }
         let dtype = mapper.get_min_dtype(dtype)?;
+
+        let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
+        if mapping_uses_cpu {
+            warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
 
         info!(
             "Model config: {:?}",

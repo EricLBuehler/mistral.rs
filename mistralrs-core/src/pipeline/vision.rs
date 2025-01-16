@@ -47,7 +47,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct VisionPipeline {
     model: Box<dyn VisionModel + Send + Sync>,
@@ -313,6 +313,12 @@ impl Loader for VisionLoader {
             layer_devices.push(device);
         }
         let dtype = mapper.get_min_dtype(dtype)?;
+
+        let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
+        if mapping_uses_cpu {
+            warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
 
         let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
         if let Some(ref topology) = self.config.topology {
