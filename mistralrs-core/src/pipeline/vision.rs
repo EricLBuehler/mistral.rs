@@ -314,6 +314,8 @@ impl Loader for VisionLoader {
         }
         let dtype = mapper.get_min_dtype(dtype)?;
 
+        // TODO: PagedAttention is not supported with CPU for now.
+        // This check is not really necessary because `get_device_layers` should prevent it.
         let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
         if mapping_uses_cpu {
             warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");

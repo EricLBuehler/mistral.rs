@@ -571,11 +571,9 @@ pub trait DeviceMappedModelLoader {
         let paged_attn_size_in_bytes =
             paged_attn_size_elems * model_cfg.num_layers() * dtype.size_in_bytes();
 
-        // Always add the CPU as fallback
-        let devices = [devices, &[Device::Cpu]].concat();
-
         let mut per_layer_avail = Vec::new();
-        for dev in devices.clone() {
+        // Always add the CPU as fallback
+        for dev in [devices, &[Device::Cpu]].concat() {
             let avail = MemoryUsage
                 .get_memory_available(&dev)?
                 .wrapping_sub(paged_attn_size_in_bytes);
@@ -592,6 +590,7 @@ pub trait DeviceMappedModelLoader {
         let mut current_ordinal = 0;
         let mut current_layer = 0;
         let per_layer_avail_cpy = per_layer_avail.clone();
+        let mut mapping_includes_cpu = false;
         while remaining_to_map > 0 && !per_layer_avail.is_empty() {
             let (device_capacity, device) = per_layer_avail
                 .pop()
@@ -657,6 +656,8 @@ pub trait DeviceMappedModelLoader {
                     layers: layers_on_device,
                 });
                 current_ordinal += 1;
+            } else {
+                mapping_includes_cpu = true;
             }
 
             current_layer += layers_on_device;
@@ -674,6 +675,22 @@ pub trait DeviceMappedModelLoader {
                     ))
                     .collect::<Vec<_>>(),
                 b_to_mb!(remaining_to_map)
+            );
+        }
+
+        // TODO: PagedAttention is not supported with CPU for now.
+        // Recalculate without PagedAttention metadata.
+        if paged_attn_config.is_some_and(|_| mapping_includes_cpu) {
+            return self.get_device_layers(
+                config,
+                num_layers,
+                layer_sizes_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                devices,
+                dtype,
+                params,
+                None,
             );
         }
 
