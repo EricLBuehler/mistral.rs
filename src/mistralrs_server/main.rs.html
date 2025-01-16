@@ -508,7 +508,10 @@
 <a href="#507" id="507">507</a>
 <a href="#508" id="508">508</a>
 <a href="#509" id="509">509</a>
-<a href="#510" id="510">510</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
@@ -518,10 +521,11 @@
 <span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
+    paged_attn_supported, parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
+    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
+    TokenSource,
 };
 <span class="kw">use </span>openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
@@ -614,14 +618,14 @@
     </span><span class="attr">#[arg(long, default_value_t = <span class="number">16</span>)]
     </span>prefix_cache_n: usize,
 
-    <span class="doccomment">/// Note: this is deprecated in favor of automatic device mapping.
+    <span class="doccomment">/// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     </span><span class="attr">#[arg(short, long, value_parser, value_delimiter = <span class="string">';'</span>)]
     </span>num_device_layers: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 
-    <span class="doccomment">/// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    <span class="doccomment">/// In-situ quantization to apply.
     </span><span class="attr">#[arg(long = <span class="string">"isq"</span>, value_parser = parse_isq_value)]
     </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
 
@@ -810,6 +814,7 @@
 
     <span class="kw">let </span>tgt_non_granular_index = get_tgt_non_granular_index(<span class="kw-2">&amp;</span>args.model);
     <span class="kw">let </span>dtype = get_model_dtype(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
+    <span class="kw">let </span>auto_device_map_params = get_auto_device_map_params(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
 
     <span class="kw">if </span>tgt_non_granular_index.is_some() {
         args.max_seqs = <span class="number">1</span>;
@@ -893,7 +898,7 @@
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } <span class="kw">else </span>{
-        DeviceMapSetting::Auto
+        DeviceMapSetting::Auto(auto_device_map_params)
     };
 
     <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() {
@@ -996,9 +1001,10 @@
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
         .with_prefix_cache_n(args.prefix_cache_n)
-        .with_gemm_full_precision_f16(args.cpu);
+        .with_gemm_full_precision_f16(args.cpu)
+        .with_gemm_full_precision_f16(args.cpu); <span class="comment">// Required to allow `cuda` build to use `--cpu`, #1056
 
-    <span class="kw">if </span>args.interactive_mode {
+    </span><span class="kw">if </span>args.interactive_mode {
         interactive_mode(builder.build(), args.throughput_log).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }

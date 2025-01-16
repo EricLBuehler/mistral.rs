@@ -574,15 +574,17 @@
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
 <a href="#575" id="575">575</a>
-<a href="#576" id="576">576</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
-    get_model_dtype, initialize_logging, paged_attn_supported, parse_isq_value, Constraint,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
-    DrySamplingParams, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
-    MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
-    Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
+    parse_isq_value, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, DrySamplingParams, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
+    MistralRs, MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
+    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Display, num::NonZeroUsize};
@@ -867,13 +869,14 @@
     </span><span class="attr">#[arg(long, short, default_value_t = <span class="number">5</span>)]
     </span>repetitions: usize,
 
-    <span class="doccomment">/// Number of device layers to load and run on GPU(s). All others will be on the CPU.
+    <span class="doccomment">/// NOTE: This can be omitted to use automatic device mapping!
+    /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     </span><span class="attr">#[arg(short, long, value_parser, value_delimiter = <span class="string">';'</span>)]
     </span>num_device_layers: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
 
-    <span class="doccomment">/// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    <span class="doccomment">/// In-situ quantization to apply.
     </span><span class="attr">#[arg(long = <span class="string">"isq"</span>, value_parser = parse_isq_value)]
     </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
 
@@ -932,6 +935,7 @@
     };
 
     <span class="kw">let </span>dtype = get_model_dtype(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
+    <span class="kw">let </span>auto_device_map_params = get_auto_device_map_params(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
 
     <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
@@ -998,7 +1002,7 @@
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } <span class="kw">else </span>{
-        DeviceMapSetting::Auto
+        DeviceMapSetting::Auto(auto_device_map_params)
     };
 
     <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() {

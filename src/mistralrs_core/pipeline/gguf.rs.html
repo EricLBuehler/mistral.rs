@@ -791,43 +791,7 @@
 <a href="#790" id="790">790</a>
 <a href="#791" id="791">791</a>
 <a href="#792" id="792">792</a>
-<a href="#793" id="793">793</a>
-<a href="#794" id="794">794</a>
-<a href="#795" id="795">795</a>
-<a href="#796" id="796">796</a>
-<a href="#797" id="797">797</a>
-<a href="#798" id="798">798</a>
-<a href="#799" id="799">799</a>
-<a href="#800" id="800">800</a>
-<a href="#801" id="801">801</a>
-<a href="#802" id="802">802</a>
-<a href="#803" id="803">803</a>
-<a href="#804" id="804">804</a>
-<a href="#805" id="805">805</a>
-<a href="#806" id="806">806</a>
-<a href="#807" id="807">807</a>
-<a href="#808" id="808">808</a>
-<a href="#809" id="809">809</a>
-<a href="#810" id="810">810</a>
-<a href="#811" id="811">811</a>
-<a href="#812" id="812">812</a>
-<a href="#813" id="813">813</a>
-<a href="#814" id="814">814</a>
-<a href="#815" id="815">815</a>
-<a href="#816" id="816">816</a>
-<a href="#817" id="817">817</a>
-<a href="#818" id="818">818</a>
-<a href="#819" id="819">819</a>
-<a href="#820" id="820">820</a>
-<a href="#821" id="821">821</a>
-<a href="#822" id="822">822</a>
-<a href="#823" id="823">823</a>
-<a href="#824" id="824">824</a>
-<a href="#825" id="825">825</a>
-<a href="#826" id="826">826</a>
-<a href="#827" id="827">827</a>
-<a href="#828" id="828">828</a>
-<a href="#829" id="829">829</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#793" id="793">793</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -854,7 +818,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::ChatTemplate;
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher_v2::PrefixCacheManagerV2;
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
-<span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::GgufDeviceMapLoaderInner;
+<span class="kw">use </span><span class="kw">crate</span>::utils::gguf_metadata::{ContentConfig, GgufDeviceMapLoaderInner};
 <span class="kw">use </span><span class="kw">crate</span>::utils::model_config <span class="kw">as </span>ModelConfig;
 <span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
 <span class="kw">use </span><span class="kw">crate</span>::xlora_models::NonGranularState;
@@ -872,7 +836,7 @@
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 <span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
-<span class="kw">use </span>candle_core::{DType, Device, Tensor};
+<span class="kw">use </span>candle_core::{Device, Tensor};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>mistralrs_quant::IsqType;
@@ -1080,55 +1044,6 @@
     }
 }
 
-<span class="kw">struct </span>ContentConfig {
-    max_seq_len: usize,
-    hidden_size: usize,
-    num_attn_heads: usize,
-    num_kv_heads: usize,
-    num_layers: usize,
-}
-
-<span class="attr">#[allow(clippy::cast_possible_truncation)]
-</span><span class="kw">impl</span>&lt;<span class="lifetime">'a</span>, R: std::io::Seek + std::io::Read&gt; From&lt;<span class="kw-2">&amp;</span>Content&lt;<span class="lifetime">'a</span>, R&gt;&gt; <span class="kw">for </span>ContentConfig {
-    <span class="kw">fn </span>from(value: <span class="kw-2">&amp;</span>Content&lt;<span class="lifetime">'a</span>, R&gt;) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>metadata = value.get_metadata();
-        <span class="kw">let </span>arch = metadata[<span class="string">"general.architecture"</span>].to_string().unwrap();
-        <span class="self">Self </span>{
-            max_seq_len: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.context_length"</span>)]
-                .to_u64()
-                .unwrap() <span class="kw">as </span>usize,
-            hidden_size: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.embedding_length"</span>)]
-                .to_u64()
-                .unwrap() <span class="kw">as </span>usize,
-            num_attn_heads: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.head_count"</span>)]
-                .to_u64()
-                .unwrap() <span class="kw">as </span>usize,
-            num_kv_heads: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.head_count_kv"</span>)]
-                .to_u64()
-                .unwrap() <span class="kw">as </span>usize,
-            num_layers: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.block_count"</span>)].to_u64().unwrap() <span class="kw">as </span>usize,
-        }
-    }
-}
-
-<span class="kw">impl </span>ModelConfigLike <span class="kw">for </span>ContentConfig {
-    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="self">self</span>.max_seq_len
-    }
-    <span class="kw">fn </span>hidden_size(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="self">self</span>.hidden_size
-    }
-    <span class="kw">fn </span>num_attn_heads(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="self">self</span>.num_attn_heads
-    }
-    <span class="kw">fn </span>num_kv_heads(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="self">self</span>.num_kv_heads
-    }
-    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="self">self</span>.num_layers
-    }
-}
-
 <span class="kw">impl </span>Loader <span class="kw">for </span>GGUFLoader {
     <span class="attr">#[allow(clippy::type_complexity, clippy::too_many_arguments)]
     </span><span class="kw">fn </span>load_model_from_hf(
@@ -1171,7 +1086,7 @@
         silent: bool,
         <span class="kw-2">mut </span>mapper: DeviceMapSetting,
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
-        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
+        <span class="kw-2">mut </span>paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">if </span>in_situ_quant.is_some() {
             <span class="macro">anyhow::bail!</span>(
@@ -1191,14 +1106,15 @@
 
         <span class="comment">// If auto, convert to Map
         </span><span class="kw">let </span>num_layers = model.get_metadata()[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.block_count"</span>)].to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="kw">if let </span>DeviceMapSetting::Auto = mapper.clone() {
+        <span class="kw">if let </span>DeviceMapSetting::Auto(params) = mapper.clone() {
             <span class="kw">let </span>devices = device_map::get_all_similar_devices(device)<span class="question-mark">?</span>;
+            <span class="comment">// Initial dtype
+            </span><span class="kw">let </span>dtype = dtype.try_into_dtype(<span class="kw-2">&amp;</span>devices.iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())<span class="question-mark">?</span>;
 
             <span class="kw">let </span>model = GgufDeviceMapLoaderInner {
                 model: <span class="kw-2">&amp;</span>model,
                 arch,
             };
-            <span class="kw">let </span>dtype = DType::F32;
 
             <span class="kw">let </span>layer_sizes_in_bytes =
                 model.layer_sizes_in_bytes(<span class="string">"this is a dummy config!"</span>, dtype, <span class="number">1</span>)<span class="question-mark">?</span>;
@@ -1214,6 +1130,9 @@
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 <span class="kw-2">&amp;</span>devices,
+                dtype,
+                <span class="kw-2">&amp;</span>params,
+                paged_attn_config.as_ref(),
             )<span class="question-mark">?</span>;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -1225,6 +1144,14 @@
         <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_layers {
             <span class="kw">let </span>device = mapper.device_for(layer, <span class="bool-val">false</span>).cloned();
             layer_devices.push(device);
+        }
+
+        <span class="comment">// TODO: PagedAttention is not supported with CPU for now.
+        // This check is not really necessary because `get_device_layers` should prevent it.
+        </span><span class="kw">let </span>mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
+        <span class="kw">if </span>mapping_uses_cpu {
+            <span class="macro">warn!</span>(<span class="string">"Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention."</span>);
+            paged_attn_config = <span class="prelude-val">None</span>;
         }
 
         <span class="kw">let </span>GgufTokenizerConversion {
@@ -1262,7 +1189,7 @@
         };
 
         <span class="kw">let </span>model_config_metadata: ContentConfig = (<span class="kw-2">&amp;</span>model).into();
-        <span class="kw">let </span>internal_dtype = dtype.try_into_dtype(<span class="kw-2">&amp;</span>[device]).unwrap();
+        <span class="kw">let </span>internal_dtype = mapper.get_min_dtype(dtype)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>model_config = {
             <span class="comment">// Base config (quantization only):
@@ -1321,6 +1248,7 @@
                 model_config,
                 device,
                 <span class="kw-2">&amp;</span>layer_devices,
+                silent,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>cache_engine = CacheEngine::new(
                 model_config,

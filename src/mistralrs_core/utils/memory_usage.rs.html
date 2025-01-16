@@ -170,7 +170,7 @@
             </span>Device::Metal(dev) =&gt; {
                 <span class="kw">let </span>max = dev.recommended_max_working_set_size();
                 <span class="kw">let </span>alloc = dev.current_allocated_size();
-                <span class="kw">let </span>avail = max - alloc;
+                <span class="kw">let </span>avail = max.saturating_sub(alloc);
 
                 <span class="prelude-val">Ok</span>(avail <span class="kw">as </span>usize)
             }

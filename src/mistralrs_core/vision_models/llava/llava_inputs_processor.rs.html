@@ -402,7 +402,9 @@
 <a href="#401" id="401">401</a>
 <a href="#402" id="402">402</a>
 <a href="#403" id="403">403</a>
-<a href="#404" id="404">404</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::sync::Arc;
@@ -467,9 +469,9 @@
 }
 
 <span class="kw">impl </span>LLaVAInputProcessor {
-    <span class="kw">fn </span>get_num_image_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="kw">let </span>patch_size = <span class="self">self</span>.model_config.vision_config.patch_size;
-        <span class="kw">let </span>patch_per_side = <span class="self">self</span>.model_config.vision_config.image_size / patch_size;
+    <span class="kw">pub fn </span>get_num_image_tokens(cfg: <span class="kw-2">&amp;</span>LLaVAConfig) -&gt; usize {
+        <span class="kw">let </span>patch_size = cfg.vision_config.patch_size;
+        <span class="kw">let </span>patch_per_side = cfg.vision_config.image_size / patch_size;
         patch_per_side * patch_per_side
     }
 }
@@ -795,7 +797,9 @@
             pixel_values,
             pixel_attention_mask: <span class="prelude-val">None</span>,
             image_sizes: <span class="prelude-val">Some</span>((original_size.<span class="number">0 </span><span class="kw">as </span>usize, original_size.<span class="number">1 </span><span class="kw">as </span>usize)),
-            num_img_tokens: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="self">self</span>.get_num_image_tokens()]),
+            num_img_tokens: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[LLaVAInputProcessor::get_num_image_tokens(
+                <span class="kw-2">&amp;</span><span class="self">self</span>.model_config,
+            )]),
             aspect_ratio_ids: <span class="prelude-val">None</span>,
             aspect_ratio_mask: <span class="prelude-val">None</span>,
             num_tiles: <span class="prelude-val">None</span>,

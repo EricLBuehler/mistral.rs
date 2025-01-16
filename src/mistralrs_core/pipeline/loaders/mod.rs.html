@@ -523,13 +523,246 @@
 <a href="#522" id="522">522</a>
 <a href="#523" id="523">523</a>
 <a href="#524" id="524">524</a>
-<a href="#525" id="525">525</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a>
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a>
+<a href="#667" id="667">667</a>
+<a href="#668" id="668">668</a>
+<a href="#669" id="669">669</a>
+<a href="#670" id="670">670</a>
+<a href="#671" id="671">671</a>
+<a href="#672" id="672">672</a>
+<a href="#673" id="673">673</a>
+<a href="#674" id="674">674</a>
+<a href="#675" id="675">675</a>
+<a href="#676" id="676">676</a>
+<a href="#677" id="677">677</a>
+<a href="#678" id="678">678</a>
+<a href="#679" id="679">679</a>
+<a href="#680" id="680">680</a>
+<a href="#681" id="681">681</a>
+<a href="#682" id="682">682</a>
+<a href="#683" id="683">683</a>
+<a href="#684" id="684">684</a>
+<a href="#685" id="685">685</a>
+<a href="#686" id="686">686</a>
+<a href="#687" id="687">687</a>
+<a href="#688" id="688">688</a>
+<a href="#689" id="689">689</a>
+<a href="#690" id="690">690</a>
+<a href="#691" id="691">691</a>
+<a href="#692" id="692">692</a>
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a>
+<a href="#696" id="696">696</a>
+<a href="#697" id="697">697</a>
+<a href="#698" id="698">698</a>
+<a href="#699" id="699">699</a>
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a>
+<a href="#708" id="708">708</a>
+<a href="#709" id="709">709</a>
+<a href="#710" id="710">710</a>
+<a href="#711" id="711">711</a>
+<a href="#712" id="712">712</a>
+<a href="#713" id="713">713</a>
+<a href="#714" id="714">714</a>
+<a href="#715" id="715">715</a>
+<a href="#716" id="716">716</a>
+<a href="#717" id="717">717</a>
+<a href="#718" id="718">718</a>
+<a href="#719" id="719">719</a>
+<a href="#720" id="720">720</a>
+<a href="#721" id="721">721</a>
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a>
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a>
+<a href="#746" id="746">746</a>
+<a href="#747" id="747">747</a>
+<a href="#748" id="748">748</a>
+<a href="#749" id="749">749</a>
+<a href="#750" id="750">750</a>
+<a href="#751" id="751">751</a>
+<a href="#752" id="752">752</a>
+<a href="#753" id="753">753</a>
+<a href="#754" id="754">754</a>
+<a href="#755" id="755">755</a>
+<a href="#756" id="756">756</a>
+<a href="#757" id="757">757</a>
+<a href="#758" id="758">758</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
 <span class="kw">mod </span>normal_loaders;
 <span class="kw">mod </span>vision_loaders;
 
 <span class="kw">use </span>std::{
     collections::HashMap,
-    fmt::{<span class="self">self</span>, Debug},
+    fmt::{<span class="self">self</span>, Debug, Display},
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -558,8 +791,12 @@
 };
 
 <span class="kw">use crate</span>::{
-    lora::LoraConfig, utils::debug::DeviceRepr, xlora_models::XLoraConfig, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, MemoryUsage, Ordering, PagedAttentionConfig, TryIntoDType,
+    lora::LoraConfig,
+    paged_attention::{calculate_cache_config, ModelConfigLike},
+    utils::debug::DeviceRepr,
+    xlora_models::XLoraConfig,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryGpuConfig, MemoryUsage,
+    Ordering, PagedAttentionConfig, TryIntoDType,
 };
 
 <span class="kw">use </span><span class="kw">super</span>::Pipeline;
@@ -882,39 +1119,222 @@
     }
 }
 
+<span class="macro">macro_rules!</span> b_to_mb {
+    (<span class="macro-nonterminal">$x</span>:expr) =&gt; {
+        <span class="macro-nonterminal">$x </span>/ (<span class="number">1024 </span>* <span class="number">1024</span>)
+    };
+}
+
+<span class="attr">#[derive(Debug, Clone)]
+</span><span class="kw">pub enum </span>AutoDeviceMapParams {
+    Text {
+        max_seq_len: usize,
+        max_batch_size: usize,
+    },
+    Vision {
+        max_seq_len: usize,
+        max_batch_size: usize,
+        max_image_shape: (usize, usize),
+        max_num_images: usize,
+    },
+}
+
+<span class="kw">impl </span>Display <span class="kw">for </span>AutoDeviceMapParams {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
+        <span class="kw">match </span><span class="self">self </span>{
+            <span class="self">Self</span>::Text {
+                max_seq_len,
+                max_batch_size,
+            } =&gt; <span class="macro">write!</span>(
+                f,
+                <span class="string">"text[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}]"
+            </span>),
+            <span class="self">Self</span>::Vision {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images
+            } =&gt; <span class="macro">write!</span>(
+                f,
+                <span class="string">"vision[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}, max_image_shape: {max_image_shape:?}, max_num_images: {max_num_images}]"
+            </span>),
+        }
+    }
+}
+
+<span class="kw">impl </span>AutoDeviceMapParams {
+    <span class="kw">pub const </span>DEFAULT_MAX_SEQ_LEN: usize = <span class="number">16 </span>* <span class="number">1024</span>;
+    <span class="kw">pub const </span>DEFAULT_MAX_BATCH_SIZE: usize = <span class="number">1</span>;
+    <span class="kw">pub const </span>DEFAULT_MAX_NUM_IMAGES: usize = <span class="number">1</span>;
+    <span class="kw">pub const </span>DEFAULT_MAX_IMAGE_LENGTH: usize = <span class="number">2 </span>* <span class="number">1024</span>;
+
+    <span class="kw">pub fn </span>default_text() -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::Text {
+            max_seq_len: <span class="self">Self</span>::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: <span class="self">Self</span>::DEFAULT_MAX_BATCH_SIZE,
+        }
+    }
+
+    <span class="kw">pub fn </span>default_vision() -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::Vision {
+            max_seq_len: <span class="self">Self</span>::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: <span class="self">Self</span>::DEFAULT_MAX_BATCH_SIZE,
+            max_num_images: <span class="self">Self</span>::DEFAULT_MAX_NUM_IMAGES,
+            max_image_shape: (
+                <span class="self">Self</span>::DEFAULT_MAX_IMAGE_LENGTH,
+                <span class="self">Self</span>::DEFAULT_MAX_IMAGE_LENGTH,
+            ),
+        }
+    }
+}
+
+<span class="kw">fn </span>calculate_key_block_shape(
+    model_config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike,
+    dtype: DType,
+    block_size: usize,
+) -&gt; (usize, usize, usize, usize) {
+    <span class="kw">let </span>element_size = dtype.size_in_bytes();
+    <span class="kw">let </span>x = <span class="number">16 </span>/ element_size;
+    (
+        model_config.num_kv_heads(),
+        model_config.k_head_dim() / x,
+        block_size,
+        x,
+    )
+}
+
+<span class="kw">fn </span>calculate_value_block_shape(
+    model_config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike,
+    block_size: usize,
+) -&gt; (usize, usize, usize) {
+    (
+        model_config.num_kv_heads(),
+        model_config.v_head_dim(),
+        block_size,
+    )
+}
+
 <span class="kw">pub trait </span>DeviceMappedModelLoader {
-    <span class="kw">fn </span>non_mapped_size_in_bytes(
+    <span class="doccomment">/// Maximum activation size of non-mapped parts of this model.
+    /// Useful for the vision models which may prefer to keep the vison components on the GPU.
+    </span><span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
+    <span class="doccomment">/// Maximum activation size of mapped parts of the model
+    </span><span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
+    <span class="doccomment">/// weight_pack_factor only applies to quantized weights.
+    </span><span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
-    <span class="kw">fn </span>layer_sizes_in_bytes(
+    <span class="doccomment">/// weight_pack_factor only applies to quantized weights.
+    </span><span class="kw">fn </span>layer_sizes_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt;;
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt;;
 
-    <span class="doccomment">/// weight_pack_factor only applies to quantized weights.
+    <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>get_device_layers(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        _config: <span class="kw-2">&amp;</span>str,
+        config: <span class="kw-2">&amp;</span>str,
         num_layers: usize,
         <span class="kw-2">mut </span>layer_sizes_in_bytes: Vec&lt;usize&gt;,
         non_mapped_size_in_bytes: usize,
         total_model_size_in_bytes: usize,
         devices: <span class="kw-2">&amp;</span>[Device],
+        dtype: DType,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        paged_attn_config: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;DeviceMapMetadata&gt; {
+        <span class="kw">let </span>mapped_max_act_size_in_bytes =
+            <span class="self">self</span>.mapped_max_act_size_elems(config, params)<span class="question-mark">? </span>* dtype.size_in_bytes();
+        <span class="kw">let </span>non_mapped_max_act_size_in_bytes =
+            <span class="self">self</span>.non_mapped_max_act_size_elems(config, params)<span class="question-mark">? </span>* dtype.size_in_bytes();
+
         <span class="kw">let </span><span class="kw-2">mut </span>remaining_to_map = total_model_size_in_bytes;
 
-        <span class="comment">// Always add the CPU as fallback
-        </span><span class="kw">let </span>devices = [devices, <span class="kw-2">&amp;</span>[Device::Cpu]].concat();
+        <span class="kw">let </span>max_seq_len = <span class="kw">match </span>params {
+            AutoDeviceMapParams::Text { max_seq_len, .. }
+            | AutoDeviceMapParams::Vision { max_seq_len, .. } =&gt; <span class="kw-2">*</span>max_seq_len,
+        };
+        <span class="kw">let </span>max_batch_size = <span class="kw">match </span>params {
+            AutoDeviceMapParams::Text { max_batch_size, .. }
+            | AutoDeviceMapParams::Vision { max_batch_size, .. } =&gt; <span class="kw-2">*</span>max_batch_size,
+        };
+
+        <span class="kw">let </span>model_cfg = <span class="self">self</span>.model_config(config)<span class="question-mark">?</span>;
+        <span class="kw">let </span>paged_attn_size_elems = <span class="kw">match </span>paged_attn_config {
+            <span class="prelude-val">Some</span>(paged_attn_config) =&gt; {
+                <span class="kw">let </span>cache_config = calculate_cache_config(
+                    MemoryGpuConfig::ContextSize(max_seq_len),
+                    <span class="number">0</span>,
+                    <span class="prelude-val">Some</span>(paged_attn_config.block_size.unwrap_or(<span class="number">32</span>)),
+                    dtype,
+                    <span class="kw-2">&amp;*</span>model_cfg,
+                    <span class="kw-2">&amp;</span>devices[<span class="number">0</span>],
+                    <span class="kw-2">&amp;</span>devices.iter().map(|x| <span class="prelude-val">Some</span>(x.clone())).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                    <span class="bool-val">true</span>,
+                )<span class="question-mark">?</span>;
+
+                <span class="kw">let </span>key_block_shape =
+                    calculate_key_block_shape(<span class="kw-2">&amp;*</span>model_cfg, dtype, cache_config.block_size);
+                <span class="kw">let </span>key_block_size = cache_config.num_gpu_blocks
+                    * key_block_shape.<span class="number">0
+                    </span>* key_block_shape.<span class="number">1
+                    </span>* key_block_shape.<span class="number">2
+                    </span>* key_block_shape.<span class="number">3</span>;
+
+                <span class="kw">let </span>value_block_shape = calculate_value_block_shape(
+                    <span class="kw-2">&amp;*</span><span class="self">self</span>.model_config(config)<span class="question-mark">?</span>,
+                    cache_config.block_size,
+                );
+                <span class="kw">let </span>value_block_size = cache_config.num_gpu_blocks
+                    * value_block_shape.<span class="number">0
+                    </span>* value_block_shape.<span class="number">1
+                    </span>* value_block_shape.<span class="number">2</span>;
+
+                key_block_size + value_block_size
+            }
+            <span class="prelude-val">None </span>=&gt; {
+                <span class="comment">// Non-paged KV cache
+                </span><span class="kw">let </span>key_block_shape = [
+                    max_batch_size,
+                    model_cfg.num_kv_heads(),
+                    max_seq_len,
+                    model_cfg.k_head_dim(),
+                ];
+                <span class="kw">let </span>value_block_shape = [
+                    max_batch_size,
+                    model_cfg.num_kv_heads(),
+                    max_seq_len,
+                    model_cfg.v_head_dim(),
+                ];
+
+                key_block_shape.into_iter().product::&lt;usize&gt;()
+                    + value_block_shape.iter().product::&lt;usize&gt;()
+            }
+        };
+        <span class="kw">let </span>paged_attn_size_in_bytes =
+            paged_attn_size_elems * model_cfg.num_layers() * dtype.size_in_bytes();
 
         <span class="kw">let </span><span class="kw-2">mut </span>per_layer_avail = Vec::new();
-        <span class="kw">for </span>dev <span class="kw">in </span>devices.clone() {
-            <span class="kw">let </span>avail = MemoryUsage.get_memory_available(<span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>;
+        <span class="comment">// Always add the CPU as fallback
+        </span><span class="kw">for </span>dev <span class="kw">in </span>[devices, <span class="kw-2">&amp;</span>[Device::Cpu]].concat() {
+            <span class="kw">let </span>avail = MemoryUsage
+                .get_memory_available(<span class="kw-2">&amp;</span>dev)<span class="question-mark">?
+                </span>.wrapping_sub(paged_attn_size_in_bytes);
             per_layer_avail.push((avail, dev));
         }
         <span class="comment">// Reverse so we don't use the cpu first!
@@ -927,6 +1347,8 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>current_ordinal = <span class="number">0</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>current_layer = <span class="number">0</span>;
+        <span class="kw">let </span>per_layer_avail_cpy = per_layer_avail.clone();
+        <span class="kw">let </span><span class="kw-2">mut </span>mapping_includes_cpu = <span class="bool-val">false</span>;
         <span class="kw">while </span>remaining_to_map &gt; <span class="number">0 </span>&amp;&amp; !per_layer_avail.is_empty() {
             <span class="kw">let </span>(device_capacity, device) = per_layer_avail
                 .pop()
@@ -935,27 +1357,53 @@
             </span><span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
             </span><span class="kw">let </span>device_capacity = (device_capacity <span class="kw">as </span>f64 * <span class="number">0.90</span>) <span class="kw">as </span>usize;
 
-            <span class="kw">let </span>layers_on_device = <span class="kw">if </span>device_capacity &gt;= remaining_to_map {
+            <span class="comment">// Algorithm is to check the following:
+            // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
+            // 2) if the mapped activations plus remaining fits on the nth device
+            // 3) common case, iteratively find the optimal amount of layers to put on the nth device
+            //   - if this is the first dev: must hold the non-mapped act and non-mapped model
+            //   - otherwise, must hold the mapped act
+            </span><span class="attr">#[allow(clippy::if_same_then_else)]
+            </span><span class="kw">let </span>layers_on_device = <span class="kw">if </span>current_ordinal == <span class="number">0
+                </span>&amp;&amp; device_capacity
+                    &gt;= remaining_to_map
+                        + non_mapped_max_act_size_in_bytes
+                        + mapped_max_act_size_in_bytes
+            {
+                remaining_to_map = <span class="number">0</span>;
+
+                num_layers - current_layer
+            } <span class="kw">else if </span>current_ordinal != <span class="number">0
+                </span>&amp;&amp; device_capacity &gt;= remaining_to_map + mapped_max_act_size_in_bytes
+            {
                 remaining_to_map = <span class="number">0</span>;
 
                 num_layers - current_layer
             } <span class="kw">else </span>{
                 <span class="kw">let </span><span class="kw-2">mut </span>used_capacity = <span class="number">0</span>;
+                <span class="kw">let </span><span class="kw-2">mut </span>used_capacity_no_act = <span class="number">0</span>;
                 <span class="kw">let </span><span class="kw-2">mut </span>layers_on_device = <span class="number">0</span>;
 
                 <span class="kw">if </span>current_ordinal == <span class="number">0 </span>{
-                    used_capacity += non_mapped_size_in_bytes;
+                    used_capacity += non_mapped_size_in_bytes + non_mapped_max_act_size_in_bytes;
+                } <span class="kw">else </span>{
+                    used_capacity += mapped_max_act_size_in_bytes;
                 }
 
                 <span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>last) = layer_sizes_in_bytes.last() {
                     <span class="kw">if </span>used_capacity + last &gt; device_capacity {
                         <span class="kw">break</span>;
                     }
-                    used_capacity += layer_sizes_in_bytes.pop().unwrap();
+                    <span class="kw">let </span>last = layer_sizes_in_bytes.pop().unwrap();
+                    used_capacity += last;
+                    used_capacity_no_act += last;
                     layers_on_device += <span class="number">1</span>;
                 }
 
-                remaining_to_map = remaining_to_map.saturating_sub(used_capacity);
+                <span class="comment">// Do not reduce amount to map if this device can't fit any
+                </span><span class="kw">if </span>layers_on_device &gt; <span class="number">0 </span>{
+                    remaining_to_map = remaining_to_map.saturating_sub(used_capacity_no_act);
+                }
                 layers_on_device
             };
 
@@ -966,14 +1414,16 @@
                     layers: layers_on_device,
                 });
                 current_ordinal += <span class="number">1</span>;
+            } <span class="kw">else </span>{
+                mapping_includes_cpu = <span class="bool-val">true</span>;
             }
 
             current_layer += layers_on_device;
         }
         <span class="kw">if </span>remaining_to_map &gt; <span class="number">0 </span>{
             <span class="macro">anyhow::bail!</span>(
-                <span class="string">"This model does not fit on the devices {:?}, and exceeds total capacity by {}MB"</span>,
-                per_layer_avail
+                <span class="string">"This model does not fit on the devices {:?}, and exceeds total capacity by {}MB. Auto device mapping params: {params}"</span>,
+                per_layer_avail_cpy
                     .iter()
                     .rev()
                     .map(|(avail, dev)| <span class="macro">format!</span>(
@@ -982,7 +1432,23 @@
                         avail / (<span class="number">1024 </span>* <span class="number">1024</span>),
                     ))
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-                remaining_to_map / (<span class="number">1024 </span>* <span class="number">1024</span>)
+                <span class="macro">b_to_mb!</span>(remaining_to_map)
+            );
+        }
+
+        <span class="comment">// TODO: PagedAttention is not supported with CPU for now.
+        // Recalculate without PagedAttention metadata.
+        </span><span class="kw">if </span>paged_attn_config.is_some_and(|<span class="kw">_</span>| mapping_includes_cpu) {
+            <span class="kw">return </span><span class="self">self</span>.get_device_layers(
+                config,
+                num_layers,
+                layer_sizes_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                devices,
+                dtype,
+                params,
+                <span class="prelude-val">None</span>,
             );
         }
 
@@ -995,7 +1461,7 @@
 ///
 /// # Example
 /// ```no_run
-/// use mistralrs_core::{Loader, TokenSource, DeviceMapSetting, ModelDType};
+/// use mistralrs_core::{Loader, TokenSource, DeviceMapSetting, AutoDeviceMapParams, ModelDType};
 /// use candle_core::Device;
 ///
 /// let loader: Box&lt;dyn Loader&gt; = todo!();
@@ -1005,7 +1471,7 @@
 ///     &amp;ModelDType::Auto,
 ///     &amp;Device::cuda_if_available(0).unwrap(),
 ///     false,
-///     DeviceMapSetting::Auto,
+///     DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
 ///     None,
 ///     None,
 /// ).unwrap();

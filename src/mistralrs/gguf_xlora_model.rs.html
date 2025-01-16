@@ -99,7 +99,9 @@
 <a href="#98" id="98">98</a>
 <a href="#99" id="99">99</a>
 <a href="#100" id="100">100</a>
-<a href="#101" id="101">101</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 
 <span class="kw">use crate</span>::{best_device, GgufModelBuilder, Model};
 
@@ -162,7 +164,9 @@
             <span class="kw-2">&amp;</span>ModelDType::Auto,
             <span class="kw-2">&amp;</span>best_device(<span class="self">self</span>.gguf_model.force_cpu)<span class="question-mark">?</span>,
             !<span class="self">self</span>.gguf_model.with_logging,
-            DeviceMapSetting::Auto,
+            <span class="self">self</span>.gguf_model
+                .device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             <span class="prelude-val">None</span>,
             <span class="self">self</span>.gguf_model.paged_attn_cfg,
         )<span class="question-mark">?</span>;

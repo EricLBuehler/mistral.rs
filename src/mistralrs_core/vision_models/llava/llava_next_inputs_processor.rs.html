@@ -461,7 +461,10 @@
 <a href="#460" id="460">460</a>
 <a href="#461" id="461">461</a>
 <a href="#462" id="462">462</a>
-<a href="#463" id="463">463</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::sync::Arc;
@@ -529,12 +532,12 @@
 }
 
 <span class="kw">impl </span>LLaVANextInputProcessor {
-    <span class="kw">fn </span>get_num_image_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>, image_size: (u32, u32)) -&gt; usize {
-        <span class="kw">let </span>patch_size = <span class="self">self</span>.model_config.vision_config.patch_size;
-        <span class="kw">let </span>image_grid_pinpoints = <span class="self">self</span>.model_config.image_grid_pinpoints.clone().unwrap();
+    <span class="kw">pub fn </span>get_num_image_tokens(cfg: <span class="kw-2">&amp;</span>LLaVANextConfig, image_size: (u32, u32)) -&gt; usize {
+        <span class="kw">let </span>patch_size = cfg.vision_config.patch_size;
+        <span class="kw">let </span>image_grid_pinpoints = cfg.image_grid_pinpoints.clone().unwrap();
         <span class="kw">let </span>anyres_grid_shape =
             get_anyres_image_grid_shape(image_size, <span class="kw-2">&amp;</span>image_grid_pinpoints, patch_size <span class="kw">as </span>u32);
-        <span class="kw">let </span>patch_per_side = <span class="self">self</span>.model_config.vision_config.image_size / patch_size;
+        <span class="kw">let </span>patch_per_side = cfg.vision_config.image_size / patch_size;
         <span class="kw">let </span>unpad_shape = calculate_unpad(anyres_grid_shape, image_size);
         patch_per_side * patch_per_side + (unpad_shape.<span class="number">0 </span><span class="kw">as </span>usize + <span class="number">1</span>) * (unpad_shape.<span class="number">1 </span><span class="kw">as </span>usize)
     }
@@ -913,7 +916,10 @@
             pixel_values,
             pixel_attention_mask: <span class="prelude-val">None</span>,
             image_sizes: <span class="prelude-val">Some</span>((original_size.<span class="number">0 </span><span class="kw">as </span>usize, original_size.<span class="number">1 </span><span class="kw">as </span>usize)),
-            num_img_tokens: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[<span class="self">self</span>.get_num_image_tokens(original_size)]),
+            num_img_tokens: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[LLaVANextInputProcessor::get_num_image_tokens(
+                <span class="kw-2">&amp;</span><span class="self">self</span>.model_config,
+                original_size,
+            )]),
             aspect_ratio_ids: <span class="prelude-val">None</span>,
             aspect_ratio_mask: <span class="prelude-val">None</span>,
             num_tiles: <span class="prelude-val">None</span>,

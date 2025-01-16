@@ -215,7 +215,8 @@
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
-<a href="#217" id="217">217</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::num::NonZeroUsize;
 
 <span class="kw">use crate</span>::{best_device, Model};
@@ -250,6 +251,7 @@
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
+    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
     </span><span class="kw">pub fn </span>new(model_id: <span class="kw">impl </span>ToString, files: Vec&lt;<span class="kw">impl </span>ToString&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             model_id: model_id.to_string(),
@@ -361,8 +363,7 @@
         <span class="self">self
     </span>}
 
-    <span class="doccomment">/// Provide metadata to initialize the device mapper. Generally, it is more programmatic and easier to use
-    /// the [`Topology`], see [`Self::with_topology`].
+    <span class="doccomment">/// Provide metadata to initialize the device mapper.
     </span><span class="kw">pub fn </span>with_device_mapping(<span class="kw-2">mut </span><span class="self">self</span>, device_mapping: DeviceMapSetting) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.device_mapping = <span class="prelude-val">Some</span>(device_mapping);
         <span class="self">self
@@ -394,7 +395,8 @@
             <span class="kw-2">&amp;</span>ModelDType::Auto,
             <span class="kw-2">&amp;</span>best_device(<span class="self">self</span>.force_cpu)<span class="question-mark">?</span>,
             !<span class="self">self</span>.with_logging,
-            <span class="self">self</span>.device_mapping.unwrap_or(DeviceMapSetting::Auto),
+            <span class="self">self</span>.device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             <span class="prelude-val">None</span>,
             <span class="self">self</span>.paged_attn_cfg,
         )<span class="question-mark">?</span>;

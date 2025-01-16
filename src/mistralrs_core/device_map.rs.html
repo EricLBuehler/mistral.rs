@@ -382,9 +382,13 @@
 <a href="#381" id="381">381</a>
 <a href="#382" id="382">382</a>
 <a href="#383" id="383">383</a>
-<a href="#384" id="384">384</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::fmt::Debug;
 
 <span class="kw">use crate</span>::{
+    pipeline::AutoDeviceMapParams,
     utils::{debug::DeviceRepr, log::once_log_info},
     Topology, TryIntoDType,
 };
@@ -401,8 +405,10 @@
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub enum </span>DeviceMapSetting {
-    Map(DeviceMapMetadata),
-    Auto,
+    <span class="doccomment">/// Manual device mapping.
+    </span>Map(DeviceMapMetadata),
+    <span class="doccomment">/// Automatic device mapping (recommended).
+    </span>Auto(AutoDeviceMapParams),
 }
 
 <span class="attr">#[derive(Debug, Default, Deserialize, Clone)]
@@ -565,7 +571,7 @@
                     nm_device: device.clone(),
                 }))
             }
-            <span class="self">Self</span>::Auto =&gt; {
+            <span class="self">Self</span>::Auto(<span class="kw">_</span>) =&gt; {
                 <span class="macro">candle_core::bail!</span>(<span class="string">".into_mapper does not work on Auto device map, convert it to a Map with DeviceMappedModelLoader::get_device_layers"</span>)
             }
         }

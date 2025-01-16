@@ -203,7 +203,7 @@
             <span class="kw-2">&amp;</span><span class="self">self</span>.dtype,
             <span class="kw-2">&amp;</span>best_device(<span class="self">self</span>.force_cpu)<span class="question-mark">?</span>,
             !<span class="self">self</span>.with_logging,
-            DeviceMapSetting::Auto,
+            DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
             <span class="prelude-val">None</span>,
             <span class="prelude-val">None</span>,
         )<span class="question-mark">?</span>;

@@ -892,7 +892,20 @@
 <a href="#891" id="891">891</a>
 <a href="#892" id="892">892</a>
 <a href="#893" id="893">893</a>
-<a href="#894" id="894">894</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
+<a href="#899" id="899">899</a>
+<a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -941,7 +954,7 @@
 <span class="kw">use </span>std::time::Instant;
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
-<span class="kw">use </span>tracing::info;
+<span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">pub struct </span>VisionPipeline {
     model: Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;,
@@ -1103,7 +1116,7 @@
         }
 
         <span class="comment">// If auto, convert to Map
-        </span><span class="kw">if let </span>DeviceMapSetting::Auto = mapper.clone() {
+        </span><span class="kw">if let </span>DeviceMapSetting::Auto(params) = mapper.clone() {
             <span class="kw">let </span>devices = device_map::get_all_similar_devices(device)<span class="question-mark">?</span>;
             <span class="comment">// Initial dtype
             </span><span class="kw">let </span>dtype = dtype.try_into_dtype(<span class="kw-2">&amp;</span>devices.iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())<span class="question-mark">?</span>;
@@ -1171,6 +1184,7 @@
                         layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 };
+
             <span class="kw">let </span>new = <span class="self">self</span>.inner.get_device_layers(
                 <span class="kw-2">&amp;</span>config,
                 <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
@@ -1178,6 +1192,9 @@
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 <span class="kw-2">&amp;</span>devices,
+                dtype,
+                <span class="kw-2">&amp;</span>params,
+                paged_attn_config.as_ref(),
             )<span class="question-mark">?</span>;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -1203,6 +1220,14 @@
             layer_devices.push(device);
         }
         <span class="kw">let </span>dtype = mapper.get_min_dtype(dtype)<span class="question-mark">?</span>;
+
+        <span class="comment">// TODO: PagedAttention is not supported with CPU for now.
+        // This check is not really necessary because `get_device_layers` should prevent it.
+        </span><span class="kw">let </span>mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
+        <span class="kw">if </span>mapping_uses_cpu {
+            <span class="macro">warn!</span>(<span class="string">"Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention."</span>);
+            paged_attn_config = <span class="prelude-val">None</span>;
+        }
 
         <span class="kw">let </span><span class="kw-2">mut </span>loading_isq = in_situ_quant.is_some() || <span class="self">self</span>.config.from_uqff.is_some();
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>topology) = <span class="self">self</span>.config.topology {
@@ -1403,6 +1428,7 @@
                 model.config(),
                 device,
                 <span class="kw-2">&amp;</span>layer_devices,
+                silent,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>cache_engine =
                 CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device, layer_devices)<span class="question-mark">?</span>;

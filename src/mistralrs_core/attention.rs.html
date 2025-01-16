@@ -332,11 +332,7 @@
 <a href="#331" id="331">331</a>
 <a href="#332" id="332">332</a>
 <a href="#333" id="333">333</a>
-<a href="#334" id="334">334</a>
-<a href="#335" id="335">335</a>
-<a href="#336" id="336">336</a>
-<a href="#337" id="337">337</a>
-<a href="#338" id="338">338</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#334" id="334">334</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -494,13 +490,12 @@
     mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
     sdpa_params: <span class="kw-2">&amp;</span>SdpaParams,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="comment">// Use faster softmax if mask is rank 2 or it's rank 3 and bs 1
-    </span><span class="kw">if </span>mask.is_some_and(|mask| mask.rank() == <span class="number">2 </span>|| (mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1</span>))
-        &amp;&amp; supports_attn_softmax()<span class="question-mark">?
-    </span>{
+    q.device().synchronize()<span class="question-mark">?</span>;
+
+    <span class="comment">// Use faster softmax if mask is rank 2 or it's rank 3
+    </span><span class="kw">if </span>mask.is_some_and(|mask| mask.rank() == <span class="number">2 </span>|| mask.rank() == <span class="number">3</span>) &amp;&amp; supports_attn_softmax()<span class="question-mark">? </span>{
         <span class="kw">let </span>mask = <span class="kw">match </span>mask {
-            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1 </span>=&gt; mask.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>,
-            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">2 </span>=&gt; mask.clone(),
+            <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>|| mask.rank() == <span class="number">2 </span>=&gt; mask.clone(),
             <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"unsupported mask {mask:?}"</span>),
         };
 
@@ -597,14 +592,11 @@
 
         <span class="kw">let </span>k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
-        <span class="kw">if let </span>(Device::Cuda(<span class="kw">_</span>), <span class="prelude-val">Some</span>(cublaslt)) = (q.device(), <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap()) {
-            <span class="kw">if </span>mask
-                .is_some_and(|mask| mask.rank() == <span class="number">2 </span>|| (mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1</span>))
-                &amp;&amp; supports_attn_softmax()<span class="question-mark">?
-            </span>{
-                <span class="kw">return </span>naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params);
-            }
+        <span class="kw">return </span>naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params);
 
+        <span class="comment">// TODO: bench?
+        </span><span class="attr">#[allow(unused)]
+        </span><span class="kw">if let </span>(Device::Cuda(<span class="kw">_</span>), <span class="prelude-val">Some</span>(cublaslt)) = (q.device(), <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap()) {
             <span class="kw">if </span>!get_use_matmul_via_f16() {
                 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
                 </span>{

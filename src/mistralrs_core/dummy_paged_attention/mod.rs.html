@@ -64,7 +64,9 @@
 <a href="#63" id="63">63</a>
 <a href="#64" id="64">64</a>
 <a href="#65" id="65">65</a>
-<a href="#66" id="66">66</a></pre></div><pre class="rust"><code><span class="doccomment">/// The higher-level manager of the blocks allocated. Operations performed by the block engine do
+<a href="#66" id="66">66</a>
+<a href="#67" id="67">67</a>
+<a href="#68" id="68">68</a></pre></div><pre class="rust"><code><span class="doccomment">/// The higher-level manager of the blocks allocated. Operations performed by the block engine do
 /// not directly change memory.
 </span><span class="kw">mod </span>block_engine;
 <span class="kw">mod </span>block_engine_sequence;
@@ -119,6 +121,7 @@
 }
 
 <span class="doccomment">/// Memory values are in MBs or a percentage in [0,1]. Specify block size or the default is 32.
+</span><span class="attr">#[allow(clippy::too_many_arguments)]
 </span><span class="kw">pub fn </span>calculate_cache_config(
     _mem_gpu: MemoryGpuConfig,
     _mem_cpu: usize,
@@ -127,6 +130,7 @@
     _config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike,
     _device: <span class="kw-2">&amp;</span>Device,
     _layer_devices: <span class="kw-2">&amp;</span>[<span class="prelude-ty">Option</span>&lt;Device&gt;],
+    _silent: bool,
 ) -&gt; anyhow::Result&lt;CacheConfig&gt; {
     <span class="macro">anyhow::bail!</span>(<span class="string">"Cannot calculate cache config when not using PagedAttention."</span>)
 }

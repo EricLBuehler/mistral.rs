@@ -339,28 +339,14 @@
 <a href="#338" id="338">338</a>
 <a href="#339" id="339">339</a>
 <a href="#340" id="340">340</a>
-<a href="#341" id="341">341</a>
-<a href="#342" id="342">342</a>
-<a href="#343" id="343">343</a>
-<a href="#344" id="344">344</a>
-<a href="#345" id="345">345</a>
-<a href="#346" id="346">346</a>
-<a href="#347" id="347">347</a>
-<a href="#348" id="348">348</a>
-<a href="#349" id="349">349</a>
-<a href="#350" id="350">350</a>
-<a href="#351" id="351">351</a>
-<a href="#352" id="352">352</a>
-<a href="#353" id="353">353</a>
-<a href="#354" id="354">354</a>
-<a href="#355" id="355">355</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#341" id="341">341</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::ops::Add;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, WithDType};
 <span class="kw">use </span>mistralrs_quant::get_use_matmul_via_f16;
 
-<span class="kw">use crate</span>::{cublaslt::CUBLASLT_HANDLE, pipeline::KvCache};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::KvCache;
 
 <span class="comment">// https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 </span><span class="kw">pub struct </span>CausalMasker;
@@ -492,7 +478,7 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         cache: <span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
         dtype: DType,
-        n_attn_heads: usize,
+        _n_attn_heads: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
         <span class="kw">let </span>past_kv_len = cache.get_past_kv_len()<span class="question-mark">?</span>;
         <span class="kw">let </span>(_b_sz, tgt_len) = input_ids.dims2()<span class="question-mark">?</span>;
@@ -517,13 +503,6 @@
             mask
         };
 
-        <span class="comment">// IMPORTANT: this must match the logic in attention.rs.
-        </span><span class="kw">if </span>causal_mask.device().is_cuda()
-            &amp;&amp; !get_use_matmul_via_f16()
-            &amp;&amp; CUBLASLT_HANDLE.lock().unwrap().is_some()
-        {
-            causal_mask = causal_mask.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.repeat((n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>;
-        }
         <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(causal_mask))
     }
 
@@ -566,13 +545,6 @@
             )<span class="question-mark">?
         </span>};
 
-        <span class="comment">// IMPORTANT: this must match the logic in attention.rs.
-        </span><span class="kw">if </span>causal_mask.device().is_cuda()
-            &amp;&amp; !get_use_matmul_via_f16()
-            &amp;&amp; CUBLASLT_HANDLE.lock().unwrap().is_some()
-        {
-            causal_mask = causal_mask.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.repeat((n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>;
-        }
         <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(causal_mask))
     }
 

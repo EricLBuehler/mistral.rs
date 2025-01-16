@@ -2547,7 +2547,484 @@
 <a href="#2546" id="2546">2546</a>
 <a href="#2547" id="2547">2547</a>
 <a href="#2548" id="2548">2548</a>
-<a href="#2549" id="2549">2549</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#2549" id="2549">2549</a>
+<a href="#2550" id="2550">2550</a>
+<a href="#2551" id="2551">2551</a>
+<a href="#2552" id="2552">2552</a>
+<a href="#2553" id="2553">2553</a>
+<a href="#2554" id="2554">2554</a>
+<a href="#2555" id="2555">2555</a>
+<a href="#2556" id="2556">2556</a>
+<a href="#2557" id="2557">2557</a>
+<a href="#2558" id="2558">2558</a>
+<a href="#2559" id="2559">2559</a>
+<a href="#2560" id="2560">2560</a>
+<a href="#2561" id="2561">2561</a>
+<a href="#2562" id="2562">2562</a>
+<a href="#2563" id="2563">2563</a>
+<a href="#2564" id="2564">2564</a>
+<a href="#2565" id="2565">2565</a>
+<a href="#2566" id="2566">2566</a>
+<a href="#2567" id="2567">2567</a>
+<a href="#2568" id="2568">2568</a>
+<a href="#2569" id="2569">2569</a>
+<a href="#2570" id="2570">2570</a>
+<a href="#2571" id="2571">2571</a>
+<a href="#2572" id="2572">2572</a>
+<a href="#2573" id="2573">2573</a>
+<a href="#2574" id="2574">2574</a>
+<a href="#2575" id="2575">2575</a>
+<a href="#2576" id="2576">2576</a>
+<a href="#2577" id="2577">2577</a>
+<a href="#2578" id="2578">2578</a>
+<a href="#2579" id="2579">2579</a>
+<a href="#2580" id="2580">2580</a>
+<a href="#2581" id="2581">2581</a>
+<a href="#2582" id="2582">2582</a>
+<a href="#2583" id="2583">2583</a>
+<a href="#2584" id="2584">2584</a>
+<a href="#2585" id="2585">2585</a>
+<a href="#2586" id="2586">2586</a>
+<a href="#2587" id="2587">2587</a>
+<a href="#2588" id="2588">2588</a>
+<a href="#2589" id="2589">2589</a>
+<a href="#2590" id="2590">2590</a>
+<a href="#2591" id="2591">2591</a>
+<a href="#2592" id="2592">2592</a>
+<a href="#2593" id="2593">2593</a>
+<a href="#2594" id="2594">2594</a>
+<a href="#2595" id="2595">2595</a>
+<a href="#2596" id="2596">2596</a>
+<a href="#2597" id="2597">2597</a>
+<a href="#2598" id="2598">2598</a>
+<a href="#2599" id="2599">2599</a>
+<a href="#2600" id="2600">2600</a>
+<a href="#2601" id="2601">2601</a>
+<a href="#2602" id="2602">2602</a>
+<a href="#2603" id="2603">2603</a>
+<a href="#2604" id="2604">2604</a>
+<a href="#2605" id="2605">2605</a>
+<a href="#2606" id="2606">2606</a>
+<a href="#2607" id="2607">2607</a>
+<a href="#2608" id="2608">2608</a>
+<a href="#2609" id="2609">2609</a>
+<a href="#2610" id="2610">2610</a>
+<a href="#2611" id="2611">2611</a>
+<a href="#2612" id="2612">2612</a>
+<a href="#2613" id="2613">2613</a>
+<a href="#2614" id="2614">2614</a>
+<a href="#2615" id="2615">2615</a>
+<a href="#2616" id="2616">2616</a>
+<a href="#2617" id="2617">2617</a>
+<a href="#2618" id="2618">2618</a>
+<a href="#2619" id="2619">2619</a>
+<a href="#2620" id="2620">2620</a>
+<a href="#2621" id="2621">2621</a>
+<a href="#2622" id="2622">2622</a>
+<a href="#2623" id="2623">2623</a>
+<a href="#2624" id="2624">2624</a>
+<a href="#2625" id="2625">2625</a>
+<a href="#2626" id="2626">2626</a>
+<a href="#2627" id="2627">2627</a>
+<a href="#2628" id="2628">2628</a>
+<a href="#2629" id="2629">2629</a>
+<a href="#2630" id="2630">2630</a>
+<a href="#2631" id="2631">2631</a>
+<a href="#2632" id="2632">2632</a>
+<a href="#2633" id="2633">2633</a>
+<a href="#2634" id="2634">2634</a>
+<a href="#2635" id="2635">2635</a>
+<a href="#2636" id="2636">2636</a>
+<a href="#2637" id="2637">2637</a>
+<a href="#2638" id="2638">2638</a>
+<a href="#2639" id="2639">2639</a>
+<a href="#2640" id="2640">2640</a>
+<a href="#2641" id="2641">2641</a>
+<a href="#2642" id="2642">2642</a>
+<a href="#2643" id="2643">2643</a>
+<a href="#2644" id="2644">2644</a>
+<a href="#2645" id="2645">2645</a>
+<a href="#2646" id="2646">2646</a>
+<a href="#2647" id="2647">2647</a>
+<a href="#2648" id="2648">2648</a>
+<a href="#2649" id="2649">2649</a>
+<a href="#2650" id="2650">2650</a>
+<a href="#2651" id="2651">2651</a>
+<a href="#2652" id="2652">2652</a>
+<a href="#2653" id="2653">2653</a>
+<a href="#2654" id="2654">2654</a>
+<a href="#2655" id="2655">2655</a>
+<a href="#2656" id="2656">2656</a>
+<a href="#2657" id="2657">2657</a>
+<a href="#2658" id="2658">2658</a>
+<a href="#2659" id="2659">2659</a>
+<a href="#2660" id="2660">2660</a>
+<a href="#2661" id="2661">2661</a>
+<a href="#2662" id="2662">2662</a>
+<a href="#2663" id="2663">2663</a>
+<a href="#2664" id="2664">2664</a>
+<a href="#2665" id="2665">2665</a>
+<a href="#2666" id="2666">2666</a>
+<a href="#2667" id="2667">2667</a>
+<a href="#2668" id="2668">2668</a>
+<a href="#2669" id="2669">2669</a>
+<a href="#2670" id="2670">2670</a>
+<a href="#2671" id="2671">2671</a>
+<a href="#2672" id="2672">2672</a>
+<a href="#2673" id="2673">2673</a>
+<a href="#2674" id="2674">2674</a>
+<a href="#2675" id="2675">2675</a>
+<a href="#2676" id="2676">2676</a>
+<a href="#2677" id="2677">2677</a>
+<a href="#2678" id="2678">2678</a>
+<a href="#2679" id="2679">2679</a>
+<a href="#2680" id="2680">2680</a>
+<a href="#2681" id="2681">2681</a>
+<a href="#2682" id="2682">2682</a>
+<a href="#2683" id="2683">2683</a>
+<a href="#2684" id="2684">2684</a>
+<a href="#2685" id="2685">2685</a>
+<a href="#2686" id="2686">2686</a>
+<a href="#2687" id="2687">2687</a>
+<a href="#2688" id="2688">2688</a>
+<a href="#2689" id="2689">2689</a>
+<a href="#2690" id="2690">2690</a>
+<a href="#2691" id="2691">2691</a>
+<a href="#2692" id="2692">2692</a>
+<a href="#2693" id="2693">2693</a>
+<a href="#2694" id="2694">2694</a>
+<a href="#2695" id="2695">2695</a>
+<a href="#2696" id="2696">2696</a>
+<a href="#2697" id="2697">2697</a>
+<a href="#2698" id="2698">2698</a>
+<a href="#2699" id="2699">2699</a>
+<a href="#2700" id="2700">2700</a>
+<a href="#2701" id="2701">2701</a>
+<a href="#2702" id="2702">2702</a>
+<a href="#2703" id="2703">2703</a>
+<a href="#2704" id="2704">2704</a>
+<a href="#2705" id="2705">2705</a>
+<a href="#2706" id="2706">2706</a>
+<a href="#2707" id="2707">2707</a>
+<a href="#2708" id="2708">2708</a>
+<a href="#2709" id="2709">2709</a>
+<a href="#2710" id="2710">2710</a>
+<a href="#2711" id="2711">2711</a>
+<a href="#2712" id="2712">2712</a>
+<a href="#2713" id="2713">2713</a>
+<a href="#2714" id="2714">2714</a>
+<a href="#2715" id="2715">2715</a>
+<a href="#2716" id="2716">2716</a>
+<a href="#2717" id="2717">2717</a>
+<a href="#2718" id="2718">2718</a>
+<a href="#2719" id="2719">2719</a>
+<a href="#2720" id="2720">2720</a>
+<a href="#2721" id="2721">2721</a>
+<a href="#2722" id="2722">2722</a>
+<a href="#2723" id="2723">2723</a>
+<a href="#2724" id="2724">2724</a>
+<a href="#2725" id="2725">2725</a>
+<a href="#2726" id="2726">2726</a>
+<a href="#2727" id="2727">2727</a>
+<a href="#2728" id="2728">2728</a>
+<a href="#2729" id="2729">2729</a>
+<a href="#2730" id="2730">2730</a>
+<a href="#2731" id="2731">2731</a>
+<a href="#2732" id="2732">2732</a>
+<a href="#2733" id="2733">2733</a>
+<a href="#2734" id="2734">2734</a>
+<a href="#2735" id="2735">2735</a>
+<a href="#2736" id="2736">2736</a>
+<a href="#2737" id="2737">2737</a>
+<a href="#2738" id="2738">2738</a>
+<a href="#2739" id="2739">2739</a>
+<a href="#2740" id="2740">2740</a>
+<a href="#2741" id="2741">2741</a>
+<a href="#2742" id="2742">2742</a>
+<a href="#2743" id="2743">2743</a>
+<a href="#2744" id="2744">2744</a>
+<a href="#2745" id="2745">2745</a>
+<a href="#2746" id="2746">2746</a>
+<a href="#2747" id="2747">2747</a>
+<a href="#2748" id="2748">2748</a>
+<a href="#2749" id="2749">2749</a>
+<a href="#2750" id="2750">2750</a>
+<a href="#2751" id="2751">2751</a>
+<a href="#2752" id="2752">2752</a>
+<a href="#2753" id="2753">2753</a>
+<a href="#2754" id="2754">2754</a>
+<a href="#2755" id="2755">2755</a>
+<a href="#2756" id="2756">2756</a>
+<a href="#2757" id="2757">2757</a>
+<a href="#2758" id="2758">2758</a>
+<a href="#2759" id="2759">2759</a>
+<a href="#2760" id="2760">2760</a>
+<a href="#2761" id="2761">2761</a>
+<a href="#2762" id="2762">2762</a>
+<a href="#2763" id="2763">2763</a>
+<a href="#2764" id="2764">2764</a>
+<a href="#2765" id="2765">2765</a>
+<a href="#2766" id="2766">2766</a>
+<a href="#2767" id="2767">2767</a>
+<a href="#2768" id="2768">2768</a>
+<a href="#2769" id="2769">2769</a>
+<a href="#2770" id="2770">2770</a>
+<a href="#2771" id="2771">2771</a>
+<a href="#2772" id="2772">2772</a>
+<a href="#2773" id="2773">2773</a>
+<a href="#2774" id="2774">2774</a>
+<a href="#2775" id="2775">2775</a>
+<a href="#2776" id="2776">2776</a>
+<a href="#2777" id="2777">2777</a>
+<a href="#2778" id="2778">2778</a>
+<a href="#2779" id="2779">2779</a>
+<a href="#2780" id="2780">2780</a>
+<a href="#2781" id="2781">2781</a>
+<a href="#2782" id="2782">2782</a>
+<a href="#2783" id="2783">2783</a>
+<a href="#2784" id="2784">2784</a>
+<a href="#2785" id="2785">2785</a>
+<a href="#2786" id="2786">2786</a>
+<a href="#2787" id="2787">2787</a>
+<a href="#2788" id="2788">2788</a>
+<a href="#2789" id="2789">2789</a>
+<a href="#2790" id="2790">2790</a>
+<a href="#2791" id="2791">2791</a>
+<a href="#2792" id="2792">2792</a>
+<a href="#2793" id="2793">2793</a>
+<a href="#2794" id="2794">2794</a>
+<a href="#2795" id="2795">2795</a>
+<a href="#2796" id="2796">2796</a>
+<a href="#2797" id="2797">2797</a>
+<a href="#2798" id="2798">2798</a>
+<a href="#2799" id="2799">2799</a>
+<a href="#2800" id="2800">2800</a>
+<a href="#2801" id="2801">2801</a>
+<a href="#2802" id="2802">2802</a>
+<a href="#2803" id="2803">2803</a>
+<a href="#2804" id="2804">2804</a>
+<a href="#2805" id="2805">2805</a>
+<a href="#2806" id="2806">2806</a>
+<a href="#2807" id="2807">2807</a>
+<a href="#2808" id="2808">2808</a>
+<a href="#2809" id="2809">2809</a>
+<a href="#2810" id="2810">2810</a>
+<a href="#2811" id="2811">2811</a>
+<a href="#2812" id="2812">2812</a>
+<a href="#2813" id="2813">2813</a>
+<a href="#2814" id="2814">2814</a>
+<a href="#2815" id="2815">2815</a>
+<a href="#2816" id="2816">2816</a>
+<a href="#2817" id="2817">2817</a>
+<a href="#2818" id="2818">2818</a>
+<a href="#2819" id="2819">2819</a>
+<a href="#2820" id="2820">2820</a>
+<a href="#2821" id="2821">2821</a>
+<a href="#2822" id="2822">2822</a>
+<a href="#2823" id="2823">2823</a>
+<a href="#2824" id="2824">2824</a>
+<a href="#2825" id="2825">2825</a>
+<a href="#2826" id="2826">2826</a>
+<a href="#2827" id="2827">2827</a>
+<a href="#2828" id="2828">2828</a>
+<a href="#2829" id="2829">2829</a>
+<a href="#2830" id="2830">2830</a>
+<a href="#2831" id="2831">2831</a>
+<a href="#2832" id="2832">2832</a>
+<a href="#2833" id="2833">2833</a>
+<a href="#2834" id="2834">2834</a>
+<a href="#2835" id="2835">2835</a>
+<a href="#2836" id="2836">2836</a>
+<a href="#2837" id="2837">2837</a>
+<a href="#2838" id="2838">2838</a>
+<a href="#2839" id="2839">2839</a>
+<a href="#2840" id="2840">2840</a>
+<a href="#2841" id="2841">2841</a>
+<a href="#2842" id="2842">2842</a>
+<a href="#2843" id="2843">2843</a>
+<a href="#2844" id="2844">2844</a>
+<a href="#2845" id="2845">2845</a>
+<a href="#2846" id="2846">2846</a>
+<a href="#2847" id="2847">2847</a>
+<a href="#2848" id="2848">2848</a>
+<a href="#2849" id="2849">2849</a>
+<a href="#2850" id="2850">2850</a>
+<a href="#2851" id="2851">2851</a>
+<a href="#2852" id="2852">2852</a>
+<a href="#2853" id="2853">2853</a>
+<a href="#2854" id="2854">2854</a>
+<a href="#2855" id="2855">2855</a>
+<a href="#2856" id="2856">2856</a>
+<a href="#2857" id="2857">2857</a>
+<a href="#2858" id="2858">2858</a>
+<a href="#2859" id="2859">2859</a>
+<a href="#2860" id="2860">2860</a>
+<a href="#2861" id="2861">2861</a>
+<a href="#2862" id="2862">2862</a>
+<a href="#2863" id="2863">2863</a>
+<a href="#2864" id="2864">2864</a>
+<a href="#2865" id="2865">2865</a>
+<a href="#2866" id="2866">2866</a>
+<a href="#2867" id="2867">2867</a>
+<a href="#2868" id="2868">2868</a>
+<a href="#2869" id="2869">2869</a>
+<a href="#2870" id="2870">2870</a>
+<a href="#2871" id="2871">2871</a>
+<a href="#2872" id="2872">2872</a>
+<a href="#2873" id="2873">2873</a>
+<a href="#2874" id="2874">2874</a>
+<a href="#2875" id="2875">2875</a>
+<a href="#2876" id="2876">2876</a>
+<a href="#2877" id="2877">2877</a>
+<a href="#2878" id="2878">2878</a>
+<a href="#2879" id="2879">2879</a>
+<a href="#2880" id="2880">2880</a>
+<a href="#2881" id="2881">2881</a>
+<a href="#2882" id="2882">2882</a>
+<a href="#2883" id="2883">2883</a>
+<a href="#2884" id="2884">2884</a>
+<a href="#2885" id="2885">2885</a>
+<a href="#2886" id="2886">2886</a>
+<a href="#2887" id="2887">2887</a>
+<a href="#2888" id="2888">2888</a>
+<a href="#2889" id="2889">2889</a>
+<a href="#2890" id="2890">2890</a>
+<a href="#2891" id="2891">2891</a>
+<a href="#2892" id="2892">2892</a>
+<a href="#2893" id="2893">2893</a>
+<a href="#2894" id="2894">2894</a>
+<a href="#2895" id="2895">2895</a>
+<a href="#2896" id="2896">2896</a>
+<a href="#2897" id="2897">2897</a>
+<a href="#2898" id="2898">2898</a>
+<a href="#2899" id="2899">2899</a>
+<a href="#2900" id="2900">2900</a>
+<a href="#2901" id="2901">2901</a>
+<a href="#2902" id="2902">2902</a>
+<a href="#2903" id="2903">2903</a>
+<a href="#2904" id="2904">2904</a>
+<a href="#2905" id="2905">2905</a>
+<a href="#2906" id="2906">2906</a>
+<a href="#2907" id="2907">2907</a>
+<a href="#2908" id="2908">2908</a>
+<a href="#2909" id="2909">2909</a>
+<a href="#2910" id="2910">2910</a>
+<a href="#2911" id="2911">2911</a>
+<a href="#2912" id="2912">2912</a>
+<a href="#2913" id="2913">2913</a>
+<a href="#2914" id="2914">2914</a>
+<a href="#2915" id="2915">2915</a>
+<a href="#2916" id="2916">2916</a>
+<a href="#2917" id="2917">2917</a>
+<a href="#2918" id="2918">2918</a>
+<a href="#2919" id="2919">2919</a>
+<a href="#2920" id="2920">2920</a>
+<a href="#2921" id="2921">2921</a>
+<a href="#2922" id="2922">2922</a>
+<a href="#2923" id="2923">2923</a>
+<a href="#2924" id="2924">2924</a>
+<a href="#2925" id="2925">2925</a>
+<a href="#2926" id="2926">2926</a>
+<a href="#2927" id="2927">2927</a>
+<a href="#2928" id="2928">2928</a>
+<a href="#2929" id="2929">2929</a>
+<a href="#2930" id="2930">2930</a>
+<a href="#2931" id="2931">2931</a>
+<a href="#2932" id="2932">2932</a>
+<a href="#2933" id="2933">2933</a>
+<a href="#2934" id="2934">2934</a>
+<a href="#2935" id="2935">2935</a>
+<a href="#2936" id="2936">2936</a>
+<a href="#2937" id="2937">2937</a>
+<a href="#2938" id="2938">2938</a>
+<a href="#2939" id="2939">2939</a>
+<a href="#2940" id="2940">2940</a>
+<a href="#2941" id="2941">2941</a>
+<a href="#2942" id="2942">2942</a>
+<a href="#2943" id="2943">2943</a>
+<a href="#2944" id="2944">2944</a>
+<a href="#2945" id="2945">2945</a>
+<a href="#2946" id="2946">2946</a>
+<a href="#2947" id="2947">2947</a>
+<a href="#2948" id="2948">2948</a>
+<a href="#2949" id="2949">2949</a>
+<a href="#2950" id="2950">2950</a>
+<a href="#2951" id="2951">2951</a>
+<a href="#2952" id="2952">2952</a>
+<a href="#2953" id="2953">2953</a>
+<a href="#2954" id="2954">2954</a>
+<a href="#2955" id="2955">2955</a>
+<a href="#2956" id="2956">2956</a>
+<a href="#2957" id="2957">2957</a>
+<a href="#2958" id="2958">2958</a>
+<a href="#2959" id="2959">2959</a>
+<a href="#2960" id="2960">2960</a>
+<a href="#2961" id="2961">2961</a>
+<a href="#2962" id="2962">2962</a>
+<a href="#2963" id="2963">2963</a>
+<a href="#2964" id="2964">2964</a>
+<a href="#2965" id="2965">2965</a>
+<a href="#2966" id="2966">2966</a>
+<a href="#2967" id="2967">2967</a>
+<a href="#2968" id="2968">2968</a>
+<a href="#2969" id="2969">2969</a>
+<a href="#2970" id="2970">2970</a>
+<a href="#2971" id="2971">2971</a>
+<a href="#2972" id="2972">2972</a>
+<a href="#2973" id="2973">2973</a>
+<a href="#2974" id="2974">2974</a>
+<a href="#2975" id="2975">2975</a>
+<a href="#2976" id="2976">2976</a>
+<a href="#2977" id="2977">2977</a>
+<a href="#2978" id="2978">2978</a>
+<a href="#2979" id="2979">2979</a>
+<a href="#2980" id="2980">2980</a>
+<a href="#2981" id="2981">2981</a>
+<a href="#2982" id="2982">2982</a>
+<a href="#2983" id="2983">2983</a>
+<a href="#2984" id="2984">2984</a>
+<a href="#2985" id="2985">2985</a>
+<a href="#2986" id="2986">2986</a>
+<a href="#2987" id="2987">2987</a>
+<a href="#2988" id="2988">2988</a>
+<a href="#2989" id="2989">2989</a>
+<a href="#2990" id="2990">2990</a>
+<a href="#2991" id="2991">2991</a>
+<a href="#2992" id="2992">2992</a>
+<a href="#2993" id="2993">2993</a>
+<a href="#2994" id="2994">2994</a>
+<a href="#2995" id="2995">2995</a>
+<a href="#2996" id="2996">2996</a>
+<a href="#2997" id="2997">2997</a>
+<a href="#2998" id="2998">2998</a>
+<a href="#2999" id="2999">2999</a>
+<a href="#3000" id="3000">3000</a>
+<a href="#3001" id="3001">3001</a>
+<a href="#3002" id="3002">3002</a>
+<a href="#3003" id="3003">3003</a>
+<a href="#3004" id="3004">3004</a>
+<a href="#3005" id="3005">3005</a>
+<a href="#3006" id="3006">3006</a>
+<a href="#3007" id="3007">3007</a>
+<a href="#3008" id="3008">3008</a>
+<a href="#3009" id="3009">3009</a>
+<a href="#3010" id="3010">3010</a>
+<a href="#3011" id="3011">3011</a>
+<a href="#3012" id="3012">3012</a>
+<a href="#3013" id="3013">3013</a>
+<a href="#3014" id="3014">3014</a>
+<a href="#3015" id="3015">3015</a>
+<a href="#3016" id="3016">3016</a>
+<a href="#3017" id="3017">3017</a>
+<a href="#3018" id="3018">3018</a>
+<a href="#3019" id="3019">3019</a>
+<a href="#3020" id="3020">3020</a>
+<a href="#3021" id="3021">3021</a>
+<a href="#3022" id="3022">3022</a>
+<a href="#3023" id="3023">3023</a>
+<a href="#3024" id="3024">3024</a>
+<a href="#3025" id="3025">3025</a>
+<a href="#3026" id="3026">3026</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
@@ -2559,7 +3036,7 @@
     device_map::DeviceMapper,
     layers::{Activation, Llama3RopeConfig, PhiRopeScalingConfig},
     lora::{LoraConfig, Ordering},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
     pipeline::{
         isq::IsqModelLoader,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -2585,7 +3062,7 @@
     xlora_models::{<span class="self">self</span>, XLoraConfig},
 };
 
-<span class="kw">use </span><span class="kw">super</span>::DeviceMappedModelLoader;
+<span class="kw">use super</span>::{AutoDeviceMapParams, DeviceMappedModelLoader};
 
 <span class="kw">pub trait </span>NormalModel: IsqModel + AnyMoeBaseModelMixin {
     <span class="attr">#[allow(clippy::too_many_arguments)]
@@ -2903,6 +3380,23 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.layer_sizes_in_bytes(config, dtype, weight_pack_factor)
     }
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span><span class="kw">super</span>::AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.mapped_max_act_size_elems(config, params)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.model_config(config)
+    }
 }
 
 <span class="macro">serde_default_fn!</span>(bool, word_emb_default, <span class="bool-val">false</span>);
@@ -3024,6 +3518,31 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>MistralLoader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg = MistralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -3086,8 +3605,25 @@
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>cfg = LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cfg = MistralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg = MistralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.head_dim()),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.head_dim()),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 
@@ -3220,6 +3756,31 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>GemmaLoader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg = GemmaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -3288,6 +3849,23 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg = GemmaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg = GemmaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: <span class="prelude-val">None</span>,
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.head_dim),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.head_dim),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 
@@ -3414,6 +3992,31 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>LlamaLoader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg = LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -3478,6 +4081,22 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg = LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg = LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: <span class="prelude-val">None</span>,
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 
@@ -3601,6 +4220,31 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>MixtralLoader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg = MixtralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -3668,6 +4312,23 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg = MixtralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg = MixtralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 
@@ -3790,6 +4451,31 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Phi2Loader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg = Phi2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -3849,6 +4535,23 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg = Phi2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg = Phi2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads(),
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: <span class="prelude-val">None</span>,
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.head_dim()),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.head_dim()),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 
@@ -3976,6 +4679,31 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Phi3Loader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg = Phi3BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -4035,6 +4763,23 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg = Phi3BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg = Phi3BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.head_dim()),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.head_dim()),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 
@@ -4146,13 +4891,38 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Qwen2Loader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg = Qwen2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         dtype: DType,
         weight_pack_factor: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>cfg = LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cfg = Qwen2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>elems = {
             <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
             <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
@@ -4172,7 +4942,7 @@
         dtype: DType,
         weight_pack_factor: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
-        <span class="kw">let </span>cfg = LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cfg = Qwen2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>per_layer_elems = {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
             <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size;
@@ -4208,8 +4978,25 @@
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>cfg = LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cfg = Qwen2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg = Qwen2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: <span class="prelude-val">Some</span>(cfg.sliding_window),
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 
@@ -4347,6 +5134,31 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Gemma2Loader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg = Gemma2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -4415,6 +5227,22 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg = Gemma2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg = Gemma2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: <span class="prelude-val">Some</span>(cfg.sliding_window),
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 
@@ -4536,6 +5364,31 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Starcoder2Loader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg = Starcoder2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -4598,6 +5451,23 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg = Starcoder2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg = Starcoder2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 
@@ -4741,6 +5611,31 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Phi3_5MoELoader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg = Phi3_5MoEBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -4812,6 +5707,23 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg = Phi3_5MoEBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg = Phi3_5MoEBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.head_dim()),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.head_dim()),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 
@@ -4985,6 +5897,31 @@
 }
 
 <span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>DeepSeekV2Loader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected text AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg: <span class="kw">crate</span>::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        _params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="prelude-val">Ok</span>(<span class="number">0</span>)
+    }
+
     <span class="kw">fn </span>non_mapped_size_in_bytes(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -5094,6 +6031,23 @@
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>cfg: <span class="kw">crate</span>::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg: <span class="kw">crate</span>::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_attention_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: <span class="prelude-val">None</span>,
+            k_head_dim: <span class="prelude-val">Some</span>(cfg.qk_rope_head_dim + cfg.qk_nope_head_dim),
+            v_head_dim: <span class="prelude-val">Some</span>(cfg.v_head_dim),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
     }
 }
 </code></pre></div></section></main></body></html>

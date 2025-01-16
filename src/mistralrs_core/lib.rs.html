@@ -554,7 +554,10 @@
 <a href="#553" id="553">553</a>
 <a href="#554" id="554">554</a>
 <a href="#555" id="555">555</a>
-<a href="#556" id="556">556</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
 <span class="kw">use </span>engine::Engine;
@@ -587,11 +590,13 @@
 <span class="kw">mod </span>lora;
 <span class="kw">mod </span>model_loader;
 <span class="kw">mod </span>ops;
-<span class="kw">pub use </span>model_loader::{get_model_dtype, get_tgt_non_granular_index, LoaderBuilder};
+<span class="kw">pub use </span>model_loader::{
+    get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
+};
 
 <span class="kw">mod </span>model_selected;
 <span class="kw">pub use </span>model_selected::ModelSelected;
-<span class="kw">pub use </span>toml_selector::get_toml_selected_model_dtype;
+<span class="kw">pub use </span>toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 <span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cublaslt;
@@ -632,14 +637,15 @@
 <span class="kw">pub use </span>paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 <span class="kw">pub use </span>pipeline::{
     chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline,
-    DiffusionGenerationParams, DiffusionLoader, DiffusionLoaderBuilder, DiffusionLoaderType,
-    DiffusionSpecificConfig, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader,
-    GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization,
-    LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
-    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource, VisionLoader,
-    VisionLoaderBuilder, VisionLoaderType, VisionPromptPrefixer, VisionSpecificConfig,
+    AutoDeviceMapParams, DiffusionGenerationParams, DiffusionLoader, DiffusionLoaderBuilder,
+    DiffusionLoaderType, DiffusionSpecificConfig, GGMLLoader, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader,
+    Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
+    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
+    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    Starcoder2Loader, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
+    VisionPromptPrefixer, VisionSpecificConfig,
 };
 <span class="kw">pub use </span>request::{
     Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,

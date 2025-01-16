@@ -93,7 +93,9 @@
 <a href="#92" id="92">92</a>
 <a href="#93" id="93">93</a>
 <a href="#94" id="94">94</a>
-<a href="#95" id="95">95</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 
 <span class="kw">use crate</span>::{best_device, Model, TextModelBuilder};
 
@@ -150,7 +152,9 @@
             <span class="kw-2">&amp;</span><span class="self">self</span>.text_model.dtype,
             <span class="kw-2">&amp;</span>best_device(<span class="self">self</span>.text_model.force_cpu)<span class="question-mark">?</span>,
             !<span class="self">self</span>.text_model.with_logging,
-            DeviceMapSetting::Auto,
+            <span class="self">self</span>.text_model
+                .device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             <span class="self">self</span>.text_model.isq,
             <span class="self">self</span>.text_model.paged_attn_cfg,
         )<span class="question-mark">?</span>;

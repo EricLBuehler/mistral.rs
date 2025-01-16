@@ -119,9 +119,13 @@
 <a href="#118" id="118">118</a>
 <a href="#119" id="119">119</a>
 <a href="#120" id="120">120</a>
-<a href="#121" id="121">121</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::{
-    initialize_logging, AnyMoeConfig, AnyMoeLoader, DefaultSchedulerMethod, DeviceMapSetting,
-    Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig, SchedulerConfig,
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::{
+    initialize_logging, AnyMoeConfig, AnyMoeLoader, AutoDeviceMapParams, DefaultSchedulerMethod,
+    DeviceMapSetting, Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
+    SchedulerConfig,
 };
 
 <span class="kw">use crate</span>::{best_device, Model, TextModelBuilder};
@@ -202,7 +206,9 @@
             <span class="kw-2">&amp;</span><span class="self">self</span>.base.dtype,
             <span class="kw-2">&amp;</span>best_device(<span class="self">self</span>.base.force_cpu)<span class="question-mark">?</span>,
             !<span class="self">self</span>.base.with_logging,
-            <span class="self">self</span>.base.device_mapping.unwrap_or(DeviceMapSetting::Auto),
+            <span class="self">self</span>.base
+                .device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             <span class="self">self</span>.base.isq,
             <span class="self">self</span>.base.paged_attn_cfg,
         )<span class="question-mark">?</span>;
