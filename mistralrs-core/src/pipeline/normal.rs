@@ -348,10 +348,7 @@ impl Loader for NormalLoader {
                         layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 };
-            let mapped_max_act_size_in_bytes =
-                self.inner.mapped_max_act_size_elems(&config, &params)? * dtype.size_in_bytes();
-            let non_mapped_max_act_size_in_bytes =
-                self.inner.non_mapped_max_act_size_elems(&config, &params)? * dtype.size_in_bytes();
+
             let new = self.inner.get_device_layers(
                 &config,
                 self.inner.num_layers(&config)?,
@@ -359,8 +356,8 @@ impl Loader for NormalLoader {
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 &devices,
-                non_mapped_max_act_size_in_bytes,
-                mapped_max_act_size_in_bytes,
+                dtype,
+                &params,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }

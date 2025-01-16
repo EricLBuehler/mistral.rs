@@ -4,7 +4,7 @@ mod vision_loaders;
 
 use std::{
     collections::HashMap,
-    fmt::{self, Debug},
+    fmt::{self, Debug, Display},
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -377,6 +377,29 @@ pub enum AutoDeviceMapParams {
     },
 }
 
+impl Display for AutoDeviceMapParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text {
+                max_seq_len,
+                max_batch_size,
+            } => write!(
+                f,
+                "text[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}]"
+            ),
+            Self::Vision {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images
+            } => write!(
+                f,
+                "vision[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}, max_image_shape: {max_image_shape:?}, max_num_images: {max_num_images}]"
+            ),
+        }
+    }
+}
+
 impl AutoDeviceMapParams {
     pub const DEFAULT_MAX_SEQ_LEN: usize = 16 * 1024;
     pub const DEFAULT_MAX_BATCH_SIZE: usize = 1;
@@ -418,12 +441,14 @@ pub trait DeviceMappedModelLoader {
         params: &AutoDeviceMapParams,
     ) -> Result<usize>;
 
+    /// weight_pack_factor only applies to quantized weights.
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<usize>;
+    /// weight_pack_factor only applies to quantized weights.
     fn layer_sizes_in_bytes(
         &self,
         config: &str,
@@ -433,18 +458,22 @@ pub trait DeviceMappedModelLoader {
     fn num_layers(&self, config: &str) -> Result<usize>;
 
     #[allow(clippy::too_many_arguments)]
-    /// weight_pack_factor only applies to quantized weights.
     fn get_device_layers(
         &self,
-        _config: &str,
+        config: &str,
         num_layers: usize,
         mut layer_sizes_in_bytes: Vec<usize>,
         non_mapped_size_in_bytes: usize,
         total_model_size_in_bytes: usize,
         devices: &[Device],
-        non_mapped_max_act_size_in_bytes: usize,
-        mapped_max_act_size_in_bytes: usize,
+        dtype: DType,
+        params: &AutoDeviceMapParams,
     ) -> Result<DeviceMapMetadata> {
+        let mapped_max_act_size_in_bytes =
+            self.mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
+        let non_mapped_max_act_size_in_bytes =
+            self.non_mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
+
         let mut remaining_to_map = total_model_size_in_bytes;
 
         // Always add the CPU as fallback
@@ -512,7 +541,7 @@ pub trait DeviceMappedModelLoader {
         }
         if remaining_to_map > 0 {
             anyhow::bail!(
-                "This model does not fit on the devices {:?}, and exceeds total capacity by {}MB",
+                "This model does not fit on the devices {:?}, and exceeds total capacity by {}MB. Auto device mapping params: {params}",
                 devices
                     .iter()
                     .map(|dev| dev.device_pretty_repr())
