@@ -252,6 +252,7 @@ impl GGUFLoader {
 }
 
 struct ContentConfig {
+    max_seq_len: usize,
     hidden_size: usize,
     num_attn_heads: usize,
     num_kv_heads: usize,
@@ -264,6 +265,9 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
         let metadata = value.get_metadata();
         let arch = metadata["general.architecture"].to_string().unwrap();
         Self {
+            max_seq_len: metadata[&format!("{arch}.context_length")]
+                .to_u64()
+                .unwrap() as usize,
             hidden_size: metadata[&format!("{arch}.embedding_length")]
                 .to_u64()
                 .unwrap() as usize,
@@ -279,6 +283,9 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
 }
 
 impl ModelConfigLike for ContentConfig {
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
     fn hidden_size(&self) -> usize {
         self.hidden_size
     }
@@ -487,6 +494,7 @@ impl Loader for GGUFLoader {
                 internal_dtype,
                 model_config,
                 device,
+                &layer_devices,
             )?;
             let cache_engine = CacheEngine::new(
                 model_config,
