@@ -563,9 +563,14 @@ pub trait DeviceMappedModelLoader {
         if remaining_to_map > 0 {
             anyhow::bail!(
                 "This model does not fit on the devices {:?}, and exceeds total capacity by {}MB. Auto device mapping params: {params}",
-                devices
+                per_layer_avail
                     .iter()
-                    .map(|dev| dev.device_pretty_repr())
+                    .rev()
+                    .map(|(avail, dev)| format!(
+                        "{} (avail: {}MB)",
+                        dev.device_pretty_repr(),
+                        avail / (1024 * 1024),
+                    ))
                     .collect::<Vec<_>>(),
                 b_to_mb!(remaining_to_map)
             );

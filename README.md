@@ -345,6 +345,8 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
 
 To run GGUF models, the only mandatory arguments are the quantized model ID and the quantized filename. The quantized model ID can be a HF model ID.
 
+You must also specify either `-i` for interactive mode or `--port` to launch a server, just like when [running a non-GGUF model with the CLI](#run-with-the-cli)
+
 GGUF models contain a tokenizer. However, mistral.rs allows you to run the model with a tokenizer from a specified model, typically the official one. This means there are two options:
 1) [With a specified tokenizer](#with-a-specified-tokenizer)
 1) [With the builtin tokenizer](#with-the-builtin-tokenizer)
@@ -396,7 +398,7 @@ please consider using the method demonstrated in examples below, where the token
 
 ## Run with the CLI
 
-Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
+Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-server --help` to see the subcommands which categorize the models by kind.
 
 ### Architecture for plain models
 
