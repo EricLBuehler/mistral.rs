@@ -7,9 +7,14 @@ Automatic device mapping works by prioritizing loading models into GPU memory, a
 Models architectures such as vision models which greatly benefit from GPU acceleration also automatically prioritize keeping those
 components on the GPU.
 
-To control the mapping across devices, you can set the maximum sequence length and maximum batch size which the model should expect. For vision models,
-you can also specify the maximum image size and number of images. These parameters do not translate to hard limits during runtime, they only control
-the mapping.
+To control the mapping across devices, you can set the following maximum parameters which the model should expect in a prompt.
+
+- maximum sequence length
+- maximum batch size
+- (vision models) maximum image size
+- (vision models) maximum number of images
+
+These parameters do not translate to hard limits during runtime, they only control the mapping.
 
 > [!NOTE]
 > The maximum sequence length is also used to ensure that a KV cache will fit for with and without PagedAttention.
