@@ -277,8 +277,10 @@ impl Loader for VisionLoader {
                         layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 };
-            let max_act_size_in_bytes =
-                self.inner.max_act_size_elems(&config, &params)? * dtype.size_in_bytes();
+            let mapped_max_act_size_in_bytes =
+                self.inner.mapped_max_act_size_elems(&config, &params)? * dtype.size_in_bytes();
+            let non_mapped_max_act_size_in_bytes =
+                self.inner.non_mapped_max_act_size_elems(&config, &params)? * dtype.size_in_bytes();
             let new = self.inner.get_device_layers(
                 &config,
                 self.inner.num_layers(&config)?,
@@ -286,7 +288,8 @@ impl Loader for VisionLoader {
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 &devices,
-                max_act_size_in_bytes,
+                non_mapped_max_act_size_in_bytes,
+                mapped_max_act_size_in_bytes,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }

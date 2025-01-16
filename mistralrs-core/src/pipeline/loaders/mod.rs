@@ -404,7 +404,20 @@ impl AutoDeviceMapParams {
 }
 
 pub trait DeviceMappedModelLoader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize>;
+    /// Maximum activation size of non-mapped parts of this model.
+    /// Useful for the vision models which may prefer to keep the vison compoents on the GPU.
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize>;
+    /// Maximum activation size of mapped parts of the model
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize>;
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
@@ -429,7 +442,8 @@ pub trait DeviceMappedModelLoader {
         non_mapped_size_in_bytes: usize,
         total_model_size_in_bytes: usize,
         devices: &[Device],
-        max_act_size_in_bytes: usize,
+        non_mapped_max_act_size_in_bytes: usize,
+        mapped_max_act_size_in_bytes: usize,
     ) -> Result<DeviceMapMetadata> {
         let mut remaining_to_map = total_model_size_in_bytes;
 
@@ -438,7 +452,7 @@ pub trait DeviceMappedModelLoader {
 
         let mut per_layer_avail = Vec::new();
         for dev in devices.clone() {
-            let avail = MemoryUsage.get_memory_available(&dev)? - max_act_size_in_bytes;
+            let avail = MemoryUsage.get_memory_available(&dev)?;
             per_layer_avail.push((avail, dev));
         }
         // Reverse so we don't use the cpu first!
@@ -468,7 +482,9 @@ pub trait DeviceMappedModelLoader {
                 let mut layers_on_device = 0;
 
                 if current_ordinal == 0 {
-                    used_capacity += non_mapped_size_in_bytes;
+                    used_capacity += non_mapped_size_in_bytes + non_mapped_max_act_size_in_bytes;
+                } else {
+                    used_capacity += mapped_max_act_size_in_bytes;
                 }
 
                 while let Some(&last) = layer_sizes_in_bytes.last() {

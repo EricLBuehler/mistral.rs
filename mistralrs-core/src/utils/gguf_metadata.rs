@@ -161,7 +161,11 @@ pub struct GgufDeviceMapLoaderInner<'a, 'f> {
 }
 
 impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
-    fn max_act_size_elems(&self, _config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -173,6 +177,14 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
             .to_u32()? as usize;
         Ok(max_batch_size * num_heads * max_seq_len * max_seq_len)
     }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         _config: &str,

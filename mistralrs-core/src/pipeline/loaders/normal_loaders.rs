@@ -354,12 +354,19 @@ impl DeviceMappedModelLoader for AutoLoader {
     ) -> Result<Vec<usize>> {
         Self::get_loader(config)?.layer_sizes_in_bytes(config, dtype, weight_pack_factor)
     }
-    fn max_act_size_elems(
+    fn mapped_max_act_size_elems(
         &self,
         config: &str,
         params: &super::AutoDeviceMapParams,
     ) -> Result<usize> {
-        Self::get_loader(config)?.max_act_size_elems(config, params)
+        Self::get_loader(config)?.mapped_max_act_size_elems(config, params)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 }
 
@@ -482,7 +489,11 @@ impl IsqModelLoader for MistralLoader {
 }
 
 impl DeviceMappedModelLoader for MistralLoader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -494,6 +505,13 @@ impl DeviceMappedModelLoader for MistralLoader {
         let cfg = MistralBasicConfig::deserialize(config, false)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
@@ -692,7 +710,11 @@ impl IsqModelLoader for GemmaLoader {
 }
 
 impl DeviceMappedModelLoader for GemmaLoader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -704,6 +726,13 @@ impl DeviceMappedModelLoader for GemmaLoader {
         let cfg = GemmaBasicConfig::deserialize(config, false)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
@@ -900,7 +929,11 @@ impl IsqModelLoader for LlamaLoader {
 }
 
 impl DeviceMappedModelLoader for LlamaLoader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -912,6 +945,13 @@ impl DeviceMappedModelLoader for LlamaLoader {
         let cfg = LlamaBasicConfig::deserialize(config, false)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
@@ -1101,7 +1141,11 @@ impl IsqModelLoader for MixtralLoader {
 }
 
 impl DeviceMappedModelLoader for MixtralLoader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -1113,6 +1157,13 @@ impl DeviceMappedModelLoader for MixtralLoader {
         let cfg = MixtralBasicConfig::deserialize(config, false)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
@@ -1304,7 +1355,11 @@ impl IsqModelLoader for Phi2Loader {
 }
 
 impl DeviceMappedModelLoader for Phi2Loader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -1316,6 +1371,13 @@ impl DeviceMappedModelLoader for Phi2Loader {
         let cfg = Phi2BasicConfig::deserialize(config, false)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
@@ -1504,7 +1566,11 @@ impl IsqModelLoader for Phi3Loader {
 }
 
 impl DeviceMappedModelLoader for Phi3Loader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -1516,6 +1582,13 @@ impl DeviceMappedModelLoader for Phi3Loader {
         let cfg = Phi3BasicConfig::deserialize(config, false)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
@@ -1688,7 +1761,11 @@ impl IsqModelLoader for Qwen2Loader {
 }
 
 impl DeviceMappedModelLoader for Qwen2Loader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -1700,6 +1777,13 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         let cfg = Qwen2BasicConfig::deserialize(config, false)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
@@ -1903,7 +1987,11 @@ impl IsqModelLoader for Gemma2Loader {
 }
 
 impl DeviceMappedModelLoader for Gemma2Loader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -1915,6 +2003,13 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         let cfg = Gemma2BasicConfig::deserialize(config, false)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
@@ -2106,7 +2201,11 @@ impl IsqModelLoader for Starcoder2Loader {
 }
 
 impl DeviceMappedModelLoader for Starcoder2Loader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -2118,6 +2217,13 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
@@ -2325,7 +2431,11 @@ impl IsqModelLoader for Phi3_5MoELoader {
 }
 
 impl DeviceMappedModelLoader for Phi3_5MoELoader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -2337,6 +2447,13 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
         let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
@@ -2583,7 +2700,11 @@ impl IsqModelLoader for DeepSeekV2Loader {
 }
 
 impl DeviceMappedModelLoader for DeepSeekV2Loader {
-    fn max_act_size_elems(&self, config: &str, params: &AutoDeviceMapParams) -> Result<usize> {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
             max_seq_len,
             max_batch_size,
@@ -2595,6 +2716,13 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
 
         Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        self.mapped_max_act_size_elems(config, params)
     }
 
     fn non_mapped_size_in_bytes(
