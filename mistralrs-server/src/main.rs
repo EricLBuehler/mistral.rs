@@ -487,7 +487,8 @@ async fn main() -> Result<()> {
         .with_opt_log(args.log)
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
-        .with_prefix_cache_n(args.prefix_cache_n);
+        .with_prefix_cache_n(args.prefix_cache_n)
+        .with_gemm_full_precision_f16(args.cpu); // Required to allow `cuda` build to use `--cpu`, #1056
 
     if args.interactive_mode {
         interactive_mode(builder.build(), args.throughput_log).await;
