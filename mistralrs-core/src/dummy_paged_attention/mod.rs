@@ -53,6 +53,7 @@ pub enum MemoryGpuConfig {
 }
 
 /// Memory values are in MBs or a percentage in [0,1]. Specify block size or the default is 32.
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
     _mem_gpu: MemoryGpuConfig,
     _mem_cpu: usize,
@@ -61,6 +62,7 @@ pub fn calculate_cache_config(
     _config: &dyn ModelConfigLike,
     _device: &Device,
     _layer_devices: &[Option<Device>],
+    _silent: bool,
 ) -> anyhow::Result<CacheConfig> {
     anyhow::bail!("Cannot calculate cache config when not using PagedAttention.")
 }

@@ -47,7 +47,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct VisionPipeline {
     model: Box<dyn VisionModel + Send + Sync>,
@@ -209,7 +209,7 @@ impl Loader for VisionLoader {
         }
 
         // If auto, convert to Map
-        if let DeviceMapSetting::Auto = mapper.clone() {
+        if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype
             let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
@@ -277,6 +277,7 @@ impl Loader for VisionLoader {
                         layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 };
+
             let new = self.inner.get_device_layers(
                 &config,
                 self.inner.num_layers(&config)?,
@@ -284,6 +285,9 @@ impl Loader for VisionLoader {
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 &devices,
+                dtype,
+                &params,
+                paged_attn_config.as_ref(),
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -309,6 +313,14 @@ impl Loader for VisionLoader {
             layer_devices.push(device);
         }
         let dtype = mapper.get_min_dtype(dtype)?;
+
+        // TODO: PagedAttention is not supported with CPU for now.
+        // This check is not really necessary because `get_device_layers` should prevent it.
+        let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
+        if mapping_uses_cpu {
+            warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
 
         let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
         if let Some(ref topology) = self.config.topology {
@@ -509,6 +521,7 @@ impl Loader for VisionLoader {
                 model.config(),
                 device,
                 &layer_devices,
+                silent,
             )?;
             let cache_engine =
                 CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;

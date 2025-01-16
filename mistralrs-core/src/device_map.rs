@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use crate::{
+    pipeline::AutoDeviceMapParams,
     utils::{debug::DeviceRepr, log::once_log_info},
     Topology, TryIntoDType,
 };
@@ -17,8 +18,10 @@ pub struct DeviceLayerMapMetadata {
 
 #[derive(Debug, Clone)]
 pub enum DeviceMapSetting {
+    /// Manual device mapping.
     Map(DeviceMapMetadata),
-    Auto,
+    /// Automatic device mapping (recommended).
+    Auto(AutoDeviceMapParams),
 }
 
 #[derive(Debug, Default, Deserialize, Clone)]
@@ -181,7 +184,7 @@ impl DeviceMapSetting {
                     nm_device: device.clone(),
                 }))
             }
-            Self::Auto => {
+            Self::Auto(_) => {
                 candle_core::bail!(".into_mapper does not work on Auto device map, convert it to a Map with DeviceMappedModelLoader::get_device_layers")
             }
         }

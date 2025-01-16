@@ -8,10 +8,11 @@ use axum::{
 use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    ModelSelected, PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
+    paged_attn_supported, parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
+    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
+    TokenSource,
 };
 use openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
@@ -104,14 +105,14 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     prefix_cache_n: usize,
 
-    /// Note: this is deprecated in favor of automatic device mapping.
+    /// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
-    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    /// In-situ quantization to apply.
     #[arg(long = "isq", value_parser = parse_isq_value)]
     in_situ_quant: Option<IsqType>,
 
@@ -300,6 +301,7 @@ async fn main() -> Result<()> {
 
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let dtype = get_model_dtype(&args.model)?;
+    let auto_device_map_params = get_auto_device_map_params(&args.model)?;
 
     if tgt_non_granular_index.is_some() {
         args.max_seqs = 1;
@@ -383,7 +385,7 @@ async fn main() -> Result<()> {
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapSetting::Auto
+        DeviceMapSetting::Auto(auto_device_map_params)
     };
 
     let no_paged_attn = if device.is_cuda() {
@@ -486,7 +488,8 @@ async fn main() -> Result<()> {
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
         .with_prefix_cache_n(args.prefix_cache_n)
-        .with_gemm_full_precision_f16(args.cpu);
+        .with_gemm_full_precision_f16(args.cpu)
+        .with_gemm_full_precision_f16(args.cpu); // Required to allow `cuda` build to use `--cpu`, #1056
 
     if args.interactive_mode {
         interactive_mode(builder.build(), args.throughput_log).await;

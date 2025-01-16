@@ -2,11 +2,11 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    get_model_dtype, initialize_logging, paged_attn_supported, parse_isq_value, Constraint,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
-    DrySamplingParams, IsqType, Loader, LoaderBuilder, MemoryGpuConfig, MistralRs,
-    MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request, RequestMessage,
-    Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
+    get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
+    parse_isq_value, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, DrySamplingParams, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
+    MistralRs, MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
+    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use std::sync::Arc;
 use std::{fmt::Display, num::NonZeroUsize};
@@ -291,13 +291,14 @@ struct Args {
     #[arg(long, short, default_value_t = 5)]
     repetitions: usize,
 
+    /// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
-    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    /// In-situ quantization to apply.
     #[arg(long = "isq", value_parser = parse_isq_value)]
     in_situ_quant: Option<IsqType>,
 
@@ -356,6 +357,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let dtype = get_model_dtype(&args.model)?;
+    let auto_device_map_params = get_auto_device_map_params(&args.model)?;
 
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
@@ -422,7 +424,7 @@ fn main() -> anyhow::Result<()> {
             DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapSetting::Auto
+        DeviceMapSetting::Auto(auto_device_map_params)
     };
 
     let no_paged_attn = if device.is_cuda() {

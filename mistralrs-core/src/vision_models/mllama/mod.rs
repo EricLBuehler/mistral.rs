@@ -145,11 +145,12 @@ impl MLlamaModel {
 
         let (cross_attn_mask, full_text_row_masked_out_mask) =
             if let Some(cross_attn_mask) = cross_attn_mask {
-                let (cmask, fmask) = prepare_cross_attention_mask(
+                let (mut cmask, fmask) = prepare_cross_attention_mask(
                     cross_attn_mask,
                     self.vision_model.num_patches,
                     self.dtype,
                 )?;
+                cmask = cmask.squeeze(1)?;
                 (Some(cmask), Some(fmask))
             } else {
                 (None, None)

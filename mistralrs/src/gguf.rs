@@ -33,6 +33,7 @@ impl GgufModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
+    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
     pub fn new(model_id: impl ToString, files: Vec<impl ToString>) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -144,8 +145,7 @@ impl GgufModelBuilder {
         self
     }
 
-    /// Provide metadata to initialize the device mapper. Generally, it is more programmatic and easier to use
-    /// the [`Topology`], see [`Self::with_topology`].
+    /// Provide metadata to initialize the device mapper.
     pub fn with_device_mapping(mut self, device_mapping: DeviceMapSetting) -> Self {
         self.device_mapping = Some(device_mapping);
         self
@@ -177,7 +177,8 @@ impl GgufModelBuilder {
             &ModelDType::Auto,
             &best_device(self.force_cpu)?,
             !self.with_logging,
-            self.device_mapping.unwrap_or(DeviceMapSetting::Auto),
+            self.device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             None,
             self.paged_attn_cfg,
         )?;

@@ -5,7 +5,7 @@ use std::ops::Add;
 use candle_core::{DType, Device, Result, Tensor, WithDType};
 use mistralrs_quant::get_use_matmul_via_f16;
 
-use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::KvCache};
+use crate::pipeline::KvCache;
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 pub struct CausalMasker;
@@ -137,7 +137,7 @@ impl CausalMasker {
         input_ids: &Tensor,
         cache: &dyn PastKvLenCache,
         dtype: DType,
-        n_attn_heads: usize,
+        _n_attn_heads: usize,
     ) -> Result<Option<Tensor>> {
         let past_kv_len = cache.get_past_kv_len()?;
         let (_b_sz, tgt_len) = input_ids.dims2()?;
@@ -162,13 +162,6 @@ impl CausalMasker {
             mask
         };
 
-        // IMPORTANT: this must match the logic in attention.rs.
-        if causal_mask.device().is_cuda()
-            && !get_use_matmul_via_f16()
-            && CUBLASLT_HANDLE.lock().unwrap().is_some()
-        {
-            causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
-        }
         Ok(Some(causal_mask))
     }
 
@@ -211,13 +204,6 @@ impl CausalMasker {
             )?
         };
 
-        // IMPORTANT: this must match the logic in attention.rs.
-        if causal_mask.device().is_cuda()
-            && !get_use_matmul_via_f16()
-            && CUBLASLT_HANDLE.lock().unwrap().is_some()
-        {
-            causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
-        }
         Ok(Some(causal_mask))
     }
 

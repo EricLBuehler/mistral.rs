@@ -25,7 +25,7 @@ use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::gguf_metadata::GgufDeviceMapLoaderInner;
+use crate::utils::gguf_metadata::{ContentConfig, GgufDeviceMapLoaderInner};
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
@@ -43,7 +43,7 @@ use crate::{
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
@@ -251,55 +251,6 @@ impl GGUFLoader {
     }
 }
 
-struct ContentConfig {
-    max_seq_len: usize,
-    hidden_size: usize,
-    num_attn_heads: usize,
-    num_kv_heads: usize,
-    num_layers: usize,
-}
-
-#[allow(clippy::cast_possible_truncation)]
-impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConfig {
-    fn from(value: &Content<'a, R>) -> Self {
-        let metadata = value.get_metadata();
-        let arch = metadata["general.architecture"].to_string().unwrap();
-        Self {
-            max_seq_len: metadata[&format!("{arch}.context_length")]
-                .to_u64()
-                .unwrap() as usize,
-            hidden_size: metadata[&format!("{arch}.embedding_length")]
-                .to_u64()
-                .unwrap() as usize,
-            num_attn_heads: metadata[&format!("{arch}.attention.head_count")]
-                .to_u64()
-                .unwrap() as usize,
-            num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
-                .to_u64()
-                .unwrap() as usize,
-            num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
-        }
-    }
-}
-
-impl ModelConfigLike for ContentConfig {
-    fn max_seq_len(&self) -> usize {
-        self.max_seq_len
-    }
-    fn hidden_size(&self) -> usize {
-        self.hidden_size
-    }
-    fn num_attn_heads(&self) -> usize {
-        self.num_attn_heads
-    }
-    fn num_kv_heads(&self) -> usize {
-        self.num_kv_heads
-    }
-    fn num_layers(&self) -> usize {
-        self.num_layers
-    }
-}
-
 impl Loader for GGUFLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
@@ -342,7 +293,7 @@ impl Loader for GGUFLoader {
         silent: bool,
         mut mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
@@ -362,14 +313,15 @@ impl Loader for GGUFLoader {
 
         // If auto, convert to Map
         let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
-        if let DeviceMapSetting::Auto = mapper.clone() {
+        if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
+            // Initial dtype
+            let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
 
             let model = GgufDeviceMapLoaderInner {
                 model: &model,
                 arch,
             };
-            let dtype = DType::F32;
 
             let layer_sizes_in_bytes =
                 model.layer_sizes_in_bytes("this is a dummy config!", dtype, 1)?;
@@ -385,6 +337,9 @@ impl Loader for GGUFLoader {
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
                 &devices,
+                dtype,
+                &params,
+                paged_attn_config.as_ref(),
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -396,6 +351,14 @@ impl Loader for GGUFLoader {
         for layer in 0..num_layers {
             let device = mapper.device_for(layer, false).cloned();
             layer_devices.push(device);
+        }
+
+        // TODO: PagedAttention is not supported with CPU for now.
+        // This check is not really necessary because `get_device_layers` should prevent it.
+        let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
+        if mapping_uses_cpu {
+            warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
+            paged_attn_config = None;
         }
 
         let GgufTokenizerConversion {
@@ -433,7 +396,7 @@ impl Loader for GGUFLoader {
         };
 
         let model_config_metadata: ContentConfig = (&model).into();
-        let internal_dtype = dtype.try_into_dtype(&[device]).unwrap();
+        let internal_dtype = mapper.get_min_dtype(dtype)?;
 
         let model_config = {
             // Base config (quantization only):
@@ -492,6 +455,7 @@ impl Loader for GGUFLoader {
                 model_config,
                 device,
                 &layer_devices,
+                silent,
             )?;
             let cache_engine = CacheEngine::new(
                 model_config,
