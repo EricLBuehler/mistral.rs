@@ -428,7 +428,7 @@ impl AutoDeviceMapParams {
 
 pub trait DeviceMappedModelLoader {
     /// Maximum activation size of non-mapped parts of this model.
-    /// Useful for the vision models which may prefer to keep the vison compoents on the GPU.
+    /// Useful for the vision models which may prefer to keep the vison components on the GPU.
     fn non_mapped_max_act_size_elems(
         &self,
         config: &str,
