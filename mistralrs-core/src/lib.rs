@@ -54,6 +54,8 @@ mod paged_attention;
 use dummy_paged_attention as paged_attention;
 mod attention;
 mod diffusion_models;
+#[cfg(feature = "nccl")]
+mod distributed;
 mod pipeline;
 mod prefix_cacher;
 mod prefix_cacher_v2;
@@ -68,8 +70,6 @@ mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
-#[cfg(feature = "nccl")]
-mod distributed;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{
