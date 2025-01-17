@@ -479,12 +479,14 @@ impl Model {
             mapper,
             rope_parameters,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
-                head_dim: None,
+                k_head_dim: None,
+                v_head_dim: None,
             },
         })
     }

@@ -27,8 +27,6 @@ use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapMetadata;
-use crate::Topology;
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
@@ -56,6 +54,7 @@ struct LayerWeights {
     rope_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+    dtype: DType,
 }
 
 impl LayerWeights {
@@ -83,10 +82,11 @@ impl LayerWeights {
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let qkv =
-            self.attn_qkv
-                .forward(x)?
-                .reshape((b_sz, seq_len, 3, self.n_head, self.head_dim))?;
+        let qkv = self
+            .attn_qkv
+            .forward(x)?
+            .reshape((b_sz, seq_len, 3, self.n_head, self.head_dim))?
+            .to_dtype(self.dtype)?;
 
         let q = qkv.i((.., .., 0))?.transpose(1, 2)?;
         let k = qkv.i((.., .., 1))?.transpose(1, 2)?;
@@ -125,7 +125,7 @@ impl LayerWeights {
         } else {
             y.reshape(&[b_sz, seq_len, n_embd])?
         };
-        let y = self.attn_output.forward(&y)?;
+        let y = self.attn_output.forward(&y.to_dtype(x.dtype())?)?;
         Ok(y)
     }
 }
@@ -139,6 +139,7 @@ pub struct ModelWeights {
     pub cache: EitherCache,
     pub max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    dtype: DType,
 }
 
 fn precomput_freqs_cis(
@@ -146,6 +147,7 @@ fn precomput_freqs_cis(
     freq_base: f32,
     device: &Device,
     max_seq_len: usize,
+    dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
@@ -156,8 +158,8 @@ fn precomput_freqs_cis(
         .to_dtype(DType::F32)?
         .reshape((max_seq_len, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-    let cos = idx_theta.cos()?;
-    let sin = idx_theta.sin()?;
+    let cos = idx_theta.cos()?.to_dtype(dtype)?;
+    let sin = idx_theta.sin()?.to_dtype(dtype)?;
     Ok((cos, sin))
 }
 
@@ -221,9 +223,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
         device: &Device,
-        mapper: DeviceMapMetadata,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         attention_mechanism: AttentionImplementation,
+        dtype: DType,
     ) -> Result<Self> {
         // Parameter extraction from metadata.
         let metadata = ContentMetadata {
@@ -240,7 +242,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             max_seq_len,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len)?;
+        let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, max_seq_len, dtype)?;
 
         let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -252,8 +254,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let output = QLinear::new(&mut ct, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let head_dim = embedding_length / head_count;
-
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");
@@ -326,6 +326,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
                 },
+                dtype,
             })
         }
         Ok(Self {
@@ -337,6 +338,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
             cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
             max_seq_len,
             mapper,
+            dtype,
         })
     }
 }
@@ -357,7 +359,7 @@ impl ModelWeights {
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
-            DType::F32,
+            self.dtype,
             self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {

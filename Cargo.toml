@@ -12,7 +12,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -24,8 +24,8 @@ rust-version = "1.82"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "521e33c" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "521e33c" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "3388a3c" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "3388a3c" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
@@ -47,7 +47,6 @@ half = "2.4.0"
 rayon = "1.1.0"
 url = "2.5.2"
 data-url = "0.3.1"
-buildstructor = "0.5.4"
-float8 = "0.1.1"
+float8 = "0.1.2"
 regex = "1.10.6"
 metal = { version = "0.27.0", features = ["mps"] }

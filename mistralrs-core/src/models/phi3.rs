@@ -188,8 +188,8 @@ impl Attention {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
-                    &k,
-                    &v,
+                    &k.contiguous()?,
+                    &v.contiguous()?,
                     attention_mask,
                     Some(key_cache),
                     Some(value_cache),
@@ -204,8 +204,8 @@ impl Attention {
                     assert!(attention_mask.is_some());
                     paged_attn.forward(
                         &q,
-                        &k,
-                        &v,
+                        &k.contiguous()?,
+                        &v.contiguous()?,
                         attention_mask,
                         None,
                         None,
@@ -529,12 +529,14 @@ impl Model {
             mapper,
             sliding_window: cfg.sliding_window,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
-                head_dim: None,
+                k_head_dim: None,
+                v_head_dim: None,
             },
         })
     }

@@ -37,19 +37,19 @@ use crate::{
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct EmbedLayerConfig {
-    hd_transform_order: Option<String>,
-    projection_cls: Option<String>,
-    use_hd_transform: Option<bool>,
-    with_learnable_separator: Option<bool>,
+    pub hd_transform_order: Option<String>,
+    pub projection_cls: Option<String>,
+    pub use_hd_transform: Option<bool>,
+    pub with_learnable_separator: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct ImageProcessorConfig {
-    image_dim_out: usize,
-    name: String,
-    num_img_tokens: usize,
-    layer_idx: Option<isize>,
-    type_feature: Option<String>,
+    pub image_dim_out: usize,
+    pub name: String,
+    pub num_img_tokens: usize,
+    pub layer_idx: Option<isize>,
+    pub type_feature: Option<String>,
 }
 
 serde_default_fn!(bool, d_flash_attn, false);
@@ -268,8 +268,8 @@ impl Attention {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
-                    &k,
-                    &v,
+                    &k.contiguous()?,
+                    &v.contiguous()?,
                     attention_mask,
                     Some(key_cache),
                     Some(value_cache),
@@ -284,8 +284,8 @@ impl Attention {
                     assert!(attention_mask.is_some());
                     paged_attn.forward(
                         &q,
-                        &k,
-                        &v,
+                        &k.contiguous()?,
+                        &v.contiguous()?,
                         attention_mask,
                         None,
                         None,
@@ -530,6 +530,17 @@ pub struct ImageEmbedding {
     tensors: Vec<(String, Tensor)>,
 }
 
+pub(crate) const PHI3V_CLIP_CONFIG: ClipConfig = ClipConfig {
+    hidden_act: Activation::QuickGelu,
+    hidden_size: 1024,
+    image_size: 336,
+    intermediate_size: 4096,
+    num_attention_heads: 16,
+    num_channels: 3,
+    num_hidden_layers: 24,
+    patch_size: 14,
+};
+
 impl ImageEmbedding {
     fn new(
         config: &Config,
@@ -548,19 +559,8 @@ impl ImageEmbedding {
         let num_img_tokens = config.img_processor.num_img_tokens;
 
         // CLIP image processor here...
-        let image_processor = ClipVisionTransformer::new(
-            vb.pp("img_processor.vision_model"),
-            &ClipConfig {
-                hidden_act: Activation::QuickGelu,
-                hidden_size: 1024,
-                image_size: 336,
-                intermediate_size: 4096,
-                num_attention_heads: 16,
-                num_channels: 3,
-                num_hidden_layers: 24,
-                patch_size: 14,
-            },
-        )?;
+        let image_processor =
+            ClipVisionTransformer::new(vb.pp("img_processor.vision_model"), &PHI3V_CLIP_CONFIG)?;
 
         // High dim transform
         let use_hd_transform = embed_config.use_hd_transform.unwrap_or(false);
@@ -1056,12 +1056,14 @@ impl Model {
             sliding_window: cfg.sliding_window,
             embed_tokens,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
-                head_dim: None,
+                k_head_dim: None,
+                v_head_dim: None,
             },
         })
     }

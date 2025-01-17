@@ -3,13 +3,10 @@
 #[cfg(feature = "metal")]
 use std::sync::atomic::AtomicUsize;
 
-use crate::{
-    cublaslt::CUBLASLT_HANDLE,
-    layers::{get_use_matmul_via_f16, MatMul},
-    pipeline::text_models_inputs_processor::FlashParams,
-};
+use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::text_models_inputs_processor::FlashParams};
 
 use candle_core::{Device, Result, Tensor};
+use mistralrs_quant::{get_use_matmul_via_f16, MatMul};
 
 #[cfg(feature = "metal")]
 /// Initial, sentinel value is usize::MAX
@@ -90,17 +87,9 @@ fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     }
 }
 
-/// Computes softmax(QK^T*sqrt(d_k))V
-fn naive_sdpa(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    mask: Option<&Tensor>,
-    head_dim: usize,
-    sdpa_params: &SdpaParams,
-) -> Result<Tensor> {
+fn supports_attn_softmax() -> Result<bool> {
     #[cfg(feature = "metal")]
-    let supports_attn_softmax = {
+    {
         use std::sync::atomic::Ordering;
         let cache = METAL_VERSION_CACHE.load(Ordering::Relaxed);
 
@@ -152,48 +141,45 @@ fn naive_sdpa(
             }
         };
         // Attn softmax is only supported for metal >= 310
-        version >= 310
-    };
+        Ok(version >= 310)
+    }
 
     #[cfg(not(feature = "metal"))]
-    let supports_attn_softmax = true;
+    Ok(true)
+}
 
-    // Use faster softmax if mask is rank 2 or it's rank 3 and bs 1
-    if mask.is_some_and(|mask| mask.rank() == 2 || (mask.rank() == 3 && mask.dims()[0] == 1))
-        && supports_attn_softmax
-    {
-        let n_attn_heads = q.dim(1)?;
-        let bs = q.dim(0)?;
-        let attention_bias = match mask {
-            Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => {
-                mask.unsqueeze(0)?.repeat((bs, n_attn_heads, 1, 1))?
-            }
-            Some(mask) if mask.rank() == 3 => mask.unsqueeze(0)?,
-            Some(mask) if mask.rank() == 2 => {
-                mask.unsqueeze(0)?
-                    .unsqueeze(0)?
-                    .repeat((bs, n_attn_heads, 1, 1))?
-            }
-            Some(mask) if mask.rank() == 4 => mask.clone(),
+/// Computes softmax(QK^T*sqrt(d_k))V
+fn naive_sdpa(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+    sdpa_params: &SdpaParams,
+) -> Result<Tensor> {
+    q.device().synchronize()?;
+
+    // Use faster softmax if mask is rank 2 or it's rank 3
+    if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && supports_attn_softmax()? {
+        let mask = match mask {
+            Some(mask) if mask.rank() == 3 || mask.rank() == 2 => mask.clone(),
             _ => candle_core::bail!("unsupported mask {mask:?}"),
         };
-        let mut att = attention_bias;
 
-        q.matmul_with_alpha_beta(
-            &k.t()?,
+        let mut att = MatMul.matmul(q, &k.t()?)?;
+
+        candle_nn::ops::inplace_attn_softmax_last_dim(
             &mut att,
-            Some((sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)) as f64),
+            &mask,
+            sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0),
         )?;
 
         if let Some(softcap) = sdpa_params.softcap {
             att = (att.tanh()? * softcap as f64)?;
         }
 
-        candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
-
         MatMul.matmul(&att, v)
     } else if let Some(mask) = mask {
-        let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
+        let mut att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
             att = att.tanh()?;
@@ -204,7 +190,7 @@ fn naive_sdpa(
         candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
         MatMul.matmul(&att, v)
     } else {
-        let mut att = MatMul.matmul_affine_div(q, &k.t()?, (head_dim as f64).sqrt())?;
+        let mut att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
             att = att.tanh()?;
@@ -249,7 +235,9 @@ impl Sdpa {
         sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
-        if sdpa_params.use_flash_attn {
+        let (_, _, _, k_head_dim) = k.dims4()?;
+        let (_, _, _, v_head_dim) = v.dims4()?;
+        if sdpa_params.use_flash_attn && q.device().is_cuda() {
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -257,7 +245,8 @@ impl Sdpa {
             return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
         }
 
-        if q.device().is_metal() && seq_len == 1 {
+        let all_head_dims_match = head_dim == k_head_dim && k_head_dim == v_head_dim;
+        if q.device().is_metal() && seq_len == 1 && all_head_dims_match {
             return candle_nn::ops::sdpa(
                 q,
                 k,
@@ -269,6 +258,10 @@ impl Sdpa {
 
         let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
+        return naive_sdpa(q, &k, &v, mask, sdpa_params);
+
+        // TODO: bench?
+        #[allow(unused)]
         if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
             if !get_use_matmul_via_f16() {
                 #[cfg(feature = "cuda")]
@@ -313,7 +306,7 @@ impl Sdpa {
                     candle_nn::ops::inplace_softmax_last_dim(&mut attention_scores)?;
 
                     let context_layer = cublaslt.batch_matmul(
-                        &v.t()?.contiguous()?,
+                        &v.t()?.contiguous().unwrap(),
                         &attention_scores,
                         // We save one allocation
                         Some(&q),
@@ -324,7 +317,7 @@ impl Sdpa {
                     )?;
 
                     // Reshape to dims4
-                    context_layer.reshape((b_sz, n_attn_heads, seq_len, head_dim))
+                    context_layer.reshape((b_sz, n_attn_heads, seq_len, v_head_dim))
                 }
                 #[cfg(not(feature = "cuda"))]
                 {
@@ -332,10 +325,10 @@ impl Sdpa {
                 }
             } else {
                 // Use the f16 kernels here if quantized (ISQ or GGML), and a large enough prompt
-                naive_sdpa(q, &k, &v, mask, head_dim, sdpa_params)
+                naive_sdpa(q, &k, &v, mask, sdpa_params)
             }
         } else {
-            naive_sdpa(q, &k, &v, mask, head_dim, sdpa_params)
+            naive_sdpa(q, &k, &v, mask, sdpa_params)
         }
     }
 }

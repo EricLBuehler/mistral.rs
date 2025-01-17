@@ -7,7 +7,7 @@ use candle_core::Device;
 use text_models_inputs_processor::PagedAttentionMeta;
 use tokenizers::Tokenizer;
 
-use crate::sequence::Sequence;
+use crate::{device_map::DeviceMapper, sequence::Sequence};
 
 #[derive(PartialEq)]
 pub enum InputsProcessorType {
@@ -40,6 +40,7 @@ pub trait InputsProcessor {
         other_config: Option<Arc<dyn Any>>,
         paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
+        mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>>;
 
     fn get_type(&self) -> InputsProcessorType;
@@ -48,14 +49,17 @@ pub trait InputsProcessor {
 // ========================= Test models input processor
 
 pub mod text_models_inputs_processor {
-    use std::{any::Any, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc};
+    use std::{
+        any::Any, collections::HashMap, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc,
+    };
 
     use anyhow::Result;
-    use candle_core::{DType, Device, Tensor, WithDType};
+    use candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
+    use mistralrs_quant::set_use_matmul_via_f16;
     use tokenizers::Tokenizer;
 
     use crate::{
-        layers::set_use_matmul_via_f16,
+        device_map::DeviceMapper,
         paged_attention::{BlockEngine, _PAD_SLOT_ID},
         sequence::Sequence,
     };
@@ -89,9 +93,9 @@ pub mod text_models_inputs_processor {
     #[derive(Clone, Debug)]
     #[allow(dead_code)]
     pub struct PagedAttentionInputMetadata {
-        pub block_tables: Option<Tensor>,
-        pub context_lens: Option<Tensor>,
-        pub slot_mappings: Tensor,
+        pub block_tables: Option<HashMap<DeviceLocation, Tensor>>,
+        pub context_lens: Option<HashMap<DeviceLocation, Tensor>>,
+        pub slot_mappings: HashMap<DeviceLocation, Tensor>,
         pub max_context_len: Option<usize>,
     }
 
@@ -103,7 +107,7 @@ pub mod text_models_inputs_processor {
                 block_tables: None,
                 context_lens: None,
                 max_context_len: None,
-                slot_mappings: Tensor::new(&[0f32], dev)?,
+                slot_mappings: HashMap::from([(dev.location(), Tensor::new(&[0f32], dev)?)]),
             })
         }
     }
@@ -133,6 +137,7 @@ pub mod text_models_inputs_processor {
 
     // chunk_offset_toks is the number of tokens by which the tokens are offset,
     // chunk_offset_toks / prompt_batchsize = number of batches
+    #[allow(clippy::too_many_arguments)]
     pub fn make_prompt_chunk<T: WithDType + Debug>(
         chunk_offset_toks: usize,
         toks: Vec<Vec<T>>,
@@ -141,6 +146,7 @@ pub mod text_models_inputs_processor {
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputMetadata> {
         let max_len = toks
             .iter()
@@ -311,10 +317,25 @@ pub mod text_models_inputs_processor {
             )?
             .reshape(((),))?;
 
+            // For device mapping, make a copy of each tensor for each device
+            let devices = mapper.unwrap().get_unique_devices();
+            let mut slot_mappings_map = HashMap::new();
+            let mut block_tables_map = HashMap::new();
+            let mut context_lens_map = HashMap::new();
+
+            for device in devices {
+                slot_mappings_map
+                    .insert(device.location(), slot_mappings.clone().to_device(&device)?);
+                block_tables_map
+                    .insert(device.location(), block_tables.clone().to_device(&device)?);
+                context_lens_map
+                    .insert(device.location(), context_lens.clone().to_device(&device)?);
+            }
+
             Some(PagedAttentionInputMetadata {
-                slot_mappings,
-                block_tables: Some(block_tables),
-                context_lens: Some(context_lens),
+                slot_mappings: slot_mappings_map,
+                block_tables: Some(block_tables_map),
+                context_lens: Some(context_lens_map),
                 max_context_len: Some(max_context_len),
             })
         } else {
@@ -342,6 +363,7 @@ pub mod text_models_inputs_processor {
         input_seqs: &[&mut Sequence],
         device: &Device,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        mapper: Option<&dyn DeviceMapper>,
     ) -> Result<InputMetadata> {
         // Pad each sequence by the padding token to the max len.
         let mut seqs_tensors = Vec::new();
@@ -459,10 +481,25 @@ pub mod text_models_inputs_processor {
                 device,
             )?;
 
+            // For device mapping, make a copy of each tensor for each device
+            let devices = mapper.unwrap().get_unique_devices();
+            let mut slot_mappings_map = HashMap::new();
+            let mut block_tables_map = HashMap::new();
+            let mut context_lens_map = HashMap::new();
+
+            for device in devices {
+                slot_mappings_map
+                    .insert(device.location(), slot_mappings.clone().to_device(&device)?);
+                block_tables_map
+                    .insert(device.location(), block_tables.clone().to_device(&device)?);
+                context_lens_map
+                    .insert(device.location(), context_lens.clone().to_device(&device)?);
+            }
+
             Some(PagedAttentionInputMetadata {
-                slot_mappings,
-                block_tables: Some(block_tables),
-                context_lens: Some(context_lens),
+                slot_mappings: slot_mappings_map,
+                block_tables: Some(block_tables_map),
+                context_lens: Some(context_lens_map),
                 max_context_len: Some(*max_context_len),
             })
         } else {
@@ -485,6 +522,7 @@ pub mod text_models_inputs_processor {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
         toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
@@ -493,6 +531,7 @@ pub mod text_models_inputs_processor {
         return_raw_logits: bool,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
+        mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
         if let (Some(prompt_batchsize), true) = (prompt_batchsize, paged_attn_metadata.is_none()) {
             let mut seq_chunks = Vec::new();
@@ -531,6 +570,7 @@ pub mod text_models_inputs_processor {
                         last_n_context_len,
                         return_raw_logits,
                         paged_attn_metadata.as_deref_mut(),
+                        mapper,
                     )
                     .map(|inputs| InnerInputProcessorOutput {
                         inputs,
@@ -561,6 +601,7 @@ pub mod text_models_inputs_processor {
                     last_n_context_len,
                     return_raw_logits,
                     paged_attn_metadata,
+                    mapper,
                 )
                 .map(|inputs| InnerInputProcessorOutput {
                     inputs,
@@ -580,6 +621,7 @@ pub mod text_models_inputs_processor {
         return_raw_logits: bool,
         paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
+        mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
         if no_kv_cache {
             return get_prompt_input(
@@ -590,16 +632,17 @@ pub mod text_models_inputs_processor {
                 return_raw_logits,
                 paged_attn_metadata,
                 prompt_batchsize,
+                mapper,
             );
         }
 
         Box::new(std::iter::once(
-            make_completion_chunk(toks, input_seqs, device, paged_attn_metadata).map(|inputs| {
-                InnerInputProcessorOutput {
+            make_completion_chunk(toks, input_seqs, device, paged_attn_metadata, mapper).map(
+                |inputs| InnerInputProcessorOutput {
                     inputs,
                     seq_indices: (0..input_seqs.len()).collect(),
-                }
-            }),
+                },
+            ),
         ))
     }
 
@@ -634,6 +677,7 @@ pub mod text_models_inputs_processor {
             _: Option<Arc<dyn Any>>,
             mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
             prompt_batchsize: Option<NonZeroUsize>,
+            mapper: Option<&dyn DeviceMapper>,
         ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
             if is_xlora && !is_prompt {
                 Box::new(
@@ -648,6 +692,7 @@ pub mod text_models_inputs_processor {
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
+                        mapper,
                     )
                     .zip(get_completion_input(
                         input_seqs
@@ -661,6 +706,7 @@ pub mod text_models_inputs_processor {
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
+                        mapper,
                     ))
                     .map(|(prompt, completion)| {
                         let InnerInputProcessorOutput {
@@ -721,6 +767,7 @@ pub mod text_models_inputs_processor {
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
+                        mapper,
                     )
                     .map(|metadata| {
                         let InnerInputProcessorOutput {
@@ -768,6 +815,7 @@ pub mod text_models_inputs_processor {
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
+                        mapper,
                     )
                     .map(|metadata| {
                         let InnerInputProcessorOutput {
@@ -816,6 +864,7 @@ pub mod text_models_inputs_processor {
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
                         prompt_batchsize,
+                        mapper,
                     )
                     .map(|metadata| {
                         let InnerInputProcessorOutput {

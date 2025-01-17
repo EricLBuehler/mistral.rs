@@ -2,11 +2,11 @@ use candle_core::Device;
 use clap::Parser;
 use cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 use mistralrs_core::{
-    get_model_dtype, initialize_logging, paged_attn_supported, parse_isq_value, Constraint,
-    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DrySamplingParams, IsqType,
-    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
-    NormalRequest, PagedAttentionConfig, Request, RequestMessage, Response, SamplingParams,
-    SchedulerConfig, TokenSource, Usage,
+    get_auto_device_map_params, get_model_dtype, initialize_logging, paged_attn_supported,
+    parse_isq_value, Constraint, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, DrySamplingParams, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
+    MistralRs, MistralRsBuilder, ModelSelected, NormalRequest, PagedAttentionConfig, Request,
+    RequestMessage, Response, SamplingParams, SchedulerConfig, TokenSource, Usage,
 };
 use std::sync::Arc;
 use std::{fmt::Display, num::NonZeroUsize};
@@ -291,13 +291,14 @@ struct Args {
     #[arg(long, short, default_value_t = 5)]
     repetitions: usize,
 
+    /// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
-    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    /// In-situ quantization to apply.
     #[arg(long = "isq", value_parser = parse_isq_value)]
     in_situ_quant: Option<IsqType>,
 
@@ -323,9 +324,13 @@ struct Args {
     #[arg(long = "pa-blk-size")]
     paged_attn_block_size: Option<usize>,
 
-    /// Disable PagedAttention on CUDA.
-    #[arg(long = "no_paged_attn", default_value_t = false)]
+    /// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
+    #[arg(long = "no-paged-attn", default_value_t = false)]
     no_paged_attn: bool,
+
+    /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
+    #[arg(long = "paged-attn", default_value_t = false)]
+    paged_attn: bool,
 
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
@@ -352,6 +357,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let dtype = get_model_dtype(&args.model)?;
+    let auto_device_map_params = get_auto_device_map_params(&args.model)?;
 
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
@@ -389,10 +395,9 @@ fn main() -> anyhow::Result<()> {
     let mapper = if let Some(device_layers) = args.num_device_layers {
         if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
             let layers = device_layers[0].parse::<usize>().unwrap();
-            DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
-                ordinal: 0,
-                layers,
-            }])
+            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
+                DeviceLayerMapMetadata { ordinal: 0, layers },
+            ]))
         } else {
             let mut mapping = Vec::new();
             for layer in device_layers {
@@ -416,10 +421,18 @@ fn main() -> anyhow::Result<()> {
                     layers: num,
                 });
             }
-            DeviceMapMetadata::from_num_device_layers(mapping)
+            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapMetadata::dummy()
+        DeviceMapSetting::Auto(auto_device_map_params)
+    };
+
+    let no_paged_attn = if device.is_cuda() {
+        args.no_paged_attn
+    } else if device.is_metal() {
+        !args.paged_attn
+    } else {
+        true
     };
 
     // Allocate 0.5 GB of CPU memory just as a placeholder.
@@ -430,7 +443,7 @@ fn main() -> anyhow::Result<()> {
         args.paged_attn_gpu_mem_usage,
         args.paged_ctxt_len,
         paged_attn_supported(),
-        args.no_paged_attn,
+        no_paged_attn,
     ) {
         (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
@@ -450,7 +463,7 @@ fn main() -> anyhow::Result<()> {
         (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            MemoryGpuConfig::Amount(m),
+            MemoryGpuConfig::MbAmount(m),
         )?),
         (block_size, Some(_m), Some(f), None, true, false) => {
             info!("Both memory size, and usage were specified, defaulting to the usage value.");

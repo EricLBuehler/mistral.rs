@@ -140,7 +140,7 @@ impl VisionMessages {
         self
     }
 
-    #[deprecated(since = "0.3.4", note = "use add_image_message")]
+    #[deprecated(since = "0.3.5", note = "use add_image_message")]
     /// This handles adding the `<|image_{N}|>` prefix to the prompt.
     pub fn add_phiv_image_message(
         mut self,
@@ -163,7 +163,7 @@ impl VisionMessages {
         self
     }
 
-    #[deprecated(since = "0.3.4", note = "use add_image_message")]
+    #[deprecated(since = "0.3.5", note = "use add_image_message")]
     /// This handles adding the `<|image|>` prefix to the prompt.
     pub fn add_vllama_image_message(
         mut self,
@@ -182,7 +182,7 @@ impl VisionMessages {
         self
     }
 
-    #[deprecated(since = "0.3.4", note = "use add_image_message")]
+    #[deprecated(since = "0.3.5", note = "use add_image_message")]
     /// This handles adding the `<image>` prefix to the prompt.
     pub fn add_llava_image_message(
         mut self,
@@ -201,7 +201,7 @@ impl VisionMessages {
         self
     }
 
-    #[deprecated(since = "0.3.4", note = "use add_image_message")]
+    #[deprecated(since = "0.3.5", note = "use add_image_message")]
     pub fn add_idefics_image_message(
         mut self,
         role: TextMessageRole,

@@ -344,7 +344,6 @@ impl MLlamaTextCrossAttention {
         hidden_states: &Tensor,
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
-        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -385,10 +384,9 @@ impl MLlamaTextCrossAttention {
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
 
-            (k, v) = kv_cache.append(&k, &v)?;
             (k, v)
         } else {
-            candle_core::bail!("Cross attn cannot find cross attn hidden states!")
+            candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
         };
 
         let mut attn_output = Sdpa
@@ -473,15 +471,14 @@ impl MLlamaCrossAttentionDecoderLayer {
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
         full_text_row_masked_out_mask: Option<&Tensor>,
-        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states =
-            self.attn
-                .forward(&hidden_states, cross_attn_states, attention_mask, kv_cache)?;
+        hidden_states = self
+            .attn
+            .forward(&hidden_states, cross_attn_states, attention_mask)?;
         hidden_states = (residual + hidden_states.broadcast_mul(&self.attn_gate.tanh()?)?)?;
 
         let residual = &hidden_states;
@@ -612,12 +609,14 @@ impl MLlamaTextModel {
             norm,
             lm_head,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
-                head_dim: None,
+                k_head_dim: None,
+                v_head_dim: None,
             },
             cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,
@@ -645,7 +644,7 @@ impl MLlamaTextModel {
         let cache = &mut self.cache.normal().0;
         let self_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
-            &seqlen_offsets as &dyn PastKvLenCache,
+            cache as &dyn PastKvLenCache,
             hidden_states.dtype(),
             self.cfg.num_attn_heads,
         )?;
@@ -656,7 +655,10 @@ impl MLlamaTextModel {
                 MLlamaDecoderLayer::SelfAttn(attn) => {
                     hidden_states = attn.forward(
                         &hidden_states,
-                        self_mask.as_ref(),
+                        self_mask
+                            .as_ref()
+                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
                         seqlen_offsets,
                         start_offsets_kernel.clone(),
                         &mut cache[i],
@@ -671,10 +673,18 @@ impl MLlamaTextModel {
                     }
                     hidden_states = attn.forward(
                         &hidden_states,
-                        cross_attn_states,
-                        cross_attention_mask,
-                        full_text_row_masked_out_mask,
-                        &mut cache[i],
+                        cross_attn_states
+                            .as_ref()
+                            .map(|x| x.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
+                        cross_attention_mask
+                            .as_ref()
+                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
+                        full_text_row_masked_out_mask
+                            .as_ref()
+                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
                     )?;
                 }
             }

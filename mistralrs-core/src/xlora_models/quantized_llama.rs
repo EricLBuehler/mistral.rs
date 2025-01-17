@@ -14,13 +14,13 @@ use candle_core::quantized::ggml_file;
 use candle_core::quantized::QMatMul;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
+use mistralrs_quant::MatMul;
 use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
+use crate::layers::{CausalMasker, QRmsNorm, Sdpa};
 use crate::pipeline::{extract_logits, Cache, EitherCache};
-use crate::{DeviceMapMetadata, Topology};
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -182,6 +182,7 @@ struct LayerWeights {
     head_dim: usize,
     rotary: Arc<RotaryEmbedding>,
     sdpa_params: SdpaParams,
+    dtype: DType,
 }
 
 impl LayerWeights {
@@ -199,24 +200,18 @@ impl LayerWeights {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let q = self.attention_wq.lora_forward(
-            x,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
-        let k = self.attention_wk.lora_forward(
-            x,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
-        let v = self.attention_wv.lora_forward(
-            x,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
+        let q = self
+            .attention_wq
+            .lora_forward(x, scalings.clone(), global_scaling_weight, is_scaling_pass)?
+            .to_dtype(self.dtype)?;
+        let k = self
+            .attention_wk
+            .lora_forward(x, scalings.clone(), global_scaling_weight, is_scaling_pass)?
+            .to_dtype(self.dtype)?;
+        let v = self
+            .attention_wv
+            .lora_forward(x, scalings.clone(), global_scaling_weight, is_scaling_pass)?
+            .to_dtype(self.dtype)?;
 
         let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
         let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
@@ -263,7 +258,7 @@ impl LayerWeights {
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
         let y = self.attention_wo.lora_forward(
-            &y,
+            &y.to_dtype(x.dtype())?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
@@ -282,6 +277,7 @@ pub struct ModelWeights {
     xlora_classifier: Option<XLoraClassifier>,
     pub max_seq_len: usize,
     mapper: Option<Box<dyn DeviceMapper + Send + Sync>>,
+    dtype: DType,
 }
 
 impl ModelConfig::FromAdapterGGML for ModelWeights {
@@ -293,6 +289,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        dtype: DType,
     ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new_partial(
@@ -302,7 +299,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
             MAX_SEQ_LEN as usize,
             &ct.device,
             false,
-            DType::F32,
+            dtype,
         )?;
         let tok_embeddings = ct.remove("tok_embeddings.weight")?;
         let tok_embeddings = tok_embeddings.dequantize(&ct.device)?;
@@ -418,6 +415,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
                 },
+                dtype,
             })
         }
         if xlora_config.is_none() && preload_adapters.is_none() {
@@ -476,6 +474,7 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
             }),
             max_seq_len: MAX_SEQ_LEN as usize, // Cannot determine from ggml.
             mapper: None,
+            dtype,
         })
     }
 }
@@ -489,9 +488,9 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        mapper: DeviceMapMetadata,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        dtype: DType,
     ) -> Result<Self> {
         verify_sanity_adapters(ordering, &SUPPORTED_LAYERS)?;
 
@@ -533,8 +532,6 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         let mut layers = Vec::with_capacity(block_count);
         let mut count = 0;
 
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
-
         let mut ropes = HashMap::new();
         for layer_idx in 0..block_count {
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
@@ -546,7 +543,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                     max_seq_len,
                     device,
                     false,
-                    DType::F32,
+                    dtype,
                 )?),
             );
         }
@@ -716,6 +713,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
                 },
+                dtype,
             })
         }
         if xlora_config.is_none() && preload_adapters.is_none() {
@@ -774,6 +772,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
             }),
             max_seq_len,
             mapper: Some(mapper),
+            dtype,
         })
     }
 }
@@ -838,7 +837,7 @@ impl ModelWeights {
             self.cache.full().lock()
         };
         let mask =
-            CausalMasker.make_causal_mask_matrix(x, &*cache, DType::F32, self.layers[0].n_head)?;
+            CausalMasker.make_causal_mask_matrix(x, &*cache, self.dtype, self.layers[0].n_head)?;
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;

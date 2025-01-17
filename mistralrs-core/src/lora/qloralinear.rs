@@ -5,6 +5,8 @@ use candle_nn::{Linear, VarBuilder};
 use either::Either;
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, UnquantLinear};
 
+use crate::layers::MatMul;
+
 use super::{
     apply_scalings_to_x, get_maybe_topk_scalings, make_adapter, Adapter, AdapterSwapper,
     LinearLayerLike, LoraConfig, LoraLinearConfig, Merge, Ordering,
@@ -214,7 +216,7 @@ impl Merge for QLoraLinear {
                 let w_a = a[adapter].weight();
                 let w_b = b[adapter].weight();
 
-                w_b.matmul(w_a)? * self.scale_adapters[adapter]
+                MatMul.matmul(w_b, w_a)? * self.scale_adapters[adapter]
             }
             _ => unreachable!("Both adapters must be Either::Left or Either::Right."),
         }

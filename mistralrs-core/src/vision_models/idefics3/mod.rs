@@ -21,6 +21,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
+    utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
 };
 
@@ -246,7 +247,20 @@ impl IsqModel for Idefics3Model {
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        self.text_model.residual_tensors()
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m
+            .pp("connector")
+            .pp("modality_projection")
+            .pp("proj")
+            .add(&self.connector.modality_projection.proj);
+        uvb.extend(self.text_model.residual_tensors_m(uvb_m.pp("text_model")));
+        uvb_m
+            .pp("vision_model")
+            .extend(self.vision.residual_tensors());
+
+        uvb.to_safetensors()
     }
 }
 

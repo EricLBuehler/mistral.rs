@@ -93,7 +93,7 @@ impl DiffusionModelBuilder {
             &self.dtype,
             &best_device(self.force_cpu)?,
             !self.with_logging,
-            DeviceMapMetadata::dummy(),
+            DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
             None,
             None,
         )?;

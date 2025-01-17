@@ -542,12 +542,14 @@ impl Llama {
             device: normal_loading_metadata.real_device,
             mapper,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
-                head_dim: None,
+                k_head_dim: None,
+                v_head_dim: None,
             },
         })
     }
@@ -620,6 +622,19 @@ impl Llama {
         let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
         extract_logits(&xs, context_lens)
     }
+
+    pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {
+        uvb_m.pp("embed_tokens").add(&self.wte);
+        uvb_m.pp("norm").add(&self.ln_f);
+
+        for (layer_idx, layer) in self.blocks.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.rms_1);
+            uvb_l.pp("post_attention_layernorm").add(&layer.rms_2);
+        }
+
+        uvb_m.to_safetensors()
+    }
 }
 
 impl IsqModel for Llama {
@@ -650,18 +665,7 @@ impl IsqModel for Llama {
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-
-        let uvb_m = uvb.pp("model");
-        uvb_m.pp("embed_tokens").add(&self.wte);
-        uvb_m.pp("norm").add(&self.ln_f);
-
-        for (layer_idx, layer) in self.blocks.iter().enumerate() {
-            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
-            uvb_l.pp("input_layernorm").add(&layer.rms_1);
-            uvb_l.pp("post_attention_layernorm").add(&layer.rms_2);
-        }
-
-        uvb.to_safetensors()
+        self.residual_tensors_m(uvb.pp("model"))
     }
 
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {

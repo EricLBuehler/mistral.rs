@@ -9,6 +9,7 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
     ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
+use crate::device_map::DeviceMapper;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::get_chat_template;
@@ -21,7 +22,7 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths, DeviceMapMetadata, PagedAttentionConfig, Pipeline, Topology,
+    get_mut_arcmutex, get_paths, DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType, DEBUG,
 };
 use crate::{
@@ -30,7 +31,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::quantized::ggml_file;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -238,10 +239,10 @@ impl Loader for GGMLLoader {
     fn load_model_from_path(
         &self,
         paths: &Box<dyn ModelPaths>,
-        _: &dyn TryIntoDType,
+        dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -250,31 +251,14 @@ impl Loader for GGMLLoader {
                 "You are trying to in-situ quantize a GGML model. This will not do anything."
             );
         }
-        if !(mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map())))
-        {
-            warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
-        }
-        if !(mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map())))
-            && paged_attn_config.is_some()
-        {
-            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
-            paged_attn_config = None;
+
+        if matches!(mapper, DeviceMapSetting::Map(_)) {
+            anyhow::bail!("Device mapping is not supported for diffusion models.")
         }
 
-        if !mapper.is_dummy() && paged_attn_config.is_some() {
-            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+        if paged_attn_config.is_some() {
+            warn!("PagedAttention is not supported for GGML models, disabling it.");
+
             paged_attn_config = None;
         }
 
@@ -316,10 +300,11 @@ impl Loader for GGMLLoader {
 
         let has_adapter = self.kind.is_adapted();
         let is_xlora = self.kind.is_adapted_and(|a| a.is_x_lora());
+        let internal_dtype = dtype.try_into_dtype(&[device]).unwrap();
 
         let model_config = {
             // Base config (quantization only):
-            let quant = ModelConfig::ParamsGGML((model, self.config.gqa).into());
+            let quant = ModelConfig::ParamsGGML((model, self.config.gqa, internal_dtype).into());
 
             // With optional adapter config:
             let mut adapter = None;
@@ -329,10 +314,7 @@ impl Loader for GGMLLoader {
                 )?);
             }
 
-            ModelConfig::ModelParams::builder()
-                .quant(quant)
-                .and_adapter(adapter)
-                .build()
+            ModelConfig::ModelParams::new(quant, adapter)
         };
 
         // Config into model:
@@ -386,12 +368,13 @@ impl Loader for GGMLLoader {
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 tok_env: Some(tok_env),
-                has_no_kv_cache: self.no_kv_cache,
+                no_kv_cache: self.no_kv_cache,
+                no_prefix_cache: false,
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: self.kind.clone(),
                 is_xlora,
-                activation_dtype: DType::F32,
+                activation_dtype: internal_dtype,
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
@@ -409,7 +392,7 @@ impl Loader for GGMLLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -527,6 +510,9 @@ impl MetadataMixin for GGMLPipeline {
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
+    }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        None
     }
 }
 

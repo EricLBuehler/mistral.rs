@@ -1,6 +1,7 @@
 use mistralrs_core::{
-    initialize_logging, AnyMoeConfig, AnyMoeLoader, DefaultSchedulerMethod, DeviceMapMetadata,
-    Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig, SchedulerConfig,
+    initialize_logging, AnyMoeConfig, AnyMoeLoader, AutoDeviceMapParams, DefaultSchedulerMethod,
+    DeviceMapSetting, Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
+    SchedulerConfig,
 };
 
 use crate::{best_device, Model, TextModelBuilder};
@@ -83,7 +84,7 @@ impl AnyMoeModelBuilder {
             !self.base.with_logging,
             self.base
                 .device_mapping
-                .unwrap_or(DeviceMapMetadata::dummy()),
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             self.base.isq,
             self.base.paged_attn_cfg,
         )?;

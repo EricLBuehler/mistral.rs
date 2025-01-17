@@ -1,21 +1,15 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{
-    f32::consts::PI,
-    ops::Mul,
-    str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
 use candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
-use mistralrs_quant::QuantMethod;
+use float8::F8E4M3;
+use half::{bf16, f16};
+use mistralrs_quant::get_use_matmul_via_f16;
 use serde::{Deserialize, Serialize};
 
 pub use crate::attention::Sdpa;
@@ -26,8 +20,9 @@ use crate::{
     models::llama,
     ops::SplitOp,
     vision_models::mllama::{MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig},
-    INHIBIT_GEMM_F16,
 };
+
+pub use mistralrs_quant::MatMul;
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -139,6 +134,10 @@ pub enum ScaledRopeType {
     Su,
     #[serde(alias = "yarn")]
     Yarn,
+    #[serde(alias = "dynamic")]
+    Dynamic,
+    #[serde(alias = "linear")]
+    Linear,
 }
 
 impl FromStr for ScaledRopeType {
@@ -147,6 +146,8 @@ impl FromStr for ScaledRopeType {
         match s {
             "su" | "longrope" => Ok(Self::Su),
             "yarn" => Ok(Self::Yarn),
+            "linear" => Ok(Self::Linear),
+            "dynamic" => Ok(Self::Dynamic),
             _ => Err(candle_core::Error::Msg(
                 "Expected either `su` or `yarn` scaled RoPE type.".to_string(),
             )),
@@ -204,6 +205,7 @@ impl PhiRotaryEmbedding {
                     (1.0 + scale.ln() / (cfg.original_max_position_embeddings as f64).ln()).sqrt()
                 }
                 ScaledRopeType::Yarn => 0.1 * scale.ln() + 1.0,
+                _ => candle_core::bail!("Expected either `su` or `yarn` RoPE"),
             }
         };
 
@@ -615,6 +617,9 @@ impl Llama3RotaryEmbedding {
         k: &mut Tensor,
         b_sz: usize,
     ) -> Result<()> {
+        // Needed for device mapping
+        let positions_kernel = positions_kernel.to_device(q.device())?;
+
         match self {
             Self::Llama3 { sin, cos, is_gptx } => {
                 let (b_sz_seq_len, h, n_embd) = q.dims3()?;
@@ -646,7 +651,7 @@ impl Llama3RotaryEmbedding {
                 *k = Tensor::cat(&k_embeds, 0)?;
                 Ok(())
             }
-            Self::Default(rope) => rope.forward(positions, positions_kernel, q, k, b_sz),
+            Self::Default(rope) => rope.forward(positions, &positions_kernel, q, k, b_sz),
         }
     }
 }
@@ -729,56 +734,202 @@ impl Qwen2VLRotaryEmbedding {
     }
 }
 
-/// Matrix multiplication, configurable to be via f16 (to use the faster GEMM kernels) optionally.
-pub struct MatMul;
-
-/// Set the matmuls to go via f16
-pub(crate) static USE_MATMUL_VIA_F16: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn set_use_matmul_via_f16(via_f16: bool) {
-    if !INHIBIT_GEMM_F16.load(Ordering::Relaxed) {
-        USE_MATMUL_VIA_F16.store(via_f16, Ordering::Relaxed)
-    }
-}
-pub fn get_use_matmul_via_f16() -> bool {
-    USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
+#[derive(Debug, Clone)]
+pub struct DeepSeekV2RotaryEmbedding {
+    sin: Tensor,
+    cos: Tensor,
 }
 
-impl MatMul {
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    pub fn matmul(&self, a: &Tensor, b: &Tensor) -> Result<Tensor> {
-        if !get_use_matmul_via_f16() {
-            return a.matmul(b);
-        }
-        let original_dtype = a.dtype();
-        a.to_dtype(DType::F16)?
-            .matmul(&b.to_dtype(DType::F16)?)?
-            .to_dtype(original_dtype)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum DeepSeekV2RopeScaling {
+    Yarn {
+        original_max_position_embeddings: usize,
+        beta_fast: f32,
+        beta_slow: f32,
+        mscale: f32,
+        mscale_all_dim: f32,
+        factor: f32,
+        #[serde(rename = "type")]
+        scaling_type: ScaledRopeType,
+    },
+    LinearOrDynamic {
+        #[serde(rename = "type")]
+        scaling_type: ScaledRopeType,
+        factor: f64,
+    },
+}
+
+pub struct DeepSeekV2RopeConfig {
+    pub rope_scaling: Option<DeepSeekV2RopeScaling>,
+    pub max_position_embeddings: usize,
+    pub rope_theta: f32,
+    pub qk_rope_head_dim: usize,
+}
+
+impl DeepSeekV2RotaryEmbedding {
+    fn new_unscaled(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
+        let max_seq_len = cfg.max_position_embeddings;
+        let dim = cfg.qk_rope_head_dim;
+
+        let inv_freq: Vec<_> = (0..dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / dim as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), dev)?;
+        let t = Tensor::arange(0u32, max_seq_len as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((max_seq_len, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let sin = freqs.sin()?.to_dtype(dtype)?;
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+
+        Ok(Self { sin, cos })
     }
 
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    /// The result will be divided by the `scale` parameter in an affine division.
-    pub fn matmul_affine_div(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
-        // TODO(EricLBuehler): Optimize this by using the gemm parameter
-        self.matmul(a, b)? / scale
+    fn yarn_find_correction_dim(
+        num_rot: f32,
+        dim: usize,
+        base: f32,
+        max_position_embeddings: usize,
+    ) -> f32 {
+        (dim as f32 * (max_position_embeddings as f32 / (num_rot * 2. * PI)).ln())
+            / (2. * base.ln())
     }
 
-    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
-        if get_use_matmul_via_f16() {
-            matmul.forward_via_f16(x)
-        } else {
-            matmul.forward(x)
+    fn yarn_find_correction_range(
+        low_rot: f32,
+        high_rot: f32,
+        dim: usize,
+        base: f32,
+        max_position_embeddings: usize,
+    ) -> (f32, f32) {
+        let low =
+            Self::yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings).floor();
+        let high =
+            Self::yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings).ceil();
+        (low.max(0.), high.min(dim as f32 - 1.))
+    }
+
+    fn yarn_linear_ramp_mask(min: f32, mut max: f32, dim: usize, dev: &Device) -> Result<Tensor> {
+        if min == max {
+            // https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite/blob/604d5664dddd88a0433dbae533b7fe9472482de0/modeling_deepseek.py#L255
+            max += 0.001;
+        }
+        let linear_func =
+            ((Tensor::arange(0f32, dim as f32, dev)? - min as f64)? / (max as f64 - min as f64))?;
+        linear_func.clamp(0., 1)
+    }
+
+    pub(crate) fn yarn_get_mscale(scale: f32, mscale: f32) -> f32 {
+        if scale <= 1. {
+            return 1.;
+        }
+        0.1 * mscale * scale.ln() + 1.
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_yarn(
+        cfg: &DeepSeekV2RopeConfig,
+        dtype: DType,
+        dev: &Device,
+        original_max_position_embeddings: usize,
+        beta_fast: f32,
+        beta_slow: f32,
+        factor: f32,
+        mscale: f32,
+        mscale_all_dim: f32,
+    ) -> Result<Self> {
+        let freq_extra: Vec<_> = (0..cfg.qk_rope_head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / cfg.rope_theta.powf(i as f32 / cfg.qk_rope_head_dim as f32))
+            .collect();
+        let freq_extra_len = freq_extra.len();
+        let freq_extra = Tensor::from_vec(freq_extra, freq_extra_len, dev)?;
+        let freq_inter: Vec<_> = (0..cfg.qk_rope_head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / (factor * cfg.rope_theta.powf(i as f32 / cfg.qk_rope_head_dim as f32)))
+            .collect();
+        let freq_inter_len = freq_inter.len();
+        let freq_inter = Tensor::from_vec(freq_inter, (1, freq_inter_len), dev)?;
+
+        let (low, high) = Self::yarn_find_correction_range(
+            beta_fast,
+            beta_slow,
+            cfg.qk_rope_head_dim,
+            cfg.rope_theta,
+            original_max_position_embeddings,
+        );
+        let inv_freq_mask =
+            (1. - Self::yarn_linear_ramp_mask(low, high, cfg.qk_rope_head_dim / 2, dev)?)?;
+        let inv_freq = freq_inter
+            .broadcast_mul(&(1. - &inv_freq_mask)?)?
+            .broadcast_add(&freq_extra.broadcast_mul(&inv_freq_mask)?)?;
+
+        let t = Tensor::arange(0u32, cfg.max_position_embeddings as u32, dev)?
+            .to_dtype(DType::F32)?
+            .reshape((cfg.max_position_embeddings, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+
+        let mscale =
+            Self::yarn_get_mscale(factor, mscale) / Self::yarn_get_mscale(factor, mscale_all_dim);
+        let sin = (freqs.sin()? * mscale as f64)?.to_dtype(dtype)?;
+        let cos = (freqs.cos()? * mscale as f64)?.to_dtype(dtype)?;
+
+        Ok(Self { sin, cos })
+    }
+
+    pub fn new(cfg: &DeepSeekV2RopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
+        match &cfg.rope_scaling {
+            Some(DeepSeekV2RopeScaling::LinearOrDynamic {
+                scaling_type: _,
+                factor: _,
+            }) => candle_core::bail!("linear and dynamic rope are not implemented yet!"),
+            Some(DeepSeekV2RopeScaling::Yarn {
+                original_max_position_embeddings,
+                beta_fast,
+                beta_slow,
+                factor,
+                mscale,
+                mscale_all_dim,
+                scaling_type: _,
+            }) => Self::new_yarn(
+                cfg,
+                dtype,
+                dev,
+                *original_max_position_embeddings,
+                *beta_fast,
+                *beta_slow,
+                *factor,
+                *mscale,
+                *mscale_all_dim,
+            ),
+            None => Self::new_unscaled(cfg, dtype, dev),
         }
     }
 
-    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
-        if get_use_matmul_via_f16() {
-            matmul.forward_via_half(x)
-        } else {
-            matmul.forward(x)
+    pub fn forward(
+        &self,
+        q: &Tensor,
+        k: &Tensor,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+        let mut q_embeds = Vec::new();
+        let mut k_embeds = Vec::new();
+        for (i, offset) in seqlen_offsets.iter().enumerate() {
+            let sin = self.sin.narrow(0, *offset, seq_len)?;
+            let cos = self.cos.narrow(0, *offset, seq_len)?;
+
+            let q_embed =
+                candle_nn::rotary_emb::rope_i(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            let k_embed =
+                candle_nn::rotary_emb::rope_i(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            q_embeds.push(q_embed);
+            k_embeds.push(k_embed);
         }
+        Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
     }
 }
 
@@ -935,7 +1086,10 @@ impl RotaryEmbedding {
         k: &mut Tensor,
         b_sz: usize,
     ) -> Result<()> {
-        self.0.forward(positions, positions_kernel, q, k, b_sz)
+        // Needed for device mapping
+        let positions_kernel = positions_kernel.to_device(q.device())?;
+
+        self.0.forward(positions, &positions_kernel, q, k, b_sz)
     }
 }
 
@@ -1055,5 +1209,108 @@ impl Module for Conv3dNoBias {
         let xs2 = xs.i((.., .., 1, .., ..))?;
 
         (self.conv2d_1.forward(&xs1)? + self.conv2d_2.forward(&xs2)?)?.unsqueeze(2)
+    }
+}
+
+pub trait TensorInfExtend {
+    fn is_inf(&self) -> Result<Self>
+    where
+        Self: Sized;
+    fn any(&self) -> Result<bool>;
+}
+
+impl TensorInfExtend for Tensor {
+    fn is_inf(&self) -> Result<Self> {
+        self.broadcast_eq(&Tensor::new(f32::INFINITY, self.device())?.to_dtype(self.dtype())?)
+    }
+
+    fn any(&self) -> Result<bool> {
+        let sum = self.sum_all()?;
+        match self.dtype() {
+            DType::U8 => Ok(sum.to_scalar::<u8>()? == 0),
+            DType::U32 => Ok(sum.to_scalar::<u32>()? == 0),
+            DType::I16 => Ok(sum.to_scalar::<i16>()? == 0),
+            DType::I32 => Ok(sum.to_scalar::<i32>()? == 0),
+            DType::I64 => Ok(sum.to_scalar::<i64>()? == 0),
+            DType::F16 => Ok(sum.to_scalar::<half::f16>()? == half::f16::from_f32_const(0.)),
+            DType::BF16 => Ok(sum.to_scalar::<half::bf16>()? == half::bf16::from_f32_const(0.)),
+            DType::F32 => Ok(sum.to_scalar::<f32>()? == 0.),
+            DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
+            DType::F8E4M3 => Ok(sum.to_scalar::<F8E4M3>()? == F8E4M3::ZERO),
+        }
+    }
+}
+
+pub fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
+    let mut max = match xs.dtype() {
+        DType::U8 => u8::MAX as f32 - 1000.,
+        DType::U32 => u32::MAX as f32 - 1000.,
+        DType::I16 => i16::MAX as f32 - 1000.,
+        DType::I32 => i32::MAX as f32 - 1000.,
+        DType::I64 => i64::MAX as f32 - 1000.,
+        DType::F16 => half::f16::MAX.to_f32_const() - 1000.,
+        DType::BF16 => half::bf16::MAX.to_f32_const() - 1000.,
+        DType::F32 => f32::MAX - 1000.,
+        DType::F64 => f64::MAX as f32 - 1000.,
+        DType::F8E4M3 => F8E4M3::MAX.to_f32() - 1000.,
+    };
+    if xs.is_inf()?.any()? {
+        max -= 1000.;
+    }
+    xs.clamp(-max, max)
+}
+
+pub struct FloatInfo {
+    /// Minimum representable value.
+    pub min: f64,
+    /// Maximum representable value.
+    pub max: f64,
+    /// The difference between 1.0 and the next smallest representable float larger than 1.0.
+    pub eps: f64,
+    pub dtype: DType,
+}
+
+pub trait GetFloatInfo {
+    fn finfo(&self) -> Result<FloatInfo>;
+}
+
+impl GetFloatInfo for DType {
+    fn finfo(&self) -> Result<FloatInfo> {
+        let finfo = match self {
+            Self::BF16 => FloatInfo {
+                min: bf16::MIN.to_f64(),
+                max: bf16::MAX.to_f64(),
+                eps: bf16::EPSILON.to_f64(),
+                dtype: DType::BF16,
+            },
+            Self::F16 => FloatInfo {
+                min: f16::MIN.to_f64(),
+                max: f16::MAX.to_f64(),
+                eps: f16::EPSILON.to_f64(),
+                dtype: DType::F16,
+            },
+            Self::F32 => FloatInfo {
+                min: f32::MIN as f64,
+                max: f32::MAX as f64,
+                eps: f32::EPSILON as f64,
+                dtype: DType::F32,
+            },
+            Self::F64 => FloatInfo {
+                min: f64::MIN,
+                max: f64::MAX,
+                eps: f64::EPSILON,
+                dtype: DType::F64,
+            },
+            Self::F8E4M3 => FloatInfo {
+                min: F8E4M3::MIN.to_f64(),
+                max: F8E4M3::MAX.to_f64(),
+                eps: F8E4M3::EPSILON.to_f64(),
+                dtype: DType::F8E4M3,
+            },
+            other => {
+                candle_core::bail!("Expected a float type for `GetFloatInfo`, got {other:?}");
+            }
+        };
+        Ok(finfo)
     }
 }
