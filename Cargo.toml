@@ -50,3 +50,4 @@ data-url = "0.3.1"
 float8 = "0.1.2"
 regex = "1.10.6"
 metal = { version = "0.27.0", features = ["mps"] }
+cudarc = { package = "mistralrs_cudarc_fork", version = "0.12.2", features = ["std", "cublas", "cublaslt", "curand", "driver", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-linking"], default-features=false }

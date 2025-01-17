@@ -42,11 +42,13 @@ use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -361,6 +363,41 @@ impl Loader for NormalLoader {
                 paged_attn_config.as_ref(),
             )?;
             mapper = DeviceMapSetting::Map(new);
+        }
+
+        #[cfg(feature = "nccl")]
+        {
+            let device_ids = vec![0];
+            use cudarc::nccl::safe::{Comm, Id};
+            let id = Id::new().unwrap();
+            let results: Vec<_> = device_ids
+                .par_iter()
+                .enumerate()
+                .map(|(rank, dev_id)| {
+                    println!(
+                        "Loading partial model on device rank {} (ordinal {})",
+                        rank, *dev_id
+                    );
+                    let device = Device::new_cuda_with_stream(*dev_id).unwrap();
+                    let comm = Rc::new(
+                        Comm::from_rank(
+                            device.as_cuda_device().unwrap().cuda_device(),
+                            rank,
+                            device_ids.len(),
+                            id,
+                        )
+                        .unwrap(),
+                    );
+                    dbg!(&comm.rank());
+                    // let vb = unsafe {
+                    //     candle_nn::var_builder::ShardedSafeTensors::var_builder(
+                    //         &paths, dtype, &device,
+                    //     )
+                    //     .unwrap()
+                    // };
+                })
+                .collect();
+
         }
 
         let pipeline_mapper = mapper.into_mapper(

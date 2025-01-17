@@ -68,6 +68,8 @@ mod topology;
 mod utils;
 mod vision_models;
 mod xlora_models;
+#[cfg(feature = "nccl")]
+mod distributed;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{
