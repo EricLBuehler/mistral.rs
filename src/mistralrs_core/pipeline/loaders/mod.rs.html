@@ -756,7 +756,14 @@
 <a href="#755" id="755">755</a>
 <a href="#756" id="756">756</a>
 <a href="#757" id="757">757</a>
-<a href="#758" id="758">758</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
+<a href="#758" id="758">758</a>
+<a href="#759" id="759">759</a>
+<a href="#760" id="760">760</a>
+<a href="#761" id="761">761</a>
+<a href="#762" id="762">762</a>
+<a href="#763" id="763">763</a>
+<a href="#764" id="764">764</a>
+<a href="#765" id="765">765</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
 <span class="kw">mod </span>normal_loaders;
 <span class="kw">mod </span>vision_loaders;
 
@@ -780,6 +787,7 @@
     Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 
+<span class="kw">use </span>tracing::warn;
 <span class="kw">pub use </span>vision_loaders::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2VLLoader,
     VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
@@ -1275,7 +1283,7 @@
         };
 
         <span class="kw">let </span>model_cfg = <span class="self">self</span>.model_config(config)<span class="question-mark">?</span>;
-        <span class="kw">let </span>paged_attn_size_elems = <span class="kw">match </span>paged_attn_config {
+        <span class="kw">let </span>kv_cache_size_elems = <span class="kw">match </span>paged_attn_config {
             <span class="prelude-val">Some</span>(paged_attn_config) =&gt; {
                 <span class="kw">let </span>cache_config = calculate_cache_config(
                     MemoryGpuConfig::ContextSize(max_seq_len),
@@ -1326,15 +1334,12 @@
                     + value_block_shape.iter().product::&lt;usize&gt;()
             }
         };
-        <span class="kw">let </span>paged_attn_size_in_bytes =
-            paged_attn_size_elems * model_cfg.num_layers() * dtype.size_in_bytes();
+        <span class="kw">let </span>kv_cache_size_in_bytes = kv_cache_size_elems * dtype.size_in_bytes();
 
         <span class="kw">let </span><span class="kw-2">mut </span>per_layer_avail = Vec::new();
         <span class="comment">// Always add the CPU as fallback
         </span><span class="kw">for </span>dev <span class="kw">in </span>[devices, <span class="kw-2">&amp;</span>[Device::Cpu]].concat() {
-            <span class="kw">let </span>avail = MemoryUsage
-                .get_memory_available(<span class="kw-2">&amp;</span>dev)<span class="question-mark">?
-                </span>.wrapping_sub(paged_attn_size_in_bytes);
+            <span class="kw">let </span>avail = MemoryUsage.get_memory_available(<span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>;
             per_layer_avail.push((avail, dev));
         }
         <span class="comment">// Reverse so we don't use the cpu first!
@@ -1380,29 +1385,38 @@
 
                 num_layers - current_layer
             } <span class="kw">else </span>{
-                <span class="kw">let </span><span class="kw-2">mut </span>used_capacity = <span class="number">0</span>;
-                <span class="kw">let </span><span class="kw-2">mut </span>used_capacity_no_act = <span class="number">0</span>;
+                <span class="comment">// All devices need to account for the max mapped act size
+                </span><span class="kw">let </span><span class="kw-2">mut </span>used_capacity = mapped_max_act_size_in_bytes;
+                <span class="kw">let </span><span class="kw-2">mut </span>used_capacity_no_act = mapped_max_act_size_in_bytes;
                 <span class="kw">let </span><span class="kw-2">mut </span>layers_on_device = <span class="number">0</span>;
 
-                <span class="kw">if </span>current_ordinal == <span class="number">0 </span>{
+                <span class="comment">// Device w/ ordinal 0 carries the non-mapped things
+                </span><span class="kw">if </span>current_ordinal == <span class="number">0 </span>{
                     used_capacity += non_mapped_size_in_bytes + non_mapped_max_act_size_in_bytes;
-                } <span class="kw">else </span>{
-                    used_capacity += mapped_max_act_size_in_bytes;
                 }
 
                 <span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>last) = layer_sizes_in_bytes.last() {
-                    <span class="kw">if </span>used_capacity + last &gt; device_capacity {
+                    <span class="kw">let </span>delta = last + kv_cache_size_in_bytes;
+                    <span class="kw">if </span>used_capacity + delta &gt; device_capacity {
                         <span class="kw">break</span>;
                     }
-                    <span class="kw">let </span>last = layer_sizes_in_bytes.pop().unwrap();
-                    used_capacity += last;
-                    used_capacity_no_act += last;
+                    <span class="kw">let _ </span>= layer_sizes_in_bytes.pop().unwrap();
+                    used_capacity += delta;
+                    used_capacity_no_act += delta;
                     layers_on_device += <span class="number">1</span>;
                 }
 
                 <span class="comment">// Do not reduce amount to map if this device can't fit any
+                // If the device cannot fit any layers, warn the user.
                 </span><span class="kw">if </span>layers_on_device &gt; <span class="number">0 </span>{
                     remaining_to_map = remaining_to_map.saturating_sub(used_capacity_no_act);
+                } <span class="kw">else </span>{
+                    <span class="macro">warn!</span>(
+                        <span class="string">"Device {} can fit 0 layers. Consider reducing auto map params from current: {params} (ex. reducing max seq len or max num images)"</span>,
+                        device.device_pretty_repr(),
+                    );
+                    current_ordinal += <span class="number">1</span>;
+                    <span class="kw">continue</span>;
                 }
                 layers_on_device
             };
