@@ -22,6 +22,7 @@ pub use normal_loaders::{
     Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 
+use tracing::warn;
 pub use vision_loaders::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2VLLoader,
     VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
@@ -517,7 +518,7 @@ pub trait DeviceMappedModelLoader {
         };
 
         let model_cfg = self.model_config(config)?;
-        let paged_attn_size_elems = match paged_attn_config {
+        let kv_cache_size_elems = match paged_attn_config {
             Some(paged_attn_config) => {
                 let cache_config = calculate_cache_config(
                     MemoryGpuConfig::ContextSize(max_seq_len),
@@ -568,15 +569,12 @@ pub trait DeviceMappedModelLoader {
                     + value_block_shape.iter().product::<usize>()
             }
         };
-        let paged_attn_size_in_bytes =
-            paged_attn_size_elems * model_cfg.num_layers() * dtype.size_in_bytes();
+        let kv_cache_size_in_bytes = kv_cache_size_elems * dtype.size_in_bytes();
 
         let mut per_layer_avail = Vec::new();
         // Always add the CPU as fallback
         for dev in [devices, &[Device::Cpu]].concat() {
-            let avail = MemoryUsage
-                .get_memory_available(&dev)?
-                .wrapping_sub(paged_attn_size_in_bytes);
+            let avail = MemoryUsage.get_memory_available(&dev)?;
             per_layer_avail.push((avail, dev));
         }
         // Reverse so we don't use the cpu first!
@@ -622,29 +620,38 @@ pub trait DeviceMappedModelLoader {
 
                 num_layers - current_layer
             } else {
-                let mut used_capacity = 0;
-                let mut used_capacity_no_act = 0;
+                // All devices need to account for the max mapped act size
+                let mut used_capacity = mapped_max_act_size_in_bytes;
+                let mut used_capacity_no_act = mapped_max_act_size_in_bytes;
                 let mut layers_on_device = 0;
 
+                // Device w/ ordinal 0 carries the non-mapped things
                 if current_ordinal == 0 {
                     used_capacity += non_mapped_size_in_bytes + non_mapped_max_act_size_in_bytes;
-                } else {
-                    used_capacity += mapped_max_act_size_in_bytes;
                 }
 
                 while let Some(&last) = layer_sizes_in_bytes.last() {
-                    if used_capacity + last > device_capacity {
+                    let delta = last + kv_cache_size_in_bytes;
+                    if used_capacity + delta > device_capacity {
                         break;
                     }
-                    let last = layer_sizes_in_bytes.pop().unwrap();
-                    used_capacity += last;
-                    used_capacity_no_act += last;
+                    let _ = layer_sizes_in_bytes.pop().unwrap();
+                    used_capacity += delta;
+                    used_capacity_no_act += delta;
                     layers_on_device += 1;
                 }
 
                 // Do not reduce amount to map if this device can't fit any
+                // If the device cannot fit any layers, warn the user.
                 if layers_on_device > 0 {
                     remaining_to_map = remaining_to_map.saturating_sub(used_capacity_no_act);
+                } else {
+                    warn!(
+                        "Device {} can fit 0 layers. Consider reducing auto map params from current: {params} (ex. reducing max seq len or max num images)",
+                        device.device_pretty_repr(),
+                    );
+                    current_ordinal += 1;
+                    continue;
                 }
                 layers_on_device
             };
