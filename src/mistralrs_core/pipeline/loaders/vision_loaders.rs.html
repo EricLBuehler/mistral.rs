@@ -4413,7 +4413,7 @@
         <span class="prelude-val">Ok</span>(cfg.text_config.num_hidden_layers)
     }
     <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
-        <span class="kw">let </span>cfg: Idefics2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cfg: Idefics3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
         <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.text_config;
 
         <span class="kw">let </span>cfg = ModelConfigMetadata {
@@ -4422,7 +4422,7 @@
             hidden_size: cfg.hidden_size,
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
-            sliding_window: cfg.sliding_window,
+            sliding_window: <span class="prelude-val">None</span>,
             k_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
             v_head_dim: <span class="prelude-val">Some</span>(cfg.hidden_size / cfg.num_attention_heads),
         };
