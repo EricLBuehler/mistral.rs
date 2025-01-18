@@ -2040,7 +2040,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
-        let cfg: Idefics2Config = serde_json::from_str(config)?;
+        let cfg: Idefics3Config = serde_json::from_str(config)?;
 
         let num_patches = (cfg.vision_config.image_size / cfg.vision_config.patch_size).pow(2);
         let img_seq_len = (num_patches + 1) * max_num_images;
@@ -2069,7 +2069,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
-        let cfg: Idefics2Config = serde_json::from_str(config)?;
+        let cfg: Idefics3Config = serde_json::from_str(config)?;
 
         let num_patches = (cfg.vision_config.image_size / cfg.vision_config.patch_size).pow(2);
         let img_seq_len = num_patches + 1;
