@@ -22,6 +22,7 @@ pub use normal_loaders::{
     Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 
+use tracing::warn;
 pub use vision_loaders::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2VLLoader,
     VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
@@ -622,14 +623,14 @@ pub trait DeviceMappedModelLoader {
 
                 num_layers - current_layer
             } else {
-                let mut used_capacity = 0;
-                let mut used_capacity_no_act = 0;
+                // All devices need to account for the max mapped act size
+                let mut used_capacity = mapped_max_act_size_in_bytes;
+                let mut used_capacity_no_act = mapped_max_act_size_in_bytes;
                 let mut layers_on_device = 0;
 
+                // Device w/ ordinal 0 carries the non-mapped things
                 if current_ordinal == 0 {
                     used_capacity += non_mapped_size_in_bytes + non_mapped_max_act_size_in_bytes;
-                } else {
-                    used_capacity += mapped_max_act_size_in_bytes;
                 }
 
                 while let Some(&last) = layer_sizes_in_bytes.last() {
@@ -643,8 +644,16 @@ pub trait DeviceMappedModelLoader {
                 }
 
                 // Do not reduce amount to map if this device can't fit any
+                // If the device cannot fit any layers, warn the user.
                 if layers_on_device > 0 {
                     remaining_to_map = remaining_to_map.saturating_sub(used_capacity_no_act);
+                } else {
+                    warn!(
+                        "Device {} can fit 0 layers. Consider reducing auto map params from currently: {params} (ex. reducing max seq len or max num images)",
+                        device.device_pretty_repr(),
+                    );
+                    current_ordinal += 1;
+                    continue;
                 }
                 layers_on_device
             };
