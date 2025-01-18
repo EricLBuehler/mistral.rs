@@ -1,17 +1,13 @@
-
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
-    conv2d, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
-    LayerNorm, Module, VarBuilder,
+    conv2d, embedding, layer_norm, linear, Conv2d, Conv2dConfig, Embedding, LayerNorm, Module,
+    VarBuilder,
 };
-use serde::Deserialize;
-use std::{any::Any, ops::Mul};
+use std::ops::Mul;
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, MlpLayer}, device_map::DeviceMapper, layers::{repeat_kv, Activation, CausalMasker, MatMul, QLinear, RmsNorm}, models::mistral::Model as Mistral, paged_attention::{AttentionImplementation, ModelConfigMetadata}, pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
-    }, serde_default_fn, utils::unvarbuilder::UnVarBuilder, AnyMoeConfig, AnyMoeExpertType
+    layers::{Activation, CausalMasker, MatMul, QLinear},
+    serde_default_fn,
 };
 
 serde_default_fn!(usize, hidden_size, 768);
@@ -56,27 +52,32 @@ struct VisionEmbeddings {
 /// torch.bucketize with right=True
 /// Returns a 1d tensor of shape (xs.len(),) on the CPU
 fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Tensor> {
-    // Initialize a vector to store the bucket indices
-    let mut indices = vec![0; xs.len()];
+    use std::cmp::Ordering;
 
-    // Iterate over each element in `xs`
-    for (i, &x) in xs.iter().enumerate() {
-        // Find the index of the bucket for the current element
-        let mut index = 0;
-        for (j, &boundary) in boundaries.iter().enumerate() {
-            if x < boundary {
-                index = j;
-                break;
-            }
-        }
-        // If the value is greater than or equal to all boundaries, set the index to the length of boundaries
-        if index == 0 && x >= boundaries[boundaries.len() - 1] {
-            index = boundaries.len();
-        }
-        indices[i] = index as u32;
+    let mut result = Vec::with_capacity(xs.len());
+
+    for &x in xs {
+        // binary_search_by returns:
+        //   Ok(i)   if boundaries[i] == x
+        //   Err(i)  if x would be inserted at i
+        //
+        // The returned i is the "insertion point" for x to keep
+        // boundaries sorted. That i is the smallest position
+        // where boundaries[i] >= x (i.e. bisect_left).
+
+        let idx = match boundaries.binary_search_by(|&val| {
+            // Use partial_cmp here; assume no NaNs.
+            // For robust handling of NaNs, you might need a custom comparison.
+            val.partial_cmp(&x).unwrap_or(Ordering::Less)
+        }) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+
+        result.push(idx as u32);
     }
 
-    Tensor::from_vec(indices, (xs.len(),), device)
+    Tensor::from_vec(result, (xs.len(),), device)
 }
 
 impl VisionEmbeddings {
@@ -106,7 +107,12 @@ impl VisionEmbeddings {
         })
     }
 
-    fn forward(&self, pixel_values: &Tensor, patch_attention_mask: &Tensor, tgt_sizes: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &self,
+        pixel_values: &Tensor,
+        patch_attention_mask: &Tensor,
+        tgt_sizes: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let (bs, _, max_im_h, max_im_w) = pixel_values.dims4()?;
 
         let patch_embeds = self.patch_embedding.forward(pixel_values)?;
@@ -131,8 +137,13 @@ impl VisionEmbeddings {
         let mut new_position_ids = Vec::new();
         for (b_idx, p_attn_mask) in patch_attention_mask.chunk(bs, 0)?.iter().enumerate() {
             let p_attn_mask = p_attn_mask.squeeze(0)?;
-            let nb_patches_h = p_attn_mask.i((.., 0))?.sum_all()?;
-            let nb_patches_w = p_attn_mask.i((0,))?.sum_all()?;
+            let (nb_patches_h, nb_patches_w) = if let Some(tgt_sizes) = tgt_sizes {
+                (tgt_sizes.i((b_idx, 0))?, tgt_sizes.i((b_idx, 1))?)
+            } else {
+                let nb_patches_h = p_attn_mask.i((.., 0))?.sum_all()?;
+                let nb_patches_w = p_attn_mask.i((0,))?.sum_all()?;
+                (nb_patches_h, nb_patches_w)
+            };
 
             let fractional_coords_h = Tensor::arange_step(
                 0.0,
@@ -158,14 +169,29 @@ impl VisionEmbeddings {
                 .unsqueeze(D::Minus1)?
                 .mul(self.num_patches_per_side as f64)?
                 .broadcast_add(&bucket_coords_w)?
-                .flatten_all()?;
+                .flatten_all()?
+                .to_vec1::<u32>()?;
 
+            let true_indices = p_attn_mask
+                .flatten_all()?
+                .to_vec1::<u8>()?
+                .iter()
+                .enumerate()
+                .filter_map(|(i, x)| if *x != 0 { Some(i) } else { None })
+                .collect::<Vec<_>>();
             let position_ids_b = position_ids.i(b_idx)?;
-            new_position_ids.push(
-                p_attn_mask
-                    .flatten_all()?
-                    .where_cond(&pos_ids, &position_ids_b)?,
-            );
+
+            let mut new_position_ids_b = position_ids_b.to_vec1::<u32>()?;
+            let new_position_ids_b_len = new_position_ids_b.len();
+            for (i, true_idx) in true_indices.into_iter().enumerate() {
+                new_position_ids_b[true_idx] = pos_ids[i];
+            }
+
+            new_position_ids.push(Tensor::from_vec(
+                new_position_ids_b,
+                new_position_ids_b_len,
+                pixel_values.device(),
+            )?);
         }
         let position_ids = Tensor::stack(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
@@ -385,7 +411,12 @@ impl VisionTransformer {
         })
     }
 
-    fn forward(&self, pixel_values: &Tensor, attention_mask: Option<&Tensor>, tgt_sizes: Option<&Tensor>) -> Result<Tensor> {
+    fn forward(
+        &self,
+        pixel_values: &Tensor,
+        attention_mask: Option<&Tensor>,
+        tgt_sizes: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let bs = pixel_values.dim(0)?;
         let patch_attention_mask = if let Some(attn_mask) = attention_mask {
             attn_mask.clone()
@@ -402,9 +433,9 @@ impl VisionTransformer {
             )?
         };
 
-        let hidden_states = self
-            .embeddings
-            .forward(pixel_values, &patch_attention_mask, tgt_sizes)?;
+        let hidden_states =
+            self.embeddings
+                .forward(pixel_values, &patch_attention_mask, tgt_sizes)?;
 
         let attention_mask = if attention_mask.is_none() {
             None

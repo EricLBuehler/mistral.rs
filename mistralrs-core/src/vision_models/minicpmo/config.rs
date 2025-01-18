@@ -1,6 +1,5 @@
 use crate::{models::qwen2, vision_models::siglip};
 
-
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct MiniCpmOConfig {
     #[serde(flatten)]
