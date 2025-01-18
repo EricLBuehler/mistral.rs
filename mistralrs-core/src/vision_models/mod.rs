@@ -18,6 +18,8 @@ pub(crate) use llava::llava_inputs_processor;
 pub(crate) use llava::llava_next;
 pub(crate) use llava::llava_next_inputs_processor;
 pub(crate) mod idefics3;
+pub(crate) mod minicpmo;
+pub(crate) mod siglip;
 
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 
