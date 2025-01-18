@@ -4256,7 +4256,7 @@
             <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
         };
 
-        <span class="kw">let </span>cfg: Idefics2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cfg: Idefics3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>num_patches = (cfg.vision_config.image_size / cfg.vision_config.patch_size).pow(<span class="number">2</span>);
         <span class="kw">let </span>img_seq_len = (num_patches + <span class="number">1</span>) * max_num_images;
@@ -4285,7 +4285,7 @@
             <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
         };
 
-        <span class="kw">let </span>cfg: Idefics2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cfg: Idefics3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>num_patches = (cfg.vision_config.image_size / cfg.vision_config.patch_size).pow(<span class="number">2</span>);
         <span class="kw">let </span>img_seq_len = num_patches + <span class="number">1</span>;
