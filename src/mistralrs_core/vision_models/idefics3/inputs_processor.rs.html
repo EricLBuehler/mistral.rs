@@ -837,7 +837,7 @@
                     .expect(<span class="string">"The image token &lt;image&gt; should be present in the text."</span>)
                     .to_string();
                 <span class="kw">for </span>(i, image_prompt_string) <span class="kw">in </span>image_prompt_strings.into_iter().enumerate() {
-                    sample.push_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{image_prompt_string}{}"</span>, split_sample[i + <span class="number">1</span>]));
+                    sample.push_str(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{image_prompt_string}{}"</span>, split_sample[i]));
                 }
 
                 seq.set_initial_prompt(sample.clone());

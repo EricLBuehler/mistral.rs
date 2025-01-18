@@ -470,7 +470,27 @@
 <a href="#469" id="469">469</a>
 <a href="#470" id="470">470</a>
 <a href="#471" id="471">471</a>
-<a href="#472" id="472">472</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
+<a href="#472" id="472">472</a>
+<a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{
     conv2d, embedding, layer_norm, Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module,
     VarBuilder,
@@ -552,27 +572,32 @@
 <span class="doccomment">/// torch.bucketize with right=True
 /// Returns a 1d tensor of shape (xs.len(),) on the CPU
 </span><span class="kw">fn </span>bucketize_right(xs: <span class="kw-2">&amp;</span>[f32], boundaries: <span class="kw-2">&amp;</span>[f32], device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="comment">// Initialize a vector to store the bucket indices
-    </span><span class="kw">let </span><span class="kw-2">mut </span>indices = <span class="macro">vec!</span>[<span class="number">0</span>; xs.len()];
+    <span class="kw">use </span>std::cmp::Ordering;
 
-    <span class="comment">// Iterate over each element in `xs`
-    </span><span class="kw">for </span>(i, <span class="kw-2">&amp;</span>x) <span class="kw">in </span>xs.iter().enumerate() {
-        <span class="comment">// Find the index of the bucket for the current element
-        </span><span class="kw">let </span><span class="kw-2">mut </span>index = <span class="number">0</span>;
-        <span class="kw">for </span>(j, <span class="kw-2">&amp;</span>boundary) <span class="kw">in </span>boundaries.iter().enumerate() {
-            <span class="kw">if </span>x &lt; boundary {
-                index = j;
-                <span class="kw">break</span>;
-            }
-        }
-        <span class="comment">// If the value is greater than or equal to all boundaries, set the index to the length of boundaries
-        </span><span class="kw">if </span>index == <span class="number">0 </span>&amp;&amp; x &gt;= boundaries[boundaries.len() - <span class="number">1</span>] {
-            index = boundaries.len();
-        }
-        indices[i] = index <span class="kw">as </span>u32;
+    <span class="kw">let </span><span class="kw-2">mut </span>result = Vec::with_capacity(xs.len());
+
+    <span class="kw">for </span><span class="kw-2">&amp;</span>x <span class="kw">in </span>xs {
+        <span class="comment">// binary_search_by returns:
+        //   Ok(i)   if boundaries[i] == x
+        //   Err(i)  if x would be inserted at i
+        //
+        // The returned i is the "insertion point" for x to keep
+        // boundaries sorted. That i is the smallest position
+        // where boundaries[i] &gt;= x (i.e. bisect_left).
+
+        </span><span class="kw">let </span>idx = <span class="kw">match </span>boundaries.binary_search_by(|<span class="kw-2">&amp;</span>val| {
+            <span class="comment">// Use partial_cmp here; assume no NaNs.
+            // For robust handling of NaNs, you might need a custom comparison.
+            </span>val.partial_cmp(<span class="kw-2">&amp;</span>x).unwrap_or(Ordering::Less)
+        }) {
+            <span class="prelude-val">Ok</span>(i) =&gt; i,
+            <span class="prelude-val">Err</span>(i) =&gt; i,
+        };
+
+        result.push(idx <span class="kw">as </span>u32);
     }
 
-    Tensor::from_vec(indices, (xs.len(),), device)
+    Tensor::from_vec(result, (xs.len(),), device)
 }
 
 <span class="kw">impl </span>VisionEmbeddings {
@@ -654,14 +679,29 @@
                 .unsqueeze(D::Minus1)<span class="question-mark">?
                 </span>.mul(<span class="self">self</span>.num_patches_per_side <span class="kw">as </span>f64)<span class="question-mark">?
                 </span>.broadcast_add(<span class="kw-2">&amp;</span>bucket_coords_w)<span class="question-mark">?
-                </span>.flatten_all()<span class="question-mark">?</span>;
+                </span>.flatten_all()<span class="question-mark">?
+                </span>.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>;
 
+            <span class="kw">let </span>true_indices = p_attn_mask
+                .flatten_all()<span class="question-mark">?
+                </span>.to_vec1::&lt;u8&gt;()<span class="question-mark">?
+                </span>.iter()
+                .enumerate()
+                .filter_map(|(i, x)| <span class="kw">if </span><span class="kw-2">*</span>x != <span class="number">0 </span>{ <span class="prelude-val">Some</span>(i) } <span class="kw">else </span>{ <span class="prelude-val">None </span>})
+                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
             <span class="kw">let </span>position_ids_b = position_ids.i(b_idx)<span class="question-mark">?</span>;
-            new_position_ids.push(
-                p_attn_mask
-                    .flatten_all()<span class="question-mark">?
-                    </span>.where_cond(<span class="kw-2">&amp;</span>pos_ids, <span class="kw-2">&amp;</span>position_ids_b)<span class="question-mark">?</span>,
-            );
+
+            <span class="kw">let </span><span class="kw-2">mut </span>new_position_ids_b = position_ids_b.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>;
+            <span class="kw">let </span>new_position_ids_b_len = new_position_ids_b.len();
+            <span class="kw">for </span>(i, true_idx) <span class="kw">in </span>true_indices.into_iter().enumerate() {
+                new_position_ids_b[true_idx] = pos_ids[i];
+            }
+
+            new_position_ids.push(Tensor::from_vec(
+                new_position_ids_b,
+                new_position_ids_b_len,
+                pixel_values.device(),
+            )<span class="question-mark">?</span>);
         }
         <span class="kw">let </span>position_ids = Tensor::stack(<span class="kw-2">&amp;</span>new_position_ids, <span class="number">0</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>position_ids = position_ids.to_device(<span class="self">self</span>.position_embedding.embeddings().device())<span class="question-mark">?</span>;
