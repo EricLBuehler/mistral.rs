@@ -387,15 +387,15 @@ impl Encoder {
     }
 }
 
-struct VisionTransformer {
+pub struct SiglipVisionTransformer {
     embeddings: VisionEmbeddings,
     encoder: Encoder,
     post_layernorm: LayerNorm,
     config: SiglipVisionConfig,
 }
 
-impl VisionTransformer {
-    fn new(config: &SiglipVisionConfig, vb: VarBuilder) -> Result<Self> {
+impl SiglipVisionTransformer {
+    pub fn new(config: &SiglipVisionConfig, vb: VarBuilder) -> Result<Self> {
         let embeddings = VisionEmbeddings::new(config, vb.pp("embeddings"))?;
         let post_layernorm = layer_norm(
             config.hidden_size,
@@ -411,7 +411,7 @@ impl VisionTransformer {
         })
     }
 
-    fn forward(
+    pub fn forward(
         &self,
         pixel_values: &Tensor,
         attention_mask: Option<&Tensor>,

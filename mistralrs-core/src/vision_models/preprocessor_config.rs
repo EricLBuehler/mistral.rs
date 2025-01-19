@@ -14,7 +14,9 @@ pub struct PreProcessorConfig {
     pub(crate) do_rescale: Option<bool>,
     pub(crate) do_resize: Option<bool>,
     pub(crate) do_center_crop: Option<bool>,
+    #[serde(alias = "norm_mean")]
     pub(crate) image_mean: Option<[f64; 3]>,
+    #[serde(alias = "norm_std")]
     pub(crate) image_std: Option<[f64; 3]>,
     pub(crate) rescale_factor: Option<f64>,
     pub(crate) resampling: Option<usize>,
@@ -29,6 +31,11 @@ pub struct PreProcessorConfig {
     pub(crate) patch_size: Option<usize>,
     pub(crate) merge_size: Option<usize>,
     pub(crate) temporal_patch_size: Option<usize>,
+    pub(crate) max_slice_nums: Option<usize>,
+    pub(crate) scale_resolution: Option<usize>,
+    pub(crate) image_feature_size: Option<usize>,
+    pub(crate) use_image_id: Option<bool>,
+    pub(crate) slice_mode: Option<bool>,
 }
 
 #[allow(dead_code)]

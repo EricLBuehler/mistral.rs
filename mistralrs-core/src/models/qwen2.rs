@@ -556,10 +556,31 @@ impl Model {
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        let xs = self.embed_tokens.forward(input_ids)?;
+        self.forward_embed(
+            input_ids,
+            xs,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+            metadata,
+            flash_params,
+        )
+    }
+
+    pub fn forward_embed(
+        &self,
+        input_ids: &Tensor,
+        mut xs: Tensor,
+        seqlen_offsets: &[usize],
+        start_offsets_kernel: Tensor,
+        context_lens: Vec<(usize, usize)>,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
             input_ids,
@@ -594,6 +615,10 @@ impl Model {
             xs = xs.to_dtype(t)?;
         }
         extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
+    }
+
+    pub fn embed_dtype(&self) -> DType {
+        self.embed_tokens.embeddings().dtype()
     }
 }
 
