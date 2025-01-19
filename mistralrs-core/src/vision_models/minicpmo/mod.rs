@@ -1,6 +1,6 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::VarBuilder;
 pub use config::MiniCpmOConfig;
 use mistralrs_quant::QuantMethod;
@@ -66,16 +66,21 @@ impl MiniCpmOModel {
 
     fn get_vllm_embedding(
         &self,
+        input_ids: &Tensor,
         pixel_values_all: Option<Tensor>,
         tgt_sizes_all: Option<Tensor>,
+        image_bound: Option<Tensor>,
     ) -> Result<Tensor> {
+        let mut vllm_embedding = self.llm.get_input_embeddings(input_ids)?;
+
         if let Some(pixel_values_all) = pixel_values_all {
             let tgt_sizes_all = tgt_sizes_all.expect("Need tgt_sizes");
+            let image_bound = image_bound.expect("Need image_bound");
 
             let mut all_pixel_values = Vec::new();
-            let mut img_cnt = Vec::new();
+            let mut img_cnts = Vec::new();
             for pixel_values in pixel_values_all.chunk(pixel_values_all.dim(0)?, 0)? {
-                img_cnt.push(pixel_values.dim(0)?);
+                img_cnts.push(pixel_values.dim(0)?);
                 let mut imgs = Vec::new();
                 for i in pixel_values.chunk(pixel_values.dim(0)?, 0)? {
                     // Assume channel dimension first
@@ -142,8 +147,60 @@ impl MiniCpmOModel {
                     .forward(&all_pixel_values, Some(&patch_attn_mask), Some(&tgt_sizes))?
             };
             vision_embedding = self.resampler.forward(&vision_embedding, &tgt_sizes)?;
+
+            let mut start = 0;
+            let mut vision_hidden_states = Vec::new();
+            for img_cnt in img_cnts {
+                if img_cnt > 0 {
+                    vision_hidden_states.push(Some(
+                        vision_embedding
+                            .i(start..start + img_cnt)?
+                            .to_dtype(vllm_embedding.dtype())?,
+                    ));
+                    start += img_cnt;
+                } else {
+                    vision_hidden_states.push(None);
+                }
+            }
+
+            assert_eq!(vision_hidden_states.len(), b);
+
+            let mut new_vllm_embedding = Vec::new();
+            for i in 0..b {
+                if let Some(cur_vs_hs) = &vision_hidden_states[i] {
+                    let mut cur_vllm_emb = vllm_embedding.i(i)?;
+                    let cur_image_bound = image_bound.i(i)?;
+                    if cur_image_bound.dim(0)? > 0 {
+                        let mut image_indices = Vec::new();
+                        for r in cur_image_bound.to_vec2::<u32>()? {
+                            image_indices.push(Tensor::arange(
+                                r[0],
+                                r[1],
+                                pixel_values_all.device(),
+                            )?);
+                        }
+                        let image_indices = Tensor::stack(&image_indices, 0)?;
+
+                        let indices = image_indices
+                            .reshape(((), 1))?
+                            .repeat((1, cur_vllm_emb.dim(D::Minus1)?))?;
+                        // Zero out the current data
+                        let cur_vllm_emb_neg = cur_vllm_emb.gather(&indices, 0)?.neg()?;
+                        cur_vllm_emb = cur_vllm_emb.scatter_add(&indices, &cur_vllm_emb_neg, 0)?;
+                        // Add the image data
+                        cur_vllm_emb = cur_vllm_emb.scatter_add(
+                            &indices,
+                            &cur_vs_hs.reshape(((), cur_vs_hs.dim(D::Minus1)?))?,
+                            0,
+                        )?;
+                        new_vllm_embedding.push(cur_vllm_emb);
+                    }
+                }
+            }
+            vllm_embedding = Tensor::stack(&new_vllm_embedding, 0)?;
         }
-        todo!()
+
+        Ok(vllm_embedding)
     }
 
     pub fn forward(
@@ -151,13 +208,16 @@ impl MiniCpmOModel {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         tgt_sizes: Option<Tensor>,
+        image_bound: Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let vllm_embedding = self.get_vllm_embedding(pixel_values, tgt_sizes)?;
+        let vllm_embedding =
+            self.get_vllm_embedding(input_ids, pixel_values, tgt_sizes, image_bound)?;
+
         self.llm.forward_embed(
             input_ids,
             vllm_embedding,
