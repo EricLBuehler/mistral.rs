@@ -3,6 +3,7 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::VarBuilder;
 pub use config::MiniCpmOConfig;
+pub use inputs_processor::MiniCpmOProcessor;
 use mistralrs_quant::QuantMethod;
 use resampler::Resampler;
 
@@ -70,13 +71,13 @@ impl MiniCpmOModel {
         input_ids: &Tensor,
         device: &Device,
         pixel_values_all: Option<Vec<Vec<Tensor>>>,
-        tgt_sizes_all: Option<Tensor>,
-        image_bound: Option<Tensor>,
+        tgt_sizes: Option<Vec<Tensor>>,
+        image_bound: Option<Vec<Tensor>>,
     ) -> Result<Tensor> {
         let mut vllm_embedding = self.llm.get_input_embeddings(input_ids)?;
 
         if let Some(pixel_values_all) = pixel_values_all {
-            let tgt_sizes_all = tgt_sizes_all.expect("Need tgt_sizes");
+            let tgt_sizes_all = tgt_sizes.as_ref().expect("Need tgt_sizes");
             let image_bound = image_bound.expect("Need image_bound");
 
             let mut all_pixel_values = Vec::new();
@@ -91,7 +92,7 @@ impl MiniCpmOModel {
                 all_pixel_values.extend(imgs);
             }
 
-            let tgt_sizes = tgt_sizes_all.to_dtype(DType::I32)?;
+            let tgt_sizes = Tensor::cat(&tgt_sizes_all, 0)?.to_dtype(DType::I32)?;
             let tgt_sizes_vec = tgt_sizes.to_vec2::<i32>()?;
 
             let max_patches = (tgt_sizes.i((.., 0))? * tgt_sizes.i((.., 1))?)?
@@ -169,7 +170,7 @@ impl MiniCpmOModel {
             for i in 0..b {
                 if let Some(cur_vs_hs) = &vision_hidden_states[i] {
                     let mut cur_vllm_emb = vllm_embedding.i(i)?;
-                    let cur_image_bound = image_bound.i(i)?;
+                    let cur_image_bound = &image_bound[i];
                     if cur_image_bound.dim(0)? > 0 {
                         let mut image_indices = Vec::new();
                         for r in cur_image_bound.to_vec2::<u32>()? {
@@ -203,8 +204,8 @@ impl MiniCpmOModel {
         &self,
         input_ids: &Tensor,
         pixel_values_all: Option<Vec<Vec<Tensor>>>,
-        tgt_sizes: Option<Tensor>,
-        image_bound: Option<Tensor>,
+        tgt_sizes: Option<Vec<Tensor>>,
+        image_bound: Option<Vec<Tensor>>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
@@ -231,6 +232,13 @@ impl MiniCpmOModel {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct MiniCpmOSpecificArgs {
+    pub(crate) pixel_values_all: Option<Vec<Vec<Tensor>>>,
+    pub(crate) tgt_sizes: Option<Vec<Tensor>>,
+    pub(crate) image_bound: Option<Vec<Tensor>>,
+}
+
 impl VisionModel for MiniCpmOModel {
     fn cache(&self) -> &EitherCache {
         self.llm.cache()
@@ -253,7 +261,7 @@ impl VisionModel for MiniCpmOModel {
     fn forward(
         &self,
         input_ids: &Tensor,
-        pixel_values: Option<Tensor>,
+        _pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
@@ -262,7 +270,24 @@ impl VisionModel for MiniCpmOModel {
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        todo!()
+        let MiniCpmOSpecificArgs {
+            pixel_values_all,
+            tgt_sizes,
+            image_bound,
+        } = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `MiniCpmOSpecificArgs`");
+        self.forward(
+            input_ids,
+            pixel_values_all,
+            tgt_sizes,
+            image_bound,
+            seqlen_offsets,
+            start_offsets_kernel,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
         todo!()

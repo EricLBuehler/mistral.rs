@@ -36,6 +36,11 @@ pub struct PreProcessorConfig {
     pub(crate) image_feature_size: Option<usize>,
     pub(crate) use_image_id: Option<bool>,
     pub(crate) slice_mode: Option<bool>,
+    pub(crate) im_start_token: Option<String>,
+    pub(crate) slice_start_token: Option<String>,
+    pub(crate) unk_token: Option<String>,
+    pub(crate) im_end_token: Option<String>,
+    pub(crate) slice_end_token: Option<String>,
 }
 
 #[allow(dead_code)]

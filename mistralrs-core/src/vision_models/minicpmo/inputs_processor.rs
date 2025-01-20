@@ -5,6 +5,7 @@ use std::{any::Any, num::NonZeroUsize, sync::Arc};
 use candle_core::{Device, IndexOp, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{ApplyTransforms, Normalize, ToTensorNoNorm, Transforms};
+use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
@@ -17,6 +18,7 @@ use crate::{
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
+    vision_models::ModelInputs,
 };
 
 use crate::vision_models::{
@@ -24,30 +26,50 @@ use crate::vision_models::{
     preprocessor_config::PreProcessorConfig,
     processor_config::ProcessorConfig,
 };
-pub struct MiniCpmOImageProcessor;
+
+use super::MiniCpmOSpecificArgs;
+
+const DEFAULT_MAX_SLICE_NUMS: usize = 9;
+const DEFAULT_SCALE_RESOLUTION: usize = 448;
+const DEFAULT_PATCH_SIZE: usize = 14;
+const DEFAULT_IMAGE_FEATURE_SIZE: usize = 64;
+const DEFAULT_IM_START_TOKEN: &str = "<image>";
+const DEFAULT_IM_END_TOKEN: &str = "</image>";
+const DEFAULT_SLICE_START_TOKEN: &str = "<slice>";
+const DEFAULT_SLICE_END_TOKEN: &str = "</slice>";
+const DEFAULT_UNK_TOKEN: &str = "<unk>";
+const DEFAULT_USE_IMAGE_ID: bool = false;
+const DEFAULT_SLICE_MODE: bool = true;
+
+pub struct MiniCpmOImageProcessor {
+    config: PreProcessorConfig,
+}
 
 pub struct MiniCpmOProcessor {
-    config: ProcessorConfig,
+    preprocessor_config: PreProcessorConfig,
 }
 
 impl MiniCpmOProcessor {
     pub fn new(
-        config: ProcessorConfig,
-        _preprocessor_config: PreProcessorConfig,
+        _config: ProcessorConfig,
+        preprocessor_config: PreProcessorConfig,
         _max_edge: Option<u32>,
     ) -> Self {
-        Self { config }
+        Self {
+            preprocessor_config,
+        }
     }
 }
 
 impl Processor for MiniCpmOProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
-        // Default image_seq_len is 169.
-        Arc::new(MiniCpmOImageProcessor)
+        Arc::new(MiniCpmOImageProcessor {
+            config: self.preprocessor_config.clone(),
+        })
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
-        &["<fake_token_around_image>", "<image>", "<end_of_utterance>"]
+        todo!()
     }
 
     fn template_action(&self) -> MessagesAction {
@@ -149,7 +171,221 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             .iter()
             .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
 
-        todo!()
+        let (new_input, pixel_values_all, image_bound, tgt_sizes) = if has_images {
+            const IMAGE_TAG: &str = "(<image>./</image>)";
+            const IMAGE_PATTERN: &str = r"\(<image>./</image>\)";
+            const AUDIO_PATTERN: &str = r"\(<audio>./</audio>\)";
+
+            let image_pattern = Regex::new(IMAGE_PATTERN).unwrap();
+            let _audio_pattern = Regex::new(AUDIO_PATTERN).unwrap();
+            let split_pattern = Regex::new(&format!(r"({IMAGE_PATTERN}|{AUDIO_PATTERN})")).unwrap();
+
+            let mut pixel_values_accum = Vec::new();
+            let mut tgt_sizes_accum = Vec::new();
+            let mut input_ids_accum = Vec::new();
+            let mut image_bounds_accum = Vec::new();
+
+            for seq in input_seqs.iter_mut() {
+                let PreprocessedImages {
+                    pixel_values: _,
+                    pixel_attention_mask: _,
+                    image_sizes: _,
+                    num_img_tokens: _,
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
+                    rows: _,
+                    cols: _,
+                    pixel_values_list,
+                    tgt_sizes,
+                    image_sizes_all,
+                } = self
+                    .preprocess(
+                        seq.take_images()
+                            .expect("Need to have images by this point."),
+                        vec![],
+                        config,
+                        device,
+                        (usize::MAX, usize::MAX), // Don't use it here...
+                    )
+                    .expect("Preprocessing failed");
+                let pixel_values_list = pixel_values_list.unwrap();
+                let tgt_sizes = tgt_sizes.unwrap();
+                let image_sizes_all = image_sizes_all.unwrap();
+
+                let text = tokenizer
+                    .decode(seq.get_toks(), false)
+                    .expect("Detokenization failed!");
+
+                let mut text_chunks = split_pattern
+                    .split(&text)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+
+                let image_tags = image_pattern.find_iter(&text).collect::<Vec<_>>();
+
+                if !image_tags.is_empty() {
+                    assert_eq!(image_tags.len(), image_sizes_all.len());
+                }
+
+                let mut image_id = 0;
+                for (i, chunk) in text_chunks.iter_mut().enumerate() {
+                    if chunk == IMAGE_TAG {
+                        image_id += 1;
+                        *chunk = self.get_slice_image_placeholder(image_sizes_all[i], image_id);
+                    }
+                }
+
+                let final_text = text_chunks.join("");
+                seq.set_initial_prompt(final_text.clone());
+
+                let (input_ids, image_bounds) = {
+                    let im_start_id = tokenizer
+                        .encode(
+                            self.config
+                                .im_start_token
+                                .clone()
+                                .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
+                            true,
+                        )
+                        .unwrap()
+                        .get_ids()[0];
+                    let im_end_id = tokenizer
+                        .encode(
+                            self.config
+                                .im_end_token
+                                .clone()
+                                .unwrap_or(DEFAULT_IM_END_TOKEN.to_string()),
+                            true,
+                        )
+                        .unwrap()
+                        .get_ids()[0];
+                    let slice_start_id = tokenizer
+                        .encode(
+                            self.config
+                                .slice_start_token
+                                .clone()
+                                .unwrap_or(DEFAULT_SLICE_START_TOKEN.to_string()),
+                            true,
+                        )
+                        .unwrap()
+                        .get_ids()[0];
+                    let slice_end_id = tokenizer
+                        .encode(
+                            self.config
+                                .slice_end_token
+                                .clone()
+                                .unwrap_or(DEFAULT_SLICE_END_TOKEN.to_string()),
+                            true,
+                        )
+                        .unwrap()
+                        .get_ids()[0];
+
+                    let input_ids = tokenizer
+                        .encode(final_text, true)
+                        .unwrap()
+                        .get_ids()
+                        .to_vec();
+
+                    seq.set_toks(input_ids.clone());
+
+                    let image_start_idx = input_ids
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, &id)| {
+                            if id == im_start_id || id == slice_start_id {
+                                Some(i as u32 + 1)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    let image_end_idx = input_ids
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, &id)| {
+                            if id == im_end_id || id == slice_end_id {
+                                Some(i as u32)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    let valid_image_nums = image_start_idx.len().max(image_end_idx.len());
+
+                    let image_start_idx = Tensor::from_slice(
+                        &image_start_idx[..valid_image_nums],
+                        (valid_image_nums, 1),
+                        device,
+                    )
+                    .unwrap();
+                    let image_end_idx = Tensor::from_slice(
+                        &image_end_idx[..valid_image_nums],
+                        (valid_image_nums, 1),
+                        device,
+                    )
+                    .unwrap();
+
+                    let image_bounds = Tensor::cat(&[image_start_idx, image_end_idx], 1).unwrap();
+
+                    (input_ids, image_bounds)
+                };
+
+                pixel_values_accum.push(pixel_values_list);
+                tgt_sizes_accum.push(tgt_sizes);
+                input_ids_accum.push(input_ids);
+                image_bounds_accum.push(image_bounds);
+            }
+
+            let mut all_ids_new = Vec::new();
+            let max_len = input_ids_accum.iter().map(|ids| ids.len()).max().unwrap();
+            for ids in input_ids_accum {
+                let pad = max_len - ids.len();
+                all_ids_new
+                    .push(Tensor::new([ids, vec![0; pad]].concat(), input.device()).unwrap());
+            }
+
+            (
+                Some(Tensor::stack(&all_ids_new, 0).unwrap()),
+                Some(pixel_values_accum),
+                Some(image_bounds_accum),
+                Some(tgt_sizes_accum),
+            )
+        } else {
+            (None, None, None, None)
+        };
+
+        let input = match new_input {
+            Some(new_input) => new_input,
+            None => input,
+        };
+
+        let args = MiniCpmOSpecificArgs {
+            pixel_values_all,
+            tgt_sizes,
+            image_bound,
+        };
+
+        // Dummy pixel values - real ones are in model specific args
+        let inputs: Box<dyn Any> = Box::new(ModelInputs {
+            input_ids: input,
+            seqlen_offsets: positions,
+            seqlen_offsets_kernel: positions_kernel,
+            context_lens,
+            position_ids,
+            pixel_values: None,
+            model_specific_args: Box::new(args),
+            paged_attn_meta,
+            flash_meta,
+        });
+        Box::new(std::iter::once(Ok(InputProcessorOutput {
+            inputs,
+            seq_indices,
+        })))
     }
 }
 
@@ -273,6 +509,10 @@ impl MiniCpmOImageProcessor {
         scale_resolution: usize,
         patch_size: usize,
     ) -> Vec<DynamicImage> {
+        if !self.config.slice_mode.unwrap_or(DEFAULT_SLICE_MODE) {
+            return vec![image.clone()];
+        }
+
         let dims = image.dimensions();
         let (w, h) = (dims.0 as usize, dims.1 as usize);
 
@@ -345,6 +585,108 @@ impl MiniCpmOImageProcessor {
             .permute((0, 1, 3, 2))?
             .reshape((image.dim(0)?, patch_size, ()))
     }
+
+    fn get_image_id_placeholder(&self, image_idx: usize) -> String {
+        format!(
+            "{}{image_idx}{}",
+            self.config
+                .im_start_token
+                .clone()
+                .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
+            self.config
+                .im_end_token
+                .clone()
+                .unwrap_or(DEFAULT_IM_END_TOKEN.to_string())
+        )
+    }
+
+    fn get_grid_placeholder(&self, grid: Option<(usize, usize)>) -> String {
+        if let Some(grid) = grid {
+            let slice_image_placeholder = format!(
+                "{}{}{}",
+                self.config
+                    .slice_start_token
+                    .clone()
+                    .unwrap_or(DEFAULT_SLICE_START_TOKEN.to_string()),
+                self.config
+                    .unk_token
+                    .clone()
+                    .unwrap_or(DEFAULT_UNK_TOKEN.to_string())
+                    .repeat(
+                        self.config
+                            .image_feature_size
+                            .unwrap_or(DEFAULT_IMAGE_FEATURE_SIZE)
+                    ),
+                self.config
+                    .slice_end_token
+                    .clone()
+                    .unwrap_or(DEFAULT_SLICE_END_TOKEN.to_string())
+            );
+
+            let (cols, rows) = grid;
+            let mut slices = Vec::new();
+            for _ in 0..rows {
+                let mut lines = Vec::new();
+                for _ in 0..cols {
+                    lines.push(slice_image_placeholder.clone());
+                }
+                slices.push(lines.join(""));
+            }
+
+            slices.join("\n")
+        } else {
+            "".to_string()
+        }
+    }
+
+    fn get_slice_image_placeholder(&self, image_size: (u32, u32), image_idx: usize) -> String {
+        let max_slice_nums = self.config.max_slice_nums.unwrap_or(DEFAULT_MAX_SLICE_NUMS);
+        let use_image_id = self.config.use_image_id.unwrap_or(DEFAULT_USE_IMAGE_ID);
+        let slice_mode = self.config.slice_mode.unwrap_or(DEFAULT_SLICE_MODE);
+
+        let grid = self.get_sliced_grid(
+            (image_size.0 as usize, image_size.1 as usize),
+            max_slice_nums,
+            DEFAULT_SCALE_RESOLUTION,
+            false,
+        );
+
+        let image_placeholder = format!(
+            "{}{}{}",
+            self.config
+                .im_start_token
+                .clone()
+                .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
+            self.config
+                .unk_token
+                .clone()
+                .unwrap_or(DEFAULT_UNK_TOKEN.to_string())
+                .repeat(
+                    self.config
+                        .image_feature_size
+                        .unwrap_or(DEFAULT_IMAGE_FEATURE_SIZE)
+                ),
+            self.config
+                .im_end_token
+                .clone()
+                .unwrap_or(DEFAULT_IM_END_TOKEN.to_string())
+        );
+
+        let final_placeholder = if use_image_id {
+            format!(
+                "{}{image_placeholder}",
+                self.get_image_id_placeholder(image_idx)
+            )
+        } else {
+            image_placeholder
+        };
+
+        if slice_mode {
+            format!("{final_placeholder}{}", self.get_grid_placeholder(grid))
+        } else {
+            final_placeholder
+        }
+    }
 }
 
 impl ImagePreProcessor for MiniCpmOImageProcessor {
@@ -368,9 +710,9 @@ impl ImagePreProcessor for MiniCpmOImageProcessor {
             .map(|img| img.dimensions())
             .collect::<Vec<_>>();
         for image in images {
-            let max_slice_nums = config.max_slice_nums.unwrap_or(9);
-            let scale_resolution = config.scale_resolution.unwrap_or(448);
-            let patch_size = config.patch_size.unwrap_or(14);
+            let max_slice_nums = config.max_slice_nums.unwrap_or(DEFAULT_MAX_SLICE_NUMS);
+            let scale_resolution = config.scale_resolution.unwrap_or(DEFAULT_SCALE_RESOLUTION);
+            let patch_size = config.patch_size.unwrap_or(DEFAULT_PATCH_SIZE);
 
             let image_patches =
                 self.get_sliced_images(&image, max_slice_nums, scale_resolution, patch_size);
@@ -396,6 +738,7 @@ impl ImagePreProcessor for MiniCpmOImageProcessor {
         }
 
         let tgt_sizes = Tensor::cat(&tgt_sizes, 0)?.to_device(device)?;
+        // Dummy pixel values
         Ok(PreprocessedImages {
             pixel_values: Tensor::new(0u32, &Device::Cpu)?,
             pixel_attention_mask: None,

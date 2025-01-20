@@ -12,7 +12,7 @@ use pyo3::pyclass;
 use regex::Regex;
 use serde::Deserialize;
 
-use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel};
+use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
 
 use super::{DeviceMappedModelLoader, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
@@ -2271,7 +2271,11 @@ impl VisionModelLoader for MiniCpmOLoader {
         preprocessor_config: PreProcessorConfig,
         max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
-        todo!()
+        Arc::new(MiniCpmOProcessor::new(
+            processor_config.unwrap_or_default(),
+            preprocessor_config,
+            max_edge,
+        ))
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
         let config: MiniCpmOConfig = serde_json::from_str(config)?;
