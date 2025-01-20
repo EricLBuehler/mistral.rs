@@ -69,7 +69,13 @@ impl Processor for MiniCpmOProcessor {
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
-        todo!()
+        &[
+            DEFAULT_IM_START_TOKEN,
+            DEFAULT_IM_END_TOKEN,
+            DEFAULT_SLICE_START_TOKEN,
+            DEFAULT_SLICE_END_TOKEN,
+            DEFAULT_UNK_TOKEN,
+        ]
     }
 
     fn template_action(&self) -> MessagesAction {

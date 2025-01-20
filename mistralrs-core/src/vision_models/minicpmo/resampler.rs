@@ -38,7 +38,14 @@ fn get_1d_sincos_pos_embed_from_grid_new(embed_dim: usize, pos: &Tensor) -> Resu
     omega = (1f64 / (10_000f64 * omega)?)?;
     omega = omega.unsqueeze(0)?;
 
-    let out = pos.unsqueeze(1)?.matmul(&omega)?;
+    let (h, w) = pos.dims2()?;
+
+    let mut out = pos
+        .reshape(((), 1))?
+        .matmul(&omega.reshape((1, ()))?)
+        .unwrap();
+
+    out = out.reshape((h, w, ()))?;
 
     let emb_sin = out.sin()?;
     let emb_cos = out.cos()?;
