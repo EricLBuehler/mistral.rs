@@ -7,9 +7,31 @@ use crate::{
     prefix_cacher::PrefixCacheManager,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer},
+    tools::ToolCallingMatcher,
+    ToolCallResponse,
 };
 
 use super::Pipeline;
+
+/// Takes raw UTf8 text and parses any possible tool calls from it.
+fn parse_text_tools(
+    raw_text: &str,
+    matcher: Option<Arc<ToolCallingMatcher>>,
+) -> Result<(Option<&str>, Vec<ToolCallResponse>)> {
+    let mut tool_calls = Vec::new();
+    let mut text_new = Some(raw_text);
+
+    if let Some(ref matcher) = matcher {
+        let calls = matcher
+            .get_call(raw_text)
+            .map_err(candle_core::Error::msg)?;
+        if !calls.is_empty() {
+            text_new = None;
+            tool_calls = calls;
+        }
+    };
+    Ok((text_new, tool_calls))
+}
 
 pub(crate) async fn finish_or_add_toks_to_seq(
     this: &dyn Pipeline,
@@ -40,13 +62,23 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         let token_index = seq.get_toks().len();
         let rate_limit_allowed = is_done.is_some() || token_index % STREAMING_RATE_LIMIT == 0;
 
-        if rate_limit_allowed {
+        let mut tool_use_still_possible = false;
+        if let Some(ref t) = seq.tools {
+            if let Ok(Some(ref d)) = seq.peek_delta() {
+                tool_use_still_possible = t.prefix_could_be_tool(d.as_str());
+            }
+        };
+
+        if rate_limit_allowed && !tool_use_still_possible {
             if let Some(delta) = crate::handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
                 if seq.get_mut_group().is_chat {
+                    let (text_new, tool_calls) =
+                        parse_text_tools(delta.as_str(), seq.tools.clone())?;
                     seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
                         delta: crate::Delta {
-                            content: delta.clone(),
+                            content: text_new.map(ToString::to_string),
                             role: "assistant".to_string(),
+                            tool_calls: Some(tool_calls),
                         },
                         index: seq.get_response_index(),
                         finish_reason: is_done.map(|x| x.to_string()),
@@ -175,20 +207,12 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             };
 
             if seq.get_mut_group().is_chat {
-                let mut tool_calls = Vec::new();
-                let mut text_new = Some(text.clone());
-                if let Some(ref matcher) = seq.tools {
-                    let calls = matcher.get_call(&text).map_err(candle_core::Error::msg)?;
-                    if !calls.is_empty() {
-                        text_new = None;
-                    }
-                    tool_calls = calls;
-                }
+                let (text_new, tool_calls) = parse_text_tools(text.as_str(), seq.tools.clone())?;
                 let choice = crate::Choice {
                     finish_reason: reason.to_string(),
                     index: seq.get_response_index(),
                     message: crate::ResponseMessage {
-                        content: text_new,
+                        content: text_new.map(ToString::to_string),
                         role: "assistant".to_string(),
                         tool_calls,
                     },

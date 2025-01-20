@@ -15,7 +15,6 @@ use crate::{
 };
 use candle_core::Tensor;
 use std::{
-    cmp::max,
     fmt::Display,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -651,13 +650,21 @@ impl Sequence {
     pub fn get_delta(
         &mut self,
     ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+        let new_decoded = self.peek_delta();
+        if matches!(new_decoded, Ok(Some(_))) {
+            self.stream_idx = self.completion_bytes.len();
+        }
+        new_decoded
+    }
+
+    /// Peeks at the delta between the last two decoded sequences, but does not advance the stream index.
+    pub fn peek_delta(&self) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
         let is_first = self.stream_idx == 0;
         let new_decoded = String::from_utf8_lossy(&self.completion_bytes[self.stream_idx..]);
         // Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
         if new_decoded.ends_with('�') {
             return Ok(None);
         }
-        self.stream_idx = self.completion_bytes.len();
 
         // The first token usually starts with a space. We don't want to add that to the delta.
         // Since we're using the completion_bytes, we need to take care of that ourselves.

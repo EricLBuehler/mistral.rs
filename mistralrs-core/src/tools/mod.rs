@@ -30,6 +30,24 @@ impl ToolCallingMatcher {
         Ok(Self { tool_choice })
     }
 
+    // Checks if the the `message_prefix` could be a tool call.
+    // If false, either [`ToolChoice::None`] was selected, or the prefix could not match.
+    pub fn prefix_could_be_tool(&self, message_prefix: &str) -> bool {
+        if matches!(self.tool_choice, ToolChoice::None) {
+            return false;
+        }
+
+        // Check if the prefix could be a JSON serialization of any of the following types.
+        [
+            could_be_json::<CalledFunctionParameters>,
+            could_be_json::<CalledFunctionArguments>,
+            could_be_json::<Vec<CalledFunctionParameters>>,
+            could_be_json::<Vec<CalledFunctionArguments>>,
+        ]
+        .iter()
+        .any(|check| check(message_prefix))
+    }
+
     pub fn get_call(&self, message: &str) -> anyhow::Result<Vec<ToolCallResponse>> {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok(Vec::new());
@@ -91,5 +109,17 @@ impl ToolCallingMatcher {
             }
             Ok(Vec::new())
         }
+    }
+}
+
+/// Checks if the given prefix could be the start of the JSON serialization of a given type, `T`.
+fn could_be_json<T>(text_prefix: &str) -> bool
+where
+    T: serde::de::DeserializeOwned,
+{
+    match serde_json::from_str::<T>(text_prefix) {
+        Ok(_) => true,
+        Err(e) if e.is_eof() => true,
+        _ => false,
     }
 }

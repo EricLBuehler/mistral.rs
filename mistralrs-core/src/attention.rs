@@ -11,7 +11,6 @@ use crate::{
 
 use candle_core::{Device, Result, Tensor};
 
-
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
     q: &Tensor,
