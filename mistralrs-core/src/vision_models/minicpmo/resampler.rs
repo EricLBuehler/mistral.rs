@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
@@ -138,8 +140,8 @@ impl Resampler {
 
         let mut pos_embed = Vec::new();
         let tgt_sizes_vec = tgt_sizes.to_vec2::<u32>()?;
-        for i in 0..bs {
-            let (tgt_h, tgt_w) = (tgt_sizes_vec[i][0] as usize, tgt_sizes_vec[i][1] as usize);
+        for (i, tgt_sizes_vec_i) in tgt_sizes_vec.iter().enumerate().take(bs) {
+            let (tgt_h, tgt_w) = (tgt_sizes_vec_i[0] as usize, tgt_sizes_vec_i[1] as usize);
             pos_embed.push(
                 pos_embed_cache
                     .pos_embed

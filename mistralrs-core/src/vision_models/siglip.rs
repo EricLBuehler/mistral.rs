@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
     conv2d, embedding, layer_norm, linear, Conv2d, Conv2dConfig, Embedding, LayerNorm, Module,

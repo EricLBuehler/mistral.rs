@@ -92,7 +92,7 @@ impl MiniCpmOModel {
                 all_pixel_values.extend(imgs);
             }
 
-            let tgt_sizes = Tensor::cat(&tgt_sizes_all, 0)?.to_dtype(DType::I32)?;
+            let tgt_sizes = Tensor::cat(tgt_sizes_all, 0)?.to_dtype(DType::I32)?;
             let tgt_sizes_vec = tgt_sizes.to_vec2::<i32>()?;
 
             let max_patches = (tgt_sizes.i((.., 0))? * tgt_sizes.i((.., 1))?)?
@@ -119,8 +119,8 @@ impl MiniCpmOModel {
                 .reshape((b, 3, (), l))?;
 
             let mut patch_attn_mask = Tensor::zeros((b, 1, max_patches), DType::U8, device)?;
-            for i in 0..b {
-                let n = (tgt_sizes_vec[i][0] * tgt_sizes_vec[i][1]) as usize;
+            for (i, tgt_sizes_vec_i) in tgt_sizes_vec.iter().enumerate().take(b) {
+                let n = (tgt_sizes_vec_i[0] * tgt_sizes_vec_i[1]) as usize;
                 patch_attn_mask = patch_attn_mask.slice_assign(
                     &[&i, &0, &(..n)],
                     &Tensor::ones((1, 1, n), DType::U8, device)?,
@@ -200,6 +200,7 @@ impl MiniCpmOModel {
         Ok(vllm_embedding)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         input_ids: &Tensor,
