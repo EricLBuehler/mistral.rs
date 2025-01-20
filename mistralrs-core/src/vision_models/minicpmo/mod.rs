@@ -22,6 +22,7 @@ use self::siglip::SiglipVisionTransformer;
 use super::siglip;
 
 mod config;
+mod inputs_processor;
 mod resampler;
 
 pub struct MiniCpmOModel {
@@ -67,7 +68,8 @@ impl MiniCpmOModel {
     fn get_vllm_embedding(
         &self,
         input_ids: &Tensor,
-        pixel_values_all: Option<Tensor>,
+        device: &Device,
+        pixel_values_all: Option<Vec<Vec<Tensor>>>,
         tgt_sizes_all: Option<Tensor>,
         image_bound: Option<Tensor>,
     ) -> Result<Tensor> {
@@ -79,18 +81,17 @@ impl MiniCpmOModel {
 
             let mut all_pixel_values = Vec::new();
             let mut img_cnts = Vec::new();
-            for pixel_values in pixel_values_all.chunk(pixel_values_all.dim(0)?, 0)? {
-                img_cnts.push(pixel_values.dim(0)?);
+            for pixel_values in pixel_values_all {
+                img_cnts.push(pixel_values.len());
                 let mut imgs = Vec::new();
-                for i in pixel_values.chunk(pixel_values.dim(0)?, 0)? {
+                for i in pixel_values {
                     // Assume channel dimension first
                     imgs.push(i.flatten_to(1)?.permute((1, 0))?);
                 }
                 all_pixel_values.extend(imgs);
             }
 
-            let tgt_sizes = Tensor::cat(&tgt_sizes_all.chunk(tgt_sizes_all.dim(0)?, 0)?, 0)?
-                .to_dtype(DType::I32)?;
+            let tgt_sizes = tgt_sizes_all.to_dtype(DType::I32)?;
             let tgt_sizes_vec = tgt_sizes.to_vec2::<i32>()?;
 
             let max_patches = (tgt_sizes.i((.., 0))? * tgt_sizes.i((.., 1))?)?
@@ -102,7 +103,7 @@ impl MiniCpmOModel {
                 .iter()
                 .map(|pixel_values| pixel_values.dim(0))
                 .collect::<Result<Vec<_>>>()?;
-            let max_len = lens.into_iter().max().expect("No pixe values somehow?");
+            let max_len = lens.into_iter().max().expect("No pixel values somehow?");
             all_pixel_values = all_pixel_values
                 .into_iter()
                 .map(|pixel_values| {
@@ -116,13 +117,12 @@ impl MiniCpmOModel {
                 .permute((0, 2, 1))?
                 .reshape((b, 3, (), l))?;
 
-            let mut patch_attn_mask =
-                Tensor::zeros((b, 1, max_patches), DType::U8, pixel_values_all.device())?;
+            let mut patch_attn_mask = Tensor::zeros((b, 1, max_patches), DType::U8, device)?;
             for i in 0..b {
                 let n = (tgt_sizes_vec[i][0] * tgt_sizes_vec[i][1]) as usize;
                 patch_attn_mask = patch_attn_mask.slice_assign(
                     &[&i, &0, &(..n)],
-                    &Tensor::ones((1, 1, n), DType::U8, pixel_values_all.device())?,
+                    &Tensor::ones((1, 1, n), DType::U8, device)?,
                 )?;
             }
 
@@ -173,11 +173,7 @@ impl MiniCpmOModel {
                     if cur_image_bound.dim(0)? > 0 {
                         let mut image_indices = Vec::new();
                         for r in cur_image_bound.to_vec2::<u32>()? {
-                            image_indices.push(Tensor::arange(
-                                r[0],
-                                r[1],
-                                pixel_values_all.device(),
-                            )?);
+                            image_indices.push(Tensor::arange(r[0], r[1], device)?);
                         }
                         let image_indices = Tensor::stack(&image_indices, 0)?;
 
@@ -206,7 +202,7 @@ impl MiniCpmOModel {
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        pixel_values: Option<Tensor>,
+        pixel_values_all: Option<Vec<Vec<Tensor>>>,
         tgt_sizes: Option<Tensor>,
         image_bound: Option<Tensor>,
         seqlen_offsets: &[usize],
@@ -215,8 +211,13 @@ impl MiniCpmOModel {
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let vllm_embedding =
-            self.get_vllm_embedding(input_ids, pixel_values, tgt_sizes, image_bound)?;
+        let vllm_embedding = self.get_vllm_embedding(
+            input_ids,
+            self.llm.device(),
+            pixel_values_all,
+            tgt_sizes,
+            image_bound,
+        )?;
 
         self.llm.forward_embed(
             input_ids,

@@ -262,6 +262,9 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                             video_grid_thw,
                             rows: _,
                             cols: _,
+                            pixel_values_list: _,
+                            tgt_sizes: _,
+                            image_sizes_all: _,
                         } = self
                             .preprocess(
                                 seq.clone_images()
@@ -689,6 +692,9 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 video_grid_thw: None,
                 rows: None,
                 cols: None,
+                pixel_values_list: None,
+                tgt_sizes: None,
+                image_sizes_all: None,
             });
         }
 
@@ -725,6 +731,9 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 video_grid_thw: Some(vision_grid_thw),
                 rows: None,
                 cols: None,
+                pixel_values_list: None,
+                tgt_sizes: None,
+                image_sizes_all: None,
             });
         }
         unreachable!()

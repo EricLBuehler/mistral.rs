@@ -207,6 +207,9 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     video_grid_thw: _,
                     rows,
                     cols,
+                    pixel_values_list: _,
+                    tgt_sizes: _,
+                    image_sizes_all: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -594,6 +597,9 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             video_grid_thw: None,
             rows: Some(image_rows),
             cols: Some(image_cols),
+            pixel_values_list: None,
+            tgt_sizes: None,
+            image_sizes_all: None,
         })
     }
 }
