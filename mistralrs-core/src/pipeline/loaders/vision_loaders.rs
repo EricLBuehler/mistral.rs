@@ -2232,8 +2232,7 @@ pub struct MiniCpmOPrefixer;
 
 impl VisionPromptPrefixer for MiniCpmOPrefixer {
     fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
-        // Chat template does it
-        prompt.to_string()
+        format!("(<image>./</image>){prompt}")
     }
 }
 

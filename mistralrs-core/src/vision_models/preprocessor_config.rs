@@ -41,6 +41,8 @@ pub struct PreProcessorConfig {
     pub(crate) unk_token: Option<String>,
     pub(crate) im_end_token: Option<String>,
     pub(crate) slice_end_token: Option<String>,
+    pub(crate) im_id_start: Option<String>,
+    pub(crate) im_id_end: Option<String>,
 }
 
 #[allow(dead_code)]

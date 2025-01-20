@@ -6,12 +6,15 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, VarBuilder};
 use mistralrs_quant::MatMul;
 
+use crate::layers_masker::masked_fill;
+
 const DEFAULT_MAX_SIZE: (usize, usize) = (70, 70);
 
 fn get_2d_sincos_pos_embed(
     embed_dim: usize,
     image_size: (usize, usize),
     device: &Device,
+    dtype: DType,
 ) -> Result<Tensor> {
     let (grid_h_size, grid_w_size) = image_size;
     let grid_h = Tensor::arange(0f32, grid_h_size as f32, device)?;
@@ -20,7 +23,7 @@ fn get_2d_sincos_pos_embed(
     let grid = Tensor::meshgrid(&[grid_w, grid_h], true)?;
     let grid = Tensor::stack(&grid, 0)?;
 
-    get_2d_sincos_pos_embed_from_grid(embed_dim, &grid)
+    get_2d_sincos_pos_embed_from_grid(embed_dim, &grid)?.to_dtype(dtype)
 }
 
 fn get_2d_sincos_pos_embed_from_grid(embed_dim: usize, grid: &Tensor) -> Result<Tensor> {
@@ -99,7 +102,7 @@ impl Resampler {
         let attn = MultiheadAttention::new(embed_dim, num_heads, vb.pp("attn"))?;
 
         let pos_embed = Arc::new(Mutex::new(SinCos2dPosEmbed {
-            pos_embed: get_2d_sincos_pos_embed(embed_dim, max_size, vb.device())?,
+            pos_embed: get_2d_sincos_pos_embed(embed_dim, max_size, vb.device(), vb.dtype())?,
             max_size,
         }));
 
@@ -128,25 +131,29 @@ impl Resampler {
 
         // Adjust/recompute pos embeds
         {
-            let max_h = tgt_sizes.i((.., 0))?.max(0)?.to_scalar::<u32>()? as usize;
-            let max_w = tgt_sizes.i((.., 1))?.max(0)?.to_scalar::<u32>()? as usize;
+            let max_h = tgt_sizes.i((.., 0))?.max(0)?.to_scalar::<i32>()? as usize;
+            let max_w = tgt_sizes.i((.., 1))?.max(0)?.to_scalar::<i32>()? as usize;
 
             if max_h > pos_embed_cache.max_size.0 || max_w > pos_embed_cache.max_size.1 {
                 pos_embed_cache.max_size = (
                     max_h.max(pos_embed_cache.max_size.0),
                     max_w.max(pos_embed_cache.max_size.1),
                 );
-                pos_embed_cache.pos_embed =
-                    get_2d_sincos_pos_embed(self.embed_dim, pos_embed_cache.max_size, device)?;
+                pos_embed_cache.pos_embed = get_2d_sincos_pos_embed(
+                    self.embed_dim,
+                    pos_embed_cache.max_size,
+                    device,
+                    x.dtype(),
+                )?;
             }
         }
 
-        let max_patch_len = tgt_sizes.max(0)?.to_scalar::<u32>()? as usize;
+        let max_patch_len = patch_len.max(0)?.to_scalar::<i32>()? as usize;
 
         let mut key_padding_mask = Tensor::zeros((bs, max_patch_len), DType::U8, device)?;
 
         let mut pos_embed = Vec::new();
-        let tgt_sizes_vec = tgt_sizes.to_vec2::<u32>()?;
+        let tgt_sizes_vec = tgt_sizes.to_vec2::<i32>()?;
         for (i, tgt_sizes_vec_i) in tgt_sizes_vec.iter().enumerate().take(bs) {
             let (tgt_h, tgt_w) = (tgt_sizes_vec_i[0] as usize, tgt_sizes_vec_i[1] as usize);
             pos_embed.push(
@@ -156,9 +163,13 @@ impl Resampler {
                     .reshape((tgt_h * tgt_w, ()))?,
             );
 
-            let n = patch_len.i(i)?.to_scalar::<u32>()? as usize;
-            key_padding_mask = key_padding_mask
-                .slice_assign(&[&i, &(n..)], &Tensor::ones(n, DType::U8, device)?)?;
+            let n = patch_len.i(i)?.to_scalar::<i32>()? as usize;
+            if n != max_patch_len {
+                key_padding_mask = key_padding_mask.slice_assign(
+                    &[&i, &(n..)],
+                    &Tensor::ones((1, max_patch_len - n), DType::U8, device)?,
+                )?;
+            }
         }
 
         let lens = pos_embed
@@ -190,7 +201,7 @@ impl Resampler {
         )?;
 
         out = out.apply(&self.ln_post)?;
-        out.matmul(&self.proj)
+        out.broadcast_matmul(&self.proj)
     }
 
     fn repeat_q_bs(&self, q: &Tensor, n: usize) -> Result<Tensor> {
@@ -211,9 +222,18 @@ impl MultiheadAttention {
     fn new(embed_dim: usize, num_heads: usize, vb: VarBuilder) -> Result<Self> {
         let in_proj_bias = vb.get(embed_dim * 3, "in_proj_bias")?;
         let in_proj_weight = vb.get((embed_dim * 3, embed_dim), "in_proj_weight")?;
-        let q_proj = Linear::new(in_proj_weight.i(0)?, Some(in_proj_bias.i(0)?));
-        let k_proj = Linear::new(in_proj_weight.i(1)?, Some(in_proj_bias.i(1)?));
-        let v_proj = Linear::new(in_proj_weight.i(2)?, Some(in_proj_bias.i(2)?));
+        let q_proj = Linear::new(
+            in_proj_weight.i(0..embed_dim)?,
+            Some(in_proj_bias.i(0..embed_dim)?),
+        );
+        let k_proj = Linear::new(
+            in_proj_weight.i(embed_dim..embed_dim * 2)?,
+            Some(in_proj_bias.i(embed_dim..embed_dim * 2)?),
+        );
+        let v_proj = Linear::new(
+            in_proj_weight.i(embed_dim * 2..embed_dim * 3)?,
+            Some(in_proj_bias.i(embed_dim * 2..embed_dim * 3)?),
+        );
         let out_proj = candle_nn::linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
         Ok(Self {
             q_proj,
@@ -255,13 +275,16 @@ impl MultiheadAttention {
 
         q = q
             .reshape((bs, q_seq, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         k = k
             .reshape((bs, kv_seq, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
         v = v
             .reshape((bs, kv_seq, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
+            .transpose(1, 2)?
+            .contiguous()?;
 
         let mut y = {
             let mut att =
@@ -269,8 +292,8 @@ impl MultiheadAttention {
 
             att = match attn_mask {
                 Some(mask) => {
-                    let mask = mask.reshape((bs, self.num_heads, (), q_seq))?;
-                    att.broadcast_add(&mask)?
+                    let mask = mask.reshape((bs, self.num_heads, (), kv_seq))?;
+                    masked_fill(&att, &mask, f32::NEG_INFINITY)?
                 }
                 None => att,
             };

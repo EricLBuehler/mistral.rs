@@ -35,6 +35,8 @@ const DEFAULT_PATCH_SIZE: usize = 14;
 const DEFAULT_IMAGE_FEATURE_SIZE: usize = 64;
 const DEFAULT_IM_START_TOKEN: &str = "<image>";
 const DEFAULT_IM_END_TOKEN: &str = "</image>";
+const DEFAULT_IM_ID_START: &str = "<image_id>";
+const DEFAULT_IM_ID_END: &str = "</image_id>";
 const DEFAULT_SLICE_START_TOKEN: &str = "<slice>";
 const DEFAULT_SLICE_END_TOKEN: &str = "</slice>";
 const DEFAULT_UNK_TOKEN: &str = "<unk>";
@@ -79,7 +81,7 @@ impl Processor for MiniCpmOProcessor {
     }
 
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::Keep
+        MessagesAction::FlattenOnlyText
     }
 }
 
@@ -225,10 +227,28 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                     .decode(seq.get_toks(), false)
                     .expect("Detokenization failed!");
 
-                let mut text_chunks = split_pattern
-                    .split(&text)
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>();
+                let mut text_chunks = {
+                    let mut results = Vec::new();
+                    let mut last_end = 0;
+
+                    for m in split_pattern.find_iter(&text) {
+                        // Anything between last_end and m.start() is unmatched
+                        if m.start() > last_end {
+                            results.push((false, &text[last_end..m.start()]));
+                        }
+                        results.push((true, m.as_str()));
+                        last_end = m.end();
+                    }
+                    // Handle the trailing unmatched part (if any)
+                    if last_end < text.len() {
+                        results.push((false, &text[last_end..]));
+                    }
+
+                    results
+                        .into_iter()
+                        .map(|(_, x)| x.to_string())
+                        .collect::<Vec<_>>()
+                };
 
                 let image_tags = image_pattern.find_iter(&text).collect::<Vec<_>>();
 
@@ -237,10 +257,11 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 }
 
                 let mut image_id = 0;
-                for (i, chunk) in text_chunks.iter_mut().enumerate() {
+                for chunk in &mut text_chunks {
                     if chunk == IMAGE_TAG {
+                        *chunk =
+                            self.get_slice_image_placeholder(image_sizes_all[image_id], image_id);
                         image_id += 1;
-                        *chunk = self.get_slice_image_placeholder(image_sizes_all[i], image_id);
                     }
                 }
 
@@ -596,13 +617,13 @@ impl MiniCpmOImageProcessor {
         format!(
             "{}{image_idx}{}",
             self.config
-                .im_start_token
+                .im_id_start
                 .clone()
-                .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
+                .unwrap_or(DEFAULT_IM_ID_START.to_string()),
             self.config
-                .im_end_token
+                .im_id_end
                 .clone()
-                .unwrap_or(DEFAULT_IM_END_TOKEN.to_string())
+                .unwrap_or(DEFAULT_IM_ID_END.to_string())
         )
     }
 
