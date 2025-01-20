@@ -119,6 +119,7 @@ where
 {
     match serde_json::from_str::<T>(text_prefix) {
         Ok(_) => true,
+        // EOF show that JSON parsing was successful up to the end of the entire string.
         Err(e) if e.is_eof() => true,
         _ => false,
     }
