@@ -6,7 +6,7 @@ use rand_isaac::Isaac64Rng;
 use crate::{
     prefix_cacher::PrefixCacheManager,
     sampler::Logprobs,
-    sequence::{Sequence, SequenceRecognizer},
+    sequence::{Sequence, SequenceRecognizer, StopReason},
     tools::ToolCallingMatcher,
     ToolCallResponse,
 };
@@ -41,7 +41,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     eos_tok: Option<&[u32]>,
     use_prefix_cacher: bool,
 ) -> Result<()> {
-    let is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
+    let mut is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
     seq.add_token(
         logprobs.clone(),
         this.get_metadata()
@@ -63,17 +63,23 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         let rate_limit_allowed = is_done.is_some() || token_index % STREAMING_RATE_LIMIT == 0;
 
         let mut tool_use_still_possible = false;
+        let mut tool_use_is_done = false;
         if let Some(ref t) = seq.tools {
             if let Ok(Some(ref d)) = seq.peek_delta() {
-                tool_use_still_possible = t.prefix_could_be_tool(d.as_str());
+                (tool_use_still_possible, tool_use_is_done) = t.prefix_could_be_tool(d.as_str());
             }
         };
 
-        if rate_limit_allowed && !tool_use_still_possible {
+        if (rate_limit_allowed && !tool_use_still_possible) || tool_use_is_done {
             if let Some(delta) = crate::handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
                 if seq.get_mut_group().is_chat {
                     let (text_new, tool_calls) =
                         parse_text_tools(delta.as_str(), seq.tools.clone())?;
+
+                    if !tool_calls.is_empty() && is_done.is_none() {
+                        is_done = Some(StopReason::Eos);
+                    };
+
                     seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
                         delta: crate::Delta {
                             content: text_new.map(ToString::to_string),
