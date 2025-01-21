@@ -366,7 +366,9 @@ impl Loader for GGUFLoader {
         let mut readers = readers.iter_mut().collect::<Vec<_>>();
 
         let model = Content::from_readers(&mut readers)?;
-        model.print_metadata()?;
+        if !silent {
+            model.print_metadata()?;
+        }
         let arch = model.arch();
 
         let GgufTokenizerConversion {
