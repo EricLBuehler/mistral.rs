@@ -41,6 +41,7 @@ impl MiniCpmOModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        let real_device = normal_loading_metadata.real_device.clone();
         let llm = qwen2::Model::new(
             &cfg.text_config,
             vb.pp("llm"),
@@ -48,7 +49,10 @@ impl MiniCpmOModel {
             normal_loading_metadata,
             attention_mechanism,
         )?;
-        let vpm = SiglipVisionTransformer::new(&cfg.vision_config, vb.pp("vpm"))?;
+        let vpm = SiglipVisionTransformer::new(
+            &cfg.vision_config,
+            vb.pp("vpm").set_device(real_device.clone()),
+        )?;
         let resampler = Resampler::new(
             cfg.query_num,
             cfg.text_config.hidden_size,
@@ -56,7 +60,7 @@ impl MiniCpmOModel {
             cfg.vision_config.hidden_size,
             true,
             None,
-            vb.pp("resampler"),
+            vb.pp("resampler").set_device(real_device.clone()),
         )?;
         Ok(Self {
             cfg: cfg.clone(),
