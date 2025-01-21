@@ -131,8 +131,8 @@ impl Resampler {
 
         // Adjust/recompute pos embeds
         {
-            let max_h = tgt_sizes.i((.., 0))?.max(0)?.to_scalar::<i32>()? as usize;
-            let max_w = tgt_sizes.i((.., 1))?.max(0)?.to_scalar::<i32>()? as usize;
+            let max_h = tgt_sizes.i((.., 0))?.max(0)?.to_scalar::<u32>()? as usize;
+            let max_w = tgt_sizes.i((.., 1))?.max(0)?.to_scalar::<u32>()? as usize;
 
             if max_h > pos_embed_cache.max_size.0 || max_w > pos_embed_cache.max_size.1 {
                 pos_embed_cache.max_size = (
@@ -148,12 +148,12 @@ impl Resampler {
             }
         }
 
-        let max_patch_len = patch_len.max(0)?.to_scalar::<i32>()? as usize;
+        let max_patch_len = patch_len.max(0)?.to_scalar::<u32>()? as usize;
 
         let mut key_padding_mask = Tensor::zeros((bs, max_patch_len), DType::U8, device)?;
 
         let mut pos_embed = Vec::new();
-        let tgt_sizes_vec = tgt_sizes.to_vec2::<i32>()?;
+        let tgt_sizes_vec = tgt_sizes.to_vec2::<u32>()?;
         for (i, tgt_sizes_vec_i) in tgt_sizes_vec.iter().enumerate().take(bs) {
             let (tgt_h, tgt_w) = (tgt_sizes_vec_i[0] as usize, tgt_sizes_vec_i[1] as usize);
             pos_embed.push(
@@ -163,7 +163,7 @@ impl Resampler {
                     .reshape((tgt_h * tgt_w, ()))?,
             );
 
-            let n = patch_len.i(i)?.to_scalar::<i32>()? as usize;
+            let n = patch_len.i(i)?.to_scalar::<u32>()? as usize;
             if n != max_patch_len {
                 key_padding_mask = key_padding_mask.slice_assign(
                     &[&i, &(n..)],

@@ -96,12 +96,12 @@ impl MiniCpmOModel {
                 all_pixel_values.extend(imgs);
             }
 
-            let tgt_sizes = Tensor::cat(tgt_sizes_all, 0)?.to_dtype(DType::I32)?;
-            let tgt_sizes_vec = tgt_sizes.to_vec2::<i32>()?;
+            let tgt_sizes = Tensor::cat(tgt_sizes_all, 0)?;
+            let tgt_sizes_vec = tgt_sizes.to_vec2::<u32>()?;
 
             let max_patches = (tgt_sizes.i((.., 0))? * tgt_sizes.i((.., 1))?)?
                 .max(0)?
-                .to_scalar::<i32>()? as usize;
+                .to_scalar::<u32>()? as usize;
 
             // Original code does padding of the pixel values here
             let lens = all_pixel_values
