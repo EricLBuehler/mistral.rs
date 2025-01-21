@@ -736,7 +736,6 @@ impl Pipeline for VisionPipeline {
             &input_ids,
             pixel_values,
             &seqlen_offsets,
-            seqlen_offsets_kernel,
             context_lens,
             position_ids,
             model_specific_args,
