@@ -4,7 +4,7 @@ use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
 use candle_core::{Device, IndexOp, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
-use mistralrs_vision::{ApplyTransforms, Normalize, ToTensorNoNorm, Transforms};
+use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
@@ -747,7 +747,7 @@ impl ImagePreProcessor for MiniCpmOImageProcessor {
             for slice_image in image_patches {
                 let (w, h) = slice_image.dimensions();
                 let to_tensor_rescale = Transforms {
-                    input: &ToTensorNoNorm,
+                    input: &ToTensor,
                     inner_transforms: &[&Normalize {
                         mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
                         std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),

@@ -82,7 +82,7 @@ impl MiniCpmOModel {
 
             let mut all_pixel_values = Vec::new();
             let mut img_cnts = Vec::new();
-            for pixel_values in pixel_values_all {
+            for pixel_values in &pixel_values_all {
                 img_cnts.push(pixel_values.len());
                 let mut imgs = Vec::new();
                 for i in pixel_values {
@@ -151,7 +151,8 @@ impl MiniCpmOModel {
 
             let mut start = 0;
             let mut vision_hidden_states = Vec::new();
-            for img_cnt in img_cnts {
+            for pixel_values in &pixel_values_all {
+                let img_cnt = pixel_values.len();
                 if img_cnt > 0 {
                     vision_hidden_states.push(Some(
                         vision_embedding
@@ -164,10 +165,8 @@ impl MiniCpmOModel {
                 }
             }
 
-            assert_eq!(vision_hidden_states.len(), b);
-
             let mut new_vllm_embedding = Vec::new();
-            for i in 0..b {
+            for i in 0..input_ids.dim(0)? {
                 if let Some(cur_vs_hs) = &vision_hidden_states[i] {
                     let mut cur_vllm_emb = vllm_embedding.i(i)?;
                     let cur_image_bound = &image_bound[i];
