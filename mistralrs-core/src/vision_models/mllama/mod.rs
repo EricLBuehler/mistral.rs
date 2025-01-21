@@ -120,7 +120,6 @@ impl MLlamaModel {
         aspect_ratio_ids: Option<&Tensor>,
         cross_attn_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let cross_attn_states = if let Some(pixel_values) = pixel_values {
@@ -162,7 +161,6 @@ impl MLlamaModel {
             cross_attn_mask.as_ref(),
             full_text_row_masked_out_mask.as_ref(),
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
         )
     }
@@ -199,7 +197,6 @@ impl VisionModel for MLlamaModel {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
@@ -220,7 +217,6 @@ impl VisionModel for MLlamaModel {
             aspect_ratio_ids.as_ref(),
             cross_attn_mask.as_ref(),
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
         )
     }

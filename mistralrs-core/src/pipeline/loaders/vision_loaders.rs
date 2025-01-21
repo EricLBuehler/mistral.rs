@@ -49,7 +49,6 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else

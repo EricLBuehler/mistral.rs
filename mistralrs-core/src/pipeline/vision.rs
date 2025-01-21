@@ -441,7 +441,6 @@ impl Loader for VisionLoader {
                     &inputs.input,
                     None, // NOTE: We ONLY calibrate the text bits of these models!!
                     &inputs.positions,
-                    inputs.positions_kernel,
                     inputs.context_lens,
                     inputs.position_ids,
                     model.default_model_specific_args(&inputs.input),
@@ -697,7 +696,6 @@ impl Pipeline for VisionPipeline {
         let ModelInputs {
             input_ids,
             seqlen_offsets,
-            seqlen_offsets_kernel,
             context_lens,
             position_ids,
             pixel_values,
@@ -726,7 +724,6 @@ impl Pipeline for VisionPipeline {
                 &input_ids,
                 pixel_values,
                 &seqlen_offsets,
-                seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
                 model_specific_args,

@@ -423,7 +423,6 @@ impl VisionModel for Qwen2VLModel {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,

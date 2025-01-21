@@ -691,8 +691,6 @@ impl Pipeline for GGUFPipeline {
             input_ids_full,
             seqlen_offsets,
             seqlen_offsets_full,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full,
             context_lens,
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
             mut paged_attn_meta,
@@ -715,13 +713,9 @@ impl Pipeline for GGUFPipeline {
             (None, None) => None,
         };
         let logits = match self.model {
-            Model::Llama(ref model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                paged_attn_meta,
-            )?,
+            Model::Llama(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
             Model::Phi2(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
@@ -730,8 +724,6 @@ impl Pipeline for GGUFPipeline {
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
@@ -746,27 +738,18 @@ impl Pipeline for GGUFPipeline {
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
                 &flash_meta,
                 flash_meta_full.as_ref().unwrap_or(&flash_meta),
             )?,
-            Model::Starcoder2(ref model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                paged_attn_meta,
-            )?,
-            Model::Qwen2(ref model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                paged_attn_meta,
-            )?,
+            Model::Starcoder2(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, paged_attn_meta)?
+            }
+            Model::Qwen2(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
         };
         if return_raw_logits {
             Ok(ForwardInputsResult::RawLogits { logits })

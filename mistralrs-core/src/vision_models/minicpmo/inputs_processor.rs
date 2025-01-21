@@ -129,7 +129,6 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 text_models_inputs_processor::InputMetadata {
                     input,
                     positions,
-                    positions_kernel,
                     context_lens,
                     position_ids,
                     paged_attn_meta,
@@ -401,7 +400,6 @@ impl InputsProcessor for MiniCpmOImageProcessor {
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
             context_lens,
             position_ids,
             pixel_values: None,
