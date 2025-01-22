@@ -504,7 +504,16 @@
 <a href="#503" id="503">503</a>
 <a href="#504" id="504">504</a>
 <a href="#505" id="505">505</a>
-<a href="#506" id="506">506</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
@@ -535,6 +544,7 @@
 
 <span class="kw">pub use </span>bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 <span class="kw">pub use </span>dummy::DummyLayer;
+<span class="kw">use </span>fp8::fp8_linear_b;
 <span class="kw">pub use </span>fp8::FP8Linear;
 <span class="kw">pub use </span>gguf::GgufMatMul;
 <span class="kw">use </span>gptq::gptq_linear;
@@ -548,6 +558,8 @@
 
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 </span><span class="kw">pub enum </span>QuantMethodType {
+    <span class="attr">#[serde(rename = <span class="string">"fp8"</span>)]
+    </span>Fp8,
     <span class="attr">#[serde(rename = <span class="string">"gptq"</span>)]
     </span>Gptq,
     <span class="attr">#[serde(rename = <span class="string">"unreachable"</span>)]
@@ -560,7 +572,8 @@
 <span class="kw">impl </span>Display <span class="kw">for </span>QuantMethodType {
     <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>std::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; std::fmt::Result {
         <span class="kw">match </span><span class="self">self </span>{
-            <span class="self">Self</span>::Gptq =&gt; <span class="macro">write!</span>(f, <span class="string">"GPTQ"</span>),
+            <span class="self">Self</span>::Gptq =&gt; <span class="macro">write!</span>(f, <span class="string">"gptq"</span>),
+            <span class="self">Self</span>::Fp8 =&gt; <span class="macro">write!</span>(f, <span class="string">"fp8"</span>),
             <span class="self">Self</span>::Bitsandbytes =&gt; <span class="macro">write!</span>(f, <span class="string">"bnb"</span>),
             <span class="self">Self</span>::Unreachable =&gt; <span class="macro">write!</span>(f, <span class="string">"unreachable"</span>,),
         }
@@ -576,6 +589,9 @@
 
     <span class="comment">// BNB
     </span><span class="kw">pub </span>bnb_4bit_quant_type: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+    <span class="comment">// FP8
+    </span><span class="kw">pub </span>weight_block_size: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
 
     <span class="kw">pub </span>quant_method: QuantMethodType,
 }
@@ -948,6 +964,7 @@
     <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
         <span class="kw">match </span>quant_conf.quant_method {
             QuantMethodType::Gptq =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
+            QuantMethodType::Fp8 =&gt; fp8_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">false</span>, vb)<span class="question-mark">?</span>,
             QuantMethodType::Bitsandbytes =&gt; {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">false</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
             }
@@ -977,6 +994,7 @@
     <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
         <span class="kw">match </span>quant_conf.quant_method {
             QuantMethodType::Gptq =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
+            QuantMethodType::Fp8 =&gt; fp8_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">true</span>, vb)<span class="question-mark">?</span>,
             QuantMethodType::Bitsandbytes =&gt; {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">true</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
             }

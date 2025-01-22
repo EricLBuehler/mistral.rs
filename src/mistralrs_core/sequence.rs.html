@@ -969,7 +969,10 @@
 <a href="#968" id="968">968</a>
 <a href="#969" id="969">969</a>
 <a href="#970" id="970">970</a>
-<a href="#971" id="971">971</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
     get_mut_group,
     pipeline::LayerCaches,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
@@ -1676,8 +1679,8 @@
 
         <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_time += now - <span class="self">self</span>.timestamp;
 
-        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_prompt_toks += <span class="self">self</span>.prompt_len;
-        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_toks += <span class="self">self</span>.len();
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_prompt_toks = <span class="self">self</span>.prompt_len;
+        <span class="macro">get_mut_group!</span>(<span class="self">self</span>).total_toks = <span class="self">self</span>.len();
     }
 
     <span class="kw">pub fn </span>add_image_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, choice: ImageChoice) {
@@ -1720,6 +1723,7 @@
 
     <span class="kw">pub fn </span>add_streaming_chunk_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, chunk: ChunkChoice) {
         <span class="macro">get_mut_group!</span>(<span class="self">self</span>).chat_streaming_chunks.push(chunk);
+        <span class="self">self</span>.update_time_info();
     }
 
     <span class="kw">pub fn </span>add_streaming_completion_chunk_choice_to_group(<span class="kw-2">&amp;</span><span class="self">self</span>, chunk: CompletionChunkChoice) {
@@ -1891,6 +1895,7 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         seq: <span class="kw-2">&amp;</span>Sequence,
         model: String,
+        usage_opt: <span class="prelude-ty">Option</span>&lt;Usage&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(), Box&lt;SendError&lt;Response&gt;&gt;&gt; {
         <span class="kw">if </span><span class="self">self</span>.chat_streaming_chunks.len() == <span class="self">self</span>.n_choices &amp;&amp; <span class="self">self</span>.is_streaming {
             <span class="kw">let </span><span class="kw-2">mut </span>swap_streaming_chunks = <span class="macro">vec!</span>[];
@@ -1905,6 +1910,7 @@
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: <span class="string">"chat.completion.chunk"</span>.to_string(),
+                    usage: usage_opt,
                 }))
                 .<span class="kw">await</span><span class="question-mark">?</span>;
         } <span class="kw">else if </span><span class="self">self</span>.completion_streaming_chunks.len() == <span class="self">self</span>.n_choices &amp;&amp; <span class="self">self</span>.is_streaming {

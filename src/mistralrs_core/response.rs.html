@@ -333,7 +333,8 @@
 <a href="#332" id="332">332</a>
 <a href="#333" id="333">333</a>
 <a href="#334" id="334">334</a>
-<a href="#335" id="335">335</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     error::Error,
     fmt::{Debug, Display},
 };
@@ -489,6 +490,7 @@
     <span class="kw">pub </span>model: String,
     <span class="kw">pub </span>system_fingerprint: String,
     <span class="kw">pub </span>object: String,
+    <span class="kw">pub </span>usage: <span class="prelude-ty">Option</span>&lt;Usage&gt;,
 }
 
 <span class="macro">generate_repr!</span>(ChatCompletionChunkResponse);
