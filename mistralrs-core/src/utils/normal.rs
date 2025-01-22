@@ -1,5 +1,4 @@
 #[allow(dead_code)]
-
 use std::{fmt::Display, str::FromStr};
 
 use anyhow::Result;
