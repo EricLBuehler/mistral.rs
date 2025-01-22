@@ -557,7 +557,13 @@
 <a href="#556" id="556">556</a>
 <a href="#557" id="557">557</a>
 <a href="#558" id="558">558</a>
-<a href="#559" id="559">559</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
 <span class="kw">use </span>engine::Engine;
@@ -928,8 +934,14 @@
 
         <span class="kw">let </span>engine_id = ENGINE_ID.fetch_add(<span class="number">1</span>, atomic::Ordering::SeqCst);
 
+        <span class="comment">// Determine if the current runtime is multi-threaded, as blocking operations are not allowed in single-threaded mode
+        </span><span class="kw">let </span>is_multi_threaded = tokio::runtime::Handle::try_current()
+            .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
+
         <span class="comment">// Do a dummy run
-        </span><span class="kw">if </span><span class="macro">matches!</span>(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
+        </span><span class="kw">if </span>is_multi_threaded
+            &amp;&amp; <span class="macro">matches!</span>(category, ModelCategory::Text | ModelCategory::Vision { .. })
+        {
             <span class="kw">let </span>clone_sender = sender.read().unwrap().clone();
             tokio::task::block_in_place(|| {
                 <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = channel(<span class="number">1</span>);
