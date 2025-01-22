@@ -22,7 +22,7 @@ axum = { version = "0.7.4", features = ["tokio"] }
 tower-http = { version = "0.5.1", features = ["cors"]}
 utoipa = { version = "4.2", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "7.1.0", features = ["axum"]}
-mistralrs-core = { version = "0.3.5", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.4.0", path = "../mistralrs-core" }
 indexmap.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
