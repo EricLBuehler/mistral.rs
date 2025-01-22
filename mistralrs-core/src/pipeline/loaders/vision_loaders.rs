@@ -12,7 +12,7 @@ use pyo3::pyclass;
 use regex::Regex;
 use serde::Deserialize;
 
-use super::{DeviceMappedModelLoader, NormalLoadingMetadata};
+use super::{DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
@@ -1652,6 +1652,9 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         };
 
         Ok(Box::new(cfg))
+    }
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
     }
 }
 

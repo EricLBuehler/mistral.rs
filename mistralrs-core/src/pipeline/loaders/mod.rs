@@ -13,6 +13,7 @@ use std::{
 use anyhow::{Context, Result};
 use as_any::AsAny;
 use candle_core::{DType, Device};
+use itertools::Itertools;
 use mistralrs_quant::IsqType;
 use tokio::sync::Mutex;
 
@@ -22,7 +23,7 @@ pub use normal_loaders::{
     Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 
-use tracing::warn;
+use tracing::{info, warn};
 pub use vision_loaders::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2VLLoader,
     VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
@@ -431,6 +432,19 @@ impl AutoDeviceMapParams {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum NonMappedSubModel {
+    Vision,
+}
+
+impl Display for NonMappedSubModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Vision => write!(f, "vision"),
+        }
+    }
+}
+
 fn calculate_key_block_shape(
     model_config: &dyn ModelConfigLike,
     dtype: DType,
@@ -485,6 +499,9 @@ pub trait DeviceMappedModelLoader {
         dtype: DType,
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>>;
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        None
+    }
     fn num_layers(&self, config: &str) -> Result<usize>;
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;
 
@@ -584,6 +601,16 @@ pub trait DeviceMappedModelLoader {
         layer_sizes_in_bytes.reverse();
 
         let mut device_layers = Vec::new();
+
+        info!("Using automatic device mapping parameters: {params}.");
+        if let Some(sub_models) = self.non_mapped_sub_models() {
+            let (_, last) = per_layer_avail.last().unwrap();
+            info!(
+                "The following sub-models will not be device mapped and will be loaded on {}: {}",
+                last.device_pretty_repr(),
+                sub_models.iter().map(|x| x.to_string()).join(", ")
+            );
+        }
 
         let mut current_ordinal = 0;
         let mut current_layer = 0;
