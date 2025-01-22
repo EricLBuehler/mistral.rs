@@ -763,7 +763,36 @@
 <a href="#762" id="762">762</a>
 <a href="#763" id="763">763</a>
 <a href="#764" id="764">764</a>
-<a href="#765" id="765">765</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
 <span class="kw">mod </span>normal_loaders;
 <span class="kw">mod </span>vision_loaders;
 
@@ -778,6 +807,7 @@
 <span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>as_any::AsAny;
 <span class="kw">use </span>candle_core::{DType, Device};
+<span class="kw">use </span>itertools::Itertools;
 <span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">use </span>tokio::sync::Mutex;
 
@@ -787,7 +817,7 @@
     Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 
-<span class="kw">use </span>tracing::warn;
+<span class="kw">use </span>tracing::{info, warn};
 <span class="kw">pub use </span>vision_loaders::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2VLLoader,
     VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
@@ -1171,10 +1201,10 @@
 }
 
 <span class="kw">impl </span>AutoDeviceMapParams {
-    <span class="kw">pub const </span>DEFAULT_MAX_SEQ_LEN: usize = <span class="number">16 </span>* <span class="number">1024</span>;
+    <span class="kw">pub const </span>DEFAULT_MAX_SEQ_LEN: usize = <span class="number">4 </span>* <span class="number">1024</span>;
     <span class="kw">pub const </span>DEFAULT_MAX_BATCH_SIZE: usize = <span class="number">1</span>;
     <span class="kw">pub const </span>DEFAULT_MAX_NUM_IMAGES: usize = <span class="number">1</span>;
-    <span class="kw">pub const </span>DEFAULT_MAX_IMAGE_LENGTH: usize = <span class="number">2 </span>* <span class="number">1024</span>;
+    <span class="kw">pub const </span>DEFAULT_MAX_IMAGE_LENGTH: usize = <span class="number">1024</span>;
 
     <span class="kw">pub fn </span>default_text() -&gt; <span class="self">Self </span>{
         <span class="self">Self</span>::Text {
@@ -1192,6 +1222,19 @@
                 <span class="self">Self</span>::DEFAULT_MAX_IMAGE_LENGTH,
                 <span class="self">Self</span>::DEFAULT_MAX_IMAGE_LENGTH,
             ),
+        }
+    }
+}
+
+<span class="attr">#[derive(Clone, Debug)]
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>NonMappedSubModel {
+    Vision,
+}
+
+<span class="kw">impl </span>Display <span class="kw">for </span>NonMappedSubModel {
+    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
+        <span class="kw">match </span><span class="self">self </span>{
+            <span class="self">Self</span>::Vision =&gt; <span class="macro">write!</span>(f, <span class="string">"vision"</span>),
         }
     }
 }
@@ -1250,6 +1293,9 @@
         dtype: DType,
         weight_pack_factor: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt;;
+    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
+        <span class="prelude-val">None
+    </span>}
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
     <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt;;
 
@@ -1350,6 +1396,16 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>device_layers = Vec::new();
 
+        <span class="macro">info!</span>(<span class="string">"Using automatic device mapping parameters: {params}."</span>);
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(sub_models) = <span class="self">self</span>.non_mapped_sub_models() {
+            <span class="kw">let </span>(<span class="kw">_</span>, last) = per_layer_avail.last().unwrap();
+            <span class="macro">info!</span>(
+                <span class="string">"The following sub-models will not be device mapped and will be loaded on {}: {}"</span>,
+                last.device_pretty_repr(),
+                sub_models.iter().map(|x| x.to_string()).join(<span class="string">", "</span>)
+            );
+        }
+
         <span class="kw">let </span><span class="kw-2">mut </span>current_ordinal = <span class="number">0</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>current_layer = <span class="number">0</span>;
         <span class="kw">let </span>per_layer_avail_cpy = per_layer_avail.clone();
@@ -1392,7 +1448,9 @@
 
                 <span class="comment">// Device w/ ordinal 0 carries the non-mapped things
                 </span><span class="kw">if </span>current_ordinal == <span class="number">0 </span>{
-                    used_capacity += non_mapped_size_in_bytes + non_mapped_max_act_size_in_bytes;
+                    <span class="comment">// Ensure the activations are properly handled
+                    </span>used_capacity = used_capacity.max(non_mapped_max_act_size_in_bytes);
+                    used_capacity += non_mapped_size_in_bytes;
                 }
 
                 <span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>last) = layer_sizes_in_bytes.last() {

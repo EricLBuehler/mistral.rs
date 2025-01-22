@@ -905,7 +905,8 @@
 <a href="#904" id="904">904</a>
 <a href="#905" id="905">905</a>
 <a href="#906" id="906">906</a>
-<a href="#907" id="907">907</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -1199,11 +1200,6 @@
             mapper = DeviceMapSetting::Map(new);
         }
 
-        <span class="macro">info!</span>(
-            <span class="string">"Model config: {:?}"</span>,
-            <span class="self">self</span>.inner
-                .get_config_repr(<span class="kw-2">&amp;</span>config, <span class="self">self</span>.config.use_flash_attn)<span class="question-mark">?
-        </span>);
         <span class="kw">let </span>pipeline_mapper = mapper.into_mapper(
             <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
             device,
@@ -1228,6 +1224,12 @@
             <span class="macro">warn!</span>(<span class="string">"Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention."</span>);
             paged_attn_config = <span class="prelude-val">None</span>;
         }
+
+        <span class="macro">info!</span>(
+            <span class="string">"Model config: {:?}"</span>,
+            <span class="self">self</span>.inner
+                .get_config_repr(<span class="kw-2">&amp;</span>config, <span class="self">self</span>.config.use_flash_attn)<span class="question-mark">?
+        </span>);
 
         <span class="kw">let </span><span class="kw-2">mut </span>loading_isq = in_situ_quant.is_some() || <span class="self">self</span>.config.from_uqff.is_some();
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>topology) = <span class="self">self</span>.config.topology {
