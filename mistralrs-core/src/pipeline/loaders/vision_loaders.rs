@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
 
-use super::{DeviceMappedModelLoader, NonMappedSubModel, NonMappedSubModel, NormalLoadingMetadata};
+use super::{DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
