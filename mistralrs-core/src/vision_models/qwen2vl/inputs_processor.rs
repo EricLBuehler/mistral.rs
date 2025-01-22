@@ -166,7 +166,6 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 text_models_inputs_processor::InputMetadata {
                     input,
                     positions,
-                    positions_kernel,
                     context_lens,
                     position_ids,
                     paged_attn_meta,
@@ -262,6 +261,9 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                             video_grid_thw,
                             rows: _,
                             cols: _,
+                            pixel_values_list: _,
+                            tgt_sizes: _,
+                            image_sizes_all: _,
                         } = self
                             .preprocess(
                                 seq.clone_images()
@@ -475,7 +477,6 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
             context_lens,
             position_ids,
             pixel_values,
@@ -689,6 +690,9 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 video_grid_thw: None,
                 rows: None,
                 cols: None,
+                pixel_values_list: None,
+                tgt_sizes: None,
+                image_sizes_all: None,
             });
         }
 
@@ -725,6 +729,9 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 video_grid_thw: Some(vision_grid_thw),
                 rows: None,
                 cols: None,
+                pixel_values_list: None,
+                tgt_sizes: None,
+                image_sizes_all: None,
             });
         }
         unreachable!()

@@ -52,6 +52,7 @@ pub enum VisionArchitecture {
     VLlama,
     Qwen2VL,
     Idefics3,
+    MiniCpmO,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
@@ -64,6 +65,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
             VisionArchitecture::VLlama => VisionLoaderType::VLlama,
             VisionArchitecture::Qwen2VL => VisionLoaderType::Qwen2VL,
             VisionArchitecture::Idefics3 => VisionLoaderType::Idefics3,
+            VisionArchitecture::MiniCpmO => VisionLoaderType::MiniCpmO,
         }
     }
 }

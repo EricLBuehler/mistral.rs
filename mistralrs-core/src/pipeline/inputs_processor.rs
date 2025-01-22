@@ -123,7 +123,6 @@ pub mod text_models_inputs_processor {
     pub struct InputMetadata {
         pub input: Tensor,
         pub positions: Vec<usize>,
-        pub positions_kernel: Tensor,          // [bs, seq len]
         pub context_lens: Vec<(usize, usize)>, // (start index, len)
         pub position_ids: Vec<usize>,
         pub paged_attn_meta: Option<PagedAttentionInputMetadata>, // For paged attention
@@ -243,26 +242,6 @@ pub mod text_models_inputs_processor {
             }
         }
 
-        let mut tmp = Vec::new();
-        if last_n_context_len.is_some() {
-            for pos in (0..seqs_tensors.len())
-                .map(|i| {
-                    (*seqlen_offsets.get(i).unwrap() as i64
-                        ..*seqlen_offsets.get(i).unwrap() as i64 + max_len as i64)
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>()
-            {
-                tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
-            }
-        } else {
-            for pos in (0..seqs_tensors.len())
-                .map(|_| (0..max_len).map(|x| x as i64).collect::<Vec<_>>())
-                .collect::<Vec<_>>()
-            {
-                tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
-            }
-        }
         let max_q = *seqlens_q.iter().max().unwrap();
         let max_k = *seqlens_k.iter().max().unwrap();
         let seqlens_q = Tensor::new(seqlens_q, device)?
@@ -273,8 +252,7 @@ pub mod text_models_inputs_processor {
             .to_dtype(DType::F32)?
             .cumsum(0)?
             .to_dtype(DType::U32)?;
-        //dbg!(&seqlens_q, &seqlens_k, &seqlen_offsets, &position_ids);
-        let positions_kernel = Tensor::cat(&tmp, 0)?;
+
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
         // Only use matmul via f16 if prompt and seqlen > 512
         if input.dim(1)? > VIA_F16_TOK_THRESHOLD {
@@ -345,7 +323,6 @@ pub mod text_models_inputs_processor {
         Ok(InputMetadata {
             input,
             positions: seqlen_offsets,
-            positions_kernel,
             context_lens,
             position_ids,
             paged_attn_meta,
@@ -433,13 +410,7 @@ pub mod text_models_inputs_processor {
                 paged_attn_context_lens.push(paged_attn_context_len);
             }
         }
-        let mut tmp = Vec::new();
-        for pos in (0..seqs_tensors.len())
-            .map(|i| vec![*seqlen_offsets.get(i).unwrap() as i64])
-            .collect::<Vec<_>>()
-        {
-            tmp.push(Tensor::from_slice(&pos, pos.len(), device)?.unsqueeze(0)?);
-        }
+
         let max_q = *seqlens_q.iter().max().unwrap();
         let max_k = *seqlens_k.iter().max().unwrap();
         let seqlens_q = Tensor::new(seqlens_q, device)?
@@ -450,8 +421,7 @@ pub mod text_models_inputs_processor {
             .to_dtype(DType::F32)?
             .cumsum(0)?
             .to_dtype(DType::U32)?;
-        //dbg!(&seqlens_q, &seqlens_k, &seqlen_offsets, &position_ids);
-        let positions_kernel = Tensor::cat(&tmp, 0)?;
+
         set_use_matmul_via_f16(false);
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
@@ -509,7 +479,6 @@ pub mod text_models_inputs_processor {
         Ok(InputMetadata {
             input: Tensor::cat(&seqs_tensors, 0).unwrap(),
             positions: seqlen_offsets,
-            positions_kernel,
             context_lens,
             position_ids,
             paged_attn_meta,
@@ -652,8 +621,6 @@ pub mod text_models_inputs_processor {
         pub input_ids_full: Option<Tensor>,
         pub seqlen_offsets: Vec<usize>,
         pub seqlen_offsets_full: Option<Vec<usize>>,
-        pub seqlen_offsets_kernel: Tensor,
-        pub seqlen_offsets_kernel_full: Option<Tensor>,
         pub context_lens: Vec<(usize, usize)>,
         pub position_ids: Vec<usize>,
         pub paged_attn_meta: Option<PagedAttentionInputMetadata>,
@@ -714,7 +681,6 @@ pub mod text_models_inputs_processor {
                                 InputMetadata {
                                     input: input_ids_full,
                                     positions: seqlen_offsets_full,
-                                    positions_kernel: seqlen_offsets_kernel_full,
                                     context_lens: _,
                                     position_ids,
                                     paged_attn_meta: _,
@@ -727,7 +693,6 @@ pub mod text_models_inputs_processor {
                                 InputMetadata {
                                     input: input_ids,
                                     positions: seqlen_offsets,
-                                    positions_kernel: seqlen_offsets_kernel,
                                     context_lens,
                                     position_ids: _,
                                     paged_attn_meta,
@@ -740,8 +705,6 @@ pub mod text_models_inputs_processor {
                             input_ids_full: Some(input_ids_full),
                             seqlen_offsets,
                             seqlen_offsets_full: Some(seqlen_offsets_full),
-                            seqlen_offsets_kernel,
-                            seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel_full),
                             context_lens,
                             position_ids,
                             paged_attn_meta,
@@ -775,7 +738,6 @@ pub mod text_models_inputs_processor {
                                 InputMetadata {
                                     input: input_ids,
                                     positions: seqlen_offsets,
-                                    positions_kernel: seqlen_offsets_kernel,
                                     context_lens,
                                     position_ids,
                                     paged_attn_meta,
@@ -788,8 +750,6 @@ pub mod text_models_inputs_processor {
                             input_ids_full: Some(input_ids),
                             seqlen_offsets: seqlen_offsets.clone(),
                             seqlen_offsets_full: Some(seqlen_offsets),
-                            seqlen_offsets_kernel: seqlen_offsets_kernel.clone(),
-                            seqlen_offsets_kernel_full: Some(seqlen_offsets_kernel),
                             context_lens,
                             position_ids,
                             paged_attn_meta,
@@ -823,7 +783,6 @@ pub mod text_models_inputs_processor {
                                 InputMetadata {
                                     input: input_ids,
                                     positions: seqlen_offsets,
-                                    positions_kernel: seqlen_offsets_kernel,
                                     context_lens,
                                     position_ids,
                                     paged_attn_meta,
@@ -836,8 +795,6 @@ pub mod text_models_inputs_processor {
                             input_ids_full: None,
                             seqlen_offsets,
                             seqlen_offsets_full: None,
-                            seqlen_offsets_kernel,
-                            seqlen_offsets_kernel_full: None,
                             context_lens,
                             position_ids,
                             paged_attn_meta,
@@ -872,7 +829,6 @@ pub mod text_models_inputs_processor {
                                 InputMetadata {
                                     input: input_ids,
                                     positions: seqlen_offsets,
-                                    positions_kernel: seqlen_offsets_kernel,
                                     context_lens,
                                     position_ids,
                                     paged_attn_meta,
@@ -885,8 +841,6 @@ pub mod text_models_inputs_processor {
                             input_ids_full: None,
                             seqlen_offsets,
                             seqlen_offsets_full: None,
-                            seqlen_offsets_kernel,
-                            seqlen_offsets_kernel_full: None,
                             context_lens,
                             position_ids,
                             paged_attn_meta,

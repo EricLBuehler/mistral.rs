@@ -12,6 +12,8 @@ use pyo3::pyclass;
 use regex::Regex;
 use serde::Deserialize;
 
+use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
+
 use super::{DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::device_map::DeviceMapper;
@@ -31,6 +33,7 @@ use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::{self, LLaVAProcessor};
 use crate::vision_models::llava_next::Model as LLaVANext;
 use crate::vision_models::llava_next_inputs_processor::{self, LLaVANextProcessor};
+use crate::vision_models::minicpmo;
 use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3, PHI3V_CLIP_CONFIG};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
@@ -46,7 +49,6 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
@@ -130,6 +132,8 @@ pub enum VisionLoaderType {
     Qwen2VL,
     #[serde(rename = "idefics3")]
     Idefics3,
+    #[serde(rename = "minicpmo")]
+    MiniCpmO,
 }
 
 impl FromStr for VisionLoaderType {
@@ -143,7 +147,8 @@ impl FromStr for VisionLoaderType {
             "vllama" => Ok(Self::VLlama),
             "qwen2vl" => Ok(Self::Qwen2VL),
             "idefics3" => Ok(Self::Idefics3),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`.")),
+            "minicpmo" => Ok(Self::MiniCpmO),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`.")),
         }
     }
 }
@@ -2240,5 +2245,274 @@ impl DeviceMappedModelLoader for Idefics3Loader {
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         Some(vec![NonMappedSubModel::Vision])
+    }
+}
+
+// ======================== MiniCpm-O loader
+
+/// [`VisionLoader`] for an MiniCpm-O model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct MiniCpmOLoader;
+
+pub struct MiniCpmOPrefixer;
+
+impl VisionPromptPrefixer for MiniCpmOPrefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        format!("(<image>./</image>){prompt}")
+    }
+}
+
+impl VisionModelLoader for MiniCpmOLoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: VarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let mut config: MiniCpmOConfig = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(MiniCpmOModel::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut config: MiniCpmOConfig = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        processor_config: Option<ProcessorConfig>,
+        preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(MiniCpmOProcessor::new(
+            processor_config.unwrap_or_default(),
+            preprocessor_config,
+            max_edge,
+        ))
+    }
+    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
+        let config: MiniCpmOConfig = serde_json::from_str(config)?;
+        // We only apply device mapping to text model
+        Ok(config.text_config.num_hidden_layers)
+    }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(MiniCpmOPrefixer)
+    }
+}
+
+impl IsqModelLoader for MiniCpmOLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"llm.lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"llm.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"llm.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+}
+
+impl DeviceMappedModelLoader for MiniCpmOLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
+
+        let num_patches = (cfg.vision_config.image_size / cfg.vision_config.patch_size).pow(2);
+        let img_seq_len = (num_patches + 1) * max_num_images;
+
+        let max_text_attn = {
+            // This model injects the vision information directly into the input embeddings
+            let max_seq_len = img_seq_len + max_seq_len;
+            max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
+        };
+
+        Ok(max_text_attn)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Vision {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
+
+        let num_patches = (cfg.vision_config.image_size / cfg.vision_config.patch_size).pow(2);
+        let img_seq_len = num_patches + 1;
+
+        let max_vision_attn = {
+            // do_image_splitting = true
+            let images_factor = 5;
+
+            (max_batch_size * images_factor * max_num_images)
+                * cfg.vision_config.num_attention_heads
+                * img_seq_len
+                * img_seq_len
+        };
+
+        Ok(max_vision_attn)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
+        let text_elems = {
+            let cfg = &cfg.text_config;
+
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+
+        let vision_transformer = {
+            let cfg = &cfg.vision_config;
+
+            let post_layernorm = cfg.hidden_size;
+
+            let conv_config = Conv2dConfig {
+                stride: cfg.patch_size,
+                ..Default::default()
+            };
+            let patch_embedding = cfg.num_channels * cfg.hidden_size / conv_config.groups
+                * cfg.patch_size
+                * cfg.patch_size;
+
+            let num_patches_per_side = cfg.image_size / cfg.patch_size;
+            let num_patches = num_patches_per_side.pow(2);
+            let position_embedding = num_patches * cfg.hidden_size;
+
+            let layer_elems = {
+                let layer_norm_1 = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
+                let layer_norm_2 = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
+
+                let fc1 = cfg.hidden_size * cfg.intermediate_size + cfg.intermediate_size;
+                let fc2 = cfg.intermediate_size * cfg.hidden_size + cfg.hidden_size;
+
+                let q_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                let k_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                let v_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                let o_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+
+                layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
+            };
+
+            post_layernorm + patch_embedding + position_embedding + layer_elems
+        };
+
+        let elems = text_elems + vision_transformer;
+
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<Vec<usize>> {
+        let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
+        let cfg = cfg.text_config;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
+        Ok(cfg.text_config.num_hidden_layers)
+    }
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+        };
+
+        Ok(Box::new(cfg))
     }
 }

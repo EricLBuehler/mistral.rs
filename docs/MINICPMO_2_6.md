@@ -1,8 +1,11 @@
-# Llama 3.2 Vision Model: [`meta-llama/Llama-3.2-11B-Vision-Instruct`](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct)
+# MiniCPM-O 2.6 Model: [`openbmb/MiniCPM-o-2_6`](https://huggingface.co/openbmb/MiniCPM-o-2_6)
 
-Mistral.rs supports the Llama 3.2 vision model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
+Mistral.rs supports the MiniCPM-O 2.6 model, with examples in the Rust, Python, and HTTP APIs. ISQ quantization is supported to allow running the model with less memory requirements.
 
-UQFF quantizations are also available.
+UQFF quantizations are coming soon.
+
+> [!NOTE]
+> Only the vision portion of this model has been implemented. No audio features are supported yet.
 
 The Python and HTTP APIs support sending images as:
 - URL
@@ -11,30 +14,23 @@ The Python and HTTP APIs support sending images as:
 
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
-> Note: Some examples use the [Cephalo Llama 3.2 model](lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k), a member of the [Cephalo](https://huggingface.co/collections/lamm-mit/cephalo-664f3342267c4890d2f46b33) model collection. This model is finetune of Llama 3.2 with enhanced capabilities in scientific images. To use the base Llama 3.2 Vision model, simply use the [associated model ID](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct).
-
-> Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters. *The text model has 40 layers*.
-
 ## ToC
 - [Interactive mode](#interactive-mode)
 - [HTTP server](#http-server)
 - [Rust API](#rust)
 - [Python API](#python)
-- [UQFF models](#uqff-models)
 
 ## Interactive mode
 
 Mistral.rs supports interactive mode for vision models! It is an easy way to interact with the model.
 
-https://github.com/user-attachments/assets/4d11c35c-9ea2-42b8-8cab-5f7e8e2ee9ff
-
-1) Start up interactive mode with the Llama 3.2 model
+1) Start up interactive mode with the MiniCPM-O 2.6 Model model
 
 > [!NOTE]
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --features ... --release -- -i --isq Q4K vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+cargo run --features ... --release -- -i --isq Q4K vision-plain -m openbmb/MiniCPM-o-2_6 -a minicpmo
 ```
 
 2) Say hello!
@@ -52,18 +48,9 @@ How can I assist you today?
 The image shows a close-up view of a rose flower with dew drops on its petals. The rose is in full bloom, with its petals unfolding and displaying vibrant pink coloration. The dew drops on the petals create a delicate, glistening effect, adding to the overall visual appeal of the flower. The background is blurred, focusing attention on the intricate details of the rose.
 ```
 
-4) Continue the chat by passing another image.
-```
-> Hello!
-How can I assist you today?
-> \image https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Rosa_Precious_platinum.jpg/220px-Rosa_Precious_platinum.jpg What is this image?
-The image shows a close-up view of a rose flower with dew drops on its petals. The rose is in full bloom, with its petals unfolding and displaying vibrant pink coloration. The dew drops on the petals create a delicate, glistening effect, adding to the overall visual appeal of the flower. The background is blurred, focusing attention on the intricate details of the rose.
-> \image https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg What mountain is this?
-The image appears to be of Mount Washington, which is the highest peak in the Northeastern United States. It is located in the White Mountains of New Hampshire and is known for its extreme weather conditions, including high winds and low temperatures. The mountain's summit reaches an elevation of approximately 6,288 feet (1,917 meters) above sea level.
-```
 
 ## HTTP server
-You can find this example [here](../examples/server/llama_vision.py).
+You can find this example [here](../examples/server/minicpmo_2_6.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -105,7 +92,7 @@ Overall, the image showcases the diverse geological and ecological features of M
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
+cargo run --release --features ... -- --port 1234 --isq Q4K vision-plain -m openbmb/MiniCPM-o-2_6 -a minicpmo
 ```
 
 2) Send a request
@@ -116,7 +103,7 @@ from openai import OpenAI
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 completion = client.chat.completions.create(
-    model="llama-vision",
+    model="minicpmo_2_6",
     messages=[
         {
             "role": "user",
@@ -129,7 +116,7 @@ completion = client.chat.completions.create(
                 },
                 {
                     "type": "text",
-                    "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
+                    "text": "(<image>./</image>) What is shown in this image? Write a detailed response analyzing the scene.",
                 },
             ],
         },
@@ -150,13 +137,13 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/llama_vision/main.rs).
+You can find this example [here](../mistralrs/examples/minicpmo_2_6/main.rs).
 
 ```rust
 use anyhow::Result;
 use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, VisionModelBuilder};
 
-const MODEL_ID: &str = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k";
+const MODEL_ID: &str = "openbmb/MiniCPM-o-2_6";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -196,7 +183,7 @@ async fn main() -> Result<()> {
 ---
 
 ## Python
-You can find this example [here](../examples/python/llama_vision.py).
+You can find this example [here](../examples/python/minicpmo_2_6.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -205,18 +192,18 @@ This example demonstrates loading and sending a chat completion request with an 
 ```py
 from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
-MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
+MODEL_ID = "openbmb/MiniCPM-o-2_6"
 
 runner = Runner(
     which=Which.VisionPlain(
         model_id=MODEL_ID,
-        arch=VisionArchitecture.VLlama,
+        arch=VisionArchitecture.MiniCpmO,
     ),
 )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="llama-vision",
+        model="minicpmo_2_6",
         messages=[
             {
                 "role": "user",
@@ -229,7 +216,7 @@ res = runner.send_chat_completion_request(
                     },
                     {
                         "type": "text",
-                        "text": "<|image|>What is shown in this image? Write a detailed response analyzing the scene.",
+                        "text": "(<image>./</image>) What is shown in this image? Write a detailed response analyzing the scene.",
                     },
                 ],
             }
@@ -246,15 +233,3 @@ print(res.usage)
 
 - You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).
 - You can find an example of loading an [image locally here](../examples/python/phi3v_local_img.py).
-
-## UQFF models
-[UQFF](UQFF.md) is a quantized file format similar to GGUF based on ISQ. It removes the memory and compute requirements that come with ISQ by providing ready-made quantizations! The key advantage over GGUF is the flexibility to store multiple quantizations in one file.
-
-We provide UQFF files ([EricB/Llama-3.2-11B-Vision-Instruct-UQFF](https://huggingface.co/EricB/Llama-3.2-11B-Vision-Instruct-UQFF)) for this Llama 3.2 Vision model.
-
-You can use these UQFF files to easily use quantized versions of Llama 3.2 Vision.
-
-For example:
-```
-./mistralrs-server -i vision-plain -m meta-llama/Llama-3.2-11B-Vision-Instruct -a vllama --from-uqff EricB/Llama-3.2-11B-Vision-Instruct-UQFF/llama-3.2-11b-vision-q4k.uqff
-```

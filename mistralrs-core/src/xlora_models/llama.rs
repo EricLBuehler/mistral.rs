@@ -48,7 +48,6 @@ impl CausalSelfAttention {
         x: &Tensor,
         mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut LayerCaches,
         scalings: Option<Tensor>,
@@ -87,37 +86,25 @@ impl CausalSelfAttention {
             v = v.to_dtype(original_dtype)?;
         }
 
-        let mut q = q.reshape((b_sz * seq_len, self.num_attention_heads, self.head_dim))?;
-        let mut k = k.reshape((b_sz * seq_len, self.num_key_value_heads, self.head_dim))?;
-        let v = if seq_len != 1 {
-            v.reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-                .transpose(1, 2)?
+        let (q, k, v) = if seq_len != 1 {
+            let q = q
+                .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
         } else {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            v.reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
+            let q = q.reshape((b_sz, self.num_attention_heads, seq_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?;
+            (q, k, v)
         };
 
-        self.rotary_emb
-            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-
-        if q.rank() == 3 && seq_len != 1 {
-            q = q
-                .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        } else if q.rank() == 3 {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            q = q
-                .reshape((b_sz, self.num_attention_heads, seq_len, self.head_dim))?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, self.num_key_value_heads, seq_len, self.head_dim))?
-                .contiguous()?;
-        }
+        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
         let (k, v) =
             crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v, false)?;
@@ -333,7 +320,6 @@ impl Block {
         x: &Tensor,
         mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: &mut LayerCaches,
         scalings: Option<Tensor>,
@@ -347,7 +333,6 @@ impl Block {
             &x,
             mask,
             seqlen_offsets,
-            start_offsets_kernel,
             block_idx,
             kv_cache,
             scalings.clone(),
@@ -439,7 +424,6 @@ impl XLoraLlama {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         scalings: Option<Tensor>,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -472,7 +456,6 @@ impl XLoraLlama {
                 &x,
                 &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
                 block_idx,
                 &mut cache,
                 scalings.clone(),
@@ -495,8 +478,6 @@ impl XLoraLlama {
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        start_offsets_kernel: Tensor,
-        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
@@ -509,8 +490,6 @@ impl XLoraLlama {
                 input_ids_full,
                 seqlen_offsets,
                 seqlen_offsets_full,
-                &start_offsets_kernel,
-                &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
                 &vec![usize::MAX; context_lens.len()],
@@ -523,7 +502,6 @@ impl XLoraLlama {
                     .inner_forward(
                         input_ids_full,
                         seqlen_offsets_full,
-                        start_offsets_kernel_full,
                         Some(scalings),
                         true,
                         no_kv_cache,
@@ -544,7 +522,6 @@ impl XLoraLlama {
                     .inner_forward(
                         input_ids,
                         seqlen_offsets,
-                        start_offsets_kernel,
                         Some(scalings),
                         true,
                         no_kv_cache,
@@ -565,7 +542,6 @@ impl XLoraLlama {
                 .inner_forward(
                     input_ids,
                     seqlen_offsets,
-                    start_offsets_kernel,
                     None,
                     false,
                     no_kv_cache,
@@ -777,7 +753,6 @@ impl NormalModel for XLoraLlama {
         &self,
         _input_ids: &Tensor,
         _seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
@@ -791,8 +766,6 @@ impl NormalModel for XLoraLlama {
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        start_offsets_kernel: Tensor,
-        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         context_lens: Vec<(usize, usize)>,
@@ -805,8 +778,6 @@ impl NormalModel for XLoraLlama {
             input_ids_full,
             seqlen_offsets,
             seqlen_offsets_full,
-            start_offsets_kernel,
-            start_offsets_kernel_full,
             no_kv_cache,
             non_granular_state,
             context_lens,
@@ -879,7 +850,6 @@ impl ScalingsMaker for XLoraLlama {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -890,7 +860,6 @@ impl ScalingsMaker for XLoraLlama {
         self.inner_forward(
             input_ids,
             seqlen_offsets,
-            start_offsets_kernel,
             Some(scalings),
             is_full_pass,
             no_kv_cache,

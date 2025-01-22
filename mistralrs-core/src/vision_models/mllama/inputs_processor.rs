@@ -209,7 +209,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 text_models_inputs_processor::InputMetadata {
                     input,
                     positions,
-                    positions_kernel,
                     context_lens,
                     position_ids,
                     paged_attn_meta,
@@ -308,6 +307,9 @@ impl InputsProcessor for MLlamaImageProcessor {
                     video_grid_thw: _,
                     rows: _,
                     cols: _,
+                    pixel_values_list: _,
+                    tgt_sizes: _,
+                    image_sizes_all: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -366,11 +368,6 @@ impl InputsProcessor for MLlamaImageProcessor {
                 Err(e) => return Box::new(std::iter::once(Err(anyhow::Error::msg(e.to_string())))),
             };
 
-            // cross_attn_mask
-            //     .to_dtype(DType::F32).unwrap()
-            //     .to_device(&Device::Cpu).unwrap()
-            //     .write_npy("/home/ubuntu/dump/mistralrs/cross_attn_mask.npy").unwrap();
-
             (
                 Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
                 Some(Tensor::cat(&aspect_ratio_ids_accum, 0).unwrap()),
@@ -384,7 +381,6 @@ impl InputsProcessor for MLlamaImageProcessor {
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
             context_lens,
             position_ids,
             pixel_values,
@@ -581,13 +577,6 @@ impl MLlamaImageProcessor {
         let num_tiles_height = canvas_height / tile_size;
         let num_tiles_width = canvas_width / tile_size;
 
-        // dbg!(
-        //     canvas_height,
-        //     canvas_width,
-        //     num_tiles_height,
-        //     num_tiles_width
-        // );
-
         let (new_height, new_width) = Self::get_image_size_fit_to_canvas(
             image_height,
             image_width,
@@ -595,8 +584,6 @@ impl MLlamaImageProcessor {
             canvas_width,
             tile_size,
         );
-
-        // dbg!(new_height, new_width);
 
         Ok((
             image.resize_exact(new_width as u32, new_height as u32, filter),
@@ -768,19 +755,6 @@ impl ImagePreProcessor for MLlamaImageProcessor {
                 .as_ref()
                 .context("`do_resize=false` is not supported, need `size`!")?;
 
-            // {
-            //     let to_tensor_rescale = Transforms {
-            //         input: &ToTensorNoNorm,
-            //         inner_transforms: &[],
-            //     };
-            //     let image = image.apply(to_tensor_rescale, device)?;
-
-            //     image
-            //         .to_dtype(DType::F32)?
-            //         .to_device(&Device::Cpu)?
-            //         .write_npy("/home/ubuntu/dump/mistralrs/original_image.npy")?;
-            // }
-
             let (image, aspect_ratio) =
                 self.resize(image, size, max_image_tiles, config.resampling.to_filter()?)?;
 
@@ -793,17 +767,7 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             };
             let mut image = image.apply(to_tensor_rescale, device)?;
 
-            // image
-            //     .to_dtype(DType::F32)?
-            //     .to_device(&Device::Cpu)?
-            //     .write_npy("/home/ubuntu/dump/mistralrs/resize_image.npy")?;
-
             image = self.pad(&image, size, aspect_ratio)?;
-
-            // image
-            //     .to_dtype(DType::F32)?
-            //     .to_device(&Device::Cpu)?
-            //     .write_npy("/home/ubuntu/dump/mistralrs/pad_image.npy")?;
 
             let transforms = TensorTransforms {
                 inner_transforms: &[
@@ -826,18 +790,8 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             };
             image = <Tensor as ApplyTensorTransforms>::apply(&image, transforms, device)?;
 
-            // image
-            //     .to_dtype(DType::F32)?
-            //     .to_device(&Device::Cpu)?
-            //     .write_npy("/home/ubuntu/dump/mistralrs/rescale_norm_image.npy")?;
-
             let (num_tiles_height, num_tiles_width) = aspect_ratio;
             image = self.split_to_tiles(&image, num_tiles_height, num_tiles_width)?;
-
-            // image
-            //     .to_dtype(DType::F32)?
-            //     .to_device(&Device::Cpu)?
-            //     .write_npy("/home/ubuntu/dump/mistralrs/split_image.npy")?;
 
             sample_images.push(image);
             sample_aspect_ratios.push((num_tiles_height, num_tiles_width));
@@ -859,22 +813,6 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             device,
         )?;
 
-        // aspect_ratio_ids
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/aspect_ratio_ids.npy")?;
-
-        // aspect_ratio_mask
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/aspect_ratio_mask.npy")?;
-
-        // images
-        //     .to_dtype(DType::F32)?
-        //     .to_device(&Device::Cpu)?
-        //     .write_npy("/home/ubuntu/dump/mistralrs/packed_images.npy")?;
-        // dbg!(&num_tiles);
-
         Ok(PreprocessedImages {
             pixel_values: images,
             pixel_attention_mask: None,
@@ -887,6 +825,9 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             video_grid_thw: None,
             rows: None,
             cols: None,
+            pixel_values_list: None,
+            tgt_sizes: None,
+            image_sizes_all: None,
         })
     }
 }

@@ -54,10 +54,10 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
     ```
 
-- 🌟📷 Run the **Qwen2-VL** Model: [documentation and guide here](docs/QWEN2VL.md)
+- 🌟📷 Run the **MiniCPM-O 2.6** Model: [documentation and guide here](docs/MINICPMO_2_6.md)
 
     ```
-    ./mistralrs-server -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
+    ./mistralrs-server -i vision-plain -m openbmb/MiniCPM-o-2_6 -a minicpmo
     ```
 
 - 🤗📷 Run the **Smol VLM** Model: [documentation and guide here](docs/IDEFICS3.md)
@@ -171,6 +171,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Idefics 3|✅| |✅|✅|
 |DeepseekV2|✅| |✅| |
 |DeepseekV3|✅| |✅| |
+|MinCPM-O 2.6|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -439,6 +440,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `vllama`
 - `qwen2vl`
 - `idefics3`
+- `minicpmo`
 
 ### Supported GGUF architectures
 
@@ -537,6 +539,8 @@ Please submit more benchmarks via raising an issue!
 |Qwen2-VL| | |✅|
 |Idefics 3| | |✅|
 |Deepseek V2| | |✅|
+|Deepseek V3| | |✅|
+|MiniCPM-O 2.6| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -566,6 +570,8 @@ Please submit more benchmarks via raising an issue!
 |Qwen2-VL| | | |
 |Idefics 3| | | |
 |Deepseek V2| | | |
+|Deepseek V3| | | |
+|MiniCPM-O 2.6| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -588,6 +594,8 @@ Please submit more benchmarks via raising an issue!
 |Qwen2-VL| |
 |Idefics 3|✅|
 |Deepseek V2| |
+|Deepseek V3| |
+|MiniCPM-O 2.6| |
 
 
 ### Using derivative model
