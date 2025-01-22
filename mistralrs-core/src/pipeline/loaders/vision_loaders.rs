@@ -12,7 +12,7 @@ use pyo3::pyclass;
 use regex::Regex;
 use serde::Deserialize;
 
-use super::{DeviceMappedModelLoader, NormalLoadingMetadata};
+use super::{DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
@@ -462,6 +462,10 @@ impl DeviceMappedModelLoader for Phi3VLoader {
 
         Ok(Box::new(cfg))
     }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
 }
 
 // ======================== Idefics 2 loader
@@ -791,6 +795,10 @@ impl DeviceMappedModelLoader for Idefics2Loader {
 
         Ok(Box::new(cfg))
     }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
 }
 
 // ======================== LLaVANext Loader
@@ -1039,6 +1047,10 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
 
         Ok(Box::new(cfg))
     }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
 }
 
 // ======================== LLaVA Loader
@@ -1278,6 +1290,10 @@ impl DeviceMappedModelLoader for LLaVALoader {
         };
 
         Ok(Box::new(cfg))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
     }
 }
 
@@ -1653,6 +1669,10 @@ impl DeviceMappedModelLoader for VLlamaLoader {
 
         Ok(Box::new(cfg))
     }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
 }
 
 // ======================== Qwen2VL Loader
@@ -1936,6 +1956,10 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
 
         Ok(Box::new(cfg))
     }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
 }
 
 // ======================== Idefics 3 loader
@@ -2040,7 +2064,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
-        let cfg: Idefics2Config = serde_json::from_str(config)?;
+        let cfg: Idefics3Config = serde_json::from_str(config)?;
 
         let num_patches = (cfg.vision_config.image_size / cfg.vision_config.patch_size).pow(2);
         let img_seq_len = (num_patches + 1) * max_num_images;
@@ -2069,7 +2093,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
-        let cfg: Idefics2Config = serde_json::from_str(config)?;
+        let cfg: Idefics3Config = serde_json::from_str(config)?;
 
         let num_patches = (cfg.vision_config.image_size / cfg.vision_config.patch_size).pow(2);
         let img_seq_len = num_patches + 1;
@@ -2197,7 +2221,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         Ok(cfg.text_config.num_hidden_layers)
     }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg: Idefics2Config = serde_json::from_str(config)?;
+        let cfg: Idefics3Config = serde_json::from_str(config)?;
         let cfg = &cfg.text_config;
 
         let cfg = ModelConfigMetadata {
@@ -2206,11 +2230,15 @@ impl DeviceMappedModelLoader for Idefics3Loader {
             hidden_size: cfg.hidden_size,
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
-            sliding_window: cfg.sliding_window,
+            sliding_window: None,
             k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
             v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
         };
 
         Ok(Box::new(cfg))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
     }
 }
