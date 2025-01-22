@@ -7,10 +7,22 @@ The DeepSeek V3 is a mixture of expert (MoE) model.
 ```
 
 > [!NOTE]
+> The non-distill versions of the DeepSeek R1 models share the DeepSeek V3 architecture.
+
+> [!NOTE]
 > This models supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
 ```
 ./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-R1 --organization moqe
+```
+
+## Running the distill models
+
+The various [distillation](https://huggingface.co/collections/deepseek-ai/deepseek-r1-678e1e131c0169c0bc89728d) models can be run out of the box.
+```
+./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
 ```
 
 ## HTTP API
@@ -51,7 +63,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 runner = Runner(
     which=Which.Plain(
         model_id="deepseek-ai/DeepSeek-R1",
-        arch=Architecture.DeepseekV2,
+        arch=Architecture.DeepseekV3,
     ),
 )
 

@@ -146,7 +146,7 @@ This is a demo of interactive mode with streaming running Phi 3 128k mini with q
 
 https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-9006-4ec6ebc6473c
 
-## Support matrix
+## Architecture Support matrix
 
 > Note: See [supported models](#supported-models) for more information
 
@@ -170,6 +170,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Qwen2-VL|✅| |✅| |
 |Idefics 3|✅| |✅|✅|
 |DeepseekV2|✅| |✅| |
+|DeepseekV3|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -425,6 +426,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `gemma2`
 - `starcoder2`
 - `deepseekv2`
+- `deepseekv3`
 
 ### Architecture for vision models
 

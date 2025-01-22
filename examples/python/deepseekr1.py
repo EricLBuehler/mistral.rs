@@ -3,7 +3,7 @@ from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 runner = Runner(
     which=Which.Plain(
         model_id="deepseek-ai/DeepSeek-R1",
-        arch=Architecture.DeepseekV2,
+        arch=Architecture.DeepseekV3,
     ),
 )
 
