@@ -18,8 +18,8 @@ use std::{
 
 use crate::{
     utils::{
-        deserialize_tensor, serialize_tensor, version_is_compatible, BitWiseOp, LeftshiftOp,
-        HQFF_VERSION,
+        deserialize_tensor, fake_deserialize_tensor, serialize_tensor, version_is_compatible,
+        BitWiseOp, LeftshiftOp, UQFF_VERSION,
     },
     IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
@@ -644,7 +644,7 @@ impl QuantMethod for HqqLayer {
 // Serialization structure:
 //
 // -----------------------
-// HQFF version, u32, little endian
+// UQFF version, u32, little endian
 // -----------------------
 // ISQ type (2 for hqq), u8, little endian
 // -----------------------
@@ -687,7 +687,8 @@ impl QuantizedSerde for HqqLayer {
     fn serialize(&self) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
-        buffer.extend(&HQFF_VERSION.to_le_bytes());
+        // Version is always first!
+        buffer.extend(&UQFF_VERSION.to_le_bytes());
 
         // ISQ type for hqq is 2
         buffer.push(QuantizedSerdeType::Hqq as u8);
@@ -728,7 +729,7 @@ impl QuantizedSerde for HqqLayer {
     where
         Self: Sized,
     {
-        let mut buffer = Cursor::new(data.to_vec());
+        let mut buffer = Cursor::new(data);
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
@@ -757,6 +758,7 @@ impl QuantizedSerde for HqqLayer {
         }
         let w_shape = Shape::from_dims(&dims);
 
+        // TODO: keep this in sync with get_isq_type_from_uqff!
         let bits = HqqBits::try_from(buffer.read_u8()? as usize)?;
         let group_size = NonZeroUsize::try_from(buffer.read_u32::<LittleEndian>()? as usize)?;
         let axis = HqqAxis::try_from(buffer.read_u8()? as usize)?;
@@ -790,5 +792,49 @@ impl QuantizedSerde for HqqLayer {
             w_shape,
             cfg,
         }))
+    }
+}
+
+impl HqqLayer {
+    pub fn get_isq_type_from_uqff(data: Cow<[u8]>) -> Result<IsqType> {
+        let mut buffer = Cursor::new(data);
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Hqq as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Hqq as usize
+            );
+        }
+
+        let _has_bias = buffer.read_u8()? != 0;
+
+        fake_deserialize_tensor(&mut buffer)?;
+        fake_deserialize_tensor(&mut buffer)?;
+        fake_deserialize_tensor(&mut buffer)?;
+
+        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
+
+        let mut dims = Vec::with_capacity(n_dims);
+        for _ in 0..n_dims {
+            dims.push(buffer.read_u32::<LittleEndian>()? as usize)
+        }
+        let _w_shape = Shape::from_dims(&dims);
+
+        // TODO: keep this in sync with get_isq_type_from_uqff!
+        let bits = HqqBits::try_from(buffer.read_u8()? as usize)?;
+
+        match bits {
+            HqqBits::Eight => Ok(IsqType::HQQ8),
+            HqqBits::Four => Ok(IsqType::HQQ4),
+            HqqBits::One | HqqBits::Two | HqqBits::Three => {
+                candle_core::bail!("cannot convert hqq bits to isq type")
+            }
+        }
     }
 }

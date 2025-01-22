@@ -37,6 +37,7 @@ pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::ImatrixLayerStats;
 pub use unquantized::UnquantLinear;
+pub use utils::UQFF_QUANT_TYPE_OFFSET;
 
 use candle_nn::{Linear, Module, VarBuilder};
 use serde::{Deserialize, Serialize};
@@ -325,6 +326,30 @@ impl TryFrom<IsqType> for GgmlDType {
             }
         }
         Ok(tp)
+    }
+}
+
+impl TryFrom<GgmlDType> for IsqType {
+    type Error = candle_core::Error;
+
+    fn try_from(value: GgmlDType) -> Result<Self> {
+        match value {
+            GgmlDType::Q2K => Ok(Self::Q2K),
+            GgmlDType::Q3K => Ok(Self::Q3K),
+            GgmlDType::Q4K => Ok(Self::Q4K),
+            GgmlDType::Q5K => Ok(Self::Q5K),
+            GgmlDType::Q6K => Ok(Self::Q6K),
+            GgmlDType::Q4_0 => Ok(Self::Q4_0),
+            GgmlDType::Q4_1 => Ok(Self::Q4_1),
+            GgmlDType::Q5_0 => Ok(Self::Q5_0),
+            GgmlDType::Q5_1 => Ok(Self::Q5_1),
+            GgmlDType::Q8_0 => Ok(Self::Q8_0),
+            GgmlDType::Q8_1 => Ok(Self::Q8_1),
+            GgmlDType::Q8K => Ok(Self::Q8K),
+            GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 => {
+                candle_core::bail!("Expected valid GGML ISQ type.")
+            }
+        }
     }
 }
 

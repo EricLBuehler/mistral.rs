@@ -14,7 +14,7 @@ use candle_nn::Module;
 
 use crate::{
     generate_isq, generate_isq_imatrix,
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
+    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
@@ -161,7 +161,7 @@ impl QuantMethod for GgufMatMul {
 // Serialization structure:
 //
 // -----------------------
-// HQFF version, u32, little endian
+// UQFF version, u32, little endian
 // -----------------------
 // ISQ type (0 for GGUF), u8, little endian
 // -----------------------
@@ -217,7 +217,8 @@ impl QuantizedSerde for GgufMatMul {
 
                 let mut buffer = Vec::new();
 
-                buffer.extend(&HQFF_VERSION.to_le_bytes());
+                // Version is always first!
+                buffer.extend(&UQFF_VERSION.to_le_bytes());
 
                 // ISQ type for GGUF is 0
                 buffer.push(QuantizedSerdeType::Gguf as u8);
@@ -255,7 +256,7 @@ impl QuantizedSerde for GgufMatMul {
     }
 
     fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>> {
-        let mut buffer = Cursor::new(data.to_vec());
+        let mut buffer = Cursor::new(data);
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
@@ -274,6 +275,7 @@ impl QuantizedSerde for GgufMatMul {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        // TODO: keep this in sync with get_isq_type_from_uqff!
         let dtype = buffer.read_u32::<LittleEndian>()?;
         let dtype = match dtype {
             0 => GgmlDType::F32,
@@ -317,5 +319,51 @@ impl QuantizedSerde for GgufMatMul {
             w: QMatMul::QTensor(w.into()),
             b,
         }))
+    }
+}
+
+impl GgufMatMul {
+    pub fn get_isq_type_from_uqff(data: Cow<[u8]>) -> Result<IsqType> {
+        let mut buffer = Cursor::new(data);
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Gguf as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Gguf as usize
+            );
+        }
+
+        let _ = buffer.read_u32::<LittleEndian>()? as usize;
+
+        let _ = buffer.read_u8()? != 0;
+
+        let dtype = buffer.read_u32::<LittleEndian>()?;
+        let dtype = match dtype {
+            0 => GgmlDType::F32,
+            1 => GgmlDType::F16,
+            2 => GgmlDType::Q4_0,
+            3 => GgmlDType::Q4_1,
+            6 => GgmlDType::Q5_0,
+            7 => GgmlDType::Q5_1,
+            8 => GgmlDType::Q8_0,
+            9 => GgmlDType::Q8_1,
+            10 => GgmlDType::Q2K,
+            11 => GgmlDType::Q3K,
+            12 => GgmlDType::Q4K,
+            13 => GgmlDType::Q5K,
+            14 => GgmlDType::Q6K,
+            15 => GgmlDType::Q8K,
+            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+            30 => GgmlDType::BF16,
+            _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
+        };
+
+        IsqType::try_from(dtype)
     }
 }
