@@ -170,3 +170,7 @@ required-features = []
 [[example]]
 name = "deepseekr1"
 required-features = []
+
+[[example]]
+name = "minicpmo_2_6"
+required-features = []

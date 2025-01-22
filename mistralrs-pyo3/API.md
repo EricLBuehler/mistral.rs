@@ -39,6 +39,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `VLlama`
 - `Qwen2VL`
 - `Idefics3`
+- `MiniCpmO`
 
 ### Architecture for diffusion models
 - `Flux`
