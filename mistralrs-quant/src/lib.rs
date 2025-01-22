@@ -29,6 +29,7 @@ mod utils;
 
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use dummy::DummyLayer;
+use fp8::fp8_linear_b;
 pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;
 use gptq::gptq_linear;
@@ -42,6 +43,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub enum QuantMethodType {
+    #[serde(rename = "fp8")]
+    Fp8,
     #[serde(rename = "gptq")]
     Gptq,
     #[serde(rename = "unreachable")]
@@ -54,7 +57,8 @@ pub enum QuantMethodType {
 impl Display for QuantMethodType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Gptq => write!(f, "GPTQ"),
+            Self::Gptq => write!(f, "gptq"),
+            Self::Fp8 => write!(f, "fp8"),
             Self::Bitsandbytes => write!(f, "bnb"),
             Self::Unreachable => write!(f, "unreachable",),
         }
@@ -70,6 +74,9 @@ pub struct QuantizedConfig {
 
     // BNB
     pub bnb_4bit_quant_type: Option<String>,
+
+    // FP8
+    pub weight_block_size: Option<Vec<usize>>,
 
     pub quant_method: QuantMethodType,
 }
@@ -442,6 +449,7 @@ pub fn linear_no_bias(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Fp8 => fp8_linear_b(in_dim, out_dim, quant_conf, false, vb)?,
             QuantMethodType::Bitsandbytes => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
@@ -471,6 +479,7 @@ pub fn linear(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Fp8 => fp8_linear_b(in_dim, out_dim, quant_conf, true, vb)?,
             QuantMethodType::Bitsandbytes => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
             }
