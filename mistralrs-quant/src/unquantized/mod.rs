@@ -13,7 +13,7 @@ use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
+    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul, QuantMethod, QuantMethodConfig,
     QuantizedSerde, QuantizedSerdeType,
 };
@@ -296,7 +296,7 @@ impl QuantMethod for UnquantLinear {
 // Serialization structure:
 //
 // -----------------------
-// HQFF version, u32, little endian
+// UQFF version, u32, little endian
 // -----------------------
 // ISQ type (1 for unquantized), u8, little endian
 // -----------------------
@@ -317,7 +317,9 @@ impl QuantizedSerde for UnquantLinear {
     fn serialize(&self) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
-        buffer.extend(&HQFF_VERSION.to_le_bytes());
+        // Version is always first!
+
+        buffer.extend(&UQFF_VERSION.to_le_bytes());
 
         // ISQ type for unquant is 1
         buffer.push(QuantizedSerdeType::Unquant as u8);
@@ -340,7 +342,7 @@ impl QuantizedSerde for UnquantLinear {
     where
         Self: Sized,
     {
-        let mut buffer = Cursor::new(data.to_vec());
+        let mut buffer = Cursor::new(data);
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {
