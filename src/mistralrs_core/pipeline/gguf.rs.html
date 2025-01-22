@@ -791,7 +791,9 @@
 <a href="#790" id="790">790</a>
 <a href="#791" id="791">791</a>
 <a href="#792" id="792">792</a>
-<a href="#793" id="793">793</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -1101,7 +1103,9 @@
         <span class="kw">let </span><span class="kw-2">mut </span>readers = readers.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
         <span class="kw">let </span>model = Content::from_readers(<span class="kw-2">&amp;mut </span>readers)<span class="question-mark">?</span>;
-        model.print_metadata()<span class="question-mark">?</span>;
+        <span class="kw">if </span>!silent {
+            model.print_metadata()<span class="question-mark">?</span>;
+        }
         <span class="kw">let </span>arch = model.arch();
 
         <span class="comment">// If auto, convert to Map
