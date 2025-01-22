@@ -15,7 +15,6 @@ use crate::{
 };
 use candle_core::Tensor;
 use std::{
-    cmp::max,
     fmt::Display,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
