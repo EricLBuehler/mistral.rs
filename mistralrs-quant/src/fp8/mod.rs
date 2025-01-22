@@ -6,8 +6,8 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Linear, Module};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_nn::{Linear, Module, VarBuilder};
 use quantize::QuantizationResult;
 
 mod quantize;
@@ -18,7 +18,8 @@ use crate::{
         deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
         HQFF_VERSION,
     },
-    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
+    QuantizedSerdeType, UnquantLinear,
 };
 
 #[derive(Debug)]
@@ -290,4 +291,71 @@ impl QuantizedSerde for FP8Linear {
             dtype,
         }))
     }
+}
+
+pub fn fp8_linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    config: &QuantizedConfig,
+    bias: bool,
+    vb: VarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    // Handle the case where the layer is dummy (no tensors)
+    if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
+        let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
+    }
+
+    let weight_block_size = config
+        .weight_block_size
+        .as_ref()
+        .expect("FP8 requires weight_block_size in config");
+    if weight_block_size.len() != 2 {
+        candle_core::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
+    }
+    let weight = vb.get_with_hints_dtype(
+        (out_dim, in_dim),
+        "weight",
+        Default::default(),
+        DType::F8E4M3,
+    )?;
+    let weight_scale_inv = vb.get_with_hints_dtype(
+        (
+            out_dim / weight_block_size[0],
+            in_dim / weight_block_size[1],
+        ),
+        "weight_scale_inv",
+        Default::default(),
+        DType::F32,
+    )?;
+    let bias = if bias {
+        Some(vb.get((out_dim,), "bias")?)
+    } else {
+        None
+    };
+
+    let mut out = unsafe { Tensor::empty((out_dim, in_dim), vb.dtype(), vb.device())? };
+
+    for i in (0..out_dim).step_by(weight_block_size[0]) {
+        for j in (0..in_dim).step_by(weight_block_size[1]) {
+            let scale = weight_scale_inv.i((i / weight_block_size[0], j / weight_block_size[1]))?;
+
+            let dequannt_block = (weight
+                .i((i..i + weight_block_size[0], j..j + weight_block_size[1]))?
+                .to_dtype(DType::F32)?
+                * scale)?
+                .to_dtype(out.dtype())?;
+
+            out = out.slice_assign(
+                &[
+                    &(i..i + weight_block_size[0]),
+                    &(j..j + weight_block_size[1]),
+                ],
+                &dequannt_block,
+            )?;
+        }
+    }
+
+    let config = QuantMethodConfig::Unquantized(Linear::new(weight, bias));
+    Ok(Arc::new(UnquantLinear::new(config)?))
 }
