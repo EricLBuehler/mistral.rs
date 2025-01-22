@@ -369,8 +369,14 @@ impl MistralRs {
 
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
 
+        // Determine if the current runtime is multi-threaded, as blocking operations are not allowed in single-threaded mode
+        let is_multi_threaded = tokio::runtime::Handle::try_current()
+            .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
+
         // Do a dummy run
-        if matches!(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
+        if is_multi_threaded
+            && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
+        {
             let clone_sender = sender.read().unwrap().clone();
             tokio::task::block_in_place(|| {
                 let (tx, mut rx) = channel(1);
