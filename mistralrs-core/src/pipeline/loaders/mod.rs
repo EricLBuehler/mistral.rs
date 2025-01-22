@@ -627,7 +627,9 @@ pub trait DeviceMappedModelLoader {
 
                 // Device w/ ordinal 0 carries the non-mapped things
                 if current_ordinal == 0 {
-                    used_capacity += non_mapped_size_in_bytes + non_mapped_max_act_size_in_bytes;
+                    // Ensure the activations are properly handled
+                    used_capacity = used_capacity.max(non_mapped_max_act_size_in_bytes);
+                    used_capacity += non_mapped_size_in_bytes;
                 }
 
                 while let Some(&last) = layer_sizes_in_bytes.last() {
