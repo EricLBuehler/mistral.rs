@@ -4,6 +4,9 @@ Mistral.rs supports the MiniCPM-O 2.6 model, with examples in the Rust, Python, 
 
 UQFF quantizations are coming soon.
 
+> [!NOTE]
+> Only the vision portion of this model has been implemented. No audio features are supported yet.
+
 The Python and HTTP APIs support sending images as:
 - URL
 - Path to a local image
