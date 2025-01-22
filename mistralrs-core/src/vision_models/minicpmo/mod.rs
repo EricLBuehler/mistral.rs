@@ -83,6 +83,10 @@ impl MiniCpmOModel {
         if let Some(pixel_values_all) = pixel_values_all {
             let tgt_sizes_all = tgt_sizes.as_ref().expect("Need tgt_sizes");
             let image_bound = image_bound.expect("Need image_bound");
+            let image_bound_vec = image_bound
+                .into_iter()
+                .map(|x| x.to_vec2::<u32>())
+                .collect::<Result<Vec<_>>>()?;
 
             let mut all_pixel_values = Vec::new();
             let mut img_cnts = Vec::new();
@@ -151,7 +155,7 @@ impl MiniCpmOModel {
                 self.vpm
                     .forward(&all_pixel_values, Some(&patch_attn_mask), Some(&tgt_sizes))?
             };
-            vision_embedding = self.resampler.forward(&vision_embedding, &tgt_sizes)?;
+            vision_embedding = self.resampler.forward(&vision_embedding, &tgt_sizes_vec)?;
 
             let mut start = 0;
             let mut vision_hidden_states = Vec::new();
@@ -173,10 +177,10 @@ impl MiniCpmOModel {
             for i in 0..input_ids.dim(0)? {
                 if let Some(cur_vs_hs) = &vision_hidden_states[i] {
                     let mut cur_vllm_emb = vllm_embedding.i(i)?;
-                    let cur_image_bound = &image_bound[i];
-                    if cur_image_bound.dim(0)? > 0 {
+                    let cur_image_bound = &image_bound_vec[i];
+                    if !cur_image_bound.is_empty() {
                         let mut image_indices = Vec::new();
-                        for r in cur_image_bound.to_vec2::<u32>()? {
+                        for r in cur_image_bound {
                             image_indices.push(Tensor::arange(r[0], r[1], device)?);
                         }
                         let image_indices = Tensor::stack(&image_indices, 0)?;

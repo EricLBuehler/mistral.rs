@@ -121,20 +121,26 @@ impl Resampler {
         })
     }
 
-    pub fn forward(&self, x: &Tensor, tgt_sizes: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, x: &Tensor, tgt_sizes_vec: &[Vec<u32>]) -> Result<Tensor> {
         let mut pos_embed_cache = self.sincos_pos_embed.lock().unwrap();
 
         let bs = x.dim(0)?;
         let device = x.device();
 
-        assert_eq!(bs, tgt_sizes.dim(0)?);
+        assert_eq!(bs, tgt_sizes_vec.len());
 
-        let patch_len = (tgt_sizes.i((.., 0))? * tgt_sizes.i((.., 1))?)?;
+        let tgt_sizes_vec_0 = tgt_sizes_vec.iter().map(|x| x[0]).collect::<Vec<_>>();
+        let tgt_sizes_vec_1 = tgt_sizes_vec.iter().map(|x| x[1]).collect::<Vec<_>>();
+        let patch_len = tgt_sizes_vec_0
+            .iter()
+            .zip(&tgt_sizes_vec_1)
+            .map(|(x, y)| x * y)
+            .collect::<Vec<_>>();
 
         // Adjust/recompute pos embeds
         {
-            let max_h = tgt_sizes.i((.., 0))?.max(0)?.to_scalar::<u32>()? as usize;
-            let max_w = tgt_sizes.i((.., 1))?.max(0)?.to_scalar::<u32>()? as usize;
+            let max_h = *tgt_sizes_vec_0.iter().max().unwrap() as usize;
+            let max_w = *tgt_sizes_vec_1.iter().max().unwrap() as usize;
 
             if max_h > pos_embed_cache.max_size.0 || max_w > pos_embed_cache.max_size.1 {
                 pos_embed_cache.max_size = (
@@ -150,12 +156,11 @@ impl Resampler {
             }
         }
 
-        let max_patch_len = patch_len.max(0)?.to_scalar::<u32>()? as usize;
+        let max_patch_len = *patch_len.iter().max().unwrap() as usize;
 
         let mut key_padding_mask = Tensor::zeros((bs, max_patch_len), DType::U8, device)?;
 
         let mut pos_embed = Vec::new();
-        let tgt_sizes_vec = tgt_sizes.to_vec2::<u32>()?;
         for (i, tgt_sizes_vec_i) in tgt_sizes_vec.iter().enumerate().take(bs) {
             let (tgt_h, tgt_w) = (tgt_sizes_vec_i[0] as usize, tgt_sizes_vec_i[1] as usize);
             pos_embed.push(
@@ -165,7 +170,7 @@ impl Resampler {
                     .reshape((tgt_h * tgt_w, ()))?,
             );
 
-            let n = patch_len.i(i)?.to_scalar::<u32>()? as usize;
+            let n = patch_len[i] as usize;
             if n != max_patch_len {
                 key_padding_mask = key_padding_mask.slice_assign(
                     &[&i, &(n..)],
