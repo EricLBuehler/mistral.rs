@@ -407,10 +407,10 @@ impl Display for AutoDeviceMapParams {
 }
 
 impl AutoDeviceMapParams {
-    pub const DEFAULT_MAX_SEQ_LEN: usize = 16 * 1024;
+    pub const DEFAULT_MAX_SEQ_LEN: usize = 4 * 1024;
     pub const DEFAULT_MAX_BATCH_SIZE: usize = 1;
     pub const DEFAULT_MAX_NUM_IMAGES: usize = 1;
-    pub const DEFAULT_MAX_IMAGE_LENGTH: usize = 2 * 1024;
+    pub const DEFAULT_MAX_IMAGE_LENGTH: usize = 1024;
 
     pub fn default_text() -> Self {
         Self::Text {
