@@ -832,33 +832,12 @@
 <a href="#831" id="831">831</a>
 <a href="#832" id="832">832</a>
 <a href="#833" id="833">833</a>
-<a href="#834" id="834">834</a>
-<a href="#835" id="835">835</a>
-<a href="#836" id="836">836</a>
-<a href="#837" id="837">837</a>
-<a href="#838" id="838">838</a>
-<a href="#839" id="839">839</a>
-<a href="#840" id="840">840</a>
-<a href="#841" id="841">841</a>
-<a href="#842" id="842">842</a>
-<a href="#843" id="843">843</a>
-<a href="#844" id="844">844</a>
-<a href="#845" id="845">845</a>
-<a href="#846" id="846">846</a>
-<a href="#847" id="847">847</a>
-<a href="#848" id="848">848</a>
-<a href="#849" id="849">849</a>
-<a href="#850" id="850">850</a>
-<a href="#851" id="851">851</a>
-<a href="#852" id="852">852</a>
-<a href="#853" id="853">853</a>
-<a href="#854" id="854">854</a>
-<a href="#855" id="855">855</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#834" id="834">834</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{Linear, RotaryEmbedding, VarBuilder};
+<span class="kw">use </span>candle_nn::{Linear, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
 
 <span class="kw">use crate</span>::{
@@ -869,7 +848,7 @@
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -1108,7 +1087,6 @@
         xs: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
@@ -1129,37 +1107,25 @@
             v = v.to_dtype(original_dtype)<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="kw">if </span>q_len != <span class="number">1 </span>{
-            v.reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            </span>v.reshape((b_sz, <span class="self">self</span>.num_kv_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
-        </span>};
-
-        <span class="self">self</span>.rotary_emb
-            .forward(seqlen_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k, b_sz)<span class="question-mark">?</span>;
-
-        <span class="kw">if </span>q.rank() == <span class="number">3 </span>&amp;&amp; q_len != <span class="number">1 </span>{
-            q = q
+        <span class="kw">let </span>(q, k, v) = <span class="kw">if </span>q_len != <span class="number">1 </span>{
+            <span class="kw">let </span>q = q
                 .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-            k = k
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k = k
                 .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-        } <span class="kw">else if </span>q.rank() == <span class="number">3 </span>{
-            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            </span>q = q
-                .reshape((b_sz, <span class="self">self</span>.num_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-            k = k
-                .reshape((b_sz, <span class="self">self</span>.num_kv_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-        }
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>v = v
+                .reshape((b_sz, q_len, <span class="self">self</span>.num_kv_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            (q, k, v)
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>q = q.reshape((b_sz, <span class="self">self</span>.num_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            <span class="kw">let </span>k = k.reshape((b_sz, <span class="self">self</span>.num_kv_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            <span class="kw">let </span>v = v.reshape((b_sz, <span class="self">self</span>.num_kv_heads, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            (q, k, v)
+        };
+
+        <span class="kw">let </span>(q, k) = <span class="self">self</span>.rotary_emb.forward(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, seqlen_offsets)<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_output = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
             <span class="prelude-val">Some</span>(paged_attn) =&gt; <span class="kw">match </span>metadata {
@@ -1269,7 +1235,6 @@
         xs: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
@@ -1280,7 +1245,6 @@
             <span class="kw-2">&amp;</span>xs,
             attention_mask,
             seqlen_offsets,
-            start_offsets_kernel,
             kv_cache,
             metadata,
             flash_params,
@@ -1423,7 +1387,6 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         <span class="kw-2">mut </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
@@ -1449,7 +1412,6 @@
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],
                 metadata
                     .as_mut()
@@ -1535,7 +1497,6 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
@@ -1544,7 +1505,6 @@
         <span class="self">self</span>.forward(
             input_ids,
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             metadata,
             flash_params,
@@ -1556,8 +1516,6 @@
         _input_ids_full: <span class="kw-2">&amp;</span>Tensor,
         _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         _seqlen_offsets_full: <span class="kw-2">&amp;</span>[usize],
-        _start_offsets_kernel: Tensor,
-        _start_offsets_kernel_full: Tensor,
         _no_kv_cache: bool,
         _non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
         _context_lens: Vec&lt;(usize, usize)&gt;,

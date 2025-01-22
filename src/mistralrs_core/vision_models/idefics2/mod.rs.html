@@ -1305,11 +1305,7 @@
 <a href="#1304" id="1304">1304</a>
 <a href="#1305" id="1305">1305</a>
 <a href="#1306" id="1306">1306</a>
-<a href="#1307" id="1307">1307</a>
-<a href="#1308" id="1308">1308</a>
-<a href="#1309" id="1309">1309</a>
-<a href="#1310" id="1310">1310</a>
-<a href="#1311" id="1311">1311</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1307" id="1307">1307</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>idefics2_input_processor;
 
@@ -2394,7 +2390,6 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         pixel_attention_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
@@ -2500,7 +2495,6 @@
             input_ids,
             input_embeds,
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             metadata,
             flash_params,
@@ -2576,7 +2570,6 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         <span class="kw">_</span>: Vec&lt;usize&gt;, <span class="comment">// Ignore, it is for phi3
         </span>model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;,
@@ -2590,7 +2583,6 @@
             input_ids,
             pixel_values,
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             pixel_attention_mask,
             metadata,

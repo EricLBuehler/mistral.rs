@@ -597,7 +597,11 @@
 <a href="#596" id="596">596</a>
 <a href="#597" id="597">597</a>
 <a href="#598" id="598">598</a>
-<a href="#599" id="599">599</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a>
+<a href="#603" id="603">603</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, cmp, collections::HashMap, num::NonZeroUsize, sync::Arc};
 
@@ -739,7 +743,6 @@
                 text_models_inputs_processor::InputMetadata {
                     input,
                     positions,
-                    positions_kernel,
                     context_lens,
                     position_ids,
                     paged_attn_meta,
@@ -806,6 +809,9 @@
                     video_grid_thw: <span class="kw">_</span>,
                     rows,
                     cols,
+                    pixel_values_list: <span class="kw">_</span>,
+                    tgt_sizes: <span class="kw">_</span>,
+                    image_sizes_all: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         seq.take_images()
@@ -875,7 +881,6 @@
         <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
             context_lens,
             position_ids,
             pixel_values,
@@ -1193,6 +1198,9 @@
             video_grid_thw: <span class="prelude-val">None</span>,
             rows: <span class="prelude-val">Some</span>(image_rows),
             cols: <span class="prelude-val">Some</span>(image_cols),
+            pixel_values_list: <span class="prelude-val">None</span>,
+            tgt_sizes: <span class="prelude-val">None</span>,
+            image_sizes_all: <span class="prelude-val">None</span>,
         })
     }
 }

@@ -730,7 +730,14 @@
 <a href="#729" id="729">729</a>
 <a href="#730" id="730">730</a>
 <a href="#731" id="731">731</a>
-<a href="#732" id="732">732</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a>
+<a href="#734" id="734">734</a>
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     num::NonZeroUsize,
     sync::{Arc, RwLock},
@@ -898,7 +905,6 @@
                 text_models_inputs_processor::InputMetadata {
                     input,
                     positions,
-                    positions_kernel,
                     context_lens,
                     position_ids,
                     paged_attn_meta,
@@ -994,6 +1000,9 @@
                             video_grid_thw,
                             rows: <span class="kw">_</span>,
                             cols: <span class="kw">_</span>,
+                            pixel_values_list: <span class="kw">_</span>,
+                            tgt_sizes: <span class="kw">_</span>,
+                            image_sizes_all: <span class="kw">_</span>,
                         } = <span class="self">self
                             </span>.preprocess(
                                 seq.clone_images()
@@ -1207,7 +1216,6 @@
         <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
             context_lens,
             position_ids,
             pixel_values,
@@ -1421,6 +1429,9 @@
                 video_grid_thw: <span class="prelude-val">None</span>,
                 rows: <span class="prelude-val">None</span>,
                 cols: <span class="prelude-val">None</span>,
+                pixel_values_list: <span class="prelude-val">None</span>,
+                tgt_sizes: <span class="prelude-val">None</span>,
+                image_sizes_all: <span class="prelude-val">None</span>,
             });
         }
 
@@ -1457,6 +1468,9 @@
                 video_grid_thw: <span class="prelude-val">Some</span>(vision_grid_thw),
                 rows: <span class="prelude-val">None</span>,
                 cols: <span class="prelude-val">None</span>,
+                pixel_values_list: <span class="prelude-val">None</span>,
+                tgt_sizes: <span class="prelude-val">None</span>,
+                image_sizes_all: <span class="prelude-val">None</span>,
             });
         }
         <span class="macro">unreachable!</span>()

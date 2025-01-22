@@ -32,7 +32,8 @@
 <a href="#31" id="31">31</a>
 <a href="#32" id="32">32</a>
 <a href="#33" id="33">33</a>
-<a href="#34" id="34">34</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#34" id="34">34</a>
+<a href="#35" id="35">35</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 
 <span class="kw">use </span>candle_core::Tensor;
 
@@ -52,13 +53,14 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_next;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>llava::llava_next_inputs_processor;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>idefics3;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>minicpmo;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>siglip;
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 
 <span class="kw">pub struct </span>ModelInputs {
     <span class="kw">pub </span>input_ids: Tensor,
     <span class="kw">pub </span>seqlen_offsets: Vec&lt;usize&gt;,
-    <span class="kw">pub </span>seqlen_offsets_kernel: Tensor,
     <span class="kw">pub </span>context_lens: Vec&lt;(usize, usize)&gt;,
     <span class="kw">pub </span>position_ids: Vec&lt;usize&gt;,
     <span class="kw">pub </span>pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,

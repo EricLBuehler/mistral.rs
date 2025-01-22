@@ -1033,16 +1033,7 @@
 <a href="#1032" id="1032">1032</a>
 <a href="#1033" id="1033">1033</a>
 <a href="#1034" id="1034">1034</a>
-<a href="#1035" id="1035">1035</a>
-<a href="#1036" id="1036">1036</a>
-<a href="#1037" id="1037">1037</a>
-<a href="#1038" id="1038">1038</a>
-<a href="#1039" id="1039">1039</a>
-<a href="#1040" id="1040">1040</a>
-<a href="#1041" id="1041">1041</a>
-<a href="#1042" id="1042">1042</a>
-<a href="#1043" id="1043">1043</a>
-<a href="#1044" id="1044">1044</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1035" id="1035">1035</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
@@ -1580,7 +1571,6 @@
                 <span class="kw">let _ </span>= model.forward(
                     <span class="kw-2">&amp;</span>inputs.input,
                     <span class="kw-2">&amp;</span>inputs.positions,
-                    inputs.positions_kernel,
                     inputs.context_lens,
                     inputs.position_ids,
                     <span class="prelude-val">None</span>,
@@ -1855,8 +1845,6 @@
             input_ids_full,
             seqlen_offsets,
             seqlen_offsets_full,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full,
             context_lens,
             position_ids,
             <span class="kw-2">mut </span>paged_attn_meta,
@@ -1883,7 +1871,6 @@
             <span class="bool-val">false </span>=&gt; <span class="self">self</span>.model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
-                seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
                 paged_attn_meta,
@@ -1894,8 +1881,6 @@
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
                 context_lens,
@@ -1909,7 +1894,6 @@
             <span class="bool-val">false </span>=&gt; <span class="self">self</span>.model.forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
-                seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
                 paged_attn_meta,
@@ -1920,8 +1904,6 @@
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
                 context_lens,

@@ -398,22 +398,7 @@
 <a href="#397" id="397">397</a>
 <a href="#398" id="398">398</a>
 <a href="#399" id="399">399</a>
-<a href="#400" id="400">400</a>
-<a href="#401" id="401">401</a>
-<a href="#402" id="402">402</a>
-<a href="#403" id="403">403</a>
-<a href="#404" id="404">404</a>
-<a href="#405" id="405">405</a>
-<a href="#406" id="406">406</a>
-<a href="#407" id="407">407</a>
-<a href="#408" id="408">408</a>
-<a href="#409" id="409">409</a>
-<a href="#410" id="410">410</a>
-<a href="#411" id="411">411</a>
-<a href="#412" id="412">412</a>
-<a href="#413" id="413">413</a>
-<a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#400" id="400">400</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::sync::Arc;
@@ -482,7 +467,6 @@
         x: <span class="kw-2">&amp;</span>Tensor,
         mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -498,37 +482,25 @@
             .qmethod_matmul(x, <span class="kw-2">&amp;*</span><span class="self">self</span>.attn_v)<span class="question-mark">?
             </span>.to_dtype(<span class="self">self</span>.dtype)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * q_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * q_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="kw">if </span>q_len != <span class="number">1 </span>{
-            v.reshape((b_sz, q_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            </span>v.reshape((b_sz, <span class="self">self</span>.n_kv_head, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
-        </span>};
-
-        <span class="self">self</span>.rotary_emb
-            .forward(seqlen_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k, b_sz)<span class="question-mark">?</span>;
-
-        <span class="kw">if </span>q.rank() == <span class="number">3 </span>&amp;&amp; q_len != <span class="number">1 </span>{
-            q = q
+        <span class="kw">let </span>(q, k, v) = <span class="kw">if </span>q_len != <span class="number">1 </span>{
+            <span class="kw">let </span>q = q
                 .reshape((b_sz, q_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-            k = k
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k = k
                 .reshape((b_sz, q_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-        } <span class="kw">else if </span>q.rank() == <span class="number">3 </span>{
-            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            </span>q = q
-                .reshape((b_sz, <span class="self">self</span>.n_head, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-            k = k
-                .reshape((b_sz, <span class="self">self</span>.n_kv_head, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-        }
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>v = v
+                .reshape((b_sz, q_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            (q, k, v)
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>q = q.reshape((b_sz, <span class="self">self</span>.n_head, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            <span class="kw">let </span>k = k.reshape((b_sz, <span class="self">self</span>.n_kv_head, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            <span class="kw">let </span>v = v.reshape((b_sz, <span class="self">self</span>.n_kv_head, q_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            (q, k, v)
+        };
+
+        <span class="kw">let </span>(q, k) = <span class="self">self</span>.rotary_emb.forward(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, seqlen_offsets)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>y = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
             <span class="prelude-val">Some</span>(paged_attn) =&gt; {
@@ -785,7 +757,6 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         <span class="kw-2">mut </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(_b_sz, seq_len) = input_ids.dims2()<span class="question-mark">?</span>;
@@ -812,7 +783,6 @@
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],
                 metadata
                     .as_mut()

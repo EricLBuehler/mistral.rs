@@ -466,12 +466,7 @@
 <a href="#465" id="465">465</a>
 <a href="#466" id="466">466</a>
 <a href="#467" id="467">467</a>
-<a href="#468" id="468">468</a>
-<a href="#469" id="469">469</a>
-<a href="#470" id="470">470</a>
-<a href="#471" id="471">471</a>
-<a href="#472" id="472">472</a>
-<a href="#473" id="473">473</a></pre></div><pre class="rust"><code><span class="attr">#![allow(
+<a href="#468" id="468">468</a></pre></div><pre class="rust"><code><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::too_many_arguments
@@ -775,7 +770,6 @@
         num_image_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
         num_image_samples: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
@@ -794,7 +788,6 @@
                 input_ids,
                 input_embeds,
                 seqlen_offsets,
-                start_offsets_kernel,
                 context_lens,
                 metadata,
                 flash_params,
@@ -803,7 +796,6 @@
             <span class="self">self</span>.llm.forward(
                 input_ids,
                 seqlen_offsets,
-                start_offsets_kernel,
                 context_lens,
                 position_ids,
                 metadata,
@@ -853,7 +845,6 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
         model_specific_args: Box&lt;<span class="kw">dyn </span>std::any::Any&gt;, <span class="comment">// pixel attention mask, or image sizes, or anything else
@@ -880,7 +871,6 @@
             num_image_tokens,
             num_image_samples,
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             position_ids,
             metadata,

@@ -1303,18 +1303,7 @@
 <a href="#1302" id="1302">1302</a>
 <a href="#1303" id="1303">1303</a>
 <a href="#1304" id="1304">1304</a>
-<a href="#1305" id="1305">1305</a>
-<a href="#1306" id="1306">1306</a>
-<a href="#1307" id="1307">1307</a>
-<a href="#1308" id="1308">1308</a>
-<a href="#1309" id="1309">1309</a>
-<a href="#1310" id="1310">1310</a>
-<a href="#1311" id="1311">1311</a>
-<a href="#1312" id="1312">1312</a>
-<a href="#1313" id="1313">1313</a>
-<a href="#1314" id="1314">1314</a>
-<a href="#1315" id="1315">1315</a>
-<a href="#1316" id="1316">1316</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1305" id="1305">1305</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
@@ -1744,14 +1733,7 @@
 
 <span class="doccomment">/// RoPE for Llama3
 </span><span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub enum </span>Llama3RotaryEmbedding {
-    Llama3 {
-        sin: Tensor,
-        cos: Tensor,
-        is_gptx: bool,
-    },
-    Default(RotaryEmbedding),
-}
+</span><span class="kw">pub struct </span>Llama3RotaryEmbedding(RotaryEmbedding);
 
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 </span><span class="kw">pub enum </span>Llama3RopeType {
@@ -1792,7 +1774,7 @@
             </span>| <span class="prelude-val">Some</span>(Llama3RopeConfig {
                 rope_type: Llama3RopeType::Default,
                 ..
-            }) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Default(RotaryEmbedding::new(
+            }) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>(RotaryEmbedding::new(
                 cfg.rope_theta,
                 cfg.hidden_size / cfg.num_attention_heads,
                 cfg.max_position_embeddings,
@@ -1832,11 +1814,11 @@
                 <span class="kw">let </span>freqs = t.matmul(<span class="kw-2">&amp;</span>inv_freq)<span class="question-mark">?</span>;
                 <span class="kw">let </span>sin = freqs.sin()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
                 <span class="kw">let </span>cos = freqs.cos()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
-                <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Llama3 {
+                <span class="prelude-val">Ok</span>(<span class="self">Self</span>(RotaryEmbedding {
                     sin,
                     cos,
-                    is_gptx: is_gpt_neox,
-                })
+                    is_gpt_neox,
+                }))
             }
         }
     }
@@ -1852,7 +1834,7 @@
             </span>| <span class="prelude-val">Some</span>(MLlamaRopeScaling {
                 rope_type: MLlamaRopeType::Default,
                 ..
-            }) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Default(RotaryEmbedding::new(
+            }) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>(RotaryEmbedding::new(
                 cfg.rope_theta,
                 cfg.hidden_size / cfg.num_attention_heads,
                 cfg.max_position_embeddings,
@@ -1909,11 +1891,11 @@
                 <span class="kw">let </span>freqs = t.matmul(<span class="kw-2">&amp;</span>inv_freq)<span class="question-mark">?</span>;
                 <span class="kw">let </span>sin = freqs.sin()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
                 <span class="kw">let </span>cos = freqs.cos()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
-                <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Llama3 {
+                <span class="prelude-val">Ok</span>(<span class="self">Self</span>(RotaryEmbedding {
                     sin,
                     cos,
-                    is_gptx: is_gpt_neox,
-                })
+                    is_gpt_neox,
+                }))
             }
             <span class="prelude-val">Some</span>(MLlamaRopeScaling {
                 rope_type: other, ..
@@ -1927,48 +1909,11 @@
 
     <span class="kw">pub fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        positions: <span class="kw-2">&amp;</span>[usize],
-        positions_kernel: <span class="kw-2">&amp;</span>Tensor,
-        q: <span class="kw-2">&amp;mut </span>Tensor,
-        k: <span class="kw-2">&amp;mut </span>Tensor,
-        b_sz: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="comment">// Needed for device mapping
-        </span><span class="kw">let </span>positions_kernel = positions_kernel.to_device(q.device())<span class="question-mark">?</span>;
-
-        <span class="kw">match </span><span class="self">self </span>{
-            <span class="self">Self</span>::Llama3 { sin, cos, is_gptx } =&gt; {
-                <span class="kw">let </span>(b_sz_seq_len, h, n_embd) = q.dims3()<span class="question-mark">?</span>;
-                <span class="kw-2">*</span>q = q
-                    .reshape((b_sz, b_sz_seq_len / b_sz, h, n_embd))<span class="question-mark">?
-                    </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-                <span class="kw">let </span>(b_sz_seq_len, h, n_embd) = k.dims3()<span class="question-mark">?</span>;
-                <span class="kw-2">*</span>k = k
-                    .reshape((b_sz, b_sz_seq_len / b_sz, h, n_embd))<span class="question-mark">?
-                    </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-
-                <span class="kw">let </span>(_b_sz, _h, seq_len, _n_embd) = q.dims4()<span class="question-mark">?</span>;
-                <span class="kw">let </span><span class="kw-2">mut </span>q_embeds = Vec::new();
-                <span class="kw">let </span><span class="kw-2">mut </span>k_embeds = Vec::new();
-                <span class="kw">for </span>(i, offset) <span class="kw">in </span>positions.iter().enumerate() {
-                    <span class="kw">let </span>cos = cos.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>sin = sin.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>rope = <span class="kw">if </span><span class="kw-2">*</span>is_gptx {
-                        candle_nn::rotary_emb::rope
-                    } <span class="kw">else </span>{
-                        candle_nn::rotary_emb::rope_i
-                    };
-                    <span class="kw">let </span>q_embed = rope(<span class="kw-2">&amp;</span>q.i(i)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>k_embed = rope(<span class="kw-2">&amp;</span>k.i(i)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
-                    q_embeds.push(q_embed);
-                    k_embeds.push(k_embed);
-                }
-                <span class="kw-2">*</span>q = Tensor::cat(<span class="kw-2">&amp;</span>q_embeds, <span class="number">0</span>)<span class="question-mark">?</span>;
-                <span class="kw-2">*</span>k = Tensor::cat(<span class="kw-2">&amp;</span>k_embeds, <span class="number">0</span>)<span class="question-mark">?</span>;
-                <span class="prelude-val">Ok</span>(())
-            }
-            <span class="self">Self</span>::Default(rope) =&gt; rope.forward(positions, <span class="kw-2">&amp;</span>positions_kernel, q, k, b_sz),
-        }
+        q: <span class="kw-2">&amp;</span>Tensor,
+        k: <span class="kw-2">&amp;</span>Tensor,
+        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
+        <span class="self">self</span>.<span class="number">0</span>.forward(q, k, seqlen_offsets)
     }
 }
 
@@ -2353,7 +2298,11 @@
 }
 
 <span class="attr">#[derive(Debug, Clone)]
-</span><span class="kw">pub struct </span>RotaryEmbedding(candle_nn::RotaryEmbedding);
+</span><span class="kw">pub struct </span>RotaryEmbedding {
+    cos: Tensor,
+    sin: Tensor,
+    is_gpt_neox: bool,
+}
 
 <span class="kw">impl </span>RotaryEmbedding {
     <span class="kw">pub fn </span>new(
@@ -2364,48 +2313,77 @@
         is_gpt_neox: bool,
         dtype: DType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">Self</span>(candle_nn::RotaryEmbedding::new(
-            base,
-            head_dim,
-            max_position_embeddings,
-            device,
+        <span class="kw">let </span>inv_freq: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..head_dim)
+            .step_by(<span class="number">2</span>)
+            .map(|i| <span class="number">1f32 </span>/ base.powf(i <span class="kw">as </span>f32 / head_dim <span class="kw">as </span>f32))
+            .collect();
+        <span class="kw">let </span>inv_freq_len = inv_freq.len();
+        <span class="kw">let </span>inv_freq = Tensor::from_vec(inv_freq, (<span class="number">1</span>, inv_freq_len), device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>t = Tensor::arange(<span class="number">0u32</span>, max_position_embeddings <span class="kw">as </span>u32, device)<span class="question-mark">?
+            </span>.to_dtype(DType::F32)<span class="question-mark">?
+            </span>.reshape((max_position_embeddings, <span class="number">1</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>freqs = t.matmul(<span class="kw-2">&amp;</span>inv_freq)<span class="question-mark">?</span>;
+        <span class="kw">let </span>sin = freqs.sin()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cos = freqs.cos()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+            cos,
+            sin,
             is_gpt_neox,
-            dtype,
-        )<span class="question-mark">?</span>))
+        })
     }
 
     <span class="kw">pub fn </span>new_partial(
         base: f32,
-        head_dim: usize,
         rot_dim: usize,
         max_position_embeddings: usize,
         device: <span class="kw-2">&amp;</span>Device,
         is_gpt_neox: bool,
         dtype: DType,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="prelude-val">Ok</span>(<span class="self">Self</span>(candle_nn::RotaryEmbedding::new_partial(
-            base,
-            head_dim,
-            rot_dim,
-            max_position_embeddings,
-            device,
+        <span class="kw">let </span>inv_freq: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..rot_dim)
+            .step_by(<span class="number">2</span>)
+            .map(|i| <span class="number">1f32 </span>/ base.powf(i <span class="kw">as </span>f32 / rot_dim <span class="kw">as </span>f32))
+            .collect();
+        <span class="kw">let </span>inv_freq_len = inv_freq.len();
+        <span class="kw">let </span>inv_freq = Tensor::from_vec(inv_freq, (<span class="number">1</span>, inv_freq_len), device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>t = Tensor::arange(<span class="number">0u32</span>, max_position_embeddings <span class="kw">as </span>u32, device)<span class="question-mark">?
+            </span>.to_dtype(DType::F32)<span class="question-mark">?
+            </span>.reshape((max_position_embeddings, <span class="number">1</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>freqs = t.matmul(<span class="kw-2">&amp;</span>inv_freq)<span class="question-mark">?</span>;
+        <span class="kw">let </span>sin = freqs.sin()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+        <span class="kw">let </span>cos = freqs.cos()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
+
+        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+            cos,
+            sin,
             is_gpt_neox,
-            dtype,
-        )<span class="question-mark">?</span>))
+        })
     }
 
     <span class="kw">pub fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        positions: <span class="kw-2">&amp;</span>[usize],
-        positions_kernel: <span class="kw-2">&amp;</span>Tensor,
-        q: <span class="kw-2">&amp;mut </span>Tensor,
-        k: <span class="kw-2">&amp;mut </span>Tensor,
-        b_sz: usize,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="comment">// Needed for device mapping
-        </span><span class="kw">let </span>positions_kernel = positions_kernel.to_device(q.device())<span class="question-mark">?</span>;
-
-        <span class="self">self</span>.<span class="number">0</span>.forward(positions, <span class="kw-2">&amp;</span>positions_kernel, q, k, b_sz)
+        q: <span class="kw-2">&amp;</span>Tensor,
+        k: <span class="kw-2">&amp;</span>Tensor,
+        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
+        <span class="kw">let </span>(_b_sz, _h, seq_len, _n_embd) = q.dims4()<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>q_embeds = Vec::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>k_embeds = Vec::new();
+        <span class="kw">for </span>(i, offset) <span class="kw">in </span>seqlen_offsets.iter().enumerate() {
+            <span class="kw">let </span>cos = <span class="self">self</span>.cos.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
+            <span class="kw">let </span>sin = <span class="self">self</span>.sin.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
+            <span class="kw">let </span>rope = <span class="kw">if </span><span class="self">self</span>.is_gpt_neox {
+                candle_nn::rotary_emb::rope
+            } <span class="kw">else </span>{
+                candle_nn::rotary_emb::rope_i
+            };
+            <span class="kw">let </span>q_embed = rope(<span class="kw-2">&amp;</span>q.i(i)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k_embed = rope(<span class="kw-2">&amp;</span>k.i(i)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
+            q_embeds.push(q_embed);
+            k_embeds.push(k_embed);
+        }
+        <span class="prelude-val">Ok</span>((Tensor::cat(<span class="kw-2">&amp;</span>q_embeds, <span class="number">0</span>)<span class="question-mark">?</span>, Tensor::cat(<span class="kw-2">&amp;</span>k_embeds, <span class="number">0</span>)<span class="question-mark">?</span>))
     }
 }
 

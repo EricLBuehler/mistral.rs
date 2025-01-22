@@ -988,32 +988,7 @@
 <a href="#987" id="987">987</a>
 <a href="#988" id="988">988</a>
 <a href="#989" id="989">989</a>
-<a href="#990" id="990">990</a>
-<a href="#991" id="991">991</a>
-<a href="#992" id="992">992</a>
-<a href="#993" id="993">993</a>
-<a href="#994" id="994">994</a>
-<a href="#995" id="995">995</a>
-<a href="#996" id="996">996</a>
-<a href="#997" id="997">997</a>
-<a href="#998" id="998">998</a>
-<a href="#999" id="999">999</a>
-<a href="#1000" id="1000">1000</a>
-<a href="#1001" id="1001">1001</a>
-<a href="#1002" id="1002">1002</a>
-<a href="#1003" id="1003">1003</a>
-<a href="#1004" id="1004">1004</a>
-<a href="#1005" id="1005">1005</a>
-<a href="#1006" id="1006">1006</a>
-<a href="#1007" id="1007">1007</a>
-<a href="#1008" id="1008">1008</a>
-<a href="#1009" id="1009">1009</a>
-<a href="#1010" id="1010">1010</a>
-<a href="#1011" id="1011">1011</a>
-<a href="#1012" id="1012">1012</a>
-<a href="#1013" id="1013">1013</a>
-<a href="#1014" id="1014">1014</a>
-<a href="#1015" id="1015">1015</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#990" id="990">990</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::sync::Arc;
@@ -1028,13 +1003,13 @@
 <span class="kw">use </span>candle_core::quantized::ggml_file;
 <span class="kw">use </span>candle_core::quantized::QMatMul;
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
+<span class="kw">use </span>candle_nn::{Embedding, Module, VarBuilder};
 <span class="kw">use </span>mistralrs_quant::MatMul;
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
-<span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, QRmsNorm, Sdpa};
+<span class="kw">use </span><span class="kw">crate</span>::layers::{CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{extract_logits, Cache, EitherCache};
 
 <span class="kw">use </span><span class="kw">super</span>::classifier::XLoraClassifier;
@@ -1207,7 +1182,6 @@
         x: <span class="kw-2">&amp;</span>Tensor,
         mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         start_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         global_scaling_weight: f64,
@@ -1228,37 +1202,25 @@
             .lora_forward(x, scalings.clone(), global_scaling_weight, is_scaling_pass)<span class="question-mark">?
             </span>.to_dtype(<span class="self">self</span>.dtype)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>q = q.reshape((b_sz * seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>k = k.reshape((b_sz * seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = <span class="kw">if </span>seq_len != <span class="number">1 </span>{
-            v.reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            </span>v.reshape((b_sz, <span class="self">self</span>.n_kv_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
-        </span>};
-
-        <span class="self">self</span>.rotary
-            .forward(start_offsets, <span class="kw-2">&amp;</span>start_offsets_kernel, <span class="kw-2">&amp;mut </span>q, <span class="kw-2">&amp;mut </span>k, b_sz)<span class="question-mark">?</span>;
-
-        <span class="kw">if </span>q.rank() == <span class="number">3 </span>&amp;&amp; seq_len != <span class="number">1 </span>{
-            q = q
+        <span class="kw">let </span>(q, k, v) = <span class="kw">if </span>seq_len != <span class="number">1 </span>{
+            <span class="kw">let </span>q = q
                 .reshape((b_sz, seq_len, <span class="self">self</span>.n_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-            k = k
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k = k
                 .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-        } <span class="kw">else if </span>q.rank() == <span class="number">3 </span>{
-            <span class="comment">// Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            </span>q = q
-                .reshape((b_sz, <span class="self">self</span>.n_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-            k = k
-                .reshape((b_sz, <span class="self">self</span>.n_kv_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?
-                </span>.contiguous()<span class="question-mark">?</span>;
-        }
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>v = v
+                .reshape((b_sz, seq_len, <span class="self">self</span>.n_kv_head, <span class="self">self</span>.head_dim))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            (q, k, v)
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>q = q.reshape((b_sz, <span class="self">self</span>.n_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            <span class="kw">let </span>k = k.reshape((b_sz, <span class="self">self</span>.n_kv_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            <span class="kw">let </span>v = v.reshape((b_sz, <span class="self">self</span>.n_kv_head, seq_len, <span class="self">self</span>.head_dim))<span class="question-mark">?</span>;
+            (q, k, v)
+        };
+
+        <span class="kw">let </span>(q, k) = <span class="self">self</span>.rotary.forward(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, start_offsets)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>(k, v) = Cache::update_kv_cache(kv_cache, k, v, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
@@ -1309,7 +1271,6 @@
         <span class="kw">let </span>head_dim = (ct.hparams.n_embd / ct.hparams.n_head) <span class="kw">as </span>usize;
         <span class="kw">let </span>rotary = RotaryEmbedding::new_partial(
             <span class="number">10000.</span>,
-            head_dim,
             ct.hparams.n_rot <span class="kw">as </span>usize,
             MAX_SEQ_LEN <span class="kw">as </span>usize,
             <span class="kw-2">&amp;</span>ct.device,
@@ -1830,7 +1791,6 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         x: <span class="kw-2">&amp;</span>Tensor,
         start_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         scalings: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -1864,7 +1824,6 @@
                 <span class="kw-2">&amp;</span>x,
                 <span class="kw-2">&amp;</span>mask.as_ref().map(|m| m.to_device(x.device()).unwrap()),
                 start_offsets,
-                start_offsets_kernel.clone(),
                 <span class="kw-2">&amp;mut </span>cache[i],
                 scalings.clone(),
                 <span class="self">self</span>.xlora_classifier
@@ -1902,8 +1861,6 @@
         input_ids_full: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         seqlen_offsets_full: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
-        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;NonGranularState&gt;,
         context_lens: Vec&lt;(usize, usize)&gt;,
@@ -1916,8 +1873,6 @@
                 input_ids_full,
                 seqlen_offsets,
                 seqlen_offsets_full,
-                <span class="kw-2">&amp;</span>start_offsets_kernel,
-                <span class="kw-2">&amp;</span>start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
                 <span class="kw-2">&amp;</span><span class="macro">vec!</span>[usize::MAX; context_lens.len()],
@@ -1932,7 +1887,6 @@
                             </span>.inner_forward(
                                 input_ids_full,
                                 seqlen_offsets_full,
-                                start_offsets_kernel_full,
                                 <span class="prelude-val">Some</span>(scalings),
                                 <span class="bool-val">true</span>,
                                 no_kv_cache,
@@ -1954,7 +1908,6 @@
                             </span>.inner_forward(
                                 input_ids,
                                 seqlen_offsets,
-                                start_offsets_kernel,
                                 <span class="prelude-val">Some</span>(scalings),
                                 <span class="bool-val">true</span>,
                                 no_kv_cache,
@@ -1976,7 +1929,6 @@
                         </span>.inner_forward(
                             input_ids,
                             seqlen_offsets,
-                            start_offsets_kernel,
                             <span class="prelude-val">None</span>,
                             <span class="bool-val">false</span>,
                             no_kv_cache,
@@ -2008,7 +1960,6 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -2019,7 +1970,6 @@
         <span class="self">self</span>.inner_forward(
             input_ids,
             seqlen_offsets,
-            start_offsets_kernel,
             <span class="prelude-val">Some</span>(scalings),
             is_full_pass,
             no_kv_cache,

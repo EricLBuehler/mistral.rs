@@ -291,11 +291,7 @@
 <a href="#290" id="290">290</a>
 <a href="#291" id="291">291</a>
 <a href="#292" id="292">292</a>
-<a href="#293" id="293">293</a>
-<a href="#294" id="294">294</a>
-<a href="#295" id="295">295</a>
-<a href="#296" id="296">296</a>
-<a href="#297" id="297">297</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#293" id="293">293</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
 <span class="kw">mod </span>inputs_processor;
@@ -417,7 +413,6 @@
         aspect_ratio_ids: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         cross_attn_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>cross_attn_states = <span class="kw">if let </span><span class="prelude-val">Some</span>(pixel_values) = pixel_values {
@@ -459,7 +454,6 @@
             cross_attn_mask.as_ref(),
             full_text_row_masked_out_mask.as_ref(),
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
         )
     }
@@ -496,7 +490,6 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
         model_specific_args: Box&lt;<span class="kw">dyn </span>Any&gt;, <span class="comment">// pixel attention mask, or image sizes, or anything else
@@ -517,7 +510,6 @@
             aspect_ratio_ids.as_ref(),
             cross_attn_mask.as_ref(),
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
         )
     }

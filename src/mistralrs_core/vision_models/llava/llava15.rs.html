@@ -372,12 +372,7 @@
 <a href="#371" id="371">371</a>
 <a href="#372" id="372">372</a>
 <a href="#373" id="373">373</a>
-<a href="#374" id="374">374</a>
-<a href="#375" id="375">375</a>
-<a href="#376" id="376">376</a>
-<a href="#377" id="377">377</a>
-<a href="#378" id="378">378</a>
-<a href="#379" id="379">379</a></pre></div><pre class="rust"><code><span class="attr">#![allow(
+<a href="#374" id="374">374</a></pre></div><pre class="rust"><code><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::too_many_arguments
@@ -603,7 +598,6 @@
         pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         num_image_tokens: <span class="prelude-ty">Option</span>&lt;usize&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
@@ -620,7 +614,6 @@
                 input_ids,
                 input_embeds,
                 seqlen_offsets,
-                start_offsets_kernel,
                 context_lens,
                 metadata,
                 flash_params,
@@ -629,7 +622,6 @@
             <span class="self">self</span>.llm.forward(
                 input_ids,
                 seqlen_offsets,
-                start_offsets_kernel,
                 context_lens,
                 position_ids,
                 metadata,
@@ -677,7 +669,6 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
         _model_specific_args: Box&lt;<span class="kw">dyn </span>std::any::Any&gt;, <span class="comment">// pixel attention mask, or image sizes, or anything else
@@ -692,7 +683,6 @@
                     * <span class="self">self</span>.clip_vision_tower.num_patches_per_side(),
             ),
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             position_ids,
             metadata,

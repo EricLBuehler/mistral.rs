@@ -404,7 +404,8 @@
 <a href="#403" id="403">403</a>
 <a href="#404" id="404">404</a>
 <a href="#405" id="405">405</a>
-<a href="#406" id="406">406</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::sync::Arc;
@@ -544,6 +545,9 @@
                     video_grid_thw: <span class="kw">_</span>,
                     rows: <span class="kw">_</span>,
                     cols: <span class="kw">_</span>,
+                    pixel_values_list: <span class="kw">_</span>,
+                    tgt_sizes: <span class="kw">_</span>,
+                    image_sizes_all: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         imgs.clone(),
@@ -588,8 +592,6 @@
                             input_ids_full: <span class="kw">_</span>,
                             seqlen_offsets,
                             seqlen_offsets_full: <span class="kw">_</span>,
-                            seqlen_offsets_kernel,
-                            seqlen_offsets_kernel_full: <span class="kw">_</span>,
                             context_lens,
                             position_ids,
                             paged_attn_meta,
@@ -602,7 +604,6 @@
                         <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
                             input_ids,
                             seqlen_offsets,
-                            seqlen_offsets_kernel,
                             context_lens,
                             position_ids,
                             pixel_values: <span class="prelude-val">None</span>,
@@ -714,7 +715,6 @@
                     text_models_inputs_processor::InputMetadata {
                         input,
                         positions,
-                        positions_kernel,
                         context_lens,
                         position_ids,
                         paged_attn_meta,
@@ -725,7 +725,6 @@
             <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
                 input_ids: input,
                 seqlen_offsets: positions,
-                seqlen_offsets_kernel: positions_kernel,
                 context_lens,
                 position_ids,
                 pixel_values: pixel_values.clone(),
@@ -807,6 +806,9 @@
             video_grid_thw: <span class="prelude-val">None</span>,
             rows: <span class="prelude-val">None</span>,
             cols: <span class="prelude-val">None</span>,
+            pixel_values_list: <span class="prelude-val">None</span>,
+            tgt_sizes: <span class="prelude-val">None</span>,
+            image_sizes_all: <span class="prelude-val">None</span>,
         })
     }
 }

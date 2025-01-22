@@ -903,18 +903,15 @@
 <a href="#902" id="902">902</a>
 <a href="#903" id="903">903</a>
 <a href="#904" id="904">904</a>
-<a href="#905" id="905">905</a>
-<a href="#906" id="906">906</a>
-<a href="#907" id="907">907</a>
-<a href="#908" id="908">908</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#905" id="905">905</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
-    MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
-    XLoraPaths,
+    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin,
+    Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader,
+    VisionPromptPrefixer, XLoraPaths,
 };
 <span class="kw">use super</span>::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -1040,6 +1037,7 @@
             VisionLoaderType::VLlama =&gt; Box::new(VLlamaLoader),
             VisionLoaderType::Qwen2VL =&gt; Box::new(Qwen2VLLoader),
             VisionLoaderType::Idefics3 =&gt; Box::new(Idefics3Loader),
+            VisionLoaderType::MiniCpmO =&gt; Box::new(MiniCpmOLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -1349,7 +1347,6 @@
                     <span class="kw-2">&amp;</span>inputs.input,
                     <span class="prelude-val">None</span>, <span class="comment">// NOTE: We ONLY calibrate the text bits of these models!!
                     </span><span class="kw-2">&amp;</span>inputs.positions,
-                    inputs.positions_kernel,
                     inputs.context_lens,
                     inputs.position_ids,
                     model.default_model_specific_args(<span class="kw-2">&amp;</span>inputs.input),
@@ -1605,7 +1602,6 @@
         <span class="kw">let </span>ModelInputs {
             input_ids,
             seqlen_offsets,
-            seqlen_offsets_kernel,
             context_lens,
             position_ids,
             pixel_values,
@@ -1634,7 +1630,6 @@
                 <span class="kw-2">&amp;</span>input_ids,
                 pixel_values,
                 <span class="kw-2">&amp;</span>seqlen_offsets,
-                seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
                 model_specific_args,
@@ -1647,7 +1642,6 @@
             <span class="kw-2">&amp;</span>input_ids,
             pixel_values,
             <span class="kw-2">&amp;</span>seqlen_offsets,
-            seqlen_offsets_kernel,
             context_lens,
             position_ids,
             model_specific_args,

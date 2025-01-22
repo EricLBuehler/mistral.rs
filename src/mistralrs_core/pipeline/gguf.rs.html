@@ -776,24 +776,7 @@
 <a href="#775" id="775">775</a>
 <a href="#776" id="776">776</a>
 <a href="#777" id="777">777</a>
-<a href="#778" id="778">778</a>
-<a href="#779" id="779">779</a>
-<a href="#780" id="780">780</a>
-<a href="#781" id="781">781</a>
-<a href="#782" id="782">782</a>
-<a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a>
-<a href="#785" id="785">785</a>
-<a href="#786" id="786">786</a>
-<a href="#787" id="787">787</a>
-<a href="#788" id="788">788</a>
-<a href="#789" id="789">789</a>
-<a href="#790" id="790">790</a>
-<a href="#791" id="791">791</a>
-<a href="#792" id="792">792</a>
-<a href="#793" id="793">793</a>
-<a href="#794" id="794">794</a>
-<a href="#795" id="795">795</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#778" id="778">778</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -1488,8 +1471,6 @@
             input_ids_full,
             seqlen_offsets,
             seqlen_offsets_full,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full,
             context_lens,
             position_ids: <span class="kw">_</span>, <span class="comment">// NOTE(EricLBuehler): ignore, it is for phi3
             </span><span class="kw-2">mut </span>paged_attn_meta,
@@ -1512,13 +1493,9 @@
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">None</span>,
         };
         <span class="kw">let </span>logits = <span class="kw">match </span><span class="self">self</span>.model {
-            Model::Llama(<span class="kw-2">ref </span>model) =&gt; model.forward(
-                <span class="kw-2">&amp;</span>input_ids,
-                <span class="kw-2">&amp;</span>seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                paged_attn_meta,
-            )<span class="question-mark">?</span>,
+            Model::Llama(<span class="kw-2">ref </span>model) =&gt; {
+                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, context_lens, paged_attn_meta)<span class="question-mark">?
+            </span>}
             Model::Phi2(<span class="kw-2">ref </span>model) =&gt; {
                 model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, context_lens, paged_attn_meta)<span class="question-mark">?
             </span>}
@@ -1527,8 +1504,6 @@
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
                 context_lens,
@@ -1543,27 +1518,18 @@
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 <span class="self">self</span>.no_kv_cache,
                 <span class="kw-2">&amp;</span><span class="self">self</span>.non_granular_state,
                 context_lens,
                 <span class="kw-2">&amp;</span>flash_meta,
                 flash_meta_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>flash_meta),
             )<span class="question-mark">?</span>,
-            Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; model.forward(
-                <span class="kw-2">&amp;</span>input_ids,
-                <span class="kw-2">&amp;</span>seqlen_offsets,
-                seqlen_offsets_kernel,
-                paged_attn_meta,
-            )<span class="question-mark">?</span>,
-            Model::Qwen2(<span class="kw-2">ref </span>model) =&gt; model.forward(
-                <span class="kw-2">&amp;</span>input_ids,
-                <span class="kw-2">&amp;</span>seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                paged_attn_meta,
-            )<span class="question-mark">?</span>,
+            Model::Starcoder2(<span class="kw-2">ref </span>model) =&gt; {
+                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, paged_attn_meta)<span class="question-mark">?
+            </span>}
+            Model::Qwen2(<span class="kw-2">ref </span>model) =&gt; {
+                model.forward(<span class="kw-2">&amp;</span>input_ids, <span class="kw-2">&amp;</span>seqlen_offsets, context_lens, paged_attn_meta)<span class="question-mark">?
+            </span>}
         };
         <span class="kw">if </span>return_raw_logits {
             <span class="prelude-val">Ok</span>(ForwardInputsResult::RawLogits { logits })

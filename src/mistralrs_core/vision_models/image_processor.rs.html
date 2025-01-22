@@ -50,7 +50,13 @@
 <a href="#49" id="49">49</a>
 <a href="#50" id="50">50</a>
 <a href="#51" id="51">51</a>
-<a href="#52" id="52">52</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#52" id="52">52</a>
+<a href="#53" id="53">53</a>
+<a href="#54" id="54">54</a>
+<a href="#55" id="55">55</a>
+<a href="#56" id="56">56</a>
+<a href="#57" id="57">57</a>
+<a href="#58" id="58">58</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>image::DynamicImage;
@@ -82,6 +88,12 @@
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) rows: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
     <span class="doccomment">/// Without batch size
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) cols: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
+    <span class="doccomment">/// Without batch size. Only images.
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) pixel_values_list: <span class="prelude-ty">Option</span>&lt;Vec&lt;Tensor&gt;&gt;,
+    <span class="doccomment">/// Without batch size, safe to unsqueeze &amp; concat in dim0
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) tgt_sizes: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+    <span class="doccomment">/// Without batch size. Per image. (w,h).
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) image_sizes_all: <span class="prelude-ty">Option</span>&lt;Vec&lt;(u32, u32)&gt;&gt;,
 }
 
 <span class="doccomment">/// ImagePreProcessor: process images for the model (similar to `InputsProcessor`, typically called by it)

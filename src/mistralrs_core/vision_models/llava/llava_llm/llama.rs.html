@@ -733,18 +733,7 @@
 <a href="#732" id="732">732</a>
 <a href="#733" id="733">733</a>
 <a href="#734" id="734">734</a>
-<a href="#735" id="735">735</a>
-<a href="#736" id="736">736</a>
-<a href="#737" id="737">737</a>
-<a href="#738" id="738">738</a>
-<a href="#739" id="739">739</a>
-<a href="#740" id="740">740</a>
-<a href="#741" id="741">741</a>
-<a href="#742" id="742">742</a>
-<a href="#743" id="743">743</a>
-<a href="#744" id="744">744</a>
-<a href="#745" id="745">745</a>
-<a href="#746" id="746">746</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
+<a href="#735" id="735">735</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
 </span><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -796,7 +785,6 @@
         x: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        _start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::LayerCaches,
         rope_parameter: (<span class="kw-2">&amp;</span>Tensor, <span class="kw-2">&amp;</span>Tensor),
@@ -1050,7 +1038,6 @@
         x: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         block_idx: usize,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::LayerCaches,
         rope_parameters: (<span class="kw-2">&amp;</span>Tensor, <span class="kw-2">&amp;</span>Tensor),
@@ -1063,7 +1050,6 @@
             <span class="kw-2">&amp;</span>x,
             attention_mask,
             seqlen_offsets,
-            start_offsets_kernel,
             block_idx,
             kv_cache,
             rope_parameters,
@@ -1125,7 +1111,6 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
@@ -1135,7 +1120,6 @@
             input_ids,
             x,
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             metadata,
             flash_params,
@@ -1270,7 +1254,6 @@
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         input_embed: Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         <span class="kw-2">mut </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
@@ -1292,7 +1275,6 @@
                 <span class="kw-2">&amp;</span>x,
                 <span class="kw-2">&amp;</span>mask.clone().map(|m| m.to_device(x.device()).unwrap()),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
                 block_idx,
                 <span class="kw-2">&amp;mut </span>cache,
                 (<span class="kw-2">&amp;</span><span class="self">self</span>.rope_parameters.<span class="number">0</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.rope_parameters.<span class="number">1</span>),
@@ -1317,7 +1299,6 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
@@ -1326,7 +1307,6 @@
         <span class="self">self</span>.forward_input(
             input_ids,
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             metadata,
             flash_params,
@@ -1338,8 +1318,6 @@
         _input_ids_full: <span class="kw-2">&amp;</span>Tensor,
         _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         _seqlen_offsets_full: <span class="kw-2">&amp;</span>[usize],
-        _start_offsets_kernel: Tensor,
-        _start_offsets_kernel_full: Tensor,
         _no_kv_cache: bool,
         _non_granular_state: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::xlora_models::NonGranularState&gt;,
         _context_lens: Vec&lt;(usize, usize)&gt;,
