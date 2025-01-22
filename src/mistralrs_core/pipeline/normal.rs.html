@@ -1041,7 +1041,8 @@
 <a href="#1040" id="1040">1040</a>
 <a href="#1041" id="1041">1041</a>
 <a href="#1042" id="1042">1042</a>
-<a href="#1043" id="1043">1043</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1043" id="1043">1043</a>
+<a href="#1044" id="1044">1044</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
@@ -1055,9 +1056,9 @@
     PreProcessingMixin,
 };
 <span class="kw">use super</span>::{
-    AutoLoader, DeepSeekV2Loader, Gemma2Loader, GemmaLoader, LlamaLoader, MistralLoader,
-    MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
-    Starcoder2Loader,
+    AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
+    MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader,
+    Qwen2Loader, Starcoder2Loader,
 };
 <span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeExpertType;
 <span class="kw">use </span><span class="kw">crate</span>::device_map::{<span class="self">self</span>, DeviceMapper};
@@ -1247,6 +1248,7 @@
             <span class="prelude-val">Some</span>(NormalLoaderType::Starcoder2) =&gt; Box::new(Starcoder2Loader),
             <span class="prelude-val">Some</span>(NormalLoaderType::Phi3_5MoE) =&gt; Box::new(Phi3_5MoELoader),
             <span class="prelude-val">Some</span>(NormalLoaderType::DeepSeekV2) =&gt; Box::new(DeepSeekV2Loader),
+            <span class="prelude-val">Some</span>(NormalLoaderType::DeepSeekV3) =&gt; Box::new(DeepSeekV3Loader),
             <span class="prelude-val">None </span>=&gt; Box::new(AutoLoader),
         };
         <span class="prelude-val">Ok</span>(Box::new(NormalLoader {

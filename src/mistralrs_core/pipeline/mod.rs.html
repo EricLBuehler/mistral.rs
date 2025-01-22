@@ -927,7 +927,8 @@
 <a href="#926" id="926">926</a>
 <a href="#927" id="927">927</a>
 <a href="#928" id="928">928</a>
-<a href="#929" id="929">929</a></pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
+<a href="#929" id="929">929</a>
+<a href="#930" id="930">930</a></pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
 <span class="kw">mod </span>diffusion;
@@ -960,13 +961,14 @@
 <span class="kw">pub use </span>inputs_processor::InputProcessorOutput;
 <span class="kw">pub use </span>isq::{parse_isq_value, IsqModel, IsqOrganization};
 <span class="kw">pub use </span>loaders::{
-    AdapterKind, AutoDeviceMapParams, AutoLoader, DeepSeekV2Loader, DeviceMappedModelLoader,
-    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader, Gemma2Loader,
-    GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
-    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
-    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
-    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Starcoder2Loader,
-    TokenSource, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    AdapterKind, AutoDeviceMapParams, AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader,
+    DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
+    Gemma2Loader, GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
+    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader,
+    Qwen2VLLoader, Starcoder2Loader, TokenSource, VLlamaLoader, VisionLoaderType, VisionModel,
+    VisionModelLoader,
 };
 <span class="kw">use </span>mistralrs_quant::IsqType;
 <span class="kw">pub use </span>normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
