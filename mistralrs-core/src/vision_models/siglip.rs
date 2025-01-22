@@ -10,6 +10,7 @@ use std::ops::Mul;
 use crate::{
     layers::{Activation, CausalMasker, MatMul, QLinear},
     serde_default_fn,
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 serde_default_fn!(usize, hidden_size, 768);
@@ -199,6 +200,15 @@ impl VisionEmbeddings {
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
         embeddings.broadcast_add(&self.position_embedding.forward(&position_ids)?)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("patch_embedding").add(&self.patch_embedding);
+        uvb.pp("position_embedding").add(&self.position_embedding);
+
+        uvb.to_safetensors()
+    }
 }
 
 struct Attention {
@@ -288,6 +298,17 @@ impl Attention {
         }
         Ok(res)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("q_proj").add(&self.q_proj);
+        uvb.pp("k_proj").add(&self.k_proj);
+        uvb.pp("v_proj").add(&self.v_proj);
+        uvb.pp("out_proj").add(&self.o_proj);
+
+        uvb.to_safetensors()
+    }
 }
 
 struct VisionMLP {
@@ -320,6 +341,15 @@ impl VisionMLP {
             res = res.to_dtype(original_dtype)?;
         }
         Ok(res)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("fc1").add(&self.fc1);
+        uvb.pp("fc2").add(&self.fc2);
+
+        uvb.to_safetensors()
     }
 }
 
@@ -451,5 +481,25 @@ impl SiglipVisionTransformer {
             .encoder
             .forward(&hidden_states, attention_mask.as_ref())?;
         hidden_states.apply(&self.post_layernorm)
+    }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("post_layernorm").add(&self.post_layernorm);
+        uvb.pp("embeddings")
+            .extend(self.embeddings.residual_tensors());
+
+        let uvb_enc = uvb.pp("encoder");
+        for (i, layer) in self.encoder.layers.iter().enumerate() {
+            let uvb_l = uvb_enc.pp("layers").pp(i);
+
+            uvb_l.pp("layer_norm1").add(&layer.layer_norm_1);
+            uvb_l.pp("layer_norm2").add(&layer.layer_norm_2);
+            uvb_l.pp("mlp").extend(layer.mlp.residual_tensors());
+            uvb_l.pp("self_attn").extend(layer.attn.residual_tensors());
+        }
+
+        uvb.to_safetensors()
     }
 }

@@ -2318,7 +2318,18 @@ impl VisionModelLoader for MiniCpmOLoader {
 
 impl IsqModelLoader for MiniCpmOLoader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
-        todo!()
+        Ok(vec![
+            Regex::new(r"llm.lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"llm.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"llm.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"llm.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
     }
 }
 

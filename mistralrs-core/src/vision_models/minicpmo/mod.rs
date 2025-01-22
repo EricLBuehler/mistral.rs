@@ -16,6 +16,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 use self::siglip::SiglipVisionTransformer;
@@ -294,7 +295,11 @@ impl VisionModel for MiniCpmOModel {
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
-        todo!()
+        Box::new(MiniCpmOSpecificArgs {
+            pixel_values_all: None,
+            tgt_sizes: None,
+            image_bound: None,
+        })
     }
 }
 
@@ -309,7 +314,14 @@ impl IsqModel for MiniCpmOModel {
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        todo!()
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("llm").extend(self.llm.residual_tensors());
+        uvb.pp("vpm").extend(self.vpm.residual_tensors());
+        uvb.pp("resampler")
+            .extend(self.resampler.residual_tensors());
+
+        uvb.to_safetensors()
     }
 
     // NOTE: We ONLY calibrate the text bits of these models, so we should only track/return those parts!!

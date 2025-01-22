@@ -6,7 +6,7 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, VarBuilder};
 use mistralrs_quant::MatMul;
 
-use crate::{layers::GetFloatInfo, layers_masker::masked_fill};
+use crate::{layers::GetFloatInfo, layers_masker::masked_fill, utils::unvarbuilder::UnVarBuilder};
 
 const DEFAULT_MAX_SIZE: (usize, usize) = (70, 70);
 
@@ -214,6 +214,23 @@ impl Resampler {
     fn repeat_q_bs(&self, q: &Tensor, n: usize) -> Result<Tensor> {
         q.unsqueeze(0)?.repeat((n, 1, 1))
     }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        let uvb_attn = uvb.pp("attn");
+        uvb_attn.pp("out_proj").add(&self.attn.out_proj);
+        uvb_attn.add_tensor("in_proj_weight", self.attn.in_proj_weight.clone());
+        uvb_attn.add_tensor("in_proj_bias", self.attn.in_proj_bias.clone());
+
+        uvb.pp("ln_kv").add(&self.ln_kv);
+        uvb.pp("ln_post").add(&self.ln_post);
+        uvb.pp("ln_q").add(&self.ln_q);
+        uvb.add_tensor("proj", self.proj.clone());
+        uvb.add_tensor("query", self.query.clone());
+
+        uvb.to_safetensors()
+    }
 }
 
 struct MultiheadAttention {
@@ -223,6 +240,8 @@ struct MultiheadAttention {
     out_proj: Linear,
     num_heads: usize,
     head_dim: usize,
+    in_proj_weight: Tensor,
+    in_proj_bias: Tensor,
 }
 
 impl MultiheadAttention {
@@ -249,6 +268,8 @@ impl MultiheadAttention {
             out_proj,
             num_heads,
             head_dim: embed_dim / num_heads,
+            in_proj_weight,
+            in_proj_bias,
         })
     }
 
