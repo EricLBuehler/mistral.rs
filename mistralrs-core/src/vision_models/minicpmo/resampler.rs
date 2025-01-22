@@ -6,7 +6,7 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{layer_norm, LayerNorm, Linear, VarBuilder};
 use mistralrs_quant::MatMul;
 
-use crate::layers_masker::masked_fill;
+use crate::{layers::GetFloatInfo, layers_masker::masked_fill};
 
 const DEFAULT_MAX_SIZE: (usize, usize) = (70, 70);
 
@@ -36,10 +36,12 @@ fn get_2d_sincos_pos_embed_from_grid(embed_dim: usize, grid: &Tensor) -> Result<
 }
 
 fn get_1d_sincos_pos_embed_from_grid_new(embed_dim: usize, pos: &Tensor) -> Result<Tensor> {
-    let mut omega = Tensor::arange(0., embed_dim as f32 / 2., pos.device())?;
-    omega = (omega / (embed_dim as f64 / 2.))?;
-    omega = (1f64 / (10_000f64 * omega)?)?;
-    omega = omega.unsqueeze(0)?;
+    let inv_freq: Vec<_> = (0..embed_dim)
+        .step_by(2)
+        .map(|i| 1f32 / 10_000f32.powf(i as f32 / embed_dim as f32))
+        .collect();
+    let inv_freq_len = inv_freq.len();
+    let omega = Tensor::from_vec(inv_freq, (1, inv_freq_len), pos.device())?;
 
     let (h, w) = pos.dims2()?;
 
@@ -293,7 +295,7 @@ impl MultiheadAttention {
             att = match attn_mask {
                 Some(mask) => {
                     let mask = mask.reshape((bs, self.num_heads, (), kv_seq))?;
-                    masked_fill(&att, &mask, f32::NEG_INFINITY)?
+                    masked_fill(&att, &mask, att.dtype().finfo()?.min as f32)?
                 }
                 None => att,
             };

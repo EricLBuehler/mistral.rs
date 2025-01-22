@@ -1010,7 +1010,7 @@ impl RotaryEmbedding {
     ) -> Result<Self> {
         let inv_freq: Vec<_> = (0..head_dim)
             .step_by(2)
-            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32) as f32)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?;
@@ -1038,7 +1038,7 @@ impl RotaryEmbedding {
     ) -> Result<Self> {
         let inv_freq: Vec<_> = (0..rot_dim)
             .step_by(2)
-            .map(|i| 1f32 / base.powf(i as f32 / rot_dim as f32) as f32)
+            .map(|i| 1f32 / base.powf(i as f32 / rot_dim as f32))
             .collect();
         let inv_freq_len = inv_freq.len();
         let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?;
