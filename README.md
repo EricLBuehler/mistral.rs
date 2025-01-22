@@ -31,6 +31,20 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
+- 🐋🐋🐋 Run the Deepseek R1/V3 model: [documentation](docs/DEEPSEEKV3.md)
+
+    ```
+    ./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1
+    ```
+
+- 🐋🐋🐋 Run the Deepseek R1 [distillations](https://huggingface.co/collections/deepseek-ai/deepseek-r1-678e1e131c0169c0bc89728d) out of the box
+
+    ```
+    ./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+    ./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+    ./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+    ```
+
 - 🦙📷 Run the **Llama 3.2 Vision** Model: [documentation and guide here](docs/VLLAMA.md)
 
     <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
@@ -50,12 +64,6 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     ```
     ./mistralrs-server -i vision-plain -m HuggingFaceTB/SmolVLM-Instruct -a idefics3
-    ```
-
-- 🐋🐋 Run the Deepseek V2 model: [documentation](docs/DEEPSEEKV2.md)
-
-    ```
-    ./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-V2-Lite
     ```
 
 - φ³ Run the new Phi 3.5/3.1/3 model with 128K context window

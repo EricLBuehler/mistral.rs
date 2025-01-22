@@ -27,7 +27,8 @@ When using ISQ, it will automatically load ISQ-able weights into CPU memory befo
 
 For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ "organization" parameter in all APIs. The following models support MoQE:
 - [Phi 3.5 MoE](PHI3.5MOE.md)
-- [DeepseekV2](DEEPSEEKV2.md)
+- [DeepSeek V2](DEEPSEEKV2.md)
+- [DeepSeek V3 / DeepSeek R1](DEEPSEEKV3.md)
 
 ## Accuracy
 

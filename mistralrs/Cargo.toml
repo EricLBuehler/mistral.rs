@@ -166,3 +166,7 @@ required-features = []
 [[example]]
 name = "vision_auto_device_map"
 required-features = []
+
+[[example]]
+name = "deepseekr1"
+required-features = []
