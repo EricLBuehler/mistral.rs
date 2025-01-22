@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
 
-use super::{DeviceMappedModelLoader, NormalLoadingMetadata};
+use super::{DeviceMappedModelLoader, NonMappedSubModel, NonMappedSubModel, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
@@ -467,6 +467,10 @@ impl DeviceMappedModelLoader for Phi3VLoader {
 
         Ok(Box::new(cfg))
     }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
 }
 
 // ======================== Idefics 2 loader
@@ -796,6 +800,10 @@ impl DeviceMappedModelLoader for Idefics2Loader {
 
         Ok(Box::new(cfg))
     }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
 }
 
 // ======================== LLaVANext Loader
@@ -1044,6 +1052,10 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
 
         Ok(Box::new(cfg))
     }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
 }
 
 // ======================== LLaVA Loader
@@ -1283,6 +1295,10 @@ impl DeviceMappedModelLoader for LLaVALoader {
         };
 
         Ok(Box::new(cfg))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
     }
 }
 
@@ -1658,6 +1674,10 @@ impl DeviceMappedModelLoader for VLlamaLoader {
 
         Ok(Box::new(cfg))
     }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
 }
 
 // ======================== Qwen2VL Loader
@@ -1941,6 +1961,10 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
 
         Ok(Box::new(cfg))
     }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
 }
 
 // ======================== Idefics 3 loader
@@ -2217,6 +2241,10 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         };
 
         Ok(Box::new(cfg))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
     }
 }
 

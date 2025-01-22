@@ -1,25 +1,34 @@
-# DeepSeek V2: [`deepseek-ai/DeepSeek-V2-Lite`](https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite)
+# DeepSeek V3: [`deepseek-ai/DeepSeek-V3`](https://huggingface.co/deepseek-ai/DeepSeek-V3), [`deepseek-ai/DeepSeek-R1`](https://huggingface.co/deepseek-ai/DeepSeek-R1)
 
-The DeepSeek V2 is a mixture of expert (MoE) model featuring ["Multi-head Latent Attention"](https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite#5-model-architecture).
-
-- Context length of **32k tokens** (Lite model), **128k tokens** (full model)
-- 64 routed experts (Lite model), 160 routed experts (full model)
+The DeepSeek V3 is a mixture of expert (MoE) model.
 
 ```
-./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-V2-Lite
+./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-R1
 ```
+
+> [!NOTE]
+> The non-distill versions of the DeepSeek R1 models share the DeepSeek V3 architecture.
 
 > [!NOTE]
 > This models supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
 
 ```
-./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-V2-Lite --organization moqe
+./mistralrs-server --isq Q4K -i plain -m deepseek-ai/DeepSeek-R1 --organization moqe
+```
+
+## Running the distill models
+
+The various [distillation](https://huggingface.co/collections/deepseek-ai/deepseek-r1-678e1e131c0169c0bc89728d) models can be run out of the box.
+```
+./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
 ```
 
 ## HTTP API
 
 ```
-./mistralrs-server --isq Q4K --port 1234 plain -m deepseek-ai/DeepSeek-V2-Lite
+./mistralrs-server --isq Q4K --port 1234 plain -m deepseek-ai/DeepSeek-R1
 ```
 
 ```py
@@ -53,8 +62,8 @@ from mistralrs import Runner, Which, ChatCompletionRequest, Architecture
 
 runner = Runner(
     which=Which.Plain(
-        model_id="deepseek-ai/DeepSeek-V2-Lite",
-        arch=Architecture.DeepseekV2,
+        model_id="deepseek-ai/DeepSeek-R1",
+        arch=Architecture.DeepseekV3,
     ),
 )
 
@@ -75,7 +84,7 @@ print(res.usage)
 ```
 
 ## Rust API
-You can find this example [here](../mistralrs/examples/deepseekv2/main.rs).
+You can find this example [here](../mistralrs/examples/deepseekr1/main.rs).
 
 ```rust
 use anyhow::Result;
@@ -85,7 +94,7 @@ use mistralrs::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("deepseek-ai/DeepSeek-V2-Lite")
+    let model = TextModelBuilder::new("deepseek-ai/DeepSeek-R1")
         .with_isq(IsqType::Q4K)
         .with_logging()
         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?

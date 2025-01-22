@@ -80,27 +80,32 @@ struct VisionEmbeddings {
 /// torch.bucketize with right=True
 /// Returns a 1d tensor of shape (xs.len(),) on the CPU
 fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Tensor> {
-    // Initialize a vector to store the bucket indices
-    let mut indices = vec![0; xs.len()];
+    use std::cmp::Ordering;
 
-    // Iterate over each element in `xs`
-    for (i, &x) in xs.iter().enumerate() {
-        // Find the index of the bucket for the current element
-        let mut index = 0;
-        for (j, &boundary) in boundaries.iter().enumerate() {
-            if x < boundary {
-                index = j;
-                break;
-            }
-        }
-        // If the value is greater than or equal to all boundaries, set the index to the length of boundaries
-        if index == 0 && x >= boundaries[boundaries.len() - 1] {
-            index = boundaries.len();
-        }
-        indices[i] = index as u32;
+    let mut result = Vec::with_capacity(xs.len());
+
+    for &x in xs {
+        // binary_search_by returns:
+        //   Ok(i)   if boundaries[i] == x
+        //   Err(i)  if x would be inserted at i
+        //
+        // The returned i is the "insertion point" for x to keep
+        // boundaries sorted. That i is the smallest position
+        // where boundaries[i] >= x (i.e. bisect_left).
+
+        let idx = match boundaries.binary_search_by(|&val| {
+            // Use partial_cmp here; assume no NaNs.
+            // For robust handling of NaNs, you might need a custom comparison.
+            val.partial_cmp(&x).unwrap_or(Ordering::Less)
+        }) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+
+        result.push(idx as u32);
     }
 
-    Tensor::from_vec(indices, (xs.len(),), device)
+    Tensor::from_vec(result, (xs.len(),), device)
 }
 
 impl VisionEmbeddings {
@@ -182,14 +187,29 @@ impl VisionEmbeddings {
                 .unsqueeze(D::Minus1)?
                 .mul(self.num_patches_per_side as f64)?
                 .broadcast_add(&bucket_coords_w)?
-                .flatten_all()?;
+                .flatten_all()?
+                .to_vec1::<u32>()?;
 
+            let true_indices = p_attn_mask
+                .flatten_all()?
+                .to_vec1::<u8>()?
+                .iter()
+                .enumerate()
+                .filter_map(|(i, x)| if *x != 0 { Some(i) } else { None })
+                .collect::<Vec<_>>();
             let position_ids_b = position_ids.i(b_idx)?;
-            new_position_ids.push(
-                p_attn_mask
-                    .flatten_all()?
-                    .where_cond(&pos_ids, &position_ids_b)?,
-            );
+
+            let mut new_position_ids_b = position_ids_b.to_vec1::<u32>()?;
+            let new_position_ids_b_len = new_position_ids_b.len();
+            for (i, true_idx) in true_indices.into_iter().enumerate() {
+                new_position_ids_b[true_idx] = pos_ids[i];
+            }
+
+            new_position_ids.push(Tensor::from_vec(
+                new_position_ids_b,
+                new_position_ids_b_len,
+                pixel_values.device(),
+            )?);
         }
         let position_ids = Tensor::stack(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;

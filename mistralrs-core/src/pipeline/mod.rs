@@ -34,11 +34,10 @@ pub use loaders::{
     AdapterKind, AutoDeviceMapParams, AutoLoader, DeepSeekV2Loader, DeviceMappedModelLoader,
     DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader, Gemma2Loader,
     GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
-    LocalModelPaths, MiniCpmOLoader, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
-    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
-    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader,
-    Qwen2VLLoader, Starcoder2Loader, TokenSource, VLlamaLoader, VisionLoaderType, VisionModel,
-    VisionModelLoader,
+    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType,
+    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
+    Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Starcoder2Loader,
+    TokenSource, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,MiniCpmOLoader, DeepSeekV3Loader
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};

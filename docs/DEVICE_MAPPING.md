@@ -9,10 +9,10 @@ components on the GPU.
 
 To control the mapping across devices, you can set the following maximum parameters which the model should expect in a prompt.
 
-- maximum sequence length
-- maximum batch size
-- (vision models) maximum image length (length refers to the edge length)
-- (vision models) maximum number of images
+- maximum sequence length (default: 4096)
+- maximum batch size (default: 1)
+- (vision models) maximum image length (length refers to the edge length) (default: 1024)
+- (vision models) maximum number of images (default: 1)
 
 These parameters do not translate to hard limits during runtime, they only control the mapping.
 
