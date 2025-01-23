@@ -1303,3 +1303,16 @@ impl GetFloatInfo for DType {
         Ok(finfo)
     }
 }
+
+/// AvgPool1d with no padding.
+pub struct AvgPool1d {
+    pub kernel_size: usize,
+    pub stride: usize,
+}
+
+impl Module for AvgPool1d {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.unsqueeze(2)?
+            .avg_pool2d_with_stride((1, self.kernel_size), (1, self.stride))
+    }
+}

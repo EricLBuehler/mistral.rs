@@ -8,17 +8,15 @@ use crate::{
     layers::{clamp_for_f16, Sdpa},
 };
 
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct WhisperEncoderConfig {
-    vocab_size: usize,
-    num_mel_bins: usize,
-    encoder_layers: usize,
-    encoder_attention_heads: usize,
-    encoder_ffn_dim: usize,
-    activation_function: Activation,
-    d_model: usize,
-    num_hidden_layers: bool,
-    max_length: usize,
-    max_source_positions: usize,
+    pub num_mel_bins: usize,
+    pub encoder_layers: usize,
+    pub encoder_attention_heads: usize,
+    pub encoder_ffn_dim: usize,
+    pub activation_function: Activation,
+    pub d_model: usize,
+    pub max_source_positions: usize,
 }
 
 pub struct WhisperAttention {

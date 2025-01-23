@@ -1,7 +1,7 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use candle_nn::{Linear, VarBuilder};
 pub use config::MiniCpmOConfig;
 pub use inputs_processor::MiniCpmOProcessor;
 use mistralrs_quant::QuantMethod;
@@ -10,6 +10,7 @@ use resampler::Resampler;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
+    layers::{Activation, AvgPool1d},
     models::qwen2,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -21,18 +22,42 @@ use crate::{
 
 use self::siglip::SiglipVisionTransformer;
 
-use super::siglip;
+use super::common::{siglip, whisper::WhisperEncoder};
 
 mod config;
 mod inputs_processor;
 mod resampler;
-mod whisper;
+
+pub struct MultiModalProjector {
+    act: Activation,
+    linear1: Linear,
+    linear2: Linear,
+}
+
+impl MultiModalProjector {
+    fn new(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            act: Activation::Relu,
+            linear1: candle_nn::linear(in_dim, out_dim, vb.pp("linear1"))?,
+            linear2: candle_nn::linear(in_dim, out_dim, vb.pp("linear2"))?,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.apply(&self.linear1)?
+            .apply(&self.act)?
+            .apply(&self.linear2)
+    }
+}
 
 pub struct MiniCpmOModel {
     cfg: MiniCpmOConfig,
     llm: qwen2::Model,
     vpm: SiglipVisionTransformer,
     resampler: Resampler,
+    apm: WhisperEncoder,
+    audio_projection_layer: MultiModalProjector,
+    audio_avg_pooler: AvgPool1d,
 }
 
 impl MiniCpmOModel {
@@ -51,6 +76,7 @@ impl MiniCpmOModel {
             normal_loading_metadata,
             attention_mechanism,
         )?;
+        // Vision
         let vpm = SiglipVisionTransformer::new(
             &cfg.vision_config,
             vb.pp("vpm").set_device(real_device.clone()),
@@ -64,11 +90,25 @@ impl MiniCpmOModel {
             None,
             vb.pp("resampler").set_device(real_device.clone()),
         )?;
+        // Audio
+        let apm = WhisperEncoder::new(&cfg.audio_config, vb.pp("apm"))?;
+        let audio_projection_layer = MultiModalProjector::new(
+            cfg.audio_config.encoder_ffn_dim / 4,
+            cfg.text_config.hidden_size,
+            vb.pp("audio_projection_layer"),
+        )?;
+        let audio_avg_pooler = AvgPool1d {
+            kernel_size: cfg.audio_pool_step,
+            stride: cfg.audio_pool_step,
+        };
         Ok(Self {
             cfg: cfg.clone(),
             llm,
             vpm,
             resampler,
+            apm,
+            audio_projection_layer,
+            audio_avg_pooler,
         })
     }
 
