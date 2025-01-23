@@ -26,6 +26,7 @@ use super::siglip;
 mod config;
 mod inputs_processor;
 mod resampler;
+mod whisper;
 
 pub struct MiniCpmOModel {
     cfg: MiniCpmOConfig,
