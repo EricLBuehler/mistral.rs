@@ -1446,7 +1446,7 @@
                     <span class="kw">if let </span><span class="prelude-val">Some</span>(artifact) = artifact_isqs.get(<span class="kw-2">&amp;</span>i) {
                         <span class="kw">let </span>artifact = artifact.data();
                         <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-                        </span><span class="kw">let </span>isq_type = artifact[<span class="number">4</span>];
+                        </span><span class="kw">let </span>isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
                         <span class="kw">let </span>deserialized = <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
                             QuantizedSerdeType::Gguf =&gt; {
                                 GgufMatMul::deserialize(Cow::from(artifact), <span class="kw-2">&amp;</span>devices[i])<span class="question-mark">?

@@ -189,7 +189,31 @@
 <a href="#188" id="188">188</a>
 <a href="#189" id="189">189</a>
 <a href="#190" id="190">190</a>
-<a href="#191" id="191">191</a></pre></div><pre class="rust"><code><span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a></pre></div><pre class="rust"><code><span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, WithDType};
 <span class="kw">use </span>float8::F8E4M3;
@@ -199,13 +223,15 @@
 // v0.1.1: add i16 dtype
 // v0.1.2: add F8E4M3
 
-</span><span class="kw">const </span>HQFF_VERSION_MAJOR: u32 = <span class="number">0</span>;
-<span class="kw">const </span>HQFF_VERSION_MINOR: u32 = <span class="number">1</span>;
-<span class="kw">const </span>HQFF_VERSION_PATCH: u32 = <span class="number">2</span>;
+</span><span class="kw">const </span>UQFF_VERSION_MAJOR: u32 = <span class="number">0</span>;
+<span class="kw">const </span>UQFF_VERSION_MINOR: u32 = <span class="number">1</span>;
+<span class="kw">const </span>UQFF_VERSION_PATCH: u32 = <span class="number">2</span>;
 
 <span class="doccomment">/// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>HQFF_VERSION: u32 =
-    (HQFF_VERSION_MAJOR &lt;&lt; (<span class="number">8 </span>* <span class="number">2</span>)) | (HQFF_VERSION_MINOR &lt;&lt; <span class="number">8</span>) | HQFF_VERSION_PATCH;
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>UQFF_VERSION: u32 =
+    (UQFF_VERSION_MAJOR &lt;&lt; (<span class="number">8 </span>* <span class="number">2</span>)) | (UQFF_VERSION_MINOR &lt;&lt; <span class="number">8</span>) | UQFF_VERSION_PATCH;
+<span class="doccomment">/// Offset for the quant type. UQFF always serializes the version first.
+</span><span class="kw">pub const </span>UQFF_QUANT_TYPE_OFFSET: usize = std::mem::size_of::&lt;u32&gt;();
 
 <span class="doccomment">/// Check if major version matches: is backwards compatible
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>version_is_compatible(version: u32) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
@@ -213,8 +239,8 @@
     <span class="kw">let </span>_minor = version &gt;&gt; <span class="number">8</span>;
     <span class="kw">let </span>_patch = version;
 
-    <span class="kw">if </span>major != HQFF_VERSION_MAJOR {
-        <span class="macro">candle_core::bail!</span>(<span class="string">"Major version of ISQ artifact file ({major}) does not match the implementation in this build ({HQFF_VERSION_MAJOR})"</span>);
+    <span class="kw">if </span>major != UQFF_VERSION_MAJOR {
+        <span class="macro">candle_core::bail!</span>(<span class="string">"Major version of ISQ artifact file ({major}) does not match the implementation in this build ({UQFF_VERSION_MAJOR})"</span>);
     }
 
     <span class="prelude-val">Ok</span>(())
@@ -336,6 +362,28 @@
         DType::U8 =&gt; bytes_to_data::&lt;u8&gt;(<span class="kw-2">&amp;</span>tensor_data, <span class="kw-2">&amp;</span>dims, device),
         DType::F8E4M3 =&gt; bytes_to_data::&lt;F8E4M3&gt;(<span class="kw-2">&amp;</span>tensor_data, <span class="kw-2">&amp;</span>dims, device),
     }
+}
+
+<span class="doccomment">/// Just seek the reader ahead.
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>fake_deserialize_tensor&lt;R: std::io::Read + std::io::Seek&gt;(
+    buffer: <span class="kw-2">&amp;mut </span>R,
+) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">let </span>data_len = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
+
+    <span class="comment">// DType
+    </span><span class="kw">let </span>_dtype = read_dtype(buffer)<span class="question-mark">?</span>;
+
+    <span class="kw">let </span>n_dims = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
+
+    <span class="kw">let </span><span class="kw-2">mut </span>dims = Vec::with_capacity(n_dims);
+    <span class="kw">for _ in </span><span class="number">0</span>..n_dims {
+        dims.push(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)
+    }
+
+    <span class="comment">// Fake read the data in bytes
+    </span>buffer.seek_relative(data_len <span class="kw">as </span>i64)<span class="question-mark">?</span>;
+
+    <span class="prelude-val">Ok</span>(())
 }
 
 <span class="kw">fn </span>data_to_bytes&lt;T: WithDType&gt;(<span class="kw-2">mut </span>vs: Vec&lt;T&gt;) -&gt; Vec&lt;u8&gt; {

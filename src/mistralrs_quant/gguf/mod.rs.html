@@ -319,7 +319,55 @@
 <a href="#318" id="318">318</a>
 <a href="#319" id="319">319</a>
 <a href="#320" id="320">320</a>
-<a href="#321" id="321">321</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::{Cursor, Read},
     num::NonZeroUsize,
@@ -335,7 +383,7 @@
 
 <span class="kw">use crate</span>::{
     generate_isq, generate_isq_imatrix,
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
+    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
@@ -482,7 +530,7 @@
 <span class="comment">// Serialization structure:
 //
 // -----------------------
-// HQFF version, u32, little endian
+// UQFF version, u32, little endian
 // -----------------------
 // ISQ type (0 for GGUF), u8, little endian
 // -----------------------
@@ -538,7 +586,8 @@
 
                 <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
 
-                buffer.extend(<span class="kw-2">&amp;</span>HQFF_VERSION.to_le_bytes());
+                <span class="comment">// Version is always first!
+                </span>buffer.extend(<span class="kw-2">&amp;</span>UQFF_VERSION.to_le_bytes());
 
                 <span class="comment">// ISQ type for GGUF is 0
                 </span>buffer.push(QuantizedSerdeType::Gguf <span class="kw">as </span>u8);
@@ -576,7 +625,7 @@
     }
 
     <span class="kw">fn </span>deserialize(data: Cow&lt;[u8]&gt;, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data.to_vec());
+        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
 
         <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
@@ -595,7 +644,8 @@
 
         <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
 
-        <span class="kw">let </span>dtype = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
+        <span class="comment">// TODO: keep this in sync with get_isq_type_from_uqff!
+        </span><span class="kw">let </span>dtype = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
         <span class="kw">let </span>dtype = <span class="kw">match </span>dtype {
             <span class="number">0 </span>=&gt; GgmlDType::F32,
             <span class="number">1 </span>=&gt; GgmlDType::F16,
@@ -638,6 +688,52 @@
             w: QMatMul::QTensor(w.into()),
             b,
         }))
+    }
+}
+
+<span class="kw">impl </span>GgufMatMul {
+    <span class="kw">pub fn </span>get_isq_type_from_uqff(data: Cow&lt;[u8]&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;IsqType&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
+
+        <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
+            <span class="kw">return </span><span class="prelude-val">Err</span>(candle_core::Error::wrap(e));
+        }
+
+        <span class="kw">let </span>isq_type = buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">if </span>isq_type != QuantizedSerdeType::Gguf <span class="kw">as </span>usize {
+            <span class="macro">candle_core::bail!</span>(
+                <span class="string">"ISQ type ({isq_type}) doesn't match expected type {}"</span>,
+                QuantizedSerdeType::Gguf <span class="kw">as </span>usize
+            );
+        }
+
+        <span class="kw">let _ </span>= buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
+
+        <span class="kw">let _ </span>= buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+
+        <span class="kw">let </span>dtype = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
+        <span class="kw">let </span>dtype = <span class="kw">match </span>dtype {
+            <span class="number">0 </span>=&gt; GgmlDType::F32,
+            <span class="number">1 </span>=&gt; GgmlDType::F16,
+            <span class="number">2 </span>=&gt; GgmlDType::Q4_0,
+            <span class="number">3 </span>=&gt; GgmlDType::Q4_1,
+            <span class="number">6 </span>=&gt; GgmlDType::Q5_0,
+            <span class="number">7 </span>=&gt; GgmlDType::Q5_1,
+            <span class="number">8 </span>=&gt; GgmlDType::Q8_0,
+            <span class="number">9 </span>=&gt; GgmlDType::Q8_1,
+            <span class="number">10 </span>=&gt; GgmlDType::Q2K,
+            <span class="number">11 </span>=&gt; GgmlDType::Q3K,
+            <span class="number">12 </span>=&gt; GgmlDType::Q4K,
+            <span class="number">13 </span>=&gt; GgmlDType::Q5K,
+            <span class="number">14 </span>=&gt; GgmlDType::Q6K,
+            <span class="number">15 </span>=&gt; GgmlDType::Q8K,
+            <span class="comment">// https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+            </span><span class="number">30 </span>=&gt; GgmlDType::BF16,
+            <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"unknown dtype for quantized weight tensor {dtype}"</span>),
+        };
+
+        IsqType::try_from(dtype)
     }
 }
 </code></pre></div></section></main></body></html>

@@ -37,7 +37,8 @@
 <a href="#36" id="36">36</a>
 <a href="#37" id="37">37</a>
 <a href="#38" id="38">38</a>
-<a href="#39" id="39">39</a></pre></div><pre class="rust"><code><span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
+<a href="#39" id="39">39</a>
+<a href="#40" id="40">40</a></pre></div><pre class="rust"><code><span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 </span><span class="kw">mod </span>ffi;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>isq;
 <span class="kw">mod </span>ops;
@@ -45,9 +46,10 @@
 <span class="kw">mod </span>uqff;
 
 <span class="kw">pub use </span>ops::{BitWiseOp, LeftshiftOp};
+<span class="kw">pub use </span>uqff::UQFF_QUANT_TYPE_OFFSET;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>uqff::{
-    deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
-    HQFF_VERSION,
+    deserialize_tensor, fake_deserialize_tensor, read_dtype, serialize_tensor,
+    version_is_compatible, write_dtype, UQFF_VERSION,
 };
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]

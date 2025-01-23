@@ -359,7 +359,8 @@
 <a href="#358" id="358">358</a>
 <a href="#359" id="359">359</a>
 <a href="#360" id="360">360</a>
-<a href="#361" id="361">361</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
     num::NonZeroUsize,
@@ -377,7 +378,7 @@
     cublaslt::{maybe_init_cublas_lt_wrapper, F8MatmulOutType, CUBLASLT_HANDLE},
     utils::{
         deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
-        HQFF_VERSION,
+        UQFF_VERSION,
     },
     DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
     QuantizedSerdeType, UnquantLinear,
@@ -550,7 +551,7 @@
 <span class="comment">// Serialization structure:
 //
 // -----------------------
-// HQFF version, u32, little endian
+// UQFF version, u32, little endian
 // -----------------------
 // ISQ type (3 for fp8), u8, little endian
 // -----------------------
@@ -579,7 +580,8 @@
     <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
 
-        buffer.extend(<span class="kw-2">&amp;</span>HQFF_VERSION.to_le_bytes());
+        <span class="comment">// Version is always first!
+        </span>buffer.extend(<span class="kw-2">&amp;</span>UQFF_VERSION.to_le_bytes());
 
         <span class="comment">// ISQ type for fp8 is 3
         </span>buffer.push(QuantizedSerdeType::Fp8 <span class="kw">as </span>u8);

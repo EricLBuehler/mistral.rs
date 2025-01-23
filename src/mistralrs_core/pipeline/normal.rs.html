@@ -1033,7 +1033,16 @@
 <a href="#1032" id="1032">1032</a>
 <a href="#1033" id="1033">1033</a>
 <a href="#1034" id="1034">1034</a>
-<a href="#1035" id="1035">1035</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1035" id="1035">1035</a>
+<a href="#1036" id="1036">1036</a>
+<a href="#1037" id="1037">1037</a>
+<a href="#1038" id="1038">1038</a>
+<a href="#1039" id="1039">1039</a>
+<a href="#1040" id="1040">1040</a>
+<a href="#1041" id="1041">1041</a>
+<a href="#1042" id="1042">1042</a>
+<a href="#1043" id="1043">1043</a>
+<a href="#1044" id="1044">1044</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
@@ -1057,7 +1066,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::get_chat_template;
-<span class="kw">use </span><span class="kw">crate</span>::pipeline::isq::{UqffFullSer, UQFF_RESIDUAL_SAFETENSORS};
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::isq::UqffFullSer;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::make_prompt_chunk;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
@@ -1072,13 +1081,14 @@
     normal_model_loader, xlora_model_loader, DeviceMapSetting, PagedAttentionConfig, Pipeline,
     Topology, TryIntoDType,
 };
-<span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
+<span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-<span class="kw">use </span>mistralrs_quant::IsqType;
+<span class="kw">use </span>mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>regex_automata::meta::Regex;
 <span class="kw">use </span>std::any::Any;
+<span class="kw">use </span>std::borrow::Cow;
 <span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::path::{Path, PathBuf};
@@ -1325,38 +1335,46 @@
             // Match logic below where UQFF has priority
             </span><span class="kw">let </span>(layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(serialized) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
-                    <span class="kw">let </span>parent = serialized
-                        .parent()
-                        .context(<span class="string">"Target UQFF path must have a filename!"</span>)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>residual = parent.join(UQFF_RESIDUAL_SAFETENSORS);
-
-                    <span class="kw">let </span>ser_total_size = {
+                    <span class="kw">let </span>weight_pack_factor = {
                         <span class="kw">let </span>ser_artifacts = <span class="kw">unsafe </span>{
                             candle_core::safetensors::MmapedSafetensors::new(serialized)<span class="question-mark">?
                         </span>};
-                        ser_artifacts
-                            .tensors()
-                            .iter()
-                            .map(|(<span class="kw">_</span>, t)| t.data().len())
-                            .sum::&lt;usize&gt;()
-                    };
-                    <span class="kw">let </span>res_total_size = {
-                        <span class="kw">let </span>res_artifacts =
-                            <span class="kw">unsafe </span>{ candle_core::safetensors::MmapedSafetensors::new(residual)<span class="question-mark">? </span>};
-                        res_artifacts
-                            .tensors()
-                            .iter()
-                            .map(|(<span class="kw">_</span>, t)| t.data().len())
-                            .sum::&lt;usize&gt;()
-                    };
-                    <span class="kw">let </span>size_per_layer = ser_total_size / <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>;
+                        <span class="kw">let </span><span class="kw-2">mut </span>total_pack_factors = <span class="number">0</span>;
+                        <span class="kw">let </span>total_tensors = ser_artifacts.tensors().len();
+                        <span class="kw">for </span>(<span class="kw">_</span>, artifact) <span class="kw">in </span>ser_artifacts.tensors() {
+                            <span class="kw">let </span>artifact = artifact.data();
+                            <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                            </span><span class="kw">let </span>isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
+                            <span class="kw">let </span>pack_factor = <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">?
+                            </span>{
+                                QuantizedSerdeType::Hqq =&gt; {
+                                    HqqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))<span class="question-mark">?
+                                        </span>.pack_factor(dtype)
+                                }
+                                QuantizedSerdeType::Gguf =&gt; {
+                                    GgufMatMul::get_isq_type_from_uqff(Cow::Borrowed(artifact))<span class="question-mark">?
+                                        </span>.pack_factor(dtype)
+                                }
+                                QuantizedSerdeType::Fp8 =&gt; IsqType::F8E4M3.pack_factor(dtype),
+                                QuantizedSerdeType::Unquant =&gt; <span class="number">1</span>,
+                            };
+                            total_pack_factors += pack_factor;
+                        }
 
-                    <span class="comment">// This is not completely correct but hopefully close enough.
-                    // For example, the norms are not necessarily correctly done.
-                    </span>(
-                        <span class="macro">vec!</span>[size_per_layer; <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>],
-                        res_total_size,
-                        ser_total_size,
+                        total_pack_factors / total_tensors
+                    };
+
+                    <span class="kw">let </span>layer_sizes_in_bytes =
+                        <span class="self">self</span>.inner
+                            .layer_sizes_in_bytes(<span class="kw-2">&amp;</span>config, dtype, weight_pack_factor)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>non_mapped_size_in_bytes =
+                        <span class="self">self</span>.inner
+                            .non_mapped_size_in_bytes(<span class="kw-2">&amp;</span>config, dtype, weight_pack_factor)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>layer_sizes_sum = layer_sizes_in_bytes.iter().sum::&lt;usize&gt;();
+                    (
+                        layer_sizes_in_bytes,
+                        non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 } <span class="kw">else if let </span><span class="prelude-val">Some</span>(isq) = in_situ_quant {
                     <span class="kw">let </span>weight_pack_factor = isq.pack_factor(dtype);

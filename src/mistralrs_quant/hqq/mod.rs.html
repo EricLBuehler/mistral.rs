@@ -792,7 +792,53 @@
 <a href="#791" id="791">791</a>
 <a href="#792" id="792">792</a>
 <a href="#793" id="793">793</a>
-<a href="#794" id="794">794</a></pre></div><pre class="rust"><code><span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
+<a href="#831" id="831">831</a>
+<a href="#832" id="832">832</a>
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a></pre></div><pre class="rust"><code><span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Shape, Tensor};
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
@@ -812,8 +858,8 @@
 
 <span class="kw">use crate</span>::{
     utils::{
-        deserialize_tensor, serialize_tensor, version_is_compatible, BitWiseOp, LeftshiftOp,
-        HQFF_VERSION,
+        deserialize_tensor, fake_deserialize_tensor, serialize_tensor, version_is_compatible,
+        BitWiseOp, LeftshiftOp, UQFF_VERSION,
     },
     IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
@@ -1438,7 +1484,7 @@
 <span class="comment">// Serialization structure:
 //
 // -----------------------
-// HQFF version, u32, little endian
+// UQFF version, u32, little endian
 // -----------------------
 // ISQ type (2 for hqq), u8, little endian
 // -----------------------
@@ -1481,7 +1527,8 @@
     <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
 
-        buffer.extend(<span class="kw-2">&amp;</span>HQFF_VERSION.to_le_bytes());
+        <span class="comment">// Version is always first!
+        </span>buffer.extend(<span class="kw-2">&amp;</span>UQFF_VERSION.to_le_bytes());
 
         <span class="comment">// ISQ type for hqq is 2
         </span>buffer.push(QuantizedSerdeType::Hqq <span class="kw">as </span>u8);
@@ -1522,7 +1569,7 @@
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
     {
-        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data.to_vec());
+        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
 
         <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
@@ -1551,7 +1598,8 @@
         }
         <span class="kw">let </span>w_shape = Shape::from_dims(<span class="kw-2">&amp;</span>dims);
 
-        <span class="kw">let </span>bits = HqqBits::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
+        <span class="comment">// TODO: keep this in sync with get_isq_type_from_uqff!
+        </span><span class="kw">let </span>bits = HqqBits::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
         <span class="kw">let </span>group_size = NonZeroUsize::try_from(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
         <span class="kw">let </span>axis = HqqAxis::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
         <span class="kw">let </span>optimization_steps = <span class="kw">match </span>buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize {
@@ -1584,6 +1632,50 @@
             w_shape,
             cfg,
         }))
+    }
+}
+
+<span class="kw">impl </span>HqqLayer {
+    <span class="kw">pub fn </span>get_isq_type_from_uqff(data: Cow&lt;[u8]&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;IsqType&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
+
+        <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
+            <span class="kw">return </span><span class="prelude-val">Err</span>(candle_core::Error::wrap(e));
+        }
+
+        <span class="kw">let </span>isq_type = buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">if </span>isq_type != QuantizedSerdeType::Hqq <span class="kw">as </span>usize {
+            <span class="macro">candle_core::bail!</span>(
+                <span class="string">"ISQ type ({isq_type}) doesn't match expected type {}"</span>,
+                QuantizedSerdeType::Hqq <span class="kw">as </span>usize
+            );
+        }
+
+        <span class="kw">let </span>_has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+
+        fake_deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
+        fake_deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
+        fake_deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>n_dims = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
+
+        <span class="kw">let </span><span class="kw-2">mut </span>dims = Vec::with_capacity(n_dims);
+        <span class="kw">for _ in </span><span class="number">0</span>..n_dims {
+            dims.push(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)
+        }
+        <span class="kw">let </span>_w_shape = Shape::from_dims(<span class="kw-2">&amp;</span>dims);
+
+        <span class="comment">// TODO: keep this in sync with get_isq_type_from_uqff!
+        </span><span class="kw">let </span>bits = HqqBits::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
+
+        <span class="kw">match </span>bits {
+            HqqBits::Eight =&gt; <span class="prelude-val">Ok</span>(IsqType::HQQ8),
+            HqqBits::Four =&gt; <span class="prelude-val">Ok</span>(IsqType::HQQ4),
+            HqqBits::One | HqqBits::Two | HqqBits::Three =&gt; {
+                <span class="macro">candle_core::bail!</span>(<span class="string">"cannot convert hqq bits to isq type"</span>)
+            }
+        }
     }
 }
 </code></pre></div></section></main></body></html>

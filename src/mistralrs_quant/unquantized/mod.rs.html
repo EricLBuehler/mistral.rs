@@ -368,7 +368,9 @@
 <a href="#367" id="367">367</a>
 <a href="#368" id="368">368</a>
 <a href="#369" id="369">369</a>
-<a href="#370" id="370">370</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
     num::NonZeroUsize,
@@ -383,7 +385,7 @@
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
+    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul, QuantMethod, QuantMethodConfig,
     QuantizedSerde, QuantizedSerdeType,
 };
@@ -666,7 +668,7 @@
 <span class="comment">// Serialization structure:
 //
 // -----------------------
-// HQFF version, u32, little endian
+// UQFF version, u32, little endian
 // -----------------------
 // ISQ type (1 for unquantized), u8, little endian
 // -----------------------
@@ -687,7 +689,9 @@
     <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
 
-        buffer.extend(<span class="kw-2">&amp;</span>HQFF_VERSION.to_le_bytes());
+        <span class="comment">// Version is always first!
+
+        </span>buffer.extend(<span class="kw-2">&amp;</span>UQFF_VERSION.to_le_bytes());
 
         <span class="comment">// ISQ type for unquant is 1
         </span>buffer.push(QuantizedSerdeType::Unquant <span class="kw">as </span>u8);
@@ -710,7 +714,7 @@
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
     {
-        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data.to_vec());
+        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
 
         <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
