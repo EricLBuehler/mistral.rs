@@ -197,4 +197,8 @@ impl WhisperEncoder {
 
         self.layer_norm.forward(&xs)
     }
+
+    pub fn dtype(&self) -> DType {
+        self.conv1.weight().dtype()
+    }
 }

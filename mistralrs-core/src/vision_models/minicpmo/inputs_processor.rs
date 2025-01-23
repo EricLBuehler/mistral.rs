@@ -42,6 +42,8 @@ const DEFAULT_SLICE_END_TOKEN: &str = "</slice>";
 const DEFAULT_UNK_TOKEN: &str = "<unk>";
 const DEFAULT_USE_IMAGE_ID: bool = false;
 const DEFAULT_SLICE_MODE: bool = true;
+const AUDIO_START_ID: &str = "<|audio_start|>";
+const AUDIO_END_ID: &str = "<|audio_end|>";
 
 pub struct MiniCpmOImageProcessor {
     config: PreProcessorConfig,
@@ -178,7 +180,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             .iter()
             .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
 
-        let (new_input, pixel_values_all, image_bound, tgt_sizes) = if has_images {
+        let (new_input, pixel_values_all, image_bound, audio_bound, tgt_sizes) = if has_images {
             const IMAGE_TAG: &str = "(<image>./</image>)";
             const IMAGE_PATTERN: &str = r"\(<image>./</image>\)";
             const AUDIO_PATTERN: &str = r"\(<audio>./</audio>\)";
@@ -191,6 +193,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             let mut tgt_sizes_accum = Vec::new();
             let mut input_ids_accum = Vec::new();
             let mut image_bounds_accum = Vec::new();
+            let mut audio_bounds_accum = Vec::new();
 
             for seq in input_seqs.iter_mut() {
                 let PreprocessedImages {
@@ -267,7 +270,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 let final_text = text_chunks.join("");
                 seq.set_initial_prompt(final_text.clone());
 
-                let (input_ids, image_bounds) = {
+                let (input_ids, image_bounds, audio_bounds) = {
                     let im_start_id = tokenizer
                         .encode(
                             self.config
@@ -358,13 +361,57 @@ impl InputsProcessor for MiniCpmOImageProcessor {
 
                     let image_bounds = Tensor::cat(&[image_start_idx, image_end_idx], 1).unwrap();
 
-                    (input_ids, image_bounds)
+                    let audio_start_id = tokenizer
+                        .encode(AUDIO_START_ID.to_string(), true)
+                        .unwrap()
+                        .get_ids()[0];
+                    let audio_end_id = tokenizer
+                        .encode(AUDIO_END_ID.to_string(), true)
+                        .unwrap()
+                        .get_ids()[0];
+
+                    let audio_start_idx = input_ids
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, &id)| {
+                            if id == audio_start_id {
+                                Some(i as u32 + 1)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    let audio_end_idx = input_ids
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, &id)| {
+                            if id == audio_end_id {
+                                Some(i as u32)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    assert_eq!(audio_start_idx.len(), audio_end_idx.len());
+                    let audio_idx_len = audio_start_idx.len();
+
+                    let audio_start_idx =
+                        Tensor::from_vec(audio_start_idx, (audio_idx_len, 1), device).unwrap();
+                    let audio_end_idx =
+                        Tensor::from_vec(audio_end_idx, (audio_idx_len, 1), device).unwrap();
+
+                    let audio_bounds = Tensor::cat(&[audio_start_idx, audio_end_idx], 1).unwrap();
+
+                    (input_ids, image_bounds, audio_bounds)
                 };
 
                 pixel_values_accum.push(pixel_values_list);
                 tgt_sizes_accum.push(tgt_sizes);
                 input_ids_accum.push(input_ids);
                 image_bounds_accum.push(image_bounds);
+                audio_bounds_accum.push(audio_bounds);
             }
 
             let mut all_ids_new = Vec::new();
@@ -379,10 +426,11 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 Some(Tensor::stack(&all_ids_new, 0).unwrap()),
                 Some(pixel_values_accum),
                 Some(image_bounds_accum),
+                Some(audio_bounds_accum),
                 Some(tgt_sizes_accum),
             )
         } else {
-            (None, None, None, None)
+            (None, None, None, None, None)
         };
 
         let input = match new_input {
@@ -394,6 +442,9 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             pixel_values_all,
             tgt_sizes,
             image_bound,
+            audio_bound,
+            audio_feature_lens_raw: todo!(),
+            audio_features: todo!(),
         };
 
         // Dummy pixel values - real ones are in model specific args

@@ -1,7 +1,7 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Linear, VarBuilder};
+use candle_nn::{Linear, Module, VarBuilder};
 pub use config::MiniCpmOConfig;
 pub use inputs_processor::MiniCpmOProcessor;
 use mistralrs_quant::QuantMethod;
@@ -10,7 +10,7 @@ use resampler::Resampler;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::{Activation, AvgPool1d},
+    layers::{Activation, AvgPool1d, GetFloatInfo},
     models::qwen2,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -249,6 +249,116 @@ impl MiniCpmOModel {
         Ok(vllm_embedding)
     }
 
+    fn get_feat_extract_output_lengths(&self, input_lengths: &Tensor) -> Result<(Tensor, Tensor)> {
+        let input_lengths = input_lengths.to_dtype(DType::I32)?;
+        let input_lengths_after_cnn = (((input_lengths - 1.)? / 2.)?.floor()? + 1.)?;
+        let input_lengths_after_pooling = (((&input_lengths_after_cnn
+            - self.cfg.audio_pool_step as f64)?
+            / self.cfg.audio_pool_step as f64)?
+            .floor()?
+            + 1.)?;
+
+        Ok((input_lengths_after_cnn, input_lengths_after_pooling))
+    }
+
+    fn get_audio_embedding(
+        &self,
+        audio_features: &Tensor,
+        audio_feature_lens_raw: Vec<Tensor>,
+    ) -> Result<Vec<Vec<Tensor>>> {
+        let audio_feature_lens = Tensor::cat(&audio_feature_lens_raw, 0)?;
+        let (bs, _, max_mel_seq_len) = audio_features.dims3()?;
+        let max_seq_len = (max_mel_seq_len - 1) / 2 + 1;
+
+        // Create a sequence tensor of shape (bs, max_seq_len)
+        let seq_range = Tensor::arange(0, max_seq_len as u32, audio_features.device())?
+            .unsqueeze(1)?
+            .expand((bs, max_seq_len))?;
+        let lengths_expand = audio_feature_lens.unsqueeze(1)?.expand((bs, max_seq_len))?;
+
+        // Create mask: 1 for padded values
+        let padding_mask = seq_range.ge(&lengths_expand)?;
+        let audio_attention_mask = padding_mask.reshape((bs, 1, 1, max_seq_len))?.expand((
+            bs,
+            1,
+            max_seq_len,
+            max_seq_len,
+        ))?;
+        let apm_dtype = self.apm.dtype();
+        // 1 -> -inf, 0 -> 0
+        let audio_attention_mask =
+            (audio_attention_mask.to_dtype(apm_dtype)? * apm_dtype.finfo()?.min)?;
+
+        let audio_states = self
+            .apm
+            .forward(audio_features, Some(&audio_attention_mask))?;
+        let mut audio_embeds = self.audio_projection_layer.forward(&audio_states)?;
+
+        audio_embeds = audio_embeds.transpose(1, 2)?;
+        audio_embeds = self.audio_avg_pooler.forward(&audio_embeds)?;
+        audio_embeds = audio_embeds.transpose(1, 2)?;
+
+        let (_, feature_lens_after_pooling) =
+            self.get_feat_extract_output_lengths(&audio_feature_lens)?;
+
+        let num_audio_tokens = feature_lens_after_pooling.to_vec1::<i32>()?;
+
+        let mut final_audio_embeds = Vec::new();
+        let mut idx = 0;
+        for lens_i in &audio_feature_lens_raw {
+            let mut target_audio_embeds = Vec::new();
+            for _ in 0..lens_i.dim(0)? {
+                target_audio_embeds.push(audio_embeds.i((
+                    idx,
+                    ..num_audio_tokens[idx] as usize,
+                    ..,
+                ))?);
+                idx += 1;
+            }
+            final_audio_embeds.push(target_audio_embeds)
+        }
+
+        Ok(final_audio_embeds)
+    }
+
+    fn get_omni_embedding(
+        &self,
+        input_embeddings: &Tensor,
+        audio_features: &Tensor,
+        audio_feature_lens_raw: Vec<Tensor>,
+        audio_bound: Vec<Tensor>,
+    ) -> Result<Tensor> {
+        let audio_embeddings = self.get_audio_embedding(audio_features, audio_feature_lens_raw)?;
+
+        assert_eq!(audio_embeddings.len(), audio_bound.len());
+        let audio_bound_vec = audio_bound
+            .into_iter()
+            .map(|x| x.to_vec2::<u32>())
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut new_embeddings = input_embeddings.clone();
+        for ((i, audio_embs), bounds) in audio_embeddings.iter().enumerate().zip(audio_bound_vec) {
+            assert_eq!(audio_embs.len(), bounds.len());
+            for (embs, bound) in audio_embs.iter().zip(bounds) {
+                let audio_indices_len = bound[1] - bound[0];
+
+                if embs.dim(0)? != audio_indices_len as usize {
+                    candle_core::bail!(
+                        "Shape mismatch: Trying to assign embeddings of shape {:?} to input indices of length {audio_indices_len}",
+                        embs.dims(),
+                    );
+                }
+
+                new_embeddings = new_embeddings.slice_assign(
+                    &[&i, &(bound[0] as usize..bound[1] as usize), &..],
+                    &embs.to_dtype(input_embeddings.dtype())?,
+                )?;
+            }
+        }
+
+        Ok(new_embeddings)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
@@ -256,12 +366,15 @@ impl MiniCpmOModel {
         pixel_values_all: Option<Vec<Vec<Tensor>>>,
         tgt_sizes: Option<Vec<Tensor>>,
         image_bound: Option<Vec<Tensor>>,
+        audio_features: Option<Tensor>,
+        audio_feature_lens_raw: Option<Vec<Tensor>>,
+        audio_bound: Option<Vec<Tensor>>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let vllm_embedding = self.get_vllm_embedding(
+        let mut embedding = self.get_vllm_embedding(
             input_ids,
             self.llm.device(),
             pixel_values_all,
@@ -269,9 +382,21 @@ impl MiniCpmOModel {
             image_bound,
         )?;
 
+        if let Some(audio_features) = audio_features {
+            let audio_feature_lens_raw =
+                audio_feature_lens_raw.expect("Require audio_feature_lens_raw");
+            let audio_bound = audio_bound.expect("Require audio_feature_lens_raw");
+            embedding = self.get_omni_embedding(
+                &embedding,
+                &audio_features,
+                audio_feature_lens_raw,
+                audio_bound,
+            )?;
+        }
+
         self.llm.forward_embed(
             input_ids,
-            vllm_embedding,
+            embedding,
             seqlen_offsets,
             context_lens,
             metadata,
@@ -285,6 +410,9 @@ pub(crate) struct MiniCpmOSpecificArgs {
     pub(crate) pixel_values_all: Option<Vec<Vec<Tensor>>>,
     pub(crate) tgt_sizes: Option<Vec<Tensor>>,
     pub(crate) image_bound: Option<Vec<Tensor>>,
+    pub(crate) audio_features: Option<Tensor>,
+    pub(crate) audio_feature_lens_raw: Option<Vec<Tensor>>,
+    pub(crate) audio_bound: Option<Vec<Tensor>>,
 }
 
 impl VisionModel for MiniCpmOModel {
@@ -321,14 +449,21 @@ impl VisionModel for MiniCpmOModel {
             pixel_values_all,
             tgt_sizes,
             image_bound,
+            audio_features,
+            audio_feature_lens_raw,
+            audio_bound,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `MiniCpmOSpecificArgs`");
+
         self.forward(
             input_ids,
             pixel_values_all,
             tgt_sizes,
             image_bound,
+            audio_features,
+            audio_feature_lens_raw,
+            audio_bound,
             seqlen_offsets,
             context_lens,
             metadata,
@@ -340,6 +475,9 @@ impl VisionModel for MiniCpmOModel {
             pixel_values_all: None,
             tgt_sizes: None,
             image_bound: None,
+            audio_features: None,
+            audio_feature_lens_raw: None,
+            audio_bound: None,
         })
     }
 }
