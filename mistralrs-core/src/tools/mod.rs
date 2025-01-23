@@ -30,8 +30,10 @@ impl ToolCallingMatcher {
         Ok(Self { tool_choice })
     }
 
-    // Checks if the the `message_prefix` could be a tool call.
-    // If false, either [`ToolChoice::None`] was selected, or the prefix could not match.
+    // Checks if the the `message_prefix` could be a tool call. If false, either
+    // [`ToolChoice::None`] was selected, or the prefix could not match.
+    //
+    // If the start of a message could be a tool call, then it looks like an incomplete JSON of a given structure, e.g. `{"name": "foo", "param`.
     //
     // Returns a tuple of `(could_be_tool, is_complete_tool)`.
     pub fn prefix_could_be_tool(&self, message_prefix: &str) -> (bool, bool) {
