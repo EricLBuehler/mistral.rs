@@ -49,6 +49,8 @@ enum TopkMethod {
 enum ScoringFunc {
     #[serde(rename = "softmax")]
     Softmax,
+    #[serde(rename = "sigmoid")]
+    Sigmoid,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -436,6 +438,7 @@ impl MoeGate {
         let logits = xs.broadcast_matmul(&self.weight.t()?)?;
         let scores = match self.cfg.scoring_func {
             ScoringFunc::Softmax => candle_nn::ops::softmax_last_dim(&logits)?,
+            ScoringFunc::Sigmoid => candle_nn::ops::sigmoid(&logits)?,
         };
 
         // Select top-k experts
