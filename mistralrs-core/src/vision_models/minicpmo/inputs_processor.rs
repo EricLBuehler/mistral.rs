@@ -18,7 +18,9 @@ use crate::{
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
     sequence::Sequence,
-    vision_models::ModelInputs,
+    vision_models::{
+        common::whisper_feature_extractor::WhisperFeatureExtractorConfig, ModelInputs,
+    },
 };
 
 use crate::vision_models::{
@@ -85,6 +87,20 @@ impl Processor for MiniCpmOProcessor {
     fn template_action(&self) -> MessagesAction {
         MessagesAction::FlattenOnlyText
     }
+}
+
+// TODO: chunk input?
+fn get_audio_placeholder(audio_lens: usize) -> String {
+    let pool_step = 2;
+    let feature_lens = audio_lens.div_ceil(WhisperFeatureExtractorConfig::default().hop_length);
+
+    let feature_lens = (feature_lens - 1) / 2 + 1;
+    let output_lens = (feature_lens - pool_step) / pool_step + 1;
+
+    format!(
+        "{AUDIO_START_ID}{}{AUDIO_END_ID}",
+        "<unk>".repeat(output_lens)
+    )
 }
 
 impl InputsProcessor for MiniCpmOImageProcessor {
@@ -182,6 +198,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
 
         let (new_input, pixel_values_all, image_bound, audio_bound, tgt_sizes) = if has_images {
             const IMAGE_TAG: &str = "(<image>./</image>)";
+            const AUDIO_TAG: &str = "(<audio>./</audio>)";
             const IMAGE_PATTERN: &str = r"\(<image>./</image>\)";
             const AUDIO_PATTERN: &str = r"\(<audio>./</audio>\)";
 
@@ -196,6 +213,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             let mut audio_bounds_accum = Vec::new();
 
             for seq in input_seqs.iter_mut() {
+                // IMAGE
                 let PreprocessedImages {
                     pixel_values: _,
                     pixel_attention_mask: _,
@@ -224,6 +242,46 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 let pixel_values_list = pixel_values_list.unwrap();
                 let tgt_sizes = tgt_sizes.unwrap();
                 let image_sizes_all = image_sizes_all.unwrap();
+
+                // AUDIO
+                let mut audios = vec![vec![0f32; 16000]];
+                let mut audio_parts = vec![0];
+
+                let mut audio_features = Vec::new();
+                let mut audio_feature_lens = Vec::new();
+                let mut audio_placeholders = Vec::new();
+
+                assert_eq!(audios.len(), audio_parts.len());
+
+                for a in &audios {
+                    audio_placeholders.push(get_audio_placeholder(a.len()));
+                }
+
+                let mut cur_audio = Vec::new();
+                let mut merge_audio = Vec::new();
+                for ((aid, audio), _part) in audios.iter().enumerate().zip(audio_parts) {
+                    if aid == 0 || audio_parts[aid] == audio_parts[aid - 1] {
+                        cur_audio.push(audio);
+                    } else {
+                        let collect = cur_audio.into_iter().flat_map(|a| a).collect::<Vec<_>>();
+                        merge_audio.push(audio);
+                        cur_audio = vec![audio];
+                    }
+                }
+
+                // If the audio exceeds 30 seconds, split it into chunks every 30 seconds.
+                let sampling_rate = WhisperFeatureExtractorConfig::default().sampling_rate;
+                let max_audio_inp_len = 30 * sampling_rate;
+                let mut final_merge_audio = Vec::new();
+                for audio in merge_audio {
+                    if audio.len() <= max_audio_inp_len {
+                        final_merge_audio.push(audio.to_vec());
+                    } else {
+                        for chunk in audio.chunks(max_audio_inp_len) {
+                            final_merge_audio.push(chunk.to_vec());
+                        }
+                    }
+                }
 
                 let text = tokenizer
                     .decode(seq.get_toks(), false)
@@ -259,11 +317,16 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 }
 
                 let mut image_id = 0;
+                let mut audio_id = 0;
                 for chunk in &mut text_chunks {
                     if chunk == IMAGE_TAG {
                         *chunk =
                             self.get_slice_image_placeholder(image_sizes_all[image_id], image_id);
                         image_id += 1;
+                    }
+                    if chunk == AUDIO_TAG {
+                        *chunk = audio_placeholders[audio_id].clone();
+                        audio_id += 1;
                     }
                 }
 

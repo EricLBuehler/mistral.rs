@@ -336,6 +336,7 @@ impl MiniCpmOModel {
             .map(|x| x.to_vec2::<u32>())
             .collect::<Result<Vec<_>>>()?;
 
+        // TODO: chunk input?
         let mut new_embeddings = input_embeddings.clone();
         for ((i, audio_embs), bounds) in audio_embeddings.iter().enumerate().zip(audio_bound_vec) {
             assert_eq!(audio_embs.len(), bounds.len());
