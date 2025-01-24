@@ -1945,8 +1945,7 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg: Idefics2Config = serde_json::from_str(config)?;
-        let cfg = &cfg.text_config;
+        let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
