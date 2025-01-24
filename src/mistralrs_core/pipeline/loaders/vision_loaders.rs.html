@@ -2515,8 +2515,7 @@
 <a href="#2514" id="2514">2514</a>
 <a href="#2515" id="2515">2515</a>
 <a href="#2516" id="2516">2516</a>
-<a href="#2517" id="2517">2517</a>
-<a href="#2518" id="2518">2518</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#2517" id="2517">2517</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -4463,8 +4462,7 @@
     }
 
     <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
-        <span class="kw">let </span>cfg: Idefics2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.text_config;
+        <span class="kw">let </span>cfg: Qwen2VLConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
