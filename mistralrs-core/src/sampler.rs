@@ -282,14 +282,14 @@ impl Sampler {
             for tok in &top_n_toks {
                 bytes.push(
                     tokenizer
-                        .decode(&[*tok as u32], false)
+                        .decode(&[{ *tok }], false)
                         .map_err(|x| Error::Msg(x.to_string()))?,
                 );
             }
 
             Ok(zip(bytes, zip(top_n_toks, top_n_logprobs))
                 .map(|(bytes, (token, logprob))| TopLogprob {
-                    token: token as u32,
+                    token,
                     logprob,
                     bytes: Some(bytes),
                 })
@@ -297,7 +297,7 @@ impl Sampler {
         } else {
             Ok(zip(top_n_toks, top_n_logprobs)
                 .map(|(token, logprob)| TopLogprob {
-                    token: token as u32,
+                    token,
                     logprob,
                     bytes: None,
                 })
@@ -454,6 +454,7 @@ impl Sampler {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sample_top_kp_min_p(
         &self,
         probs: &mut Vec<f32>,
