@@ -15,7 +15,7 @@ pub struct TextModelBuilder {
     pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
-    pub(crate) device_mapping: Option<DeviceMapMetadata>,
+    pub(crate) device_mapping: Option<DeviceMapSetting>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
@@ -74,6 +74,7 @@ impl TextModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
+    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
     pub fn new(model_id: impl ToString) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -221,9 +222,8 @@ impl TextModelBuilder {
         self
     }
 
-    /// Provide metadata to initialize the device mapper. Generally, it is more programmatic and easier to use
-    /// the [`Topology`], see [`Self::with_topology`].
-    pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
+    /// Provide metadata to initialize the device mapper.
+    pub fn with_device_mapping(mut self, device_mapping: DeviceMapSetting) -> Self {
         self.device_mapping = Some(device_mapping);
         self
     }
@@ -279,7 +279,8 @@ impl TextModelBuilder {
             &self.dtype,
             &best_device(self.force_cpu)?,
             !self.with_logging,
-            self.device_mapping.unwrap_or(DeviceMapMetadata::dummy()),
+            self.device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             self.isq,
             self.paged_attn_cfg,
         )?;

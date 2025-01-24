@@ -61,6 +61,7 @@ impl futures::Stream for Streamer {
                         self.state.clone(),
                         &ModelErrorMessage(msg.to_string()),
                     );
+                    self.is_done = true;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))
                 }
                 Response::ValidationError(e) => {

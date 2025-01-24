@@ -6,9 +6,10 @@ mod ops;
 mod uqff;
 
 pub use ops::{BitWiseOp, LeftshiftOp};
+pub use uqff::UQFF_QUANT_TYPE_OFFSET;
 pub(crate) use uqff::{
-    deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
-    HQFF_VERSION,
+    deserialize_tensor, fake_deserialize_tensor, read_dtype, serialize_tensor,
+    version_is_compatible, write_dtype, UQFF_VERSION,
 };
 
 #[cfg(feature = "cuda")]

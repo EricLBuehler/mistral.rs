@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 
 use crate::{
-    pipeline::{IsqOrganization, NormalLoaderType, VisionLoaderType},
+    pipeline::{AutoDeviceMapParams, IsqOrganization, NormalLoaderType, VisionLoaderType},
     DiffusionLoaderType, ModelDType,
 };
 
@@ -76,6 +76,14 @@ pub enum ModelSelected {
         /// Incompatible with `--imatrix/-i`
         #[arg(short, long)]
         calibration_file: Option<PathBuf>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
     },
 
     /// Select an X-LoRA architecture
@@ -120,6 +128,14 @@ pub enum ModelSelected {
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
         from_uqff: Option<PathBuf>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
     },
 
     /// Select a LoRA architecture
@@ -159,6 +175,14 @@ pub enum ModelSelected {
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         #[arg(short, long)]
         from_uqff: Option<PathBuf>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
     },
 
     /// Select a GGUF model.
@@ -186,6 +210,14 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -226,6 +258,14 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
     },
 
     /// Select a GGUF model with LoRA.
@@ -261,6 +301,14 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
     },
 
     /// Select a GGML model.
@@ -293,6 +341,14 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
     },
 
     /// Select a GGML model with X-LoRA.
@@ -338,6 +394,14 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
     },
 
     /// Select a GGML model with LoRA.
@@ -378,6 +442,14 @@ pub enum ModelSelected {
         /// Path to a topology YAML file.
         #[arg(long)]
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
     },
 
     /// Select a vision plain model, without quantization or adapters
@@ -411,13 +483,30 @@ pub enum ModelSelected {
         from_uqff: Option<PathBuf>,
 
         /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
-        /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
+        /// This is only supported on the Qwen2-VL and Idefics models. Others handle this internally.
         #[arg(short = 'e', long)]
         max_edge: Option<u32>,
 
         /// Generate and utilize an imatrix to enhance GGUF quantizations.
         #[arg(short, long)]
         calibration_file: Option<PathBuf>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
+        max_batch_size: usize,
+
+        /// Maximum prompt number of images to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES)]
+        max_num_images: usize,
+
+        /// Maximum expected image size will have this edge length on both edges.
+        /// This affects automatic device mapping but is not a hard limit.
+        #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH)]
+        max_image_length: usize,
     },
 
     /// Select a diffusion plain model, without quantization or adapters

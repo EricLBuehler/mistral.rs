@@ -3,9 +3,9 @@ use std::{fs::File, num::NonZeroUsize, path::PathBuf};
 use serde::Deserialize;
 
 use crate::{
-    amoe::AnyMoeConfig, pipeline::IsqOrganization, AnyMoeLoader, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader, ModelDType,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
+    amoe::AnyMoeConfig, pipeline::IsqOrganization, AnyMoeLoader, AutoDeviceMapParams,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
+    ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
     SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
     GGUF_MULTI_FILE_DELIMITER,
 };
@@ -20,6 +20,22 @@ fn default_dtype() -> ModelDType {
 
 fn default_empty_vec_usize() -> Vec<usize> {
     Vec::new()
+}
+
+fn default_max_seq_len() -> usize {
+    AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN
+}
+
+fn default_max_batch_size() -> usize {
+    AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE
+}
+
+fn default_max_num_images() -> usize {
+    AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES
+}
+
+fn default_max_image_length() -> usize {
+    AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +72,14 @@ pub enum TomlModelSelected {
         /// Generate and utilize an imatrix to enhance GGUF quantizations.
         /// Incompatible with `--imatrix/-i`
         calibration_file: Option<PathBuf>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_seq_len")]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_batch_size")]
+        max_batch_size: usize,
     },
 
     /// Select an X-LoRA architecture
@@ -88,6 +112,14 @@ pub enum TomlModelSelected {
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<PathBuf>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_seq_len")]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_batch_size")]
+        max_batch_size: usize,
     },
 
     /// Select a LoRA architecture
@@ -116,6 +148,14 @@ pub enum TomlModelSelected {
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
         from_uqff: Option<PathBuf>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_seq_len")]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_batch_size")]
+        max_batch_size: usize,
     },
 
     /// Select a GGUF model.
@@ -140,6 +180,14 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_seq_len")]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_batch_size")]
+        max_batch_size: usize,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -173,6 +221,14 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_seq_len")]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_batch_size")]
+        max_batch_size: usize,
     },
 
     /// Select a GGUF model with LoRA.
@@ -202,6 +258,14 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_seq_len")]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_batch_size")]
+        max_batch_size: usize,
     },
 
     /// Select a GGML model.
@@ -227,6 +291,14 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_seq_len")]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_batch_size")]
+        max_batch_size: usize,
     },
 
     /// Select a GGML model with X-LoRA.
@@ -261,6 +333,14 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_seq_len")]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_batch_size")]
+        max_batch_size: usize,
     },
 
     /// Select a GGML model with LoRA.
@@ -291,6 +371,14 @@ pub enum TomlModelSelected {
 
         /// Path to a topology YAML file.
         topology: Option<String>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_seq_len")]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_batch_size")]
+        max_batch_size: usize,
     },
 
     /// Select a vision plain model, without quantization or adapters
@@ -320,6 +408,23 @@ pub enum TomlModelSelected {
 
         /// Generate and utilize an imatrix to enhance GGUF quantizations.
         calibration_file: Option<PathBuf>,
+
+        /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_seq_len")]
+        max_seq_len: usize,
+
+        /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_batch_size")]
+        max_batch_size: usize,
+
+        /// Maximum prompt number of images to expect for this model. This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_num_images")]
+        max_num_images: usize,
+
+        /// Maximum expected image size will have this edge length on both edges.
+        /// This affects automatic device mapping but is not a hard limit.
+        #[serde(default = "default_max_image_length")]
+        max_image_length: usize,
     },
 }
 
@@ -400,6 +505,73 @@ pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
     }
 }
 
+pub fn get_toml_selected_model_device_map_params(
+    model: &TomlSelector,
+) -> anyhow::Result<AutoDeviceMapParams> {
+    match model.model {
+        TomlModelSelected::Plain {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | TomlModelSelected::Lora {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | TomlModelSelected::XLora {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | TomlModelSelected::GGML {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | TomlModelSelected::GGUF {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | TomlModelSelected::XLoraGGUF {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | TomlModelSelected::XLoraGGML {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | TomlModelSelected::LoraGGUF {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | TomlModelSelected::LoraGGML {
+            max_seq_len,
+            max_batch_size,
+            ..
+        } => Ok(AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        }),
+        TomlModelSelected::VisionPlain {
+            max_seq_len,
+            max_batch_size,
+            max_image_length,
+            max_num_images,
+            ..
+        } => Ok(AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: (max_image_length, max_image_length),
+            max_num_images,
+        }),
+    }
+}
+
 fn loader_from_selected(
     args: TomlLoaderInnerParams,
     model: TomlModelSelected,
@@ -416,6 +588,8 @@ fn loader_from_selected(
             from_uqff,
             imatrix,
             calibration_file,
+            max_seq_len: _,
+            max_batch_size: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -442,6 +616,8 @@ fn loader_from_selected(
             topology,
             write_uqff,
             from_uqff,
+            max_seq_len: _,
+            max_batch_size: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -476,6 +652,8 @@ fn loader_from_selected(
             topology,
             write_uqff,
             from_uqff,
+            max_seq_len: _,
+            max_batch_size: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -505,6 +683,8 @@ fn loader_from_selected(
             quantized_filename,
             topology,
             dtype: _,
+            max_seq_len: _,
+            max_batch_size: _,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             Some(tok_model_id),
@@ -527,7 +707,9 @@ fn loader_from_selected(
             order,
             tgt_non_granular_index,
             topology,
-            ..
+            dtype: _,
+            max_seq_len: _,
+            max_batch_size: _,
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -587,6 +769,8 @@ fn loader_from_selected(
             gqa,
             topology,
             dtype: _,
+            max_seq_len: _,
+            max_batch_size: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -609,7 +793,9 @@ fn loader_from_selected(
             tgt_non_granular_index,
             gqa,
             topology,
-            ..
+            dtype: _,
+            max_seq_len: _,
+            max_batch_size: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -640,7 +826,9 @@ fn loader_from_selected(
             order,
             gqa,
             topology,
-            ..
+            dtype: _,
+            max_seq_len: _,
+            max_batch_size: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -670,6 +858,10 @@ fn loader_from_selected(
             from_uqff,
             max_edge,
             calibration_file,
+            max_seq_len: _,
+            max_batch_size: _,
+            max_num_images: _,
+            max_image_length: _,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,

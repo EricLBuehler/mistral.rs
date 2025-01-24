@@ -154,6 +154,7 @@ pub struct ChatCompletionChunkResponse {
     pub model: String,
     pub system_fingerprint: String,
     pub object: String,
+    pub usage: Option<Usage>,
 }
 
 generate_repr!(ChatCompletionChunkResponse);

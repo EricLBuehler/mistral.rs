@@ -1,6 +1,6 @@
 # UQFF internal structure
 
-The following describes the exact memory layout of HQFF tensors of version 0.1.0.
+The following describes the exact memory layout of UQFF tensors of version 0.1.0.
 
 ## ToC
 - [GGUF quantization](#gguf-quantization)
@@ -14,7 +14,7 @@ The following describes the exact memory layout of HQFF tensors of version 0.1.0
 
 | ID | Element type | Endianness |
 | -------- | -------- | -------- |
-| HQFF version | u32 | little endian  |
+| UQFF version | u32 | little endian  |
 | ISQ type (0) | u8 | little endian  |
 | Tensor data length in bytes | u32 | little endian  |
 | Whether bias data is included (boolean) | u8 | little endian  |
@@ -27,7 +27,7 @@ The following describes the exact memory layout of HQFF tensors of version 0.1.0
 ## Unquantized layers
 | ID | Element type | Endianness |
 | -------- | -------- | -------- |
-| HQFF version | u32 | little endian  |
+| UQFF version | u32 | little endian  |
 | ISQ type (1) | u8 | little endian  |
 | Whether bias data is included (boolean) | u8 | little endian  |
 | **Array** Weight tensor data, see [docs](#standard-tensors) | See [docs](#standard-tensors) | See [docs](#standard-tensors)  |
@@ -36,7 +36,7 @@ The following describes the exact memory layout of HQFF tensors of version 0.1.0
 ## FP8 layers
 | ID | Element type | Endianness |
 | -------- | -------- | -------- |
-| HQFF version | u32 | little endian  |
+| UQFF version | u32 | little endian  |
 | ISQ type (1) | u8 | little endian  |
 | Whether bias data is included (boolean) | u8 | little endian  |
 | **Array** Weight tensor data, see [docs](#standard-tensors) | See [docs](#standard-tensors) | See [docs](#standard-tensors)  |
@@ -49,7 +49,7 @@ The following describes the exact memory layout of HQFF tensors of version 0.1.0
 ## HQQ quantization
 | ID | Element type | Endianness |
 | -------- | -------- | -------- |
-| HQFF version | u32 | little endian  |
+| UQFF version | u32 | little endian  |
 | ISQ type (2) | u8 | little endian  |
 | Whether bias data is included (boolean) | u8 | little endian  |
 | **Array** Q weight, see [docs](#standard-tensors) | See [docs](#standard-tensors) | See [docs](#standard-tensors) |
@@ -67,7 +67,7 @@ The following describes the exact memory layout of HQFF tensors of version 0.1.0
 ## FP8 layers
 | ID | Element type | Endianness |
 | -------- | -------- | -------- |
-| HQFF version | u32 | little endian  |
+| UQFF version | u32 | little endian  |
 | ISQ type (3) | u8 | little endian  |
 | Whether bias data is included (boolean) | u8 | little endian  |
 | **Array** Weight tensor data, see [docs](#standard-tensors) | See [docs](#standard-tensors) | See [docs](#standard-tensors)  | 

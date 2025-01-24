@@ -23,8 +23,7 @@ use crate::{
     },
     prefix_cacher_v2::PrefixCacheManagerV2,
     sequence::{Sequence, SequenceRecognizer},
-    DeviceMapMetadata, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource,
-    TryIntoDType,
+    DeviceMapSetting, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource, TryIntoDType,
 };
 
 use super::{
@@ -50,7 +49,7 @@ impl Loader for SpeculativeLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
@@ -97,7 +96,7 @@ impl Loader for SpeculativeLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
@@ -418,8 +417,7 @@ impl Pipeline for SpeculativePipeline {
                 for i in 0..self.gamma {
                     let is_xlora = get_mut_arcmutex!(self.draft).get_metadata().is_xlora;
                     let device = get_mut_arcmutex!(self.draft).device();
-                    let has_no_kv_cache =
-                        get_mut_arcmutex!(self.draft).get_metadata().has_no_kv_cache;
+                    let no_kv_cache = get_mut_arcmutex!(self.draft).get_metadata().no_kv_cache;
                     let inputs = self
                         .get_processor()
                         .inputs_processor()
@@ -429,7 +427,7 @@ impl Pipeline for SpeculativePipeline {
                             is_prompt && i == 0, // Only prompt (no kv cache) if first
                             is_xlora,
                             &device,
-                            has_no_kv_cache,
+                            no_kv_cache,
                             None,
                             false,
                             None,
@@ -495,9 +493,7 @@ impl Pipeline for SpeculativePipeline {
                 // ========= Run the model ============
                 let is_xlora = get_mut_arcmutex!(self.target).get_metadata().is_xlora;
                 let device = get_mut_arcmutex!(self.target).device();
-                let has_no_kv_cache = get_mut_arcmutex!(self.target)
-                    .get_metadata()
-                    .has_no_kv_cache;
+                let no_kv_cache = get_mut_arcmutex!(self.target).get_metadata().no_kv_cache;
                 let inputs = self
                     .get_processor()
                     .inputs_processor()
@@ -507,7 +503,7 @@ impl Pipeline for SpeculativePipeline {
                         true, // use the "prefill" tokens
                         is_xlora,
                         &device,
-                        has_no_kv_cache,
+                        no_kv_cache,
                         Some((self.gamma, initial_cache_len)), // Get the last gamma, see above
                         false,
                         None,

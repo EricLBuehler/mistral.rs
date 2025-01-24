@@ -19,16 +19,16 @@ use util::{PyApiErr, PyApiResult};
 
 use candle_core::{Device, Result};
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader,
+    initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, AutoDeviceMapParams,
     ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DiffusionGenerationParams,
-    DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams, GGMLLoaderBuilder,
-    GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse,
-    ImageGenerationResponseFormat, LlguidanceGrammar, Loader, MemoryGpuConfig, MistralRs,
-    MistralRsBuilder, NormalLoaderBuilder, NormalRequest, NormalSpecificConfig,
-    PagedAttentionConfig, Request as _Request, RequestMessage, Response, ResponseOk,
-    SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens, TokenSource,
-    TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
+    DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
+    DiffusionGenerationParams, DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
+    ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
+    ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
+    TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
 };
 use pyo3::prelude::*;
 use std::fs::File;
@@ -94,6 +94,7 @@ fn parse_which(
             dtype: _,
             imatrix,
             calibration_file,
+            auto_map_params: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -122,6 +123,7 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
+            auto_map_params: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -158,6 +160,7 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
+            auto_map_params: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -188,6 +191,7 @@ fn parse_which(
             quantized_filename,
             topology,
             dtype: _,
+            auto_map_params: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
@@ -209,6 +213,7 @@ fn parse_which(
             tgt_non_granular_index,
             topology,
             dtype: _,
+            auto_map_params: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
@@ -238,6 +243,7 @@ fn parse_which(
             order,
             topology,
             dtype: _,
+            auto_map_params: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
@@ -265,6 +271,7 @@ fn parse_which(
             gqa,
             topology,
             dtype: _,
+            auto_map_params: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -290,6 +297,7 @@ fn parse_which(
             gqa,
             topology,
             dtype: _,
+            auto_map_params: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -323,6 +331,7 @@ fn parse_which(
             gqa,
             topology,
             dtype: _,
+            auto_map_params: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -354,6 +363,7 @@ fn parse_which(
             dtype: _,
             max_edge,
             calibration_file,
+            auto_map_params: _,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -494,6 +504,57 @@ impl Runner {
             | Which::XLoraGGUF { dtype, .. }
             | Which::XLoraGGML { dtype, .. } => dtype,
         };
+        let auto_map_params = match &which {
+            Which::Plain {
+                auto_map_params, ..
+            }
+            | Which::Lora {
+                auto_map_params, ..
+            }
+            | Which::GGUF {
+                auto_map_params, ..
+            }
+            | Which::LoraGGUF {
+                auto_map_params, ..
+            }
+            | Which::GGML {
+                auto_map_params, ..
+            }
+            | Which::LoraGGML {
+                auto_map_params, ..
+            }
+            | Which::XLora {
+                auto_map_params, ..
+            }
+            | Which::XLoraGGUF {
+                auto_map_params, ..
+            }
+            | Which::XLoraGGML {
+                auto_map_params, ..
+            } => auto_map_params
+                .clone()
+                .map(|p| AutoDeviceMapParams::Text {
+                    max_seq_len: p.max_seq_len,
+                    max_batch_size: p.max_batch_size,
+                })
+                .unwrap_or(AutoDeviceMapParams::default_text()),
+            Which::VisionPlain {
+                auto_map_params, ..
+            } => auto_map_params
+                .clone()
+                .map(|p| AutoDeviceMapParams::Vision {
+                    max_seq_len: p.max_seq_len,
+                    max_batch_size: p.max_batch_size,
+                    max_image_shape: (p.max_image_length, p.max_image_length),
+                    max_num_images: p.max_num_images,
+                })
+                .unwrap_or(AutoDeviceMapParams::default_vision()),
+            Which::DiffusionPlain { .. } => {
+                return Err(PyApiErr::from(
+                    "diffusion model doesn't support max_seq_len",
+                ))
+            }
+        };
         let max_seqs = if tgt_non_granular_index.is_some() {
             1
         } else {
@@ -557,10 +618,9 @@ impl Runner {
             Some(device_layers) => {
                 if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
                     let layers = device_layers[0].parse::<usize>().unwrap();
-                    DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
-                        ordinal: 0,
-                        layers,
-                    }])
+                    DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
+                        DeviceLayerMapMetadata { ordinal: 0, layers },
+                    ]))
                 } else {
                     let mut mapping = Vec::new();
                     for layer in device_layers {
@@ -584,10 +644,10 @@ impl Runner {
                             layers: num,
                         });
                     }
-                    DeviceMapMetadata::from_num_device_layers(mapping)
+                    DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
                 }
             }
-            None => DeviceMapMetadata::dummy(),
+            None => DeviceMapSetting::Auto(auto_map_params),
         };
 
         let no_paged_attn = if device.is_cuda() {
@@ -625,7 +685,7 @@ impl Runner {
                 (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
                     block_size,
                     512,
-                    MemoryGpuConfig::Amount(m),
+                    MemoryGpuConfig::MbAmount(m),
                 )?),
                 (block_size, Some(_m), Some(f), None, true, false) => Some(
                     PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::Utilization(f))?,

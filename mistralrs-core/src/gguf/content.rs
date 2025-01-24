@@ -3,7 +3,7 @@ use std::{collections::HashMap, fs};
 use anyhow::Context;
 use candle_core::{
     quantized::{
-        gguf_file::{self, Value},
+        gguf_file::{self, TensorInfo, Value},
         QTensor,
     },
     Device, Result,
@@ -113,6 +113,16 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
         self.arch
     }
 
+    /// Retrieve a tensor info, searching through each content.
+    pub fn tensor_info(&self, name: &str) -> Result<&TensorInfo> {
+        for ct in &self.contents {
+            if let Some(tensor_info) = ct.tensor_infos.get(name) {
+                return Ok(tensor_info);
+            }
+        }
+        candle_core::bail!("Cannot find tensor info for {name}")
+    }
+
     /// Retrieve a tensor, searching through each content.
     pub fn tensor(&mut self, name: &str, device: &Device) -> Result<QTensor> {
         for (ct, reader) in self.contents.iter().zip(self.readers.iter_mut()) {
@@ -124,7 +134,7 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
     }
 
     /// Check for a tensor, searching through each content.
-    pub fn has_tensor(&mut self, name: &str) -> bool {
+    pub fn has_tensor(&self, name: &str) -> bool {
         for ct in self.contents.iter() {
             if ct.tensor_infos.contains_key(name) {
                 return true;

@@ -13,14 +13,14 @@ use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::ggml_file;
 use candle_core::quantized::QMatMul;
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, RotaryEmbedding, VarBuilder};
+use candle_nn::{Embedding, Module, VarBuilder};
+use mistralrs_quant::MatMul;
 use tqdm::Iter;
 use tracing::info;
 
 use crate::device_map::DeviceMapper;
-use crate::layers::{CausalMasker, MatMul, QRmsNorm, Sdpa};
+use crate::layers::{CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::pipeline::{extract_logits, Cache, EitherCache};
-use crate::{DeviceMapMetadata, Topology};
 
 use super::classifier::XLoraClassifier;
 use super::{verify_sanity_adapters, NonGranularState, ScalingsMaker, XLoraConfig};
@@ -192,7 +192,6 @@ impl LayerWeights {
         x: &Tensor,
         mask: &Option<Tensor>,
         start_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         scalings: Option<Tensor>,
         global_scaling_weight: f64,
@@ -213,37 +212,25 @@ impl LayerWeights {
             .lora_forward(x, scalings.clone(), global_scaling_weight, is_scaling_pass)?
             .to_dtype(self.dtype)?;
 
-        let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
-        let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
-        let v = if seq_len != 1 {
-            v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
+        let (q, k, v) = if seq_len != 1 {
+            let q = q
+                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
         } else {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+            let q = q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+            (q, k, v)
         };
 
-        self.rotary
-            .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-
-        if q.rank() == 3 && seq_len != 1 {
-            q = q
-                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        } else if q.rank() == 3 {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            q = q
-                .reshape((b_sz, self.n_head, seq_len, self.head_dim))?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
-                .contiguous()?;
-        }
+        let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
 
         let (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
 
@@ -294,7 +281,6 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new_partial(
             10000.,
-            head_dim,
             ct.hparams.n_rot as usize,
             MAX_SEQ_LEN as usize,
             &ct.device,
@@ -488,8 +474,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        mapper: DeviceMapMetadata,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
         dtype: DType,
     ) -> Result<Self> {
@@ -532,8 +517,6 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         };
         let mut layers = Vec::with_capacity(block_count);
         let mut count = 0;
-
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         let mut ropes = HashMap::new();
         for layer_idx in 0..block_count {
@@ -818,7 +801,6 @@ impl ModelWeights {
         &self,
         x: &Tensor,
         start_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         scalings: Option<Tensor>,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -852,7 +834,6 @@ impl ModelWeights {
                 &x,
                 &mask.as_ref().map(|m| m.to_device(x.device()).unwrap()),
                 start_offsets,
-                start_offsets_kernel.clone(),
                 &mut cache[i],
                 scalings.clone(),
                 self.xlora_classifier
@@ -890,8 +871,6 @@ impl ModelWeights {
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        start_offsets_kernel: Tensor,
-        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
@@ -904,8 +883,6 @@ impl ModelWeights {
                 input_ids_full,
                 seqlen_offsets,
                 seqlen_offsets_full,
-                &start_offsets_kernel,
-                &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
                 &vec![usize::MAX; context_lens.len()],
@@ -920,7 +897,6 @@ impl ModelWeights {
                             .inner_forward(
                                 input_ids_full,
                                 seqlen_offsets_full,
-                                start_offsets_kernel_full,
                                 Some(scalings),
                                 true,
                                 no_kv_cache,
@@ -942,7 +918,6 @@ impl ModelWeights {
                             .inner_forward(
                                 input_ids,
                                 seqlen_offsets,
-                                start_offsets_kernel,
                                 Some(scalings),
                                 true,
                                 no_kv_cache,
@@ -964,7 +939,6 @@ impl ModelWeights {
                         .inner_forward(
                             input_ids,
                             seqlen_offsets,
-                            start_offsets_kernel,
                             None,
                             false,
                             no_kv_cache,
@@ -996,7 +970,6 @@ impl ScalingsMaker for ModelWeights {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -1007,7 +980,6 @@ impl ScalingsMaker for ModelWeights {
         self.inner_forward(
             input_ids,
             seqlen_offsets,
-            start_offsets_kernel,
             Some(scalings),
             is_full_pass,
             no_kv_cache,

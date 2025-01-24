@@ -14,7 +14,6 @@ use crate::pipeline::{EitherCache, KvCache, NormalCache};
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::{DeviceMapMetadata, Topology};
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
@@ -68,7 +67,6 @@ impl LayerWeights {
         x: &Tensor,
         mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
@@ -84,37 +82,25 @@ impl LayerWeights {
             .qmethod_matmul(x, &*self.attn_v)?
             .to_dtype(self.dtype)?;
 
-        let mut q = q.reshape((b_sz * q_len, self.n_head, self.head_dim))?;
-        let mut k = k.reshape((b_sz * q_len, self.n_kv_head, self.head_dim))?;
-        let v = if q_len != 1 {
-            v.reshape((b_sz, q_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
+        let (q, k, v) = if q_len != 1 {
+            let q = q
+                .reshape((b_sz, q_len, self.n_head, self.head_dim))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, q_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, q_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
         } else {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            v.reshape((b_sz, self.n_kv_head, q_len, self.head_dim))?
+            let q = q.reshape((b_sz, self.n_head, q_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.n_kv_head, q_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.n_kv_head, q_len, self.head_dim))?;
+            (q, k, v)
         };
 
-        self.rotary_emb
-            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-
-        if q.rank() == 3 && q_len != 1 {
-            q = q
-                .reshape((b_sz, q_len, self.n_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, q_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        } else if q.rank() == 3 {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            q = q
-                .reshape((b_sz, self.n_head, q_len, self.head_dim))?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, self.n_kv_head, q_len, self.head_dim))?
-                .contiguous()?;
-        }
+        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {
@@ -207,8 +193,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
         device: &Device,
-        mapper: DeviceMapMetadata,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self> {
@@ -237,8 +222,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
         )?;
         let output = QMatMul::from_qtensor(ct.tensor("output.weight", device)?)?;
         let mut layers = Vec::with_capacity(block_count);
-
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         let mut ropes = HashMap::new();
         for layer_idx in 0..block_count {
@@ -374,7 +357,6 @@ impl ModelWeights {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let (_b_sz, seq_len) = input_ids.dims2()?;
@@ -401,7 +383,6 @@ impl ModelWeights {
                     .map(|m| m.to_device(xs.device()).unwrap())
                     .as_ref(),
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
                 &mut cache[i],
                 metadata
                     .as_mut()

@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 use std::{fmt::Display, str::FromStr};
 
 use anyhow::Result;
@@ -116,40 +117,46 @@ fn get_dtypes() -> Vec<DType> {
 }
 
 fn determine_auto_dtype_all(devices: &[&Device]) -> candle_core::Result<DType> {
-    let dev_dtypes = get_dtypes();
-    for dtype in get_dtypes_non_cuda()
-        .iter()
-        .filter(|x| dev_dtypes.contains(x))
+    // We can safely use bf16 for accelerate because we cast up to f32 in all matmuls anyway.
+    #[cfg(feature = "accelerate")]
+    return Ok(DType::BF16);
+    #[cfg(not(feature = "accelerate"))]
     {
-        let mut results = Vec::new();
-        for device in devices {
-            // Try a matmul
-            let x = Tensor::zeros((2, 2), *dtype, device)?;
-            results.push(x.matmul(&x));
-        }
-        if results.iter().all(|x| x.is_ok()) {
-            return Ok(*dtype);
-        } else {
-            for result in results {
-                match result {
-                    Ok(_) => (),
-                    Err(e) => match e {
-                        // For CUDA
-                        candle_core::Error::UnsupportedDTypeForOp(_, _) => continue,
-                        // Accelerate backend doesn't support f16/bf16
-                        // Metal backend doesn't support f16
-                        candle_core::Error::Msg(_) => continue,
-                        // This is when the metal backend doesn't support bf16
-                        candle_core::Error::Metal(_) => continue,
-                        // If running with RUST_BACKTRACE=1
-                        candle_core::Error::WithBacktrace { .. } => continue,
-                        other => return Err(other),
-                    },
+        let dev_dtypes = get_dtypes();
+        for dtype in get_dtypes_non_cuda()
+            .iter()
+            .filter(|x| dev_dtypes.contains(x))
+        {
+            let mut results = Vec::new();
+            for device in devices {
+                // Try a matmul
+                let x = Tensor::zeros((2, 2), *dtype, device)?;
+                results.push(x.matmul(&x));
+            }
+            if results.iter().all(|x| x.is_ok()) {
+                return Ok(*dtype);
+            } else {
+                for result in results {
+                    match result {
+                        Ok(_) => (),
+                        Err(e) => match e {
+                            // For CUDA
+                            candle_core::Error::UnsupportedDTypeForOp(_, _) => continue,
+                            // Accelerate backend doesn't support f16/bf16
+                            // Metal backend doesn't support f16
+                            candle_core::Error::Msg(_) => continue,
+                            // This is when the metal backend doesn't support bf16
+                            candle_core::Error::Metal(_) => continue,
+                            // If running with RUST_BACKTRACE=1
+                            candle_core::Error::WithBacktrace { .. } => continue,
+                            other => return Err(other),
+                        },
+                    }
                 }
             }
         }
+        Ok(DType::F32)
     }
-    Ok(DType::F32)
 }
 
 impl TryIntoDType for ModelDType {

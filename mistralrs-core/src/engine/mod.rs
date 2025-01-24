@@ -72,30 +72,30 @@ impl Engine {
         pipeline: Arc<Mutex<dyn Pipeline>>,
         config: SchedulerConfig,
         truncate_sequence: bool,
-        no_kv_cache: bool,
-        no_prefix_cache: bool,
+        mut no_kv_cache: bool,
+        mut _no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
     ) -> Self {
         let device = get_mut_arcmutex!(pipeline).device().clone();
-        let has_no_kv_cache = get_mut_arcmutex!(pipeline).get_metadata().has_no_kv_cache;
-        if no_kv_cache {
-            // Diffusion models...
-            assert_eq!(has_no_kv_cache, no_kv_cache);
-        }
-        // Prefix caching is always disabled if using PagedAttention for now.
-        // TODO
-        let no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
-            || no_prefix_cache
-            || has_no_kv_cache;
+        no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
+
+        // TODO: We need a nice fix, when prefix caching is enabled setting the non-PA pre op to
+        // Nothing makes it work but breaks all other cases. This requires more investigation!!
+        // no_prefix_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache;
+        // TODO: Prefix caching is always disabled if using PagedAttention for now.
+        // let no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
+        //     || no_prefix_cache
+        //     || no_kv_cache;
+        let no_prefix_cache = true;
         Self {
             rx,
             pipeline,
             scheduler: config.into_scheduler(),
             id: 0,
             truncate_sequence,
-            no_kv_cache: no_kv_cache & !has_no_kv_cache,
+            no_kv_cache,
             prefix_cacher: PrefixCacheManagerV2::new(device, prefix_cache_n, no_prefix_cache),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
@@ -834,33 +834,63 @@ impl Engine {
                 let n_tokens = prompt_tokens.len();
                 let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
                 let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
-                let kv_shape = (
+                let k_shape = (
                     1usize,
                     model_metadata.num_kv_heads(),
                     max_seq_len,
-                    model_metadata.head_dim(),
+                    model_metadata.k_head_dim(),
+                );
+                let v_shape = (
+                    1usize,
+                    model_metadata.num_kv_heads(),
+                    max_seq_len,
+                    model_metadata.v_head_dim(),
                 );
                 let dtype = get_mut_arcmutex!(self.pipeline)
                     .get_metadata()
                     .activation_dtype;
-                let seq_cache =
-                    Tensor::zeros(kv_shape, dtype, &get_mut_arcmutex!(self.pipeline).device());
-                let seq_cache = match seq_cache {
-                    Ok(x) => x,
-                    Err(_) => {
-                        request
-                            .response
-                            .send(Response::InternalError(
-                                "Failed to allocate preallocated KV cache."
-                                    .to_string()
-                                    .into(),
-                            ))
-                            .await
-                            .expect("Expected receiver.");
-                        return;
+
+                let k_seq_cache = {
+                    let k_seq_cache =
+                        Tensor::zeros(k_shape, dtype, &get_mut_arcmutex!(self.pipeline).device());
+                    match k_seq_cache {
+                        Ok(x) => x,
+                        Err(_) => {
+                            request
+                                .response
+                                .send(Response::InternalError(
+                                    "Failed to allocate preallocated KV cache."
+                                        .to_string()
+                                        .into(),
+                                ))
+                                .await
+                                .expect("Expected receiver.");
+                            return;
+                        }
                     }
                 };
-                Some(seq_cache)
+                let v_seq_cache = if k_shape == v_shape {
+                    k_seq_cache.clone()
+                } else {
+                    let v_seq_cache =
+                        Tensor::zeros(v_shape, dtype, &get_mut_arcmutex!(self.pipeline).device());
+                    match v_seq_cache {
+                        Ok(x) => x,
+                        Err(_) => {
+                            request
+                                .response
+                                .send(Response::InternalError(
+                                    "Failed to allocate preallocated KV cache."
+                                        .to_string()
+                                        .into(),
+                                ))
+                                .await
+                                .expect("Expected receiver.");
+                            return;
+                        }
+                    }
+                };
+                Some((k_seq_cache, v_seq_cache))
             } else {
                 None
             };

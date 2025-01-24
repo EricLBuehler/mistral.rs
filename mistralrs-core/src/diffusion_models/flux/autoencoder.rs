@@ -4,6 +4,8 @@ use candle_core::{Result, Tensor, D};
 use candle_nn::{conv2d, group_norm, Conv2d, GroupNorm, VarBuilder};
 use serde::Deserialize;
 
+use crate::layers::MatMul;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub in_channels: usize,
@@ -19,8 +21,8 @@ pub struct Config {
 fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
     let dim = q.dim(D::Minus1)?;
     let scale_factor = 1.0 / (dim as f64).sqrt();
-    let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
-    candle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(v)
+    let attn_weights = (MatMul.matmul(q, &k.t()?)? * scale_factor)?;
+    MatMul.matmul(&candle_nn::ops::softmax_last_dim(&attn_weights)?, v)
 }
 
 #[derive(Debug, Clone)]

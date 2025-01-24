@@ -188,8 +188,8 @@ impl Attention {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
                     &q,
-                    &k,
-                    &v,
+                    &k.contiguous()?,
+                    &v.contiguous()?,
                     attention_mask,
                     Some(key_cache),
                     Some(value_cache),
@@ -204,8 +204,8 @@ impl Attention {
                     assert!(attention_mask.is_some());
                     paged_attn.forward(
                         &q,
-                        &k,
-                        &v,
+                        &k.contiguous()?,
+                        &v.contiguous()?,
                         attention_mask,
                         None,
                         None,
@@ -529,12 +529,14 @@ impl Model {
             mapper,
             sliding_window: cfg.sliding_window,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: cfg.sliding_window,
-                head_dim: None,
+                k_head_dim: None,
+                v_head_dim: None,
             },
         })
     }
@@ -650,7 +652,6 @@ impl NormalModel for Model {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
@@ -671,8 +672,6 @@ impl NormalModel for Model {
         _input_ids_full: &Tensor,
         _seqlen_offsets: &[usize],
         _seqlen_offsets_full: &[usize],
-        _start_offsets_kernel: Tensor,
-        _start_offsets_kernel_full: Tensor,
         _no_kv_cache: bool,
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<(usize, usize)>,

@@ -5,12 +5,15 @@ use candle_nn::{
 };
 use std::ops::Mul;
 
-use crate::layers::{Activation, CausalMasker};
+use crate::{
+    layers::{Activation, CausalMasker, MatMul},
+    utils::unvarbuilder::UnVarBuilder,
+};
 
 use super::config::{Idefics3Config, Idefics3VisionConfig};
 
-struct Idefics3SimpleMLP {
-    proj: Linear,
+pub(crate) struct Idefics3SimpleMLP {
+    pub(crate) proj: Linear,
 }
 
 impl Idefics3SimpleMLP {
@@ -29,7 +32,7 @@ impl Idefics3SimpleMLP {
 
 pub struct Idefics3Connector {
     scale_factor: usize,
-    modality_projection: Idefics3SimpleMLP,
+    pub(crate) modality_projection: Idefics3SimpleMLP,
 }
 
 impl Idefics3Connector {
@@ -77,27 +80,32 @@ struct VisionEmbeddings {
 /// torch.bucketize with right=True
 /// Returns a 1d tensor of shape (xs.len(),) on the CPU
 fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Tensor> {
-    // Initialize a vector to store the bucket indices
-    let mut indices = vec![0; xs.len()];
+    use std::cmp::Ordering;
 
-    // Iterate over each element in `xs`
-    for (i, &x) in xs.iter().enumerate() {
-        // Find the index of the bucket for the current element
-        let mut index = 0;
-        for (j, &boundary) in boundaries.iter().enumerate() {
-            if x < boundary {
-                index = j;
-                break;
-            }
-        }
-        // If the value is greater than or equal to all boundaries, set the index to the length of boundaries
-        if index == 0 && x >= boundaries[boundaries.len() - 1] {
-            index = boundaries.len();
-        }
-        indices[i] = index as u32;
+    let mut result = Vec::with_capacity(xs.len());
+
+    for &x in xs {
+        // binary_search_by returns:
+        //   Ok(i)   if boundaries[i] == x
+        //   Err(i)  if x would be inserted at i
+        //
+        // The returned i is the "insertion point" for x to keep
+        // boundaries sorted. That i is the smallest position
+        // where boundaries[i] >= x (i.e. bisect_left).
+
+        let idx = match boundaries.binary_search_by(|&val| {
+            // Use partial_cmp here; assume no NaNs.
+            // For robust handling of NaNs, you might need a custom comparison.
+            val.partial_cmp(&x).unwrap_or(Ordering::Less)
+        }) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+
+        result.push(idx as u32);
     }
 
-    Tensor::from_vec(indices, (xs.len(),), device)
+    Tensor::from_vec(result, (xs.len(),), device)
 }
 
 impl VisionEmbeddings {
@@ -179,18 +187,42 @@ impl VisionEmbeddings {
                 .unsqueeze(D::Minus1)?
                 .mul(self.num_patches_per_side as f64)?
                 .broadcast_add(&bucket_coords_w)?
-                .flatten_all()?;
+                .flatten_all()?
+                .to_vec1::<u32>()?;
 
+            let true_indices = p_attn_mask
+                .flatten_all()?
+                .to_vec1::<u8>()?
+                .iter()
+                .enumerate()
+                .filter_map(|(i, x)| if *x != 0 { Some(i) } else { None })
+                .collect::<Vec<_>>();
             let position_ids_b = position_ids.i(b_idx)?;
-            new_position_ids.push(
-                p_attn_mask
-                    .flatten_all()?
-                    .where_cond(&pos_ids, &position_ids_b)?,
-            );
+
+            let mut new_position_ids_b = position_ids_b.to_vec1::<u32>()?;
+            let new_position_ids_b_len = new_position_ids_b.len();
+            for (i, true_idx) in true_indices.into_iter().enumerate() {
+                new_position_ids_b[true_idx] = pos_ids[i];
+            }
+
+            new_position_ids.push(Tensor::from_vec(
+                new_position_ids_b,
+                new_position_ids_b_len,
+                pixel_values.device(),
+            )?);
         }
         let position_ids = Tensor::stack(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
         embeddings.broadcast_add(&self.position_embedding.forward(&position_ids)?)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("patch_embedding").add(&self.patch_embedding);
+        uvb.pp("position_embedding").add(&self.position_embedding);
+
+        uvb.to_safetensors()
     }
 }
 
@@ -249,7 +281,7 @@ impl Attention {
             .transpose(1, 2)?;
 
         let attn_weights =
-            (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
+            (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
 
         let mut attn_weights = CausalMasker.apply_mask_one_and_zero(
             &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
@@ -257,12 +289,23 @@ impl Attention {
             &self.neg_inf,
         )?;
         attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = attn_weights.matmul(&v.contiguous()?)?;
+        let attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
         attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.embed_dim))?
             .apply(&self.o_proj)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("q_proj").add(&self.q_proj);
+        uvb.pp("k_proj").add(&self.k_proj);
+        uvb.pp("v_proj").add(&self.v_proj);
+        uvb.pp("out_proj").add(&self.o_proj);
+
+        uvb.to_safetensors()
     }
 }
 
@@ -287,6 +330,15 @@ impl VisionMLP {
         let mut x = self.fc1.forward(x)?;
         x = self.activation.forward(&x)?;
         self.fc2.forward(&x)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("fc1").add(&self.fc1);
+        uvb.pp("fc2").add(&self.fc2);
+
+        uvb.to_safetensors()
     }
 }
 
@@ -416,5 +468,25 @@ impl Idefics3VisionTransformer {
             .encoder
             .forward(&hidden_states, attention_mask.as_ref())?;
         hidden_states.apply(&self.post_layernorm)
+    }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("post_layernorm").add(&self.post_layernorm);
+        uvb.pp("embeddings")
+            .extend(self.embeddings.residual_tensors());
+
+        let uvb_enc = uvb.pp("encoder");
+        for (i, layer) in self.encoder.layers.iter().enumerate() {
+            let uvb_l = uvb_enc.pp("layers").pp(i);
+
+            uvb_l.pp("layer_norm1").add(&layer.layer_norm_1);
+            uvb_l.pp("layer_norm2").add(&layer.layer_norm_2);
+            uvb_l.pp("mlp").extend(layer.mlp.residual_tensors());
+            uvb_l.pp("self_attn").extend(layer.attn.residual_tensors());
+        }
+
+        uvb.to_safetensors()
     }
 }

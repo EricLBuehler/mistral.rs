@@ -19,8 +19,6 @@ use crate::pipeline::extract_logits;
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::EitherCache;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapMetadata;
-use crate::Topology;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
@@ -234,8 +232,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         vb: &VarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        mapper: DeviceMapMetadata,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
         dtype: DType,
     ) -> Result<Self> {
@@ -264,8 +261,6 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         let output_norm = rms_norm(ct.tensor("output_norm.weight", device)?, rms_eps)?;
         let output = ct.tensor("output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
-
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         let mut count = 0;
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
@@ -487,8 +482,6 @@ impl ModelWeights {
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        start_offsets_kernel: Tensor,
-        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
@@ -501,8 +494,6 @@ impl ModelWeights {
                 input_ids_full,
                 seqlen_offsets,
                 seqlen_offsets_full,
-                &start_offsets_kernel,
-                &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
                 &vec![usize::MAX; context_lens.len()],
@@ -590,7 +581,6 @@ impl ScalingsMaker for ModelWeights {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,

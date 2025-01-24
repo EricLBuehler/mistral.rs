@@ -90,9 +90,19 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     this.reset_non_granular_state();
                 }
 
+                // Send usage on final chunk.
+                let usage_opt = if is_done.is_some() {
+                    let usage = seq.get_mut_group().get_usage();
+                    seq.get_mut_group().total_prompt_toks = 0;
+                    seq.get_mut_group().total_toks = 0;
+                    Some(usage)
+                } else {
+                    None
+                };
+
                 if seq
                     .get_mut_group()
-                    .maybe_send_streaming_response(seq, this.name().clone())
+                    .maybe_send_streaming_response(seq, this.name().clone(), usage_opt)
                     .await
                     .is_err()
                 {

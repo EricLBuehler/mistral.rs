@@ -20,6 +20,7 @@ use mistralrs_quant::QuantMethod;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
+    layers::GetFloatInfo,
     layers_masker::masked_fill,
     ops::RepeatInterleaveOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -46,18 +47,18 @@ fn prepare_cross_attention_mask(
 
     // Invert the mask
     let inverted_cross_attn_mask = (1. - cross_attn_mask)?;
-    const NEG_INF_VALUE: f32 = -1e15;
+    let neg_inf_value = dtype.finfo()?.min;
     cross_attn_mask = masked_fill(
         &inverted_cross_attn_mask,
         &inverted_cross_attn_mask.ne(0.)?,
-        NEG_INF_VALUE,
+        neg_inf_value as f32,
     )?;
 
     // Apply full-row bias which return 4d tensor of shape (b, h, s1, 1) where
     // value is 0 if a full row in cross attn mask's last dimension contains
     // negative infinity values, otherwise it's 1
     let full_text_row_masked_out_mask = cross_attn_mask
-        .ne(NEG_INF_VALUE)?
+        .ne(neg_inf_value)?
         .sum(D::Minus1)?
         .ne(0.)?
         .unsqueeze(D::Minus1)?;
@@ -87,16 +88,10 @@ impl MLlamaModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let real_dev = normal_loading_metadata.real_device.clone();
-        // This vision model is very sensitive.
-        let vision_model_dtype = if vb.dtype() == DType::F16 {
-            DType::F32
-        } else {
-            vb.dtype()
-        };
         Ok(Self {
             vision_model: MLlamaVisionModel::new(
                 &cfg.vision_config,
-                vb.pp("vision_model").set_dtype(vision_model_dtype),
+                vb.pp("vision_model"),
                 &real_dev,
             )?,
             language_model: MLlamaTextModel::new(
@@ -109,9 +104,7 @@ impl MLlamaModel {
             multi_modal_projector: linear(
                 cfg.vision_config.vision_output_dim,
                 cfg.text_config.hidden_size,
-                vb.pp("multi_modal_projector")
-                    .set_device(real_dev.clone())
-                    .set_dtype(vision_model_dtype),
+                vb.pp("multi_modal_projector").set_device(real_dev.clone()),
             )?,
             hidden_size: cfg.text_config.hidden_size,
             dtype: vb.dtype(),
@@ -127,7 +120,6 @@ impl MLlamaModel {
         aspect_ratio_ids: Option<&Tensor>,
         cross_attn_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let cross_attn_states = if let Some(pixel_values) = pixel_values {
@@ -152,11 +144,12 @@ impl MLlamaModel {
 
         let (cross_attn_mask, full_text_row_masked_out_mask) =
             if let Some(cross_attn_mask) = cross_attn_mask {
-                let (cmask, fmask) = prepare_cross_attention_mask(
+                let (mut cmask, fmask) = prepare_cross_attention_mask(
                     cross_attn_mask,
                     self.vision_model.num_patches,
                     self.dtype,
                 )?;
+                cmask = cmask.squeeze(1)?;
                 (Some(cmask), Some(fmask))
             } else {
                 (None, None)
@@ -168,7 +161,6 @@ impl MLlamaModel {
             cross_attn_mask.as_ref(),
             full_text_row_masked_out_mask.as_ref(),
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
         )
     }
@@ -205,7 +197,6 @@ impl VisionModel for MLlamaModel {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
@@ -226,7 +217,6 @@ impl VisionModel for MLlamaModel {
             aspect_ratio_ids.as_ref(),
             cross_attn_mask.as_ref(),
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
         )
     }

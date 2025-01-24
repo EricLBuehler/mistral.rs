@@ -25,7 +25,10 @@ To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md)
 
 When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
 
-For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ organization parameter in all APIs.
+For Mixture of Expert models, a method called [MoQE](https://arxiv.org/abs/2310.02410) can be applied to only quantize MoE layers. This is configured via the ISQ "organization" parameter in all APIs. The following models support MoQE:
+- [Phi 3.5 MoE](PHI3.5MOE.md)
+- [DeepSeek V2](DEEPSEEKV2.md)
+- [DeepSeek V3 / DeepSeek R1](DEEPSEEKV3.md)
 
 ## Accuracy
 

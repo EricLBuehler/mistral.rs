@@ -22,7 +22,7 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths, DeviceMapMetadata, PagedAttentionConfig, Pipeline, Topology,
+    get_mut_arcmutex, get_paths, DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType, DEBUG,
 };
 use crate::{
@@ -242,7 +242,7 @@ impl Loader for GGMLLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -251,31 +251,14 @@ impl Loader for GGMLLoader {
                 "You are trying to in-situ quantize a GGML model. This will not do anything."
             );
         }
-        if !(mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map())))
-        {
-            warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
-        }
-        if !(mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map())))
-            && paged_attn_config.is_some()
-        {
-            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
-            paged_attn_config = None;
+
+        if matches!(mapper, DeviceMapSetting::Map(_)) {
+            anyhow::bail!("Device mapping is not supported for diffusion models.")
         }
 
-        if !mapper.is_dummy() && paged_attn_config.is_some() {
-            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
+        if paged_attn_config.is_some() {
+            warn!("PagedAttention is not supported for GGML models, disabling it.");
+
             paged_attn_config = None;
         }
 
@@ -331,10 +314,7 @@ impl Loader for GGMLLoader {
                 )?);
             }
 
-            ModelConfig::ModelParams::builder()
-                .quant(quant)
-                .and_adapter(adapter)
-                .build()
+            ModelConfig::ModelParams::new(quant, adapter)
         };
 
         // Config into model:
@@ -388,7 +368,8 @@ impl Loader for GGMLLoader {
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
                 tok_env: Some(tok_env),
-                has_no_kv_cache: self.no_kv_cache,
+                no_kv_cache: self.no_kv_cache,
+                no_prefix_cache: false,
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: self.kind.clone(),
@@ -411,7 +392,7 @@ impl Loader for GGMLLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -547,8 +528,6 @@ impl Pipeline for GGMLPipeline {
             input_ids_full,
             seqlen_offsets,
             seqlen_offsets_full,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full,
             context_lens,
             position_ids: _,    // NOTE(EricLBuehler): ignore, it is for phi3
             paged_attn_meta: _, // NOTE(EricLBuehler): ignore it for ggml
@@ -556,20 +535,14 @@ impl Pipeline for GGMLPipeline {
             flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
         } = *inputs.downcast().expect("Downcast failed.");
         let logits = match self.model {
-            Model::Llama(ref model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                None,
-            )?,
+            Model::Llama(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, None)?
+            }
             Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,

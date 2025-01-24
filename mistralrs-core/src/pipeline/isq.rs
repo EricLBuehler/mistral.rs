@@ -685,7 +685,7 @@ pub trait IsqModel {
                     if let Some(artifact) = artifact_isqs.get(&i) {
                         let artifact = artifact.data();
                         // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-                        let isq_type = artifact[4];
+                        let isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
                         let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
                             QuantizedSerdeType::Gguf => {
                                 GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?

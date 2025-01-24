@@ -27,8 +27,6 @@ use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapMetadata;
-use crate::Topology;
 
 pub const MAX_SEQ_LEN: usize = 4096;
 
@@ -225,8 +223,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
         device: &Device,
-        mapper: DeviceMapMetadata,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self> {
@@ -257,8 +254,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let output = QLinear::new(&mut ct, "output", device)?;
         let mut layers = Vec::with_capacity(block_count);
         let head_dim = embedding_length / head_count;
-
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
 
         for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
             let prefix = format!("blk.{layer_idx}");

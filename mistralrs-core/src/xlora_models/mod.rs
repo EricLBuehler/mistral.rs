@@ -49,7 +49,6 @@ trait ScalingsMaker {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,
@@ -66,8 +65,6 @@ trait ScalingsMaker {
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        start_offsets_kernel: &Tensor,
-        start_offsets_kernel_full: &Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         position_ids: &[usize],
@@ -97,7 +94,6 @@ trait ScalingsMaker {
             let res = self.forward(
                 input_ids_full,
                 seqlen_offsets_full,
-                start_offsets_kernel_full.clone(),
                 dummy_scalings,
                 true,
                 no_kv_cache,
@@ -120,7 +116,6 @@ trait ScalingsMaker {
             self.forward(
                 input_ids,
                 seqlen_offsets,
-                start_offsets_kernel.clone(),
                 dummy_scalings,
                 false,
                 no_kv_cache,

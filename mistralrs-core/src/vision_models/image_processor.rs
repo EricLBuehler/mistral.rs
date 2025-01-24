@@ -30,6 +30,12 @@ pub(crate) struct PreprocessedImages {
     pub(crate) rows: Option<Vec<usize>>,
     /// Without batch size
     pub(crate) cols: Option<Vec<usize>>,
+    /// Without batch size. Only images.
+    pub(crate) pixel_values_list: Option<Vec<Tensor>>,
+    /// Without batch size, safe to unsqueeze & concat in dim0
+    pub(crate) tgt_sizes: Option<Tensor>,
+    /// Without batch size. Per image. (w,h).
+    pub(crate) image_sizes_all: Option<Vec<(u32, u32)>>,
 }
 
 /// ImagePreProcessor: process images for the model (similar to `InputsProcessor`, typically called by it)

@@ -21,6 +21,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
+    utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
 };
 
@@ -116,7 +117,6 @@ impl Idefics3Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
@@ -224,7 +224,6 @@ impl Idefics3Model {
             input_ids,
             input_embeds,
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             metadata,
             flash_params,
@@ -246,7 +245,20 @@ impl IsqModel for Idefics3Model {
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        self.text_model.residual_tensors()
+        let uvb = UnVarBuilder::new();
+
+        let uvb_m = uvb.pp("model");
+        uvb_m
+            .pp("connector")
+            .pp("modality_projection")
+            .pp("proj")
+            .add(&self.connector.modality_projection.proj);
+        uvb.extend(self.text_model.residual_tensors_m(uvb_m.pp("text_model")));
+        uvb_m
+            .pp("vision_model")
+            .extend(self.vision.residual_tensors());
+
+        uvb.to_safetensors()
     }
 }
 
@@ -287,7 +299,6 @@ impl VisionModel for Idefics3Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
@@ -301,7 +312,6 @@ impl VisionModel for Idefics3Model {
             input_ids,
             pixel_values,
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             pixel_attention_mask,
             metadata,

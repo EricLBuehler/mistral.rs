@@ -6,8 +6,9 @@ use std::{
 use crate::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
-    DiffusionLoaderBuilder, DiffusionSpecificConfig, GGUFSpecificConfig, Loader, ModelDType,
-    ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
+    toml_selector::get_toml_selected_model_device_map_params,
+    AutoDeviceMapParams, DiffusionLoaderBuilder, DiffusionSpecificConfig, GGUFSpecificConfig,
+    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
     VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
@@ -102,6 +103,81 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
     }
 }
 
+pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoDeviceMapParams> {
+    match model {
+        ModelSelected::Plain {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::Lora {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::XLora {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::GGML {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::GGUF {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::XLoraGGUF {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::XLoraGGML {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::LoraGGUF {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::LoraGGML {
+            max_seq_len,
+            max_batch_size,
+            ..
+        } => Ok(AutoDeviceMapParams::Text {
+            max_seq_len: *max_seq_len,
+            max_batch_size: *max_batch_size,
+        }),
+        ModelSelected::VisionPlain {
+            max_seq_len,
+            max_batch_size,
+            max_image_length,
+            max_num_images,
+            ..
+        } => Ok(AutoDeviceMapParams::Vision {
+            max_seq_len: *max_seq_len,
+            max_batch_size: *max_batch_size,
+            max_image_shape: (*max_image_length, *max_image_length),
+            max_num_images: *max_num_images,
+        }),
+        ModelSelected::DiffusionPlain { .. } => {
+            anyhow::bail!("diffusion model doesn't support max_seq_len")
+        }
+        ModelSelected::Toml { file } => {
+            let selector: TomlSelector = toml::from_str(
+                &fs::read_to_string(file.clone())
+                    .unwrap_or_else(|_| panic!("Could not load toml selector file at {file}")),
+            )?;
+            get_toml_selected_model_device_map_params(&selector)
+        }
+    }
+}
+
 fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loader>> {
     let use_flash_attn = args.use_flash_attn;
     let loader: Box<dyn Loader> = match args.model {
@@ -129,6 +205,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             from_uqff,
             imatrix,
             calibration_file,
+            max_seq_len: _,
+            max_batch_size: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -157,6 +235,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             topology,
             write_uqff,
             from_uqff,
+            max_seq_len: _,
+            max_batch_size: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -193,6 +273,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             topology,
             write_uqff,
             from_uqff,
+            max_seq_len: _,
+            max_batch_size: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -397,6 +479,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             from_uqff,
             max_edge,
             calibration_file,
+            max_seq_len: _,
+            max_batch_size: _,
+            max_num_images: _,
+            max_image_length: _,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,

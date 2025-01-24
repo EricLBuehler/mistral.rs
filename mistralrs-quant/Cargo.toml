@@ -30,6 +30,7 @@ thiserror = "1"
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
 metal = ["candle-core/metal", "candle-nn/metal", "dep:metal"]
+accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }

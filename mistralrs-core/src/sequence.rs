@@ -192,8 +192,8 @@ pub struct Sequence {
     draft_cache: LayerCaches,
     xlora_cache: Option<LayerCaches>,
 
-    // Preallocated KV cache
-    seq_preallocated_cache: Option<Tensor>,
+    // Preallocated KV cache (k,v)
+    seq_preallocated_cache: Option<(Tensor, Tensor)>,
 
     // Mutables
     tokens: Vec<u32>,
@@ -282,8 +282,8 @@ impl Sequence {
         image_gen_response_format: Option<ImageGenerationResponseFormat>,
         sequence_stepping_type: SeqStepType,
         diffusion_params: Option<DiffusionGenerationParams>,
-        // Preallocated KV cache
-        seq_preallocated_cache: Option<Tensor>,
+        // Preallocated KV cache (k,v)
+        seq_preallocated_cache: Option<(Tensor, Tensor)>,
         //
         return_raw_logits: bool,
     ) -> Self {
@@ -501,7 +501,7 @@ impl Sequence {
         &self.completion_bytes
     }
 
-    pub fn preallocated_cache(&self) -> Option<&Tensor> {
+    pub fn preallocated_cache(&self) -> Option<&(Tensor, Tensor)> {
         self.seq_preallocated_cache.as_ref()
     }
 
@@ -711,8 +711,8 @@ impl Sequence {
 
         get_mut_group!(self).total_time += now - self.timestamp;
 
-        get_mut_group!(self).total_prompt_toks += self.prompt_len;
-        get_mut_group!(self).total_toks += self.len();
+        get_mut_group!(self).total_prompt_toks = self.prompt_len;
+        get_mut_group!(self).total_toks = self.len();
     }
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
@@ -755,6 +755,7 @@ impl Sequence {
 
     pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
         get_mut_group!(self).chat_streaming_chunks.push(chunk);
+        self.update_time_info();
     }
 
     pub fn add_streaming_completion_chunk_choice_to_group(&self, chunk: CompletionChunkChoice) {
@@ -926,6 +927,7 @@ impl SequenceGroup {
         &mut self,
         seq: &Sequence,
         model: String,
+        usage_opt: Option<Usage>,
     ) -> Result<(), Box<SendError<Response>>> {
         if self.chat_streaming_chunks.len() == self.n_choices && self.is_streaming {
             let mut swap_streaming_chunks = vec![];
@@ -940,6 +942,7 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
+                    usage: usage_opt,
                 }))
                 .await?;
         } else if self.completion_streaming_chunks.len() == self.n_choices && self.is_streaming {

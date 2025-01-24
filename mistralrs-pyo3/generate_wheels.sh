@@ -55,3 +55,4 @@ maturin build -o wheels-mkl -m mistralrs-pyo3/Cargo.toml --interpreter python3.1
 # twine upload --repository pypi --password PASSWORD --username __token__ wheels-metal/*.whl
 # ⚠️ Need both x86_64 and aarch64 builds before this! ⚠️
 # twine upload --repository pypi --password PASSWORD --username __token__ wheels-cpu/*.whl
+

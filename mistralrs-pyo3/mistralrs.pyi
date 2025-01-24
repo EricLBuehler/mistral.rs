@@ -79,6 +79,8 @@ class Architecture(Enum):
     Gemma2 = "gemma2"
     Starcoder2 = "starcoder2"
     Phi3_5MoE = "phi3.5moe"
+    DeepseekV2 = "deepseekv2"
+    DeepseekV3 = "deepseekv3"
 
 @dataclass
 class VisionArchitecture(Enum):
@@ -89,6 +91,7 @@ class VisionArchitecture(Enum):
     VLlama = "vllama"
     Qwen2VL = "qwen2vl"
     Idefics3 = "idefics3"
+    MiniCpmO = "minicpmo"
 
 @dataclass
 class DiffusionArchitecture(Enum):
@@ -112,6 +115,28 @@ class ImageGenerationResponseFormat(Enum):
     Url = "url"
     B64Json = "b64json"
 
+@dataclass
+class TextAutoMapParams:
+    """
+    Auto-mapping parameters for a text model.
+    These affects automatic device mapping but are not a hard limit.
+    """
+
+    max_seq_len: int = 4* 1024
+    max_batch_size: int = 1
+
+@dataclass
+class VisionAutoMapParams:
+    """
+    Auto-mapping parameters for a vision model.
+    These affects automatic device mapping but are not a hard limit.
+    """
+
+    max_seq_len: int = 4* 1024
+    max_batch_size: int = 1
+    max_num_images: int = 1
+    max_image_length: int = 1024
+
 class Which(Enum):
     """
     Which model to select. See the docs for the `Which` enum in API.md for more details.
@@ -129,6 +154,7 @@ class Which(Enum):
         organization: str | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        auto_map_params: TextAutoMapParams | None = (None,)
 
     @dataclass
     class XLora:
@@ -141,6 +167,7 @@ class Which(Enum):
         topology: str | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        auto_map_params: TextAutoMapParams | None = (None,)
 
     @dataclass
     class Lora:
@@ -152,6 +179,7 @@ class Which(Enum):
         topology: str | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        auto_map_params: TextAutoMapParams | None = (None,)
 
     @dataclass
     class GGUF:
@@ -160,6 +188,7 @@ class Which(Enum):
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        auto_map_params: TextAutoMapParams | None = (None,)
 
     @dataclass
     class XLoraGGUF:
@@ -171,6 +200,7 @@ class Which(Enum):
         tgt_non_granular_index: int | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        auto_map_params: TextAutoMapParams | None = (None,)
 
     @dataclass
     class LoraGGUF:
@@ -181,6 +211,7 @@ class Which(Enum):
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        auto_map_params: TextAutoMapParams | None = (None,)
 
     @dataclass
     class GGML:
@@ -191,6 +222,7 @@ class Which(Enum):
         gqa: int | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        auto_map_params: TextAutoMapParams | None = (None,)
 
     @dataclass
     class XLoraGGML:
@@ -204,6 +236,7 @@ class Which(Enum):
         gqa: int | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        auto_map_params: TextAutoMapParams | None = (None,)
 
     @dataclass
     class LoraGGML:
@@ -215,6 +248,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        auto_map_params: TextAutoMapParams | None = (None,)
 
     @dataclass
     class VisionPlain:
@@ -225,6 +259,7 @@ class Which(Enum):
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
+        auto_map_params: VisionAutoMapParams | None = (None,)
 
     @dataclass
     class DiffusionPlain:
@@ -271,8 +306,8 @@ class Runner:
             It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
         - `num_device_layers` sets the number of layers to load and run on each device.
             Each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
-            the corresponding number of layers.
-        - `in_situ_quant` sets the optional in-situ quantization for models that are not quantized (not GGUF or GGML).
+            the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
+        - `in_situ_quant` sets the optional in-situ quantization for a model.
         - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
         - `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
             PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.

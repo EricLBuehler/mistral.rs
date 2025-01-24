@@ -82,7 +82,7 @@ impl InputsProcessor for Phi3InputsProcessor {
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
-        _mapper: Option<&dyn DeviceMapper>,
+        mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
@@ -136,6 +136,9 @@ impl InputsProcessor for Phi3InputsProcessor {
                     video_grid_thw: _,
                     rows: _,
                     cols: _,
+                    pixel_values_list: _,
+                    tgt_sizes: _,
+                    image_sizes_all: _,
                 } = self
                     .preprocess(
                         imgs,
@@ -171,7 +174,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                         other_config,
                         paged_attn_metadata,
                         None, // TODO
-                        None,
+                        mapper,
                     )
                     .map(|metadata| {
                         let InputProcessorOutput {
@@ -184,8 +187,6 @@ impl InputsProcessor for Phi3InputsProcessor {
                             input_ids_full: _,
                             seqlen_offsets,
                             seqlen_offsets_full: _,
-                            seqlen_offsets_kernel,
-                            seqlen_offsets_kernel_full: _,
                             context_lens,
                             position_ids,
                             paged_attn_meta,
@@ -198,7 +199,6 @@ impl InputsProcessor for Phi3InputsProcessor {
                         let inputs: Box<dyn Any> = Box::new(ModelInputs {
                             input_ids,
                             seqlen_offsets,
-                            seqlen_offsets_kernel,
                             context_lens,
                             position_ids,
                             pixel_values: None,
@@ -323,7 +323,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
-                None,
+                mapper,
             )
         } else {
             get_completion_input(
@@ -335,7 +335,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
-                None,
+                mapper,
             )
         };
 
@@ -345,7 +345,6 @@ impl InputsProcessor for Phi3InputsProcessor {
                     text_models_inputs_processor::InputMetadata {
                         input,
                         positions,
-                        positions_kernel,
                         context_lens,
                         position_ids,
                         paged_attn_meta,
@@ -356,7 +355,6 @@ impl InputsProcessor for Phi3InputsProcessor {
             let inputs: Box<dyn Any> = Box::new(ModelInputs {
                 input_ids: input,
                 seqlen_offsets: positions,
-                seqlen_offsets_kernel: positions_kernel,
                 context_lens,
                 position_ids,
                 pixel_values: pixel_values.clone(),
@@ -570,6 +568,9 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             video_grid_thw: None,
             rows: None,
             cols: None,
+            pixel_values_list: None,
+            tgt_sizes: None,
+            image_sizes_all: None,
         })
     }
 }

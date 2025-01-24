@@ -113,7 +113,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
         prompt_batchsize: Option<NonZeroUsize>,
-        _mapper: Option<&dyn DeviceMapper>,
+        mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
@@ -140,7 +140,6 @@ impl InputsProcessor for Idefics3ImageProcessor {
                 text_models_inputs_processor::InputMetadata {
                     input,
                     positions,
-                    positions_kernel,
                     context_lens,
                     position_ids,
                     paged_attn_meta,
@@ -159,7 +158,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
-                None,
+                mapper,
             )
             .nth(0)
             .unwrap()
@@ -177,7 +176,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
-                None,
+                mapper,
             )
             .nth(0)
             .unwrap()
@@ -207,6 +206,9 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     video_grid_thw: _,
                     rows,
                     cols,
+                    pixel_values_list: _,
+                    tgt_sizes: _,
+                    image_sizes_all: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -238,7 +240,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     .expect("The image token <image> should be present in the text.")
                     .to_string();
                 for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
-                    sample.push_str(&format!("{image_prompt_string}{}", split_sample[i + 1]));
+                    sample.push_str(&format!("{image_prompt_string}{}", split_sample[i]));
                 }
 
                 seq.set_initial_prompt(sample.clone());
@@ -276,7 +278,6 @@ impl InputsProcessor for Idefics3ImageProcessor {
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
             context_lens,
             position_ids,
             pixel_values,
@@ -594,6 +595,9 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             video_grid_thw: None,
             rows: Some(image_rows),
             cols: Some(image_cols),
+            pixel_values_list: None,
+            tgt_sizes: None,
+            image_sizes_all: None,
         })
     }
 }

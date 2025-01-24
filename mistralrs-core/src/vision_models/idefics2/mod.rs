@@ -13,7 +13,7 @@ use std::{any::Any, ops::Mul};
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    layers::{repeat_kv, Activation, CausalMasker, QLinear, RmsNorm},
+    layers::{repeat_kv, Activation, CausalMasker, MatMul, QLinear, RmsNorm},
     models::mistral::Model as Mistral,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -102,73 +102,73 @@ fn default_224() -> usize {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-struct PerceiverConfig {
+pub struct PerceiverConfig {
     #[serde(default = "default_act")]
-    hidden_act: Activation,
+    pub hidden_act: Activation,
     #[serde(default = "default_64")]
-    resampler_n_latents: usize,
+    pub resampler_n_latents: usize,
     #[serde(default = "default_3")]
-    resampler_depth: usize,
+    pub resampler_depth: usize,
     #[serde(default = "default_16")]
-    resampler_n_heads: usize,
+    pub resampler_n_heads: usize,
     #[serde(default = "default_96")]
-    resampler_head_dim: usize,
+    pub resampler_head_dim: usize,
     #[serde(default = "default_4")]
-    num_key_value_heads: usize,
+    pub num_key_value_heads: usize,
     #[serde(default = "default_0_0")]
-    attention_dropout: f32,
+    pub attention_dropout: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-struct VisionConfig {
+pub struct VisionConfig {
     #[serde(default = "default_768")]
-    hidden_size: usize,
+    pub hidden_size: usize,
     #[serde(default = "default_3072")]
-    intermediate_size: usize,
+    pub intermediate_size: usize,
     #[serde(default = "default_12")]
-    num_hidden_layers: usize,
+    pub num_hidden_layers: usize,
     #[serde(default = "default_12")]
-    num_attention_heads: usize,
+    pub num_attention_heads: usize,
     #[serde(default = "default_3")]
-    num_channels: usize,
+    pub num_channels: usize,
     #[serde(default = "default_224")]
-    image_size: usize,
+    pub image_size: usize,
     #[serde(default = "default_32")]
-    patch_size: usize,
+    pub patch_size: usize,
     #[serde(default = "default_gelu")]
-    hidden_act: Activation,
+    pub hidden_act: Activation,
     #[serde(default = "default_eps")]
-    layer_norm_eps: f64,
+    pub layer_norm_eps: f64,
     #[serde(default = "default_0_0")]
-    attn_dropout: f32,
+    pub attn_dropout: f32,
     #[serde(default = "default_0_02")]
-    initiailizer_range: f32,
+    pub initiailizer_range: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) struct TextConfig {
     #[serde(default = "default_32000")]
-    vocab_size: usize,
+    pub(crate) vocab_size: usize,
     #[serde(default = "default_4096")]
-    hidden_size: usize,
+    pub(crate) hidden_size: usize,
     #[serde(default = "default_14336")]
-    intermediate_size: usize,
+    pub(crate) intermediate_size: usize,
     #[serde(default = "default_32")]
     pub(crate) num_hidden_layers: usize,
     #[serde(default = "default_32")]
-    num_attention_heads: usize,
+    pub(crate) num_attention_heads: usize,
     #[serde(default = "default_8")]
-    num_key_value_heads: usize,
+    pub(crate) num_key_value_heads: usize,
     #[serde(default = "default_act")]
-    hidden_act: Activation,
+    pub(crate) hidden_act: Activation,
     #[serde(default = "default_131072")]
-    max_position_embeddings: usize,
+    pub(crate) max_position_embeddings: usize,
     #[serde(default = "default_eps")]
-    rms_norm_eps: f64,
+    pub(crate) rms_norm_eps: f64,
     #[serde(default = "default_rope")]
-    rope_theta: f64,
+    pub(crate) rope_theta: f64,
     #[serde(default = "default_sliding")]
-    sliding_window: Option<usize>,
+    pub(crate) sliding_window: Option<usize>,
 
     #[serde(default = "default_false")]
     pub(crate) use_flash_attn: bool,
@@ -199,13 +199,13 @@ impl From<TextConfig> for mistral::Config {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) struct Config {
-    perceiver_config: PerceiverConfig,
-    vision_config: VisionConfig,
+    pub perceiver_config: PerceiverConfig,
+    pub vision_config: VisionConfig,
     pub(crate) text_config: TextConfig,
     #[serde(default = "default_32001")]
-    image_token_id: usize,
+    pub image_token_id: usize,
     #[serde(default = "default_false")]
-    tie_word_embeddings: bool,
+    pub tie_word_embeddings: bool,
 }
 
 // == START VISION MODEL ==
@@ -220,27 +220,32 @@ struct VisionEmbeddings {
 /// torch.bucketize with right=True
 /// Returns a 1d tensor of shape (xs.len(),) on the CPU
 fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Tensor> {
-    // Initialize a vector to store the bucket indices
-    let mut indices = vec![0; xs.len()];
+    use std::cmp::Ordering;
 
-    // Iterate over each element in `xs`
-    for (i, &x) in xs.iter().enumerate() {
-        // Find the index of the bucket for the current element
-        let mut index = 0;
-        for (j, &boundary) in boundaries.iter().enumerate() {
-            if x < boundary {
-                index = j;
-                break;
-            }
-        }
-        // If the value is greater than or equal to all boundaries, set the index to the length of boundaries
-        if index == 0 && x >= boundaries[boundaries.len() - 1] {
-            index = boundaries.len();
-        }
-        indices[i] = index as u32;
+    let mut result = Vec::with_capacity(xs.len());
+
+    for &x in xs {
+        // binary_search_by returns:
+        //   Ok(i)   if boundaries[i] == x
+        //   Err(i)  if x would be inserted at i
+        //
+        // The returned i is the "insertion point" for x to keep
+        // boundaries sorted. That i is the smallest position
+        // where boundaries[i] >= x (i.e. bisect_left).
+
+        let idx = match boundaries.binary_search_by(|&val| {
+            // Use partial_cmp here; assume no NaNs.
+            // For robust handling of NaNs, you might need a custom comparison.
+            val.partial_cmp(&x).unwrap_or(Ordering::Less)
+        }) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+
+        result.push(idx as u32);
     }
 
-    Tensor::from_vec(indices, (xs.len(),), device)
+    Tensor::from_vec(result, (xs.len(),), device)
 }
 
 impl VisionEmbeddings {
@@ -322,14 +327,29 @@ impl VisionEmbeddings {
                 .unsqueeze(D::Minus1)?
                 .mul(self.num_patches_per_side as f64)?
                 .broadcast_add(&bucket_coords_w)?
-                .flatten_all()?;
+                .flatten_all()?
+                .to_vec1::<u32>()?;
 
+            let true_indices = p_attn_mask
+                .flatten_all()?
+                .to_vec1::<u8>()?
+                .iter()
+                .enumerate()
+                .filter_map(|(i, x)| if *x != 0 { Some(i) } else { None })
+                .collect::<Vec<_>>();
             let position_ids_b = position_ids.i(b_idx)?;
-            new_position_ids.push(
-                p_attn_mask
-                    .flatten_all()?
-                    .where_cond(&pos_ids, &position_ids_b)?,
-            );
+
+            let mut new_position_ids_b = position_ids_b.to_vec1::<u32>()?;
+            let new_position_ids_b_len = new_position_ids_b.len();
+            for (i, true_idx) in true_indices.into_iter().enumerate() {
+                new_position_ids_b[true_idx] = pos_ids[i];
+            }
+
+            new_position_ids.push(Tensor::from_vec(
+                new_position_ids_b,
+                new_position_ids_b_len,
+                pixel_values.device(),
+            )?);
         }
         let position_ids = Tensor::stack(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
@@ -411,7 +431,7 @@ impl Attention {
             .transpose(1, 2)?;
 
         let attn_weights =
-            (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
+            (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
 
         let attn_weights = CausalMasker.apply_mask_one_and_zero(
             &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
@@ -419,7 +439,7 @@ impl Attention {
             &self.neg_inf,
         )?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let mut attn_output = attn_weights.matmul(&v.contiguous()?)?;
+        let mut attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
@@ -767,7 +787,7 @@ impl PerceiverAttention {
         let k = repeat_kv(k, self.num_kv_groups)?.contiguous()?;
         let v = repeat_kv(v, self.num_kv_groups)?.contiguous()?;
 
-        let attn_weights = (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)?
+        let attn_weights = (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)?
             / (self.head_dim as f64).sqrt())?;
 
         let attn_weights = CausalMasker.apply_mask_one_and_zero(
@@ -776,7 +796,7 @@ impl PerceiverAttention {
             &self.neg_inf,
         )?;
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let mut attn_output = attn_weights.matmul(&v.contiguous()?)?;
+        let mut attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
         if self.q_proj.is_quant() {
             attn_output = attn_output.to_dtype(DType::F32)?;
@@ -1063,7 +1083,6 @@ impl Idefics2 {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
@@ -1152,7 +1171,7 @@ impl Idefics2 {
                 &patch_attention_mask.reshape((pixel_values.dim(0)?, ()))?,
             )?;
 
-            if CausalMasker.calculate_past_kv_len(&self.text_model.cache.full().lock())? == 0 {
+            if self.text_model.cache.normal().0[0].current_seq_len() == 0 {
                 self.inputs_merger(
                     input_ids,
                     &self.text_model.get_input_embeddings(input_ids)?,
@@ -1169,7 +1188,6 @@ impl Idefics2 {
             input_ids,
             input_embeds,
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             metadata,
             flash_params,
@@ -1245,7 +1263,6 @@ impl VisionModel for Idefics2 {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
@@ -1259,7 +1276,6 @@ impl VisionModel for Idefics2 {
             input_ids,
             pixel_values,
             seqlen_offsets,
-            start_offsets_kernel,
             context_lens,
             pixel_attention_mask,
             metadata,

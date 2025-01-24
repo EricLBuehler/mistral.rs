@@ -5,7 +5,7 @@ use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 
 use crate::{
-    layers::{Activation, Conv3dConfig, Conv3dNoBias},
+    layers::{Activation, Conv3dConfig, Conv3dNoBias, MatMul},
     ops::RepeatInterleaveOp,
 };
 
@@ -138,13 +138,15 @@ impl VisionAttention {
         v = v.transpose(0, 1)?.contiguous()?;
 
         let att = {
-            let mut att = (q.matmul(&k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt())?;
+            let mut att =
+                (MatMul.matmul(&q, &k.transpose(1, 2)?)? / (self.head_dim as f64).sqrt())?;
             att = match attention_mask {
                 Some(m) => att.broadcast_add(m)?,
                 None => att,
             };
             att = candle_nn::ops::softmax_last_dim(&att)?;
-            att.matmul(&v)?
+            MatMul
+                .matmul(&att, &v)?
                 .transpose(0, 1)?
                 .reshape((seq_len, ()))?
                 .to_dtype(xs.dtype())?

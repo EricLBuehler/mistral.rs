@@ -4,14 +4,14 @@ use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
-    MetadataMixin, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, Processor,
-    Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
-    XLoraPaths,
+    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin,
+    Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader,
+    VisionPromptPrefixer, XLoraPaths,
 };
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
 };
-use crate::device_map::DeviceMapper;
+use crate::device_map::{self, DeviceMapper};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_tok_env;
@@ -20,24 +20,25 @@ use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
 use crate::utils::tokenizer::get_tokenizer;
+use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
-    AnyMoeExpertType, DeviceMapMetadata, Ordering, PagedAttentionConfig, Pipeline, Topology,
+    AnyMoeExpertType, DeviceMapSetting, Ordering, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use mistralrs_quant::IsqType;
+use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
+use std::borrow::Cow;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -131,6 +132,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::VLlama => Box::new(VLlamaLoader),
             VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
             VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
+            VisionLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -157,7 +159,7 @@ impl Loader for VisionLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -197,40 +199,108 @@ impl Loader for VisionLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mut mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
-        // Otherwise, the device mapper will print it
-        if mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map()))
-        {
-            info!(
-                "Loading model `{}` on {}.",
-                self.get_id(),
-                device.device_pretty_repr()
-            );
-        } else if paged_attn_config.is_some() {
-            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
-            paged_attn_config = None;
-        }
-
         if !self.inner.supports_paged_attention() {
             paged_attn_config = None;
         }
 
-        info!(
-            "Model config: {:?}",
-            self.inner
-                .get_config_repr(&config, self.config.use_flash_attn)?
-        );
+        // If auto, convert to Map
+        if let DeviceMapSetting::Auto(params) = mapper.clone() {
+            let devices = device_map::get_all_similar_devices(device)?;
+            // Initial dtype
+            let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
+
+            // ISQ or UQFF: quantized path
+            // Match logic below where UQFF has priority
+            let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+                if let Some(serialized) = &*self.from_uqff.read().unwrap() {
+                    let weight_pack_factor = {
+                        let ser_artifacts = unsafe {
+                            candle_core::safetensors::MmapedSafetensors::new(serialized)?
+                        };
+                        let mut total_pack_factors = 0;
+                        let total_tensors = ser_artifacts.tensors().len();
+                        for (_, artifact) in ser_artifacts.tensors() {
+                            let artifact = artifact.data();
+                            // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                            let isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
+                            let pack_factor = match QuantizedSerdeType::try_from(isq_type as usize)?
+                            {
+                                QuantizedSerdeType::Hqq => {
+                                    HqqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
+                                        .pack_factor(dtype)
+                                }
+                                QuantizedSerdeType::Gguf => {
+                                    GgufMatMul::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
+                                        .pack_factor(dtype)
+                                }
+                                QuantizedSerdeType::Fp8 => IsqType::F8E4M3.pack_factor(dtype),
+                                QuantizedSerdeType::Unquant => 1,
+                            };
+                            total_pack_factors += pack_factor;
+                        }
+
+                        total_pack_factors / total_tensors
+                    };
+
+                    let layer_sizes_in_bytes =
+                        self.inner
+                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner
+                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                    (
+                        layer_sizes_in_bytes,
+                        non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
+                    )
+                } else if let Some(isq) = in_situ_quant {
+                    let weight_pack_factor = isq.pack_factor(dtype);
+                    let layer_sizes_in_bytes =
+                        self.inner
+                            .layer_sizes_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner
+                            .non_mapped_size_in_bytes(&config, dtype, weight_pack_factor)?;
+                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                    (
+                        layer_sizes_in_bytes,
+                        non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
+                    )
+                } else {
+                    let layer_sizes_in_bytes =
+                        self.inner.layer_sizes_in_bytes(&config, dtype, 1)?;
+                    let non_mapped_size_in_bytes =
+                        self.inner.non_mapped_size_in_bytes(&config, dtype, 1)?;
+                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                    (
+                        layer_sizes_in_bytes,
+                        non_mapped_size_in_bytes,
+                        layer_sizes_sum + non_mapped_size_in_bytes,
+                    )
+                };
+
+            let new = self.inner.get_device_layers(
+                &config,
+                self.inner.num_layers(&config)?,
+                layer_sizes_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                &devices,
+                dtype,
+                &params,
+                paged_attn_config.as_ref(),
+            )?;
+            mapper = DeviceMapSetting::Map(new);
+        }
+
         let pipeline_mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
@@ -247,6 +317,20 @@ impl Loader for VisionLoader {
             layer_devices.push(device);
         }
         let dtype = mapper.get_min_dtype(dtype)?;
+
+        // TODO: PagedAttention is not supported with CPU for now.
+        // This check is not really necessary because `get_device_layers` should prevent it.
+        let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
+        if mapping_uses_cpu {
+            warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
+
+        info!(
+            "Model config: {:?}",
+            self.inner
+                .get_config_repr(&config, self.config.use_flash_attn)?
+        );
 
         let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
         if let Some(ref topology) = self.config.topology {
@@ -275,6 +359,7 @@ impl Loader for VisionLoader {
                 paths,
                 Some(dtype),
                 &load_device,
+                layer_devices.clone(),
                 config,
                 self.inner,
                 self.config.use_flash_attn,
@@ -365,7 +450,6 @@ impl Loader for VisionLoader {
                     &inputs.input,
                     None, // NOTE: We ONLY calibrate the text bits of these models!!
                     &inputs.positions,
-                    inputs.positions_kernel,
                     inputs.context_lens,
                     inputs.position_ids,
                     model.default_model_specific_args(&inputs.input),
@@ -450,6 +534,8 @@ impl Loader for VisionLoader {
                 dtype,
                 model.config(),
                 device,
+                &layer_devices,
+                silent,
             )?;
             let cache_engine =
                 CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;
@@ -480,7 +566,8 @@ impl Loader for VisionLoader {
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: self.kind.clone(),
-                has_no_kv_cache: false,
+                no_kv_cache: false,
+                no_prefix_cache: true, // TODO: evaluate. Do vision models need to not have prefix caching?
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,
@@ -624,7 +711,6 @@ impl Pipeline for VisionPipeline {
         let ModelInputs {
             input_ids,
             seqlen_offsets,
-            seqlen_offsets_kernel,
             context_lens,
             position_ids,
             pixel_values,
@@ -653,7 +739,6 @@ impl Pipeline for VisionPipeline {
                 &input_ids,
                 pixel_values,
                 &seqlen_offsets,
-                seqlen_offsets_kernel,
                 context_lens,
                 position_ids,
                 model_specific_args,
@@ -666,7 +751,6 @@ impl Pipeline for VisionPipeline {
             &input_ids,
             pixel_values,
             &seqlen_offsets,
-            seqlen_offsets_kernel,
             context_lens,
             position_ids,
             model_specific_args,
@@ -758,6 +842,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 vec![],
                 Some(dtype),
                 dev,
+                vec![None],
                 silent,
                 None,
                 move |key| {
@@ -774,6 +859,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
                         false
                     }
                 },
+                Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
             vbs.push(vb);
         }
@@ -809,9 +895,11 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 vec![],
                 Some(dtype),
                 dev,
+                vec![None],
                 silent,
                 None,
                 |_| true,
+                Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
             info!(
                 "Loaded gating layers from `{}`",
