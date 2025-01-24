@@ -265,7 +265,7 @@ typedef struct _MLX_BFloat16 bfloat16_t;
 
 struct BlockQ8_0 {
     half d;
-    char qs[QK8_0];
+    int8_t qs[QK8_0];
 };
 
 static_assert(sizeof(BlockQ8_0) == sizeof(half) + QK8_0, "wrong q8_0 block size/padding");

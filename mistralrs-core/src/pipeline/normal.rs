@@ -1,6 +1,7 @@
 use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::ImatrixDataSource;
 use super::llg::build_tok_env;
+use super::quantized_cache::QuantizedCacheManager;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
@@ -744,6 +745,8 @@ impl CacheManagerMixin for NormalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
             FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        } else if matches!(self.model.cache(), EitherCache::Quantized(_)) {
+            QuantizedCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
         } else {
             NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
         }
@@ -751,6 +754,8 @@ impl CacheManagerMixin for NormalPipeline {
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
             FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        } else if matches!(self.model.cache(), EitherCache::Quantized(_)) {
+            QuantizedCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
         } else {
             NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
         }
@@ -764,6 +769,13 @@ impl CacheManagerMixin for NormalPipeline {
     ) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
             FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
+        } else if matches!(self.model.cache(), EitherCache::Quantized(_)) {
+            QuantizedCacheManager.set_none_cache(
+                self,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            );
         } else {
             NormalCacheManager.set_none_cache(
                 self,

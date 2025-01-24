@@ -1,5 +1,8 @@
 use candle_core::{
-    quantized::k_quants::{BlockQ4_0, BlockQ8_0, QK4_0, QK8_0},
+    quantized::{
+        k_quants::{BlockQ4_0, BlockQ8_0, QK4_0, QK8_0},
+        GgmlDType,
+    },
     CustomOp1, DType, InplaceOp2, Result, Tensor,
 };
 
@@ -30,7 +33,7 @@ impl KvQuantizeOp8Bit {
     /// - start index must be at the start of a block
     /// - end index may be in the middle of a block
     pub fn narrow_qs_item(qs: &Tensor, start_idx: usize, len: usize) -> Result<Tensor> {
-        qs.narrow(0, start_block * Q8_0_TYPE_SIZE, len_blocks * Q8_0_TYPE_SIZE)
+        qs.narrow(0, start_idx * Q8_0_TYPE_SIZE, len * Q8_0_TYPE_SIZE)
     }
 
     pub fn narrow_xs(qs: &Tensor, start_block: usize, len_blocks: usize) -> Result<Tensor> {
@@ -191,7 +194,7 @@ impl KvQuantizeOp4Bit {
     pub fn compute_qs_elem_count(xs: &Tensor) -> Result<usize> {
         Self::compute_qs_elem_count_(xs.shape().elem_count())
     }
-    
+
     /// Compute the element count for qs for a tensor of this element count divisible by blocksize.
     pub fn compute_qs_elem_count_(numel: usize) -> Result<usize> {
         if numel % QK4_0 != 0 {

@@ -825,75 +825,82 @@ impl Engine {
                 .map(|conf| conf.block_size);
 
             let cache = get_mut_arcmutex!(self.pipeline).cache().clone();
-            let seq_preallocated_cache = if let EitherCache::Normal(_cache) = cache {
-                let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
-                let model_metadata = metadata
-                    .model_metadata
-                    .as_ref()
-                    .expect("If a model has a NormalCache it must have a model metadata");
-                let n_tokens = prompt_tokens.len();
-                let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
-                let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
-                let k_shape = (
-                    1usize,
-                    model_metadata.num_kv_heads(),
-                    max_seq_len,
-                    model_metadata.k_head_dim(),
-                );
-                let v_shape = (
-                    1usize,
-                    model_metadata.num_kv_heads(),
-                    max_seq_len,
-                    model_metadata.v_head_dim(),
-                );
-                let dtype = get_mut_arcmutex!(self.pipeline)
-                    .get_metadata()
-                    .activation_dtype;
+            let seq_preallocated_cache =
+                if matches!(cache, EitherCache::Normal(_) | EitherCache::Quantized(_)) {
+                    let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
+                    let model_metadata = metadata
+                        .model_metadata
+                        .as_ref()
+                        .expect("If a model has a NormalCache it must have a model metadata");
+                    let n_tokens = prompt_tokens.len();
+                    let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
+                    let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
+                    let k_shape = (
+                        1usize,
+                        model_metadata.num_kv_heads(),
+                        max_seq_len,
+                        model_metadata.k_head_dim(),
+                    );
+                    let v_shape = (
+                        1usize,
+                        model_metadata.num_kv_heads(),
+                        max_seq_len,
+                        model_metadata.v_head_dim(),
+                    );
+                    let dtype = get_mut_arcmutex!(self.pipeline)
+                        .get_metadata()
+                        .activation_dtype;
 
-                let k_seq_cache = {
-                    let k_seq_cache =
-                        Tensor::zeros(k_shape, dtype, &get_mut_arcmutex!(self.pipeline).device());
-                    match k_seq_cache {
-                        Ok(x) => x,
-                        Err(_) => {
-                            request
-                                .response
-                                .send(Response::InternalError(
-                                    "Failed to allocate preallocated KV cache."
-                                        .to_string()
-                                        .into(),
-                                ))
-                                .await
-                                .expect("Expected receiver.");
-                            return;
+                    let k_seq_cache = {
+                        let k_seq_cache = Tensor::zeros(
+                            k_shape,
+                            dtype,
+                            &get_mut_arcmutex!(self.pipeline).device(),
+                        );
+                        match k_seq_cache {
+                            Ok(x) => x,
+                            Err(_) => {
+                                request
+                                    .response
+                                    .send(Response::InternalError(
+                                        "Failed to allocate preallocated KV cache."
+                                            .to_string()
+                                            .into(),
+                                    ))
+                                    .await
+                                    .expect("Expected receiver.");
+                                return;
+                            }
                         }
-                    }
-                };
-                let v_seq_cache = if k_shape == v_shape {
-                    k_seq_cache.clone()
+                    };
+                    let v_seq_cache = if k_shape == v_shape {
+                        k_seq_cache.clone()
+                    } else {
+                        let v_seq_cache = Tensor::zeros(
+                            v_shape,
+                            dtype,
+                            &get_mut_arcmutex!(self.pipeline).device(),
+                        );
+                        match v_seq_cache {
+                            Ok(x) => x,
+                            Err(_) => {
+                                request
+                                    .response
+                                    .send(Response::InternalError(
+                                        "Failed to allocate preallocated KV cache."
+                                            .to_string()
+                                            .into(),
+                                    ))
+                                    .await
+                                    .expect("Expected receiver.");
+                                return;
+                            }
+                        }
+                    };
+                    Some((k_seq_cache, v_seq_cache))
                 } else {
-                    let v_seq_cache =
-                        Tensor::zeros(v_shape, dtype, &get_mut_arcmutex!(self.pipeline).device());
-                    match v_seq_cache {
-                        Ok(x) => x,
-                        Err(_) => {
-                            request
-                                .response
-                                .send(Response::InternalError(
-                                    "Failed to allocate preallocated KV cache."
-                                        .to_string()
-                                        .into(),
-                                ))
-                                .await
-                                .expect("Expected receiver.");
-                            return;
-                        }
-                    }
+                    None
                 };
-                Some((k_seq_cache, v_seq_cache))
-            } else {
-                None
-            };
 
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
