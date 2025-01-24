@@ -1084,7 +1084,34 @@
 <a href="#1083" id="1083">1083</a>
 <a href="#1084" id="1084">1084</a>
 <a href="#1085" id="1085">1085</a>
-<a href="#1086" id="1086">1086</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1086" id="1086">1086</a>
+<a href="#1087" id="1087">1087</a>
+<a href="#1088" id="1088">1088</a>
+<a href="#1089" id="1089">1089</a>
+<a href="#1090" id="1090">1090</a>
+<a href="#1091" id="1091">1091</a>
+<a href="#1092" id="1092">1092</a>
+<a href="#1093" id="1093">1093</a>
+<a href="#1094" id="1094">1094</a>
+<a href="#1095" id="1095">1095</a>
+<a href="#1096" id="1096">1096</a>
+<a href="#1097" id="1097">1097</a>
+<a href="#1098" id="1098">1098</a>
+<a href="#1099" id="1099">1099</a>
+<a href="#1100" id="1100">1100</a>
+<a href="#1101" id="1101">1101</a>
+<a href="#1102" id="1102">1102</a>
+<a href="#1103" id="1103">1103</a>
+<a href="#1104" id="1104">1104</a>
+<a href="#1105" id="1105">1105</a>
+<a href="#1106" id="1106">1106</a>
+<a href="#1107" id="1107">1107</a>
+<a href="#1108" id="1108">1108</a>
+<a href="#1109" id="1109">1109</a>
+<a href="#1110" id="1110">1110</a>
+<a href="#1111" id="1111">1111</a>
+<a href="#1112" id="1112">1112</a>
+<a href="#1113" id="1113">1113</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1101,7 +1128,7 @@
         Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
         DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
     },
-    layers_masker::PastKvLenCache,
+    layers_masker::{masked_fill, PastKvLenCache},
     ops::{SplitOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -1178,6 +1205,8 @@
     <span class="attr">#[serde(default = <span class="string">"use_flash_attn_default"</span>)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
     <span class="kw">pub</span>(<span class="kw">crate</span>) quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) n_group: usize,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) topk_group: usize,
 }
 
 <span class="kw">impl </span>DeepSeekV2Config {
@@ -1502,6 +1531,7 @@
     weight: Tensor,
     cfg: DeepSeekV2Config,
     top_k: usize,
+    n_routed_experts: usize,
 }
 
 <span class="kw">impl </span>MoeGate {
@@ -1511,12 +1541,13 @@
             weight,
             cfg: cfg.clone(),
             top_k: cfg.num_experts_per_tok.unwrap(),
+            n_routed_experts,
         })
     }
 
     <span class="doccomment">/// (topk_idx, topk_weight)
     </span><span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
-        <span class="kw">let </span>(_bs, _seq_len, h) = xs.dims3()<span class="question-mark">?</span>;
+        <span class="kw">let </span>(bs, seq_len, h) = xs.dims3()<span class="question-mark">?</span>;
         <span class="comment">// Compute gating score
         </span><span class="kw">let </span>xs = xs.reshape(((), h))<span class="question-mark">?</span>;
         <span class="kw">let </span>logits = xs.broadcast_matmul(<span class="kw-2">&amp;</span><span class="self">self</span>.weight.t()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
@@ -1531,7 +1562,30 @@
                 (values, indices)
             }
             TopkMethod::GroupLimitedGreedy =&gt; {
-                <span class="macro">candle_core::bail!</span>(<span class="string">"GroupLimitedGreedy is not yet implemented!"</span>)
+                <span class="comment">// (n, n_group)
+                </span><span class="kw">let </span>group_scores = scores
+                    .reshape((bs * seq_len, <span class="self">self</span>.cfg.n_group, ()))<span class="question-mark">?
+                    </span>.max(D::Minus1)<span class="question-mark">?</span>;
+                <span class="comment">// (n, topk_group)
+                </span><span class="kw">let </span>group_idx = scores.topk(<span class="self">self</span>.cfg.topk_group)<span class="question-mark">?</span>.indices;
+                <span class="comment">// (n, n_group)
+                </span><span class="kw">let </span><span class="kw-2">mut </span>group_mask = group_scores.zeros_like()<span class="question-mark">?</span>;
+                <span class="comment">// (n, n_group)
+                </span>group_mask = group_mask.scatter_add(<span class="kw-2">&amp;</span>group_idx, <span class="kw-2">&amp;</span>group_idx.ones_like()<span class="question-mark">?</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
+                <span class="comment">// (n, e)
+                </span><span class="kw">let </span>score_mask = group_mask
+                    .unsqueeze(D::Minus1)<span class="question-mark">?
+                    </span>.expand((
+                        bs * seq_len,
+                        <span class="self">self</span>.cfg.n_group,
+                        <span class="self">self</span>.n_routed_experts / <span class="self">self</span>.cfg.n_group,
+                    ))<span class="question-mark">?
+                    </span>.reshape((bs, seq_len, ()))<span class="question-mark">?</span>;
+                <span class="comment">// (n, e)
+                // Invert the mask
+                </span><span class="kw">let </span>tmp_scores = masked_fill(<span class="kw-2">&amp;</span>score_mask, <span class="kw-2">&amp;</span>(<span class="number">1. </span>- <span class="kw-2">&amp;</span>score_mask)<span class="question-mark">?</span>, <span class="number">0.</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>TopKOutput { values, indices } = tmp_scores.topk(<span class="self">self</span>.top_k)<span class="question-mark">?</span>;
+                (values, indices)
             }
         };
 
