@@ -1084,7 +1084,10 @@
 <a href="#1083" id="1083">1083</a>
 <a href="#1084" id="1084">1084</a>
 <a href="#1085" id="1085">1085</a>
-<a href="#1086" id="1086">1086</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1086" id="1086">1086</a>
+<a href="#1087" id="1087">1087</a>
+<a href="#1088" id="1088">1088</a>
+<a href="#1089" id="1089">1089</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1135,6 +1138,8 @@
 </span><span class="kw">enum </span>ScoringFunc {
     <span class="attr">#[serde(rename = <span class="string">"softmax"</span>)]
     </span>Softmax,
+    <span class="attr">#[serde(rename = <span class="string">"sigmoid"</span>)]
+    </span>Sigmoid,
 }
 
 <span class="attr">#[derive(Deserialize, Clone, Debug)]
@@ -1522,6 +1527,7 @@
         <span class="kw">let </span>logits = xs.broadcast_matmul(<span class="kw-2">&amp;</span><span class="self">self</span>.weight.t()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>scores = <span class="kw">match </span><span class="self">self</span>.cfg.scoring_func {
             ScoringFunc::Softmax =&gt; candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>logits)<span class="question-mark">?</span>,
+            ScoringFunc::Sigmoid =&gt; candle_nn::ops::sigmoid(<span class="kw-2">&amp;</span>logits)<span class="question-mark">?</span>,
         };
 
         <span class="comment">// Select top-k experts
