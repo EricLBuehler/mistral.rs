@@ -733,12 +733,7 @@
 <a href="#732" id="732">732</a>
 <a href="#733" id="733">733</a>
 <a href="#734" id="734">734</a>
-<a href="#735" id="735">735</a>
-<a href="#736" id="736">736</a>
-<a href="#737" id="737">737</a>
-<a href="#738" id="738">738</a>
-<a href="#739" id="739">739</a>
-<a href="#740" id="740">740</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#735" id="735">735</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
     collections::{HashMap, HashSet},
@@ -996,21 +991,20 @@
         })
     }
 
-    <span class="kw">fn </span>get_top_logprobs(
-        <span class="kw-2">&amp;</span><span class="self">self</span>,
-        probs: <span class="kw-2">&amp;</span>[f32],
-        argsort_indices: <span class="kw-2">&amp;</span>[usize],
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;TopLogprob&gt;&gt; {
+    <span class="kw">fn </span>get_top_logprobs(<span class="kw-2">&amp;</span><span class="self">self</span>, probs: <span class="kw-2">&amp;</span>[f32], argsort_indices: <span class="kw-2">&amp;</span>[u32]) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;TopLogprob&gt;&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>argsort_indices_sorted = argsort_indices.to_vec();
         <span class="comment">// Sort by descending prob
-        </span>argsort_indices_sorted
-            .sort_by(|a, b| probs[<span class="kw-2">*</span>b].partial_cmp(<span class="kw-2">&amp;</span>probs[<span class="kw-2">*</span>a]).expect(<span class="string">"No ordering."</span>));
+        </span>argsort_indices_sorted.sort_by(|a, b| {
+            probs[<span class="kw-2">*</span>b <span class="kw">as </span>usize]
+                .partial_cmp(<span class="kw-2">&amp;</span>probs[<span class="kw-2">*</span>a <span class="kw">as </span>usize])
+                .expect(<span class="string">"No ordering."</span>)
+        });
         <span class="comment">// These are where the top n are
         </span><span class="kw">let </span>top_n_toks_range = <span class="number">0</span>..<span class="self">self</span>.top_n_logprobs;
         <span class="comment">// The top n's values
         </span><span class="kw">let </span>top_n_logprobs = argsort_indices_sorted[top_n_toks_range.clone()]
             .iter()
-            .map(|x| probs[<span class="kw-2">*</span>x].log(<span class="number">10.0</span>))
+            .map(|x| probs[<span class="kw-2">*</span>x <span class="kw">as </span>usize].log(<span class="number">10.0</span>))
             .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="comment">// Find where they actually are in the logits
         </span><span class="kw">let </span><span class="kw-2">mut </span>top_n_toks = Vec::new();
@@ -1023,14 +1017,14 @@
             <span class="kw">for </span>tok <span class="kw">in </span><span class="kw-2">&amp;</span>top_n_toks {
                 bytes.push(
                     tokenizer
-                        .decode(<span class="kw-2">&amp;</span>[<span class="kw-2">*</span>tok <span class="kw">as </span>u32], <span class="bool-val">false</span>)
+                        .decode(<span class="kw-2">&amp;</span>[{ <span class="kw-2">*</span>tok }], <span class="bool-val">false</span>)
                         .map_err(|x| Error::Msg(x.to_string()))<span class="question-mark">?</span>,
                 );
             }
 
             <span class="prelude-val">Ok</span>(zip(bytes, zip(top_n_toks, top_n_logprobs))
                 .map(|(bytes, (token, logprob))| TopLogprob {
-                    token: token <span class="kw">as </span>u32,
+                    token,
                     logprob,
                     bytes: <span class="prelude-val">Some</span>(bytes),
                 })
@@ -1038,7 +1032,7 @@
         } <span class="kw">else </span>{
             <span class="prelude-val">Ok</span>(zip(top_n_toks, top_n_logprobs)
                 .map(|(token, logprob)| TopLogprob {
-                    token: token <span class="kw">as </span>u32,
+                    token,
                     logprob,
                     bytes: <span class="prelude-val">None</span>,
                 })
@@ -1051,7 +1045,7 @@
 
         <span class="kw">let </span>probs: Vec&lt;f32&gt; = logits.to_vec1()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>argsort_indices = (<span class="number">0</span>..probs.len()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        <span class="kw">let </span>argsort_indices = (<span class="number">0</span>..probs.len() <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="kw">let </span>logprob = probs[next_token <span class="kw">as </span>usize].log(<span class="number">10.0</span>);
 
         <span class="kw">let </span>top_logprobs = <span class="kw">if </span>return_logprobs {
@@ -1087,17 +1081,13 @@
         min_p: f32,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>probs: Vec&lt;f32&gt; = logits.to_vec1()<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>argsort_indices = (<span class="number">0</span>..probs.len()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-
-        <span class="comment">// Sort by descending probability.
-        </span>argsort_indices
-            .sort_unstable_by(|<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>j| probs[j].partial_cmp(<span class="kw-2">&amp;</span>probs[i]).expect(<span class="string">"No ordering."</span>));
+        <span class="kw">let </span>argsort_indices: Vec&lt;u32&gt; = logits.arg_sort_last_dim(<span class="bool-val">false</span>)<span class="question-mark">?</span>.to_vec1()<span class="question-mark">?</span>;
 
         <span class="kw">if </span>top_k &gt; <span class="number">0 </span>{
             <span class="comment">// Clamp smaller probabilities to zero.
             </span><span class="kw">for </span>(index, val) <span class="kw">in </span>argsort_indices.iter().enumerate() {
                 <span class="kw">if </span>index &gt;= top_k <span class="kw">as </span>usize {
-                    probs[<span class="kw-2">*</span>val] = <span class="number">0.0</span>;
+                    probs[<span class="kw-2">*</span>val <span class="kw">as </span>usize] = <span class="number">0.0</span>;
                 }
             }
         }
@@ -1112,13 +1102,13 @@
         </span><span class="kw">let </span><span class="kw-2">mut </span>cumsum = <span class="number">0.</span>;
         <span class="kw">for </span>index <span class="kw">in </span><span class="kw-2">&amp;</span>argsort_indices {
             <span class="kw">if </span>cumsum &gt;= top_p {
-                probs[<span class="kw-2">*</span>index] = <span class="number">0.0</span>;
+                probs[<span class="kw-2">*</span>index <span class="kw">as </span>usize] = <span class="number">0.0</span>;
             } <span class="kw">else </span>{
-                cumsum += probs[<span class="kw-2">*</span>index];
+                cumsum += probs[<span class="kw-2">*</span>index <span class="kw">as </span>usize];
             }
         }
 
-        <span class="kw">let </span>max_p = probs[argsort_indices[<span class="number">0</span>]];
+        <span class="kw">let </span>max_p = probs[argsort_indices[<span class="number">0</span>] <span class="kw">as </span>usize];
 
         <span class="comment">// MIN P
 
@@ -1127,8 +1117,8 @@
 
         // Clamp smaller probabilities to zero.
         </span><span class="kw">for </span>index <span class="kw">in </span><span class="kw-2">&amp;</span>argsort_indices {
-            <span class="kw">if </span>max_p * min_p &gt;= probs[<span class="kw-2">*</span>index] {
-                probs[<span class="kw-2">*</span>index] = <span class="number">0.0</span>;
+            <span class="kw">if </span>max_p * min_p &gt;= probs[<span class="kw-2">*</span>index <span class="kw">as </span>usize] {
+                probs[<span class="kw-2">*</span>index <span class="kw">as </span>usize] = <span class="number">0.0</span>;
             }
         }
 
@@ -1165,7 +1155,7 @@
     <span class="kw">fn </span>sample_multinomial(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         probs: <span class="kw-2">&amp;mut </span>Vec&lt;f32&gt;,
-        argsort_indices: Vec&lt;usize&gt;,
+        argsort_indices: Vec&lt;u32&gt;,
         return_logprobs: bool,
         rng: Arc&lt;Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
@@ -1199,25 +1189,24 @@
         })
     }
 
-    <span class="kw">fn </span>sample_top_kp_min_p(
+    <span class="attr">#[allow(clippy::too_many_arguments)]
+    </span><span class="kw">fn </span>sample_top_kp_min_p(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         probs: <span class="kw-2">&amp;mut </span>Vec&lt;f32&gt;,
+        logits: <span class="kw-2">&amp;</span>Tensor,
         top_k: i64,
         top_p: f32,
         min_p: f32,
         return_logprobs: bool,
         rng: Arc&lt;Mutex&lt;Isaac64Rng&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Logprobs&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>argsort_indices = (<span class="number">0</span>..probs.len()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-        <span class="comment">// Sort by descending probability.
-        </span>argsort_indices
-            .sort_unstable_by(|<span class="kw-2">&amp;</span>i, <span class="kw-2">&amp;</span>j| probs[j].partial_cmp(<span class="kw-2">&amp;</span>probs[i]).expect(<span class="string">"No ordering."</span>));
+        <span class="kw">let </span>argsort_indices: Vec&lt;u32&gt; = logits.arg_sort_last_dim(<span class="bool-val">false</span>)<span class="question-mark">?</span>.to_vec1()<span class="question-mark">?</span>;
 
         <span class="kw">if </span>top_k &gt; <span class="number">0 </span>{
             <span class="comment">// Clamp smaller probabilities to zero.
             </span><span class="kw">for </span>(index, val) <span class="kw">in </span>argsort_indices.iter().enumerate() {
                 <span class="kw">if </span>index &gt;= top_k <span class="kw">as </span>usize {
-                    probs[<span class="kw-2">*</span>val] = <span class="number">0.0</span>;
+                    probs[<span class="kw-2">*</span>val <span class="kw">as </span>usize] = <span class="number">0.0</span>;
                 }
             }
         }
@@ -1236,9 +1225,9 @@
         </span><span class="kw">let </span><span class="kw-2">mut </span>cumsum = <span class="number">0.</span>;
         <span class="kw">for </span>index <span class="kw">in </span><span class="kw-2">&amp;</span>argsort_indices {
             <span class="kw">if </span>cumsum &gt;= top_p {
-                probs[<span class="kw-2">*</span>index] = <span class="number">0.0</span>;
+                probs[<span class="kw-2">*</span>index <span class="kw">as </span>usize] = <span class="number">0.0</span>;
             } <span class="kw">else </span>{
-                cumsum += probs[<span class="kw-2">*</span>index];
+                cumsum += probs[<span class="kw-2">*</span>index <span class="kw">as </span>usize];
             }
         }
 
@@ -1246,7 +1235,7 @@
             <span class="kw">return </span><span class="self">self</span>.sample_multinomial(probs, argsort_indices, return_logprobs, rng);
         }
 
-        <span class="kw">let </span>max_p = probs[argsort_indices[<span class="number">0</span>]];
+        <span class="kw">let </span>max_p = probs[argsort_indices[<span class="number">0</span>] <span class="kw">as </span>usize];
 
         <span class="comment">// MIN P
 
@@ -1255,8 +1244,8 @@
 
         // Clamp smaller probabilities to zero.
         </span><span class="kw">for </span>index <span class="kw">in </span><span class="kw-2">&amp;</span>argsort_indices {
-            <span class="kw">if </span>max_p * min_p &gt;= probs[<span class="kw-2">*</span>index] {
-                probs[<span class="kw-2">*</span>index] = <span class="number">0.0</span>;
+            <span class="kw">if </span>max_p * min_p &gt;= probs[<span class="kw-2">*</span>index <span class="kw">as </span>usize] {
+                probs[<span class="kw-2">*</span>index <span class="kw">as </span>usize] = <span class="number">0.0</span>;
             }
         }
 
@@ -1417,11 +1406,12 @@
                 <span class="prelude-val">None </span>=&gt; <span class="self">self</span>.sample_argmax(logits, return_logprobs)<span class="question-mark">?</span>,
                 <span class="prelude-val">Some</span>(temperature) =&gt; {
                     <span class="kw">let </span>logits = (<span class="kw-2">&amp;</span>logits / temperature)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>probs = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>logits)<span class="question-mark">?</span>;
-                    <span class="kw">let </span><span class="kw-2">mut </span>probs: Vec&lt;f32&gt; = probs.to_vec1()<span class="question-mark">?</span>;
+                    <span class="kw">let </span>logits = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>logits)<span class="question-mark">?</span>;
+                    <span class="kw">let </span><span class="kw-2">mut </span>probs: Vec&lt;f32&gt; = logits.to_vec1()<span class="question-mark">?</span>;
 
                     <span class="self">self</span>.sample_top_kp_min_p(
                         <span class="kw-2">&amp;mut </span>probs,
+                        <span class="kw-2">&amp;</span>logits,
                         <span class="self">self</span>.top_k,
                         <span class="self">self</span>.top_p <span class="kw">as </span>f32,
                         <span class="self">self</span>.min_p <span class="kw">as </span>f32,
