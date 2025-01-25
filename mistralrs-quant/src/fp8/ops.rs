@@ -32,13 +32,13 @@ impl Fp8BlockwiseDequantize {
 
                 let mut res = Vec::new();
                 for weight_y in start_y..end_y {
-                    if weight_y > weight_l.dims()[0] {
+                    if weight_y >= weight_l.dims()[0] {
                         break;
                     }
 
                     let row_offset = weight_y * weight_l.stride()[0];
                     for weight_x in start_x..end_x {
-                        if weight_x > weight_l.dims()[1] {
+                        if weight_x >= weight_l.dims()[1] {
                             break;
                         }
 
