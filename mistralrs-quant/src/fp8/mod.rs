@@ -6,10 +6,11 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module, VarBuilder};
 use quantize::QuantizationResult;
 
+mod ops;
 mod quantize;
 
 use crate::{
@@ -335,28 +336,13 @@ pub fn fp8_linear_b(
         None
     };
 
-    let mut out = unsafe { Tensor::empty((out_dim, in_dim), vb.dtype(), vb.device())? };
+    let out = ops::fp8_blockwise_dequantize(
+        &weight,
+        &weight_scale_inv,
+        weight_block_size.to_vec(),
+        vb.dtype(),
+    )?;
 
-    for i in (0..out_dim).step_by(weight_block_size[0]) {
-        for j in (0..in_dim).step_by(weight_block_size[1]) {
-            let scale = weight_scale_inv.i((i / weight_block_size[0], j / weight_block_size[1]))?;
-
-            let dequannt_block = (weight
-                .i((i..i + weight_block_size[0], j..j + weight_block_size[1]))?
-                .to_dtype(DType::F32)?
-                * scale)?
-                .to_dtype(out.dtype())?;
-
-            out = out.slice_assign(
-                &[
-                    &(i..i + weight_block_size[0]),
-                    &(j..j + weight_block_size[1]),
-                ],
-                &dequannt_block,
-            )?;
-        }
-    }
-
-    let config = QuantMethodConfig::Unquantized(Linear::new(weight, bias));
+    let config = QuantMethodConfig::Unquantized(Linear::new(out, bias));
     Ok(Arc::new(UnquantLinear::new(config)?))
 }
