@@ -1,6 +1,6 @@
 use candle_core::{CpuStorage, CustomOp2, DType, Result, Tensor, WithDType};
 use float8::F8E4M3;
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 struct Fp8BlockwiseDequantize {
     weight_block_size: Vec<usize>,
@@ -18,10 +18,12 @@ impl Fp8BlockwiseDequantize {
         let grid_y = weight_l.dim(0)?.div_ceil(self.weight_block_size[0]);
         let grid_x = weight_l.dim(1)?.div_ceil(self.weight_block_size[1]);
 
-        let res = (0..grid_x)
-            .into_par_iter()
-            .zip(0..grid_y)
-            .flat_map(|(x, y)| {
+        let res = vec![T::zero(); weight.len()];
+
+        for y in 0..grid_y {
+            (0..grid_x).into_par_iter().for_each(|x| {
+                let res_ptr = res.as_ptr() as *mut T;
+
                 let scale = scale[y * scale_l.stride()[0] + x];
 
                 let start_y = y * self.weight_block_size[0];
@@ -30,21 +32,28 @@ impl Fp8BlockwiseDequantize {
                 let start_x = x * self.weight_block_size[1];
                 let end_x = start_x + self.weight_block_size[1];
 
-                let mut res = Vec::new();
                 for weight_y in start_y..end_y {
+                    if weight_y >= weight_l.dims()[0] {
+                        break;
+                    }
+
                     let row_offset = weight_y * weight_l.stride()[0];
                     for weight_x in start_x..end_x {
-                        let weight_pos = row_offset + weight_x;
-                        if weight_pos >= weight.len() {
+                        if weight_x >= weight_l.dims()[1] {
                             break;
                         }
 
-                        res.push(T::from_f64((weight[weight_pos].to_f32() * scale) as f64));
+                        let weight_pos = row_offset + weight_x;
+
+                        // SAFETY: We know each thread will only update indepedant values!
+                        unsafe {
+                            *res_ptr.wrapping_add(weight_pos) =
+                                T::from_f64((weight[weight_pos].to_f32() * scale) as f64);
+                        }
                     }
                 }
-                res
-            })
-            .collect::<Vec<_>>();
+            });
+        }
 
         Ok(res)
     }
@@ -119,4 +128,36 @@ pub fn fp8_blockwise_dequantize(
             out_ty,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{DType, Device, Result, Tensor};
+
+    use crate::fp8::ops;
+
+    #[test]
+    fn test_fp8_blockwise_dequant() -> Result<()> {
+        let dev = &Device::Cpu;
+        let weight = Tensor::ones((5, 5), DType::F8E4M3, dev)?;
+        let weight_block_size = vec![2, 2];
+        let inv_scales = Tensor::arange(0f32, (3 * 3) as f32, dev)?.reshape((3, 3))?;
+
+        let dequant =
+            ops::fp8_blockwise_dequantize(&weight, &inv_scales, weight_block_size, DType::F32)?;
+
+        let res = dequant.to_vec2::<f32>()?;
+        assert_eq!(
+            res,
+            vec![
+                vec![0., 0., 1., 1., 2.],
+                vec![0., 0., 1., 1., 2.],
+                vec![3., 3., 4., 4., 5.],
+                vec![3., 3., 4., 4., 5.],
+                vec![6., 6., 7., 7., 8.],
+            ]
+        );
+
+        Ok(())
+    }
 }
