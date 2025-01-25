@@ -458,7 +458,11 @@ impl MoeGate {
                 // (n, n_group)
                 let mut group_mask = group_scores.zeros_like()?;
                 // (n, n_group)
-                group_mask = group_mask.scatter_add(&group_idx, &group_idx.ones_like()?, 1)?;
+                group_mask = group_mask.scatter_add(
+                    &group_idx,
+                    &group_idx.ones_like()?.to_dtype(group_mask.dtype())?,
+                    1,
+                )?;
                 // (n, e)
                 let score_mask = group_mask
                     .unsqueeze(D::Minus1)?
