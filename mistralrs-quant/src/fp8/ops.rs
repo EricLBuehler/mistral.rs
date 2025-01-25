@@ -20,7 +20,7 @@ impl Fp8BlockwiseDequantize {
 
         let res = vec![T::zero(); weight.len()];
 
-        for y in 0..grid_y {
+        (0..grid_y).into_par_iter().for_each(|y| {
             (0..grid_x).into_par_iter().for_each(|x| {
                 let res_ptr = res.as_ptr() as *mut T;
 
@@ -53,7 +53,7 @@ impl Fp8BlockwiseDequantize {
                     }
                 }
             });
-        }
+        });
 
         Ok(res)
     }
