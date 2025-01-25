@@ -474,7 +474,7 @@ impl MoeGate {
                     .reshape((bs, seq_len, ()))?;
                 // (n, e)
                 // Invert the mask
-                let tmp_scores = masked_fill(&score_mask, &(1. - &score_mask)?, 0.)?;
+                let tmp_scores = masked_fill(&score_mask, &(1. - &score_mask.ne(0.)?)?, 0.)?;
                 let TopKOutput { values, indices } = tmp_scores.topk(self.top_k)?;
                 (values, indices)
             }
