@@ -532,7 +532,7 @@ impl MoeGate {
 
         if self.top_k > 1 && self.cfg.norm_topk_prob {
             let denmoninator = (topk_weight.sum_keepdim(D::Minus1)? + 1e-20)?;
-            topk_weight = (topk_weight / denmoninator)?;
+            topk_weight = topk_weight.broadcast_div(&denmoninator)?;
         } else {
             topk_weight = (topk_weight * self.cfg.routed_scaling_factor)?;
         }
