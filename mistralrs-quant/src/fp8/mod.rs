@@ -7,10 +7,9 @@ use std::{
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_nn::{Linear, Module};
 use quantize::QuantizationResult;
 
-mod ops;
 mod quantize;
 
 use crate::{
@@ -19,8 +18,7 @@ use crate::{
         deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
         UQFF_VERSION,
     },
-    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
-    QuantizedSerdeType, UnquantLinear,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
@@ -44,7 +42,8 @@ impl QuantMethod for FP8Linear {
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_)
-            | QuantMethodConfig::Bnb { .. } => unreachable!(),
+            | QuantMethodConfig::Bnb { .. }
+            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
             QuantMethodConfig::FP8 { lin, dtype } => {
                 let QuantizationResult {
                     qw,
@@ -293,56 +292,4 @@ impl QuantizedSerde for FP8Linear {
             dtype,
         }))
     }
-}
-
-pub fn fp8_linear_b(
-    in_dim: usize,
-    out_dim: usize,
-    config: &QuantizedConfig,
-    bias: bool,
-    vb: VarBuilder,
-) -> Result<Arc<dyn QuantMethod>> {
-    // Handle the case where the layer is dummy (no tensors)
-    if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
-        let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
-    }
-
-    let weight_block_size = config
-        .weight_block_size
-        .as_ref()
-        .expect("FP8 requires weight_block_size in config");
-    if weight_block_size.len() != 2 {
-        candle_core::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
-    }
-    let weight = vb.get_with_hints_dtype(
-        (out_dim, in_dim),
-        "weight",
-        Default::default(),
-        DType::F8E4M3,
-    )?;
-    let weight_scale_inv = vb.get_with_hints_dtype(
-        (
-            out_dim.div_ceil(weight_block_size[0]),
-            in_dim.div_ceil(weight_block_size[1]),
-        ),
-        "weight_scale_inv",
-        Default::default(),
-        DType::F32,
-    )?;
-    let bias = if bias {
-        Some(vb.get((out_dim,), "bias")?)
-    } else {
-        None
-    };
-
-    let out = ops::fp8_blockwise_dequantize(
-        &weight,
-        &weight_scale_inv,
-        weight_block_size.to_vec(),
-        vb.dtype(),
-    )?;
-
-    let config = QuantMethodConfig::Unquantized(Linear::new(out, bias));
-    Ok(Arc::new(UnquantLinear::new(config)?))
 }

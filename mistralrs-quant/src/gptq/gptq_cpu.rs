@@ -21,7 +21,8 @@ impl QuantMethod for GptqLayer {
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
-            | QuantMethodConfig::Bnb { .. } => {
+            | QuantMethodConfig::Bnb { .. }
+            | QuantMethodConfig::BlockwiseFP8 { .. } => {
                 unreachable!()
             }
         }

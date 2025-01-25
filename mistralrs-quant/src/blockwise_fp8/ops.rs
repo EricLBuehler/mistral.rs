@@ -134,7 +134,7 @@ pub fn fp8_blockwise_dequantize(
 mod tests {
     use candle_core::{DType, Device, Result, Tensor};
 
-    use crate::fp8::ops;
+    use crate::blockwise_fp8::ops;
 
     #[test]
     fn test_fp8_blockwise_dequant() -> Result<()> {

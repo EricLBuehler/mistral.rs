@@ -17,6 +17,7 @@ use candle_core::{
 mod metal_kernels;
 
 mod bitsandbytes;
+mod blockwise_fp8;
 mod cublaslt;
 mod dummy;
 mod fp8;
@@ -28,8 +29,8 @@ mod unquantized;
 mod utils;
 
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
+use blockwise_fp8::blockwise_fp8_linear_b;
 pub use dummy::DummyLayer;
-use fp8::fp8_linear_b;
 pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;
 use gptq::gptq_linear;
@@ -134,6 +135,13 @@ pub enum QuantMethodConfig {
         bias: Option<Tensor>,
         params: BnbQuantParmas,
         quant_ty: BnbQuantType,
+    },
+    BlockwiseFP8 {
+        weight: Tensor,
+        weight_scale_inv: Tensor,
+        bias: Option<Tensor>,
+        dequant_dtype: DType,
+        weight_block_size: Vec<usize>,
     },
 }
 
@@ -474,7 +482,7 @@ pub fn linear_no_bias(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantMethodType::Fp8 => fp8_linear_b(in_dim, out_dim, quant_conf, false, vb)?,
+            QuantMethodType::Fp8 => blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, vb)?,
             QuantMethodType::Bitsandbytes => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
@@ -504,7 +512,7 @@ pub fn linear(
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantMethodType::Fp8 => fp8_linear_b(in_dim, out_dim, quant_conf, true, vb)?,
+            QuantMethodType::Fp8 => blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, vb)?,
             QuantMethodType::Bitsandbytes => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
             }
