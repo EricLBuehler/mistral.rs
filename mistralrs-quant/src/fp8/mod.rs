@@ -323,8 +323,8 @@ pub fn fp8_linear_b(
     )?;
     let weight_scale_inv = vb.get_with_hints_dtype(
         (
-            out_dim / weight_block_size[0],
-            in_dim / weight_block_size[1],
+            out_dim.div_ceil(weight_block_size[0]),
+            in_dim.div_ceil(weight_block_size[1]),
         ),
         "weight_scale_inv",
         Default::default(),
