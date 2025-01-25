@@ -24,27 +24,22 @@ impl Fp8BlockwiseDequantize {
             .flat_map(|(x, y)| {
                 let scale = scale[y * scale_l.stride()[0] + x];
 
-                let start_y = grid_y * self.weight_block_size[0];
+                let start_y = y * self.weight_block_size[0];
                 let end_y = start_y + self.weight_block_size[0];
 
-                let start_x = grid_x * self.weight_block_size[1];
+                let start_x = x * self.weight_block_size[1];
                 let end_x = start_x + self.weight_block_size[1];
 
                 let mut res = Vec::new();
                 for weight_y in start_y..end_y {
-                    if weight_y >= weight_l.dims()[0] {
-                        break;
-                    }
-
                     let row_offset = weight_y * weight_l.stride()[0];
                     for weight_x in start_x..end_x {
-                        if weight_x >= weight_l.dims()[1] {
+                        let weight_pos = row_offset + weight_x;
+                        if weight_pos >= weight.len() {
                             break;
                         }
 
-                        res.push(T::from_f64(
-                            (weight[row_offset + weight_x].to_f32() * scale) as f64,
-                        ));
+                        res.push(T::from_f64((weight[weight_pos].to_f32() * scale) as f64));
                     }
                 }
                 res
