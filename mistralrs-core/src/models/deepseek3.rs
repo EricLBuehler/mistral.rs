@@ -491,16 +491,10 @@ impl MoeGate {
                         self.cfg.n_group,
                         self.n_routed_experts / self.cfg.n_group,
                     ))?
-                    .reshape((bs, seq_len, ()))?;
+                    .reshape((bs * seq_len, ()))?;
                 // (n, e)
                 // Invert the mask
-                let tmp_scores = masked_fill(
-                    &scores_for_choice,
-                    &(1. - &score_mask.ne(0.)?)?
-                        .unsqueeze(0)?
-                        .broadcast_as(scores_for_choice.shape())?,
-                    0.,
-                )?;
+                let tmp_scores = masked_fill(&scores_for_choice, &(1. - &score_mask.ne(0.)?)?, 0.)?;
                 let topk_idx = tmp_scores.topk(self.top_k)?.indices;
                 (scores.gather(&topk_idx, 1)?, topk_idx)
             }
