@@ -3351,7 +3351,13 @@
 <a href="#3350" id="3350">3350</a>
 <a href="#3351" id="3351">3351</a>
 <a href="#3352" id="3352">3352</a>
-<a href="#3353" id="3353">3353</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#3353" id="3353">3353</a>
+<a href="#3354" id="3354">3354</a>
+<a href="#3355" id="3355">3355</a>
+<a href="#3356" id="3356">3356</a>
+<a href="#3357" id="3357">3357</a>
+<a href="#3358" id="3358">3358</a>
+<a href="#3359" id="3359">3359</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
@@ -6279,7 +6285,9 @@
         weight_pack_factor: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg: <span class="kw">crate</span>::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="kw">let </span>per_layer_elems = {
+        <span class="kw">let </span><span class="kw-2">mut </span>per_layer_elems = Vec::new();
+
+        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
             <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size;
 
@@ -6306,56 +6314,57 @@
 
             <span class="kw">let </span>moe_block = {
                 <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;
-                <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
-                    <span class="kw">if </span>cfg.n_routed_experts.is_some()
-                        &amp;&amp; layer_idx &gt;= cfg.first_k_dense_replace
-                        &amp;&amp; layer_idx % cfg.moe_layer_freq == <span class="number">0
-                    </span>{
-                        <span class="kw">let </span>h_size = cfg.hidden_size;
-                        <span class="kw">let </span>gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        <span class="kw">let </span>up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        <span class="kw">let </span>down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        <span class="kw">let </span>shared_experts = <span class="kw">if let </span><span class="prelude-val">Some</span>(n_shared_experts) = cfg.n_shared_experts {
-                            <span class="kw">let </span>gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            <span class="kw">let </span>up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            <span class="kw">let </span>down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
-                                / weight_pack_factor;
-                            gate_proj + up_proj + down_proj
-                        } <span class="kw">else </span>{
-                            <span class="number">0
-                        </span>};
-                        <span class="kw">let </span>gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
-                        sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                <span class="kw">if </span>cfg.n_routed_experts.is_some()
+                    &amp;&amp; layer_idx &gt;= cfg.first_k_dense_replace
+                    &amp;&amp; layer_idx % cfg.moe_layer_freq == <span class="number">0
+                </span>{
+                    <span class="kw">let </span>h_size = cfg.hidden_size;
+                    <span class="kw">let </span>gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    <span class="kw">let </span>up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    <span class="kw">let </span>down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    <span class="kw">let </span>shared_experts = <span class="kw">if let </span><span class="prelude-val">Some</span>(n_shared_experts) = cfg.n_shared_experts {
+                        <span class="kw">let </span>gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        <span class="kw">let </span>up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        <span class="kw">let </span>down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
+                            / weight_pack_factor;
+                        gate_proj + up_proj + down_proj
                     } <span class="kw">else </span>{
-                        <span class="kw">let </span>h_size = cfg.hidden_size;
-                        <span class="kw">let </span>i_size = cfg.intermediate_size;
-                        <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
-                        <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
-                        <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
-                        sum += gate_proj + up_proj + down_proj;
-                    }
+                        <span class="number">0
+                    </span>};
+                    <span class="kw">let </span>gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
+                    sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                } <span class="kw">else </span>{
+                    <span class="kw">let </span>h_size = cfg.hidden_size;
+                    <span class="kw">let </span>i_size = cfg.intermediate_size;
+                    <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
+                    <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
+                    <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
+                    sum += gate_proj + up_proj + down_proj;
                 }
                 sum
             };
 
-            input_layernorm
-                + post_attention_layernorm
-                + q_proj
-                + kv_a_layernorm
-                + kv_a_proj_with_mqa
-                + kv_b_proj
-                + o_proj
-                + moe_block
-        };
-        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
+            per_layer_elems.push(
+                input_layernorm
+                    + post_attention_layernorm
+                    + q_proj
+                    + kv_a_layernorm
+                    + kv_a_proj_with_mqa
+                    + kv_b_proj
+                    + o_proj
+                    + moe_block,
+            );
+        }
+
+        <span class="prelude-val">Ok</span>(per_layer_elems
+            .into_iter()
+            .map(|x| x * dtype.size_in_bytes())
+            .collect())
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
@@ -6603,7 +6612,9 @@
         weight_pack_factor: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
         <span class="kw">let </span>cfg: <span class="kw">crate</span>::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="kw">let </span>per_layer_elems = {
+        <span class="kw">let </span><span class="kw-2">mut </span>per_layer_elems = Vec::new();
+
+        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
             <span class="kw">let </span>input_layernorm = cfg.hidden_size;
             <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size;
 
@@ -6630,56 +6641,57 @@
 
             <span class="kw">let </span>moe_block = {
                 <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;
-                <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
-                    <span class="kw">if </span>cfg.n_routed_experts.is_some()
-                        &amp;&amp; layer_idx &gt;= cfg.first_k_dense_replace
-                        &amp;&amp; layer_idx % cfg.moe_layer_freq == <span class="number">0
-                    </span>{
-                        <span class="kw">let </span>h_size = cfg.hidden_size;
-                        <span class="kw">let </span>gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        <span class="kw">let </span>up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        <span class="kw">let </span>down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        <span class="kw">let </span>shared_experts = <span class="kw">if let </span><span class="prelude-val">Some</span>(n_shared_experts) = cfg.n_shared_experts {
-                            <span class="kw">let </span>gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            <span class="kw">let </span>up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            <span class="kw">let </span>down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
-                                / weight_pack_factor;
-                            gate_proj + up_proj + down_proj
-                        } <span class="kw">else </span>{
-                            <span class="number">0
-                        </span>};
-                        <span class="kw">let </span>gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
-                        sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                <span class="kw">if </span>cfg.n_routed_experts.is_some()
+                    &amp;&amp; layer_idx &gt;= cfg.first_k_dense_replace
+                    &amp;&amp; layer_idx % cfg.moe_layer_freq == <span class="number">0
+                </span>{
+                    <span class="kw">let </span>h_size = cfg.hidden_size;
+                    <span class="kw">let </span>gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    <span class="kw">let </span>up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    <span class="kw">let </span>down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    <span class="kw">let </span>shared_experts = <span class="kw">if let </span><span class="prelude-val">Some</span>(n_shared_experts) = cfg.n_shared_experts {
+                        <span class="kw">let </span>gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        <span class="kw">let </span>up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        <span class="kw">let </span>down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
+                            / weight_pack_factor;
+                        gate_proj + up_proj + down_proj
                     } <span class="kw">else </span>{
-                        <span class="kw">let </span>h_size = cfg.hidden_size;
-                        <span class="kw">let </span>i_size = cfg.intermediate_size;
-                        <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
-                        <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
-                        <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
-                        sum += gate_proj + up_proj + down_proj;
-                    }
+                        <span class="number">0
+                    </span>};
+                    <span class="kw">let </span>gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
+                    sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                } <span class="kw">else </span>{
+                    <span class="kw">let </span>h_size = cfg.hidden_size;
+                    <span class="kw">let </span>i_size = cfg.intermediate_size;
+                    <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
+                    <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
+                    <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
+                    sum += gate_proj + up_proj + down_proj;
                 }
                 sum
             };
 
-            input_layernorm
-                + post_attention_layernorm
-                + q_proj
-                + kv_a_layernorm
-                + kv_a_proj_with_mqa
-                + kv_b_proj
-                + o_proj
-                + moe_block
-        };
-        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
+            per_layer_elems.push(
+                input_layernorm
+                    + post_attention_layernorm
+                    + q_proj
+                    + kv_a_layernorm
+                    + kv_a_proj_with_mqa
+                    + kv_b_proj
+                    + o_proj
+                    + moe_block,
+            );
+        }
+
+        <span class="prelude-val">Ok</span>(per_layer_elems
+            .into_iter()
+            .map(|x| x * dtype.size_in_bytes())
+            .collect())
     }
 
     <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
