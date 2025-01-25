@@ -2926,7 +2926,9 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
-        let per_layer_elems = {
+        let mut per_layer_elems = Vec::new();
+
+        for layer_idx in 0..cfg.num_hidden_layers {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
 
@@ -2953,56 +2955,57 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
 
             let moe_block = {
                 let mut sum = 0;
-                for layer_idx in 0..cfg.num_hidden_layers {
-                    if cfg.n_routed_experts.is_some()
-                        && layer_idx >= cfg.first_k_dense_replace
-                        && layer_idx % cfg.moe_layer_freq == 0
-                    {
-                        let h_size = cfg.hidden_size;
-                        let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
-                            let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            let up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            let down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
-                                / weight_pack_factor;
-                            gate_proj + up_proj + down_proj
-                        } else {
-                            0
-                        };
-                        let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
-                        sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                if cfg.n_routed_experts.is_some()
+                    && layer_idx >= cfg.first_k_dense_replace
+                    && layer_idx % cfg.moe_layer_freq == 0
+                {
+                    let h_size = cfg.hidden_size;
+                    let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
+                        let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        let up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        let down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
+                            / weight_pack_factor;
+                        gate_proj + up_proj + down_proj
                     } else {
-                        let h_size = cfg.hidden_size;
-                        let i_size = cfg.intermediate_size;
-                        let gate_proj = h_size * i_size / weight_pack_factor;
-                        let up_proj = h_size * i_size / weight_pack_factor;
-                        let down_proj = i_size * h_size / weight_pack_factor;
-                        sum += gate_proj + up_proj + down_proj;
-                    }
+                        0
+                    };
+                    let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
+                    sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                } else {
+                    let h_size = cfg.hidden_size;
+                    let i_size = cfg.intermediate_size;
+                    let gate_proj = h_size * i_size / weight_pack_factor;
+                    let up_proj = h_size * i_size / weight_pack_factor;
+                    let down_proj = i_size * h_size / weight_pack_factor;
+                    sum += gate_proj + up_proj + down_proj;
                 }
                 sum
             };
 
-            input_layernorm
-                + post_attention_layernorm
-                + q_proj
-                + kv_a_layernorm
-                + kv_a_proj_with_mqa
-                + kv_b_proj
-                + o_proj
-                + moe_block
-        };
-        Ok(vec![
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
+            per_layer_elems.push(
+                input_layernorm
+                    + post_attention_layernorm
+                    + q_proj
+                    + kv_a_layernorm
+                    + kv_a_proj_with_mqa
+                    + kv_b_proj
+                    + o_proj
+                    + moe_block,
+            );
+        }
+
+        Ok(per_layer_elems
+            .into_iter()
+            .map(|x| x * dtype.size_in_bytes())
+            .collect())
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -3250,7 +3253,9 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
-        let per_layer_elems = {
+        let mut per_layer_elems = Vec::new();
+
+        for layer_idx in 0..cfg.num_hidden_layers {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
 
@@ -3277,56 +3282,57 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
 
             let moe_block = {
                 let mut sum = 0;
-                for layer_idx in 0..cfg.num_hidden_layers {
-                    if cfg.n_routed_experts.is_some()
-                        && layer_idx >= cfg.first_k_dense_replace
-                        && layer_idx % cfg.moe_layer_freq == 0
-                    {
-                        let h_size = cfg.hidden_size;
-                        let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
-                            let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            let up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            let down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
-                                / weight_pack_factor;
-                            gate_proj + up_proj + down_proj
-                        } else {
-                            0
-                        };
-                        let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
-                        sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                if cfg.n_routed_experts.is_some()
+                    && layer_idx >= cfg.first_k_dense_replace
+                    && layer_idx % cfg.moe_layer_freq == 0
+                {
+                    let h_size = cfg.hidden_size;
+                    let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
+                        let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        let up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        let down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
+                            / weight_pack_factor;
+                        gate_proj + up_proj + down_proj
                     } else {
-                        let h_size = cfg.hidden_size;
-                        let i_size = cfg.intermediate_size;
-                        let gate_proj = h_size * i_size / weight_pack_factor;
-                        let up_proj = h_size * i_size / weight_pack_factor;
-                        let down_proj = i_size * h_size / weight_pack_factor;
-                        sum += gate_proj + up_proj + down_proj;
-                    }
+                        0
+                    };
+                    let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
+                    sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                } else {
+                    let h_size = cfg.hidden_size;
+                    let i_size = cfg.intermediate_size;
+                    let gate_proj = h_size * i_size / weight_pack_factor;
+                    let up_proj = h_size * i_size / weight_pack_factor;
+                    let down_proj = i_size * h_size / weight_pack_factor;
+                    sum += gate_proj + up_proj + down_proj;
                 }
                 sum
             };
 
-            input_layernorm
-                + post_attention_layernorm
-                + q_proj
-                + kv_a_layernorm
-                + kv_a_proj_with_mqa
-                + kv_b_proj
-                + o_proj
-                + moe_block
-        };
-        Ok(vec![
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
+            per_layer_elems.push(
+                input_layernorm
+                    + post_attention_layernorm
+                    + q_proj
+                    + kv_a_layernorm
+                    + kv_a_proj_with_mqa
+                    + kv_b_proj
+                    + o_proj
+                    + moe_block,
+            );
+        }
+
+        Ok(per_layer_elems
+            .into_iter()
+            .map(|x| x * dtype.size_in_bytes())
+            .collect())
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
