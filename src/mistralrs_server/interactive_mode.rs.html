@@ -828,8 +828,8 @@ Commands:
                     <span class="kw">let </span>choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
                     assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
                     <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
-                    toks += <span class="number">3usize</span>; <span class="comment">// NOTE: we send toks every 3.
-                    </span>io::stdout().flush().unwrap();
+                    toks += <span class="number">1usize</span>;
+                    io::stdout().flush().unwrap();
                     <span class="kw">if </span>choice.finish_reason.is_some() {
                         <span class="kw">if </span><span class="macro">matches!</span>(choice.finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
                             <span class="macro">print!</span>(<span class="string">"..."</span>);
@@ -1049,8 +1049,8 @@ Commands:
                     <span class="kw">let </span>choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
                     assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
                     <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
-                    toks += <span class="number">3usize</span>; <span class="comment">// NOTE: we send toks every 3.
-                    </span>io::stdout().flush().unwrap();
+                    toks += <span class="number">1usize</span>;
+                    io::stdout().flush().unwrap();
                     <span class="kw">if </span>choice.finish_reason.is_some() {
                         <span class="kw">if </span><span class="macro">matches!</span>(choice.finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
                             <span class="macro">print!</span>(<span class="string">"..."</span>);
