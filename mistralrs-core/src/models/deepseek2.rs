@@ -437,7 +437,9 @@ impl MoeGate {
         let (bs, seq_len, h) = xs.dims3()?;
         // Compute gating score
         let xs = xs.reshape(((), h))?;
-        let logits = xs.broadcast_matmul(&self.weight.t()?)?;
+        let logits = xs
+            .to_dtype(DType::F32)?
+            .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
         let scores = match self.cfg.scoring_func {
             ScoringFunc::Softmax => candle_nn::ops::softmax_last_dim(&logits)?,
         };
@@ -575,8 +577,8 @@ impl Moe {
 
         new_x
             .reshape([topk_ids.dims().to_vec(), vec![hole]].concat())?
+            .to_dtype(topk_weight.dtype())?
             .broadcast_mul(&topk_weight.unsqueeze(D::Minus1)?)?
-            .to_dtype(DType::F32)?
             .sum(1)?
             .to_dtype(new_x.dtype())
     }
