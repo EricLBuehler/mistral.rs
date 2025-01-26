@@ -1,6 +1,5 @@
 use anyhow::Result;
 use std::{
-    env,
     error::Error,
     pin::Pin,
     sync::Arc,
@@ -263,11 +262,7 @@ pub async fn completions(
         CompletionResponder::Sse(
             Sse::new(streamer).keep_alive(
                 KeepAlive::new()
-                    .interval(Duration::from_millis(
-                        env::var("KEEP_ALIVE_INTERVAL")
-                            .map(|val| val.parse::<u64>().unwrap_or(1000))
-                            .unwrap_or(1000),
-                    ))
+                    .interval(Duration::from_millis(10))
                     .text("keep-alive-text"),
             ),
         )
