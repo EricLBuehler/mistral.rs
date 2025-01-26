@@ -35,83 +35,74 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     );
     // Handle streaming requests
     if seq.get_mut_group().is_streaming {
-        const STREAMING_RATE_LIMIT: usize = 3;
+        if let Some(delta) = crate::handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
+            if seq.get_mut_group().is_chat {
+                seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
+                    delta: crate::Delta {
+                        content: delta.clone(),
+                        role: "assistant".to_string(),
+                    },
+                    index: seq.get_response_index(),
+                    finish_reason: is_done.map(|x| x.to_string()),
+                    logprobs: if seq.return_logprobs() {
+                        Some(crate::ResponseLogprob {
+                            token: delta,
+                            bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
+                            logprob: logprobs.logprob,
+                            top_logprobs: logprobs.top_logprobs.unwrap().clone(),
+                        })
+                    } else {
+                        None
+                    },
+                });
+            } else {
+                seq.add_streaming_completion_chunk_choice_to_group(crate::CompletionChunkChoice {
+                    text: delta.clone(),
+                    index: seq.get_response_index(),
+                    finish_reason: is_done.map(|x| x.to_string()),
+                    logprobs: if seq.return_logprobs() {
+                        Some(crate::ResponseLogprob {
+                            token: delta,
+                            bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
+                            logprob: logprobs.logprob,
+                            top_logprobs: logprobs.top_logprobs.unwrap().clone(),
+                        })
+                    } else {
+                        None
+                    },
+                });
+            }
 
-        let token_index = seq.get_toks().len();
-        let rate_limit_allowed = is_done.is_some() || token_index % STREAMING_RATE_LIMIT == 0;
-
-        if rate_limit_allowed {
-            if let Some(delta) = crate::handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
-                if seq.get_mut_group().is_chat {
-                    seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
-                        delta: crate::Delta {
-                            content: delta.clone(),
-                            role: "assistant".to_string(),
-                        },
-                        index: seq.get_response_index(),
-                        finish_reason: is_done.map(|x| x.to_string()),
-                        logprobs: if seq.return_logprobs() {
-                            Some(crate::ResponseLogprob {
-                                token: delta,
-                                bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
-                                logprob: logprobs.logprob,
-                                top_logprobs: logprobs.top_logprobs.unwrap().clone(),
-                            })
-                        } else {
-                            None
-                        },
-                    });
-                } else {
-                    seq.add_streaming_completion_chunk_choice_to_group(
-                        crate::CompletionChunkChoice {
-                            text: delta.clone(),
-                            index: seq.get_response_index(),
-                            finish_reason: is_done.map(|x| x.to_string()),
-                            logprobs: if seq.return_logprobs() {
-                                Some(crate::ResponseLogprob {
-                                    token: delta,
-                                    bytes: logprobs.bytes.clone().map(|b| b.into_bytes()),
-                                    logprob: logprobs.logprob,
-                                    top_logprobs: logprobs.top_logprobs.unwrap().clone(),
-                                })
-                            } else {
-                                None
-                            },
-                        },
-                    );
+            if let Some(reason) = is_done {
+                if use_prefix_cacher {
+                    prefix_cacher.add_sequence(seq);
+                    prefix_cacher.evict_to_cpu()?;
                 }
+                seq.set_state(crate::sequence::SequenceState::Done(reason));
+                this.reset_non_granular_state();
+            }
 
-                if let Some(reason) = is_done {
-                    if use_prefix_cacher {
-                        prefix_cacher.add_sequence(seq);
-                        prefix_cacher.evict_to_cpu()?;
-                    }
-                    seq.set_state(crate::sequence::SequenceState::Done(reason));
-                    this.reset_non_granular_state();
-                }
+            // Send usage on final chunk.
+            let usage_opt = if is_done.is_some() {
+                let usage = seq.get_mut_group().get_usage();
+                seq.get_mut_group().total_prompt_toks = 0;
+                seq.get_mut_group().total_toks = 0;
+                Some(usage)
+            } else {
+                None
+            };
 
-                // Send usage on final chunk.
-                let usage_opt = if is_done.is_some() {
-                    let usage = seq.get_mut_group().get_usage();
-                    seq.get_mut_group().total_prompt_toks = 0;
-                    seq.get_mut_group().total_toks = 0;
-                    Some(usage)
-                } else {
-                    None
-                };
-
-                if seq
-                    .get_mut_group()
-                    .maybe_send_streaming_response(seq, this.name().clone(), usage_opt)
-                    .await
-                    .is_err()
-                {
-                    // If we can't send the response, cancel the sequence
-                    seq.set_state(crate::sequence::SequenceState::Done(
-                        crate::sequence::StopReason::Canceled,
-                    ));
-                    this.reset_non_granular_state();
-                }
+            if seq
+                .get_mut_group()
+                .maybe_send_streaming_response(seq, this.name().clone(), usage_opt)
+                .await
+                .is_err()
+            {
+                // If we can't send the response, cancel the sequence
+                seq.set_state(crate::sequence::SequenceState::Done(
+                    crate::sequence::StopReason::Canceled,
+                ));
+                this.reset_non_granular_state();
             }
         }
     } else if let Some(reason) = is_done {

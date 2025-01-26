@@ -190,7 +190,7 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                     let choice = &chunk.choices[0];
                     assistant_output.push_str(&choice.delta.content);
                     print!("{}", choice.delta.content);
-                    toks += 3usize; // NOTE: we send toks every 3.
+                    toks += 1usize;
                     io::stdout().flush().unwrap();
                     if choice.finish_reason.is_some() {
                         if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
@@ -411,7 +411,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
                     let choice = &chunk.choices[0];
                     assistant_output.push_str(&choice.delta.content);
                     print!("{}", choice.delta.content);
-                    toks += 3usize; // NOTE: we send toks every 3.
+                    toks += 1usize;
                     io::stdout().flush().unwrap();
                     if choice.finish_reason.is_some() {
                         if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
