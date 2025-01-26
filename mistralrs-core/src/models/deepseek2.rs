@@ -445,7 +445,7 @@ impl MoeGate {
         // Select top-k experts
         let (mut topk_weight, topk_idx) = match self.cfg.topk_method {
             TopkMethod::Greedy => {
-                let TopKOutput { values, indices } = scores.topk(self.top_k)?;
+                let TopKOutput { values, indices } = scores.topk_unsorted(self.top_k)?;
                 (values, indices)
             }
             TopkMethod::GroupLimitedGreedy => {
@@ -454,7 +454,7 @@ impl MoeGate {
                     .reshape((bs * seq_len, self.cfg.n_group, ()))?
                     .max(D::Minus1)?;
                 // (n, topk_group)
-                let group_idx = scores.topk(self.cfg.topk_group)?.indices;
+                let group_idx = scores.topk_unsorted(self.cfg.topk_group)?.indices;
                 // (n, n_group)
                 let mut group_mask = group_scores.zeros_like()?;
                 // (n, n_group)
@@ -475,7 +475,7 @@ impl MoeGate {
                 // (n, e)
                 // Invert the mask
                 let tmp_scores = masked_fill(&score_mask, &(1. - &score_mask.ne(0.)?)?, 0.)?;
-                let TopKOutput { values, indices } = tmp_scores.topk(self.top_k)?;
+                let TopKOutput { values, indices } = tmp_scores.topk_unsorted(self.top_k)?;
                 (values, indices)
             }
         };
