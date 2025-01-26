@@ -13,7 +13,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{
         Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
-        DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
+        DeepSeekV2RotaryEmbedding, F32RmsNorm, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
     ops::{SplitOp, TopKLastDimOp, TopKOutput},
@@ -120,7 +120,7 @@ enum QProj {
     Plain(Arc<dyn QuantMethod>),
     Lora {
         a: Arc<dyn QuantMethod>,
-        norm: RmsNorm,
+        norm: F32RmsNorm,
         b: Arc<dyn QuantMethod>,
     },
 }
@@ -139,7 +139,7 @@ impl QProj {
 struct Attention {
     q: QProj,
     kv_a_proj_with_mqa: Arc<dyn QuantMethod>,
-    kv_a_layernorm: RmsNorm,
+    kv_a_layernorm: F32RmsNorm,
     kv_b_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
     rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
@@ -169,7 +169,7 @@ impl Attention {
                     &cfg.quantization_config,
                     mapper.set_device(layer_idx, vb.pp("q_a_proj"), loading_isq),
                 )?;
-                let norm = RmsNorm::new(
+                let norm = F32RmsNorm::new(
                     lora_rank,
                     cfg.rms_norm_eps,
                     mapper.set_device(layer_idx, vb.pp("q_a_layernorm"), false),
@@ -197,7 +197,7 @@ impl Attention {
             &cfg.quantization_config,
             mapper.set_device(layer_idx, vb.pp("kv_a_proj_with_mqa"), loading_isq),
         )?;
-        let kv_a_layernorm = RmsNorm::new(
+        let kv_a_layernorm = F32RmsNorm::new(
             cfg.kv_lora_rank,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("kv_a_layernorm"), false),
@@ -614,8 +614,8 @@ impl MoeOrMlp {
 }
 
 struct DecoderLayer {
-    input_layernorm: RmsNorm,
-    post_attention_layernorm: RmsNorm,
+    input_layernorm: F32RmsNorm,
+    post_attention_layernorm: F32RmsNorm,
     attn: Attention,
     moe_or_mlp: MoeOrMlp,
 }
@@ -639,12 +639,12 @@ impl DecoderLayer {
             loading_isq,
             paged_attn,
         )?;
-        let input_layernorm = RmsNorm::new(
+        let input_layernorm = F32RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
         )?;
-        let post_attention_layernorm = RmsNorm::new(
+        let post_attention_layernorm = F32RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
@@ -710,7 +710,7 @@ impl DecoderLayer {
 pub struct DeepSeekV2 {
     lm_head: Arc<dyn QuantMethod>,
     embed_tokens: Embedding,
-    norm: RmsNorm,
+    norm: F32RmsNorm,
     layers: Vec<DecoderLayer>,
     cache: EitherCache,
     device: Device,
@@ -754,7 +754,7 @@ impl DeepSeekV2 {
                 ),
             ))?)
         };
-        let norm = RmsNorm::new(
+        let norm = F32RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
