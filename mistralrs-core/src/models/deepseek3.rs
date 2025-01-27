@@ -16,7 +16,7 @@ use crate::{
         DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
-    ops::{SplitOp, TopKLastDimOp, TopKOutput},
+    ops::{NonZeroOp, SplitOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -610,50 +610,53 @@ impl Moe {
         })
     }
 
-    fn moe_infer(&self, xs: &Tensor, topk_ids: &Tensor, topk_weight: &Tensor) -> Result<Tensor> {
-        let mut cnts: Tensor = Tensor::zeros(
-            (topk_ids.dim(0)?, self.experts.len()),
-            DType::F32,
-            topk_ids.device(),
-        )?;
-        cnts = cnts
-            .scatter_add(topk_ids, &topk_ids.ones_like()?.to_dtype(DType::F32)?, 1)?
-            .to_dtype(topk_ids.dtype())?;
-        let tokens_per_expert = cnts.sum(0)?.to_vec1::<u32>()?;
-        let idxs = topk_ids.flatten_all()?.arg_sort_last_dim(true)?;
-        // NOTE: must cast to f32 and then back because the CUDA backend's affine impl will make the 1/topk_ids.dim(1) -> 0
-        let sorted_tokens = xs.index_select(
-            &(&idxs.to_dtype(DType::F32)? / topk_ids.dim(1)? as f64)?.to_dtype(idxs.dtype())?,
-            0,
-        )?;
+    fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
+        // Find the maximum value in `values` (or zero if empty)
+        let max_val = values.iter().copied().max().unwrap_or(0);
 
-        let mut outputs = Vec::with_capacity(tokens_per_expert.len());
-        let mut start_idx = 0;
-        for (i, num_tokens) in tokens_per_expert.into_iter().enumerate() {
-            let end_idx = start_idx + num_tokens;
-            if num_tokens == 0 {
-                continue;
-            }
-            let expert = &self.experts[i];
-            let tokens_for_this_expert = sorted_tokens.i(start_idx as usize..end_idx as usize)?;
-            let expert_out = expert.forward(&tokens_for_this_expert)?;
-            outputs.push(expert_out);
-            start_idx = end_idx;
+        // The final size of the bin counts must be at least `minlength`
+        // and large enough to include the largest value in `values`.
+        let result_len = (max_val + 1).max(minlength);
+
+        let mut counts = vec![0; result_len as usize];
+
+        // Increment the bin for each value
+        for &val in values {
+            counts[val as usize] += 1;
         }
 
-        let outs = Tensor::cat(&outputs, 0)?;
+        counts
+    }
 
-        let mut new_x = outs.zeros_like()?;
-        new_x = new_x.index_add(&idxs, &outs, 0)?;
+    fn moe_infer(&self, xs: &Tensor, topk_ids: &Tensor, topk_weight: &Tensor) -> Result<Tensor> {
+        let mut y = xs.zeros_like()?;
+        let counts = Self::bincount(
+            &topk_ids.flatten_all()?.to_vec1::<u32>()?,
+            self.experts.len() as u32,
+        );
+        for (i, expert) in self.experts.iter().enumerate() {
+            if counts[i] == 0 {
+                continue;
+            }
+            let idx_top = topk_ids.eq(i as f64)?.nonzero()?.t()?;
+            let idx = &idx_top.i(0)?.contiguous()?;
+            let top = &idx_top.i(1)?.contiguous()?;
 
-        let hole = new_x.elem_count() / topk_ids.elem_count();
+            y = y.index_add(
+                idx,
+                &expert.forward(&xs.index_select(idx, 0)?)?.broadcast_mul(
+                    &topk_weight
+                        .index_select(idx, 0)?
+                        .gather(&top.unsqueeze(1)?, 1)?
+                        .squeeze(1)?
+                        .unsqueeze(D::Minus1)?
+                        .to_dtype(xs.dtype())?,
+                )?,
+                0,
+            )?;
+        }
 
-        new_x
-            .reshape([topk_ids.dims().to_vec(), vec![hole]].concat())?
-            .to_dtype(topk_weight.dtype())?
-            .broadcast_mul(&topk_weight.unsqueeze(D::Minus1)?)?
-            .sum(1)?
-            .to_dtype(new_x.dtype())
+        Ok(y)
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
