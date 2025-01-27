@@ -481,7 +481,7 @@ impl MoeGate {
                     .values
                     .sum(D::Minus1)?;
                 // (n, topk_group)
-                let group_idx = group_scores.topk_unsorted(self.cfg.topk_group)?.indices;
+                let group_idx = group_scores.topk(self.cfg.topk_group)?.indices;
                 // (n, n_group)
                 let mut group_mask = group_scores.zeros_like()?;
                 // (n, n_group)
@@ -501,8 +501,8 @@ impl MoeGate {
                     .reshape((bs * seq_len, ()))?;
                 // (n, e)
                 // Invert the mask
-                let tmp_scores = masked_fill(&scores_for_choice, &(1. - &score_mask.ne(0.)?)?, 0.)?;
-                let topk_idx = tmp_scores.topk_unsorted(self.top_k)?.indices;
+                let tmp_scores = scores_for_choice.broadcast_mul(&score_mask)?;
+                let topk_idx = tmp_scores.topk(self.top_k)?.indices;
                 (scores.gather(&topk_idx, 1)?, topk_idx)
             }
             TopkMethod::GroupLimitedGreedy => {
