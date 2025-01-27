@@ -16,7 +16,7 @@ use crate::{
         DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
-    ops::{NonZeroOp, SplitOp, TopKLastDimOp, TopKOutput},
+    ops::{BincountOp, NonZeroOp, SplitOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -610,30 +610,11 @@ impl Moe {
         })
     }
 
-    fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
-        // Find the maximum value in `values` (or zero if empty)
-        let max_val = values.iter().copied().max().unwrap_or(0);
-
-        // The final size of the bin counts must be at least `minlength`
-        // and large enough to include the largest value in `values`.
-        let result_len = (max_val + 1).max(minlength);
-
-        let mut counts = vec![0; result_len as usize];
-
-        // Increment the bin for each value
-        for &val in values {
-            counts[val as usize] += 1;
-        }
-
-        counts
-    }
-
     fn moe_infer(&self, xs: &Tensor, topk_ids: &Tensor, topk_weight: &Tensor) -> Result<Tensor> {
         let mut y = xs.zeros_like()?;
-        let counts = Self::bincount(
-            &topk_ids.flatten_all()?.to_vec1::<u32>()?,
-            self.experts.len() as u32,
-        );
+        let counts = topk_ids
+            .flatten_all()?
+            .bincount(self.experts.len() as u32)?;
         for (i, expert) in self.experts.iter().enumerate() {
             if counts[i] == 0 {
                 continue;
