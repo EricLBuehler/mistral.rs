@@ -306,32 +306,44 @@ impl Attention {
 
         let mut attn_out = match &self.paged_attn {
             Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    None,
-                )?,
+                Some(((key_cache, value_cache), input_metadata)) => {
+                    let v = v
+                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+                        .contiguous()?;
+                    paged_attn
+                        .forward(
+                            &q,
+                            &k,
+                            &v,
+                            attention_mask,
+                            Some(key_cache),
+                            Some(value_cache),
+                            input_metadata,
+                            None,
+                        )?
+                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+                }
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
                     // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
                     let mut input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
                     // Sanity check.
                     assert!(attention_mask.is_some());
-                    paged_attn.forward(
-                        &q,
-                        &k,
-                        &v,
-                        attention_mask,
-                        None,
-                        None,
-                        &mut input_metadata,
-                        None,
-                    )?
+                    let v = v
+                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+                        .contiguous()?;
+                    paged_attn
+                        .forward(
+                            &q,
+                            &k,
+                            &v,
+                            attention_mask,
+                            None,
+                            None,
+                            &mut input_metadata,
+                            None,
+                        )?
+                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
                 }
             },
             None => {
@@ -784,11 +796,6 @@ impl DeepSeekV2 {
                 )?),
             );
         }
-        if cfg.q_head_dim() != cfg.v_head_dim
-            && matches!(attention_mechanism, AttentionImplementation::PagedAttention)
-        {
-            candle_core::bail!("Head sizes do not match (q/k: {}, v: {}), PagedAttention is incompatible with this model. Please disable PagedAttention.", cfg.q_head_dim(), cfg.v_head_dim);
-        }
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
@@ -848,7 +855,7 @@ impl DeepSeekV2 {
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
                 k_head_dim: Some(cfg.q_head_dim()),
-                v_head_dim: Some(cfg.v_head_dim),
+                v_head_dim: Some(cfg.q_head_dim()),
             },
             mapper,
         })
