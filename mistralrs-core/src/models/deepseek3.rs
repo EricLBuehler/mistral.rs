@@ -604,7 +604,10 @@ impl Moe {
             .to_dtype(topk_ids.dtype())?;
         let tokens_per_expert = cnts.sum(0)?.to_vec1::<u32>()?;
         let idxs = topk_ids.flatten_all()?.arg_sort_last_dim(true)?;
-        let sorted_tokens = xs.index_select(&(&idxs / topk_ids.dim(1)? as f64)?, 0)?;
+        let sorted_tokens = xs.index_select(
+            &(&idxs.to_dtype(DType::F32)? / topk_ids.dim(1)? as f64)?.to_dtype(idxs.dtype())?,
+            0,
+        )?;
 
         let mut outputs = Vec::with_capacity(tokens_per_expert.len());
         let mut start_idx = 0;
