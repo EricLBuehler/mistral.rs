@@ -430,7 +430,12 @@ impl MoeGate {
     fn new(cfg: &DeepSeekV3Config, vb: VarBuilder, n_routed_experts: usize) -> Result<Self> {
         let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
         let e_score_correction_bias = if matches!(cfg.topk_method, TopkMethod::NoAuxTc) {
-            Some(vb.get(n_routed_experts, "e_score_correction_bias")?)
+            Some(vb.get_with_hints_dtype(
+                n_routed_experts,
+                "e_score_correction_bias",
+                Default::default(),
+                DType::F32,
+            )?)
         } else {
             None
         };
@@ -448,7 +453,9 @@ impl MoeGate {
         let (bs, seq_len, h) = xs.dims3()?;
         // Compute gating score
         let xs = xs.reshape(((), h))?;
-        let logits = xs.broadcast_matmul(&self.weight.t()?)?;
+        let logits = xs
+            .to_dtype(DType::F32)?
+            .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
         let scores = match self.cfg.scoring_func {
             ScoringFunc::Softmax => candle_nn::ops::softmax_last_dim(&logits)?,
             ScoringFunc::Sigmoid => candle_nn::ops::sigmoid(&logits)?,
@@ -457,7 +464,7 @@ impl MoeGate {
         // Select top-k experts
         let (mut topk_weight, topk_idx) = match self.cfg.topk_method {
             TopkMethod::Greedy => {
-                let TopKOutput { values, indices } = scores.topk(self.top_k)?;
+                let TopKOutput { values, indices } = scores.topk_unsorted(self.top_k)?;
                 (values, indices)
             }
             TopkMethod::NoAuxTc => {
@@ -478,7 +485,11 @@ impl MoeGate {
                 // (n, n_group)
                 let mut group_mask = group_scores.zeros_like()?;
                 // (n, n_group)
-                group_mask = group_mask.scatter_add(&group_idx, &group_idx.ones_like()?, 1)?;
+                group_mask = group_mask.scatter_add(
+                    &group_idx,
+                    &group_idx.ones_like()?.to_dtype(group_mask.dtype())?,
+                    1,
+                )?;
                 // (n, e)
                 let score_mask = group_mask
                     .unsqueeze(D::Minus1)?
@@ -487,10 +498,10 @@ impl MoeGate {
                         self.cfg.n_group,
                         self.n_routed_experts / self.cfg.n_group,
                     ))?
-                    .reshape((bs, seq_len, ()))?;
+                    .reshape((bs * seq_len, ()))?;
                 // (n, e)
                 // Invert the mask
-                let tmp_scores = masked_fill(&score_mask, &(1. - &score_mask)?, 0.)?;
+                let tmp_scores = scores_for_choice.broadcast_mul(&score_mask)?;
                 let topk_idx = tmp_scores.topk(self.top_k)?.indices;
                 (scores.gather(&topk_idx, 1)?, topk_idx)
             }
@@ -500,11 +511,15 @@ impl MoeGate {
                     .reshape((bs * seq_len, self.cfg.n_group, ()))?
                     .max(D::Minus1)?;
                 // (n, topk_group)
-                let group_idx = scores.topk(self.cfg.topk_group)?.indices;
+                let group_idx = scores.topk_unsorted(self.cfg.topk_group)?.indices;
                 // (n, n_group)
                 let mut group_mask = group_scores.zeros_like()?;
                 // (n, n_group)
-                group_mask = group_mask.scatter_add(&group_idx, &group_idx.ones_like()?, 1)?;
+                group_mask = group_mask.scatter_add(
+                    &group_idx,
+                    &group_idx.ones_like()?.to_dtype(group_mask.dtype())?,
+                    1,
+                )?;
                 // (n, e)
                 let score_mask = group_mask
                     .unsqueeze(D::Minus1)?
@@ -516,18 +531,20 @@ impl MoeGate {
                     .reshape((bs, seq_len, ()))?;
                 // (n, e)
                 // Invert the mask
-                let tmp_scores = masked_fill(&score_mask, &(1. - &score_mask)?, 0.)?;
-                let TopKOutput { values, indices } = tmp_scores.topk(self.top_k)?;
+                let tmp_scores = masked_fill(&score_mask, &(1. - &score_mask.ne(0.)?)?, 0.)?;
+                let TopKOutput { values, indices } = tmp_scores.topk_unsorted(self.top_k)?;
                 (values, indices)
             }
         };
 
         if self.top_k > 1 && self.cfg.norm_topk_prob {
             let denmoninator = (topk_weight.sum_keepdim(D::Minus1)? + 1e-20)?;
-            topk_weight = (topk_weight / denmoninator)?;
-        } else {
-            topk_weight = (topk_weight * self.cfg.routed_scaling_factor)?;
+            topk_weight = topk_weight.broadcast_div(&denmoninator)?;
         }
+
+        // Must multiply the scaling factor
+        topk_weight = (topk_weight * self.cfg.routed_scaling_factor)?;
+
         Ok((topk_idx, topk_weight))
     }
 }
@@ -592,7 +609,11 @@ impl Moe {
             .to_dtype(topk_ids.dtype())?;
         let tokens_per_expert = cnts.sum(0)?.to_vec1::<u32>()?;
         let idxs = topk_ids.flatten_all()?.arg_sort_last_dim(true)?;
-        let sorted_tokens = xs.index_select(&(&idxs / topk_ids.dim(1)? as f64)?, 0)?;
+        // NOTE: must cast to f32 and then back because the CUDA backend's affine impl will make the 1/topk_ids.dim(1) -> 0
+        let sorted_tokens = xs.index_select(
+            &(&idxs.to_dtype(DType::F32)? / topk_ids.dim(1)? as f64)?.to_dtype(idxs.dtype())?,
+            0,
+        )?;
 
         let mut outputs = Vec::with_capacity(tokens_per_expert.len());
         let mut start_idx = 0;
@@ -617,8 +638,8 @@ impl Moe {
 
         new_x
             .reshape([topk_ids.dims().to_vec(), vec![hole]].concat())?
+            .to_dtype(topk_weight.dtype())?
             .broadcast_mul(&topk_weight.unsqueeze(D::Minus1)?)?
-            .to_dtype(DType::F32)?
             .sum(1)?
             .to_dtype(new_x.dtype())
     }

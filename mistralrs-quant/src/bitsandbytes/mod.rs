@@ -208,7 +208,8 @@ impl QuantMethod for BnbLinear {
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_)
-            | QuantMethodConfig::FP8 { .. } => unreachable!(),
+            | QuantMethodConfig::FP8 { .. }
+            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
             QuantMethodConfig::Bnb {
                 weight,
                 bias,

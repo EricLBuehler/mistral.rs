@@ -114,7 +114,7 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize>;
     fn get_device_for_tensor(
         &self,
-        _config: &str,
+        config: &str,
         _mapper: &dyn DeviceMapper,
         loading_isq: bool,
     ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
@@ -122,11 +122,13 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
             Ok(Arc::new(|_| DeviceForLoadTensor::Base))
         } else {
             let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
+            let num_layers = self.model_config(config)?.num_layers();
             let closure = move |name: String| {
                 if let Some(captures) = re.captures(&name) {
                     captures
                         .get(1)
                         .and_then(|m| m.as_str().parse::<usize>().ok())
+                        .map(|l| l.min(num_layers))
                         .map(DeviceForLoadTensor::Idx)
                         .unwrap_or(DeviceForLoadTensor::Base)
                 } else {
