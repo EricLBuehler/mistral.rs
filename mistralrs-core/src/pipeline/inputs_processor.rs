@@ -97,6 +97,7 @@ pub mod text_models_inputs_processor {
         pub context_lens: Option<HashMap<DeviceLocation, Tensor>>,
         pub slot_mappings: HashMap<DeviceLocation, Tensor>,
         pub max_context_len: Option<usize>,
+        pub is_first_prompt_chunk: bool,
     }
 
     impl PagedAttentionInputMetadata {
@@ -108,6 +109,7 @@ pub mod text_models_inputs_processor {
                 context_lens: None,
                 max_context_len: None,
                 slot_mappings: HashMap::from([(dev.location(), Tensor::new(&[0f32], dev)?)]),
+                is_first_prompt_chunk: true,
             })
         }
     }
@@ -315,6 +317,7 @@ pub mod text_models_inputs_processor {
                 block_tables: Some(block_tables_map),
                 context_lens: Some(context_lens_map),
                 max_context_len: Some(max_context_len),
+                is_first_prompt_chunk: chunk_offset_toks == 0,
             })
         } else {
             None
@@ -471,6 +474,7 @@ pub mod text_models_inputs_processor {
                 block_tables: Some(block_tables_map),
                 context_lens: Some(context_lens_map),
                 max_context_len: Some(*max_context_len),
+                is_first_prompt_chunk: false,
             })
         } else {
             None
@@ -549,12 +553,6 @@ pub mod text_models_inputs_processor {
                 .collect::<Vec<_>>();
             Box::new(chunks.into_iter())
         } else {
-            if prompt_batchsize.is_some() {
-                // TODO(EricLBuehler)
-                return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                    "PagedAttention does not yet support prompt batching.",
-                ))));
-            }
             let offset = input_seqs[0].token_offset();
             if offset != 0 && paged_attn_metadata.is_some() {
                 return Box::new(std::iter::once(Err(anyhow::Error::msg(

@@ -582,6 +582,13 @@ impl Llama {
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;
+        // PagedAttention prompt chunking
+        let mask = mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(

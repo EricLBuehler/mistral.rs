@@ -149,9 +149,10 @@ impl PagedAttention {
         }
 
         if let Some(att) = att {
-            // Return result in prefill
+            // Return result in prefill or first prefix chunk
             return Ok(att);
         }
+
         //  Args:
         //  output: shape = [num_generation_tokens, num_heads, head_size]
         //
