@@ -159,7 +159,7 @@ fn naive_sdpa(
     q.device().synchronize()?;
 
     // Use faster softmax if mask is rank 2 or it's rank 3
-    if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && supports_attn_softmax()? {
+    /*if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && supports_attn_softmax()? {
         let mask = match mask {
             Some(mask) if mask.rank() == 3 || mask.rank() == 2 => mask.clone(),
             _ => candle_core::bail!("unsupported mask {mask:?}"),
@@ -167,20 +167,18 @@ fn naive_sdpa(
 
         let mut att = MatMul.matmul(q, &k.t()?)?;
 
-        // candle_nn::ops::inplace_attn_softmax_last_dim(
-        //     &mut att,
-        //     &mask,
-        //     sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0),
-        // )?;
-        att = att.broadcast_add(&mask)?;
-        candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
+        candle_nn::ops::inplace_attn_softmax_last_dim(
+            &mut att,
+            &mask,
+            sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0),
+        )?;
 
-        // if let Some(softcap) = sdpa_params.softcap {
-        //     att = (att.tanh()? * softcap as f64)?;
-        // }
+        if let Some(softcap) = sdpa_params.softcap {
+            att = (att.tanh()? * softcap as f64)?;
+        }
 
         MatMul.matmul(&att, v)
-    } else if let Some(mask) = mask {
+    } else */if let Some(mask) = mask {
         let mut att = MatMul.matmul_affine_mul(q, &k.t()?, sdpa_params.softmax_scale.into())?;
         if let Some(softcap) = sdpa_params.softcap {
             att = (att / softcap as f64)?;
