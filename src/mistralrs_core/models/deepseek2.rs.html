@@ -1118,26 +1118,7 @@
 <a href="#1117" id="1117">1117</a>
 <a href="#1118" id="1118">1118</a>
 <a href="#1119" id="1119">1119</a>
-<a href="#1120" id="1120">1120</a>
-<a href="#1121" id="1121">1121</a>
-<a href="#1122" id="1122">1122</a>
-<a href="#1123" id="1123">1123</a>
-<a href="#1124" id="1124">1124</a>
-<a href="#1125" id="1125">1125</a>
-<a href="#1126" id="1126">1126</a>
-<a href="#1127" id="1127">1127</a>
-<a href="#1128" id="1128">1128</a>
-<a href="#1129" id="1129">1129</a>
-<a href="#1130" id="1130">1130</a>
-<a href="#1131" id="1131">1131</a>
-<a href="#1132" id="1132">1132</a>
-<a href="#1133" id="1133">1133</a>
-<a href="#1134" id="1134">1134</a>
-<a href="#1135" id="1135">1135</a>
-<a href="#1136" id="1136">1136</a>
-<a href="#1137" id="1137">1137</a>
-<a href="#1138" id="1138">1138</a>
-<a href="#1139" id="1139">1139</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1120" id="1120">1120</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1155,7 +1136,7 @@
         DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
-    ops::{NonZeroOp, SplitOp, TopKLastDimOp, TopKOutput},
+    ops::{BincountOp, NonZeroOp, SplitOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -1692,30 +1673,11 @@
         })
     }
 
-    <span class="kw">fn </span>bincount(values: <span class="kw-2">&amp;</span>[u32], minlength: u32) -&gt; Vec&lt;u32&gt; {
-        <span class="comment">// Find the maximum value in `values` (or zero if empty)
-        </span><span class="kw">let </span>max_val = values.iter().copied().max().unwrap_or(<span class="number">0</span>);
-
-        <span class="comment">// The final size of the bin counts must be at least `minlength`
-        // and large enough to include the largest value in `values`.
-        </span><span class="kw">let </span>result_len = (max_val + <span class="number">1</span>).max(minlength);
-
-        <span class="kw">let </span><span class="kw-2">mut </span>counts = <span class="macro">vec!</span>[<span class="number">0</span>; result_len <span class="kw">as </span>usize];
-
-        <span class="comment">// Increment the bin for each value
-        </span><span class="kw">for </span><span class="kw-2">&amp;</span>val <span class="kw">in </span>values {
-            counts[val <span class="kw">as </span>usize] += <span class="number">1</span>;
-        }
-
-        counts
-    }
-
     <span class="kw">fn </span>moe_infer(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, topk_ids: <span class="kw-2">&amp;</span>Tensor, topk_weight: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>y = xs.zeros_like()<span class="question-mark">?</span>;
-        <span class="kw">let </span>counts = <span class="self">Self</span>::bincount(
-            <span class="kw-2">&amp;</span>topk_ids.flatten_all()<span class="question-mark">?</span>.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>,
-            <span class="self">self</span>.experts.len() <span class="kw">as </span>u32,
-        );
+        <span class="kw">let </span>counts = topk_ids
+            .flatten_all()<span class="question-mark">?
+            </span>.bincount(<span class="self">self</span>.experts.len() <span class="kw">as </span>u32)<span class="question-mark">?</span>;
         <span class="kw">for </span>(i, expert) <span class="kw">in </span><span class="self">self</span>.experts.iter().enumerate() {
             <span class="kw">if </span>counts[i] == <span class="number">0 </span>{
                 <span class="kw">continue</span>;
