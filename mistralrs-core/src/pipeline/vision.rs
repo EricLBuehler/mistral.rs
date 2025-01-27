@@ -469,6 +469,11 @@ impl Loader for VisionLoader {
                             layer.set_len(0);
                         }
                     }
+                    EitherCache::Quantized(quantized) => {
+                        for layer in &mut *quantized.lock().unwrap().0 {
+                            layer.set_len(0);
+                        }
+                    }
                 }
                 let end = Instant::now();
                 info!(
@@ -546,6 +551,7 @@ impl Loader for VisionLoader {
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
+            EitherCache::Quantized(quantized) => quantized.lock().unwrap().0.len(),
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;

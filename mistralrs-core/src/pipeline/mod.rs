@@ -12,6 +12,7 @@ mod macros;
 mod normal;
 mod paths;
 mod processing;
+mod quantized_cache;
 mod response;
 mod sampling;
 mod speculative;
@@ -46,6 +47,7 @@ pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLor
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
+pub use quantized_cache::{QuantizedCache, QuantizedKvCache};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;

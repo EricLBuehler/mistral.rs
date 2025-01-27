@@ -21,6 +21,7 @@ use crate::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+        QuantizedCache, QuantizedKvCache,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -69,7 +70,8 @@ impl CausalSelfAttention {
         x: &Tensor,
         attention_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
-        kv_cache: &mut KvCache,
+        // kv_cache: &mut KvCache,
+        kv_cache: &mut QuantizedKvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -333,7 +335,8 @@ impl Block {
         x: &Tensor,
         attention_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
-        kv_cache: &mut KvCache,
+        // kv_cache: &mut KvCache,
+        kv_cache: &mut QuantizedKvCache,
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -520,7 +523,11 @@ impl Llama {
             blocks,
             ln_f,
             lm_head,
-            kv_cache: EitherCache::Normal(NormalCache::new(
+            // kv_cache: EitherCache::Normal(NormalCache::new(
+            //     cfg.num_hidden_layers,
+            //     cfg.max_position_embeddings,
+            // )),
+            kv_cache: EitherCache::Quantized(QuantizedCache::new(
                 cfg.num_hidden_layers,
                 cfg.max_position_embeddings,
             )),
@@ -572,7 +579,8 @@ impl Llama {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut x = input_embeds;
-        let cache = &mut self.kv_cache.normal().0;
+        // let cache = &mut self.kv_cache.normal().0;
+        let cache = &mut self.kv_cache.quantized().0;
         let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             metadata
