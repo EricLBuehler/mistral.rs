@@ -912,7 +912,13 @@ impl DeepSeekV3 {
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
                 k_head_dim: Some(cfg.q_head_dim()),
-                v_head_dim: Some(cfg.v_head_dim),
+                v_head_dim: Some(
+                    if matches!(attention_mechanism, AttentionImplementation::PagedAttention) {
+                        cfg.q_head_dim()
+                    } else {
+                        cfg.v_head_dim
+                    },
+                ),
             },
             mapper,
         })
