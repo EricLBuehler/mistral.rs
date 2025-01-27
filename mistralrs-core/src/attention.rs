@@ -167,15 +167,17 @@ fn naive_sdpa(
 
         let mut att = MatMul.matmul(q, &k.t()?)?;
 
-        candle_nn::ops::inplace_attn_softmax_last_dim(
-            &mut att,
-            &mask,
-            sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0),
-        )?;
+        // candle_nn::ops::inplace_attn_softmax_last_dim(
+        //     &mut att,
+        //     &mask,
+        //     sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0),
+        // )?;
+        att = att.broadcast_add(&mask)?;
+        candle_nn::ops::inplace_softmax_last_dim(&mut att)?;
 
-        if let Some(softcap) = sdpa_params.softcap {
-            att = (att.tanh()? * softcap as f64)?;
-        }
+        // if let Some(softcap) = sdpa_params.softcap {
+        //     att = (att.tanh()? * softcap as f64)?;
+        // }
 
         MatMul.matmul(&att, v)
     } else if let Some(mask) = mask {
