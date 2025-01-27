@@ -99,7 +99,7 @@ pub struct VisionLoaderBuilder {
 /// Config specific to loading a vision model.
 pub struct VisionSpecificConfig {
     pub use_flash_attn: bool,
-    pub prompt_batchsize: Option<NonZeroUsize>,
+    pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
@@ -287,6 +287,7 @@ impl Loader for VisionLoader {
                     )
                 };
 
+            // NOTE: Vision models don't support prompt chunking yet, so just using max seq len
             let new = self.inner.get_device_layers(
                 &config,
                 self.inner.num_layers(&config)?,
@@ -296,6 +297,7 @@ impl Loader for VisionLoader {
                 &devices,
                 dtype,
                 &params,
+                params.max_seq_len(),
                 paged_attn_config.as_ref(),
             )?;
             mapper = DeviceMapSetting::Map(new);
@@ -566,7 +568,7 @@ impl Loader for VisionLoader {
                 sliding_window,
                 cache_config,
                 cache_engine,
-                prompt_batchsize: self.config.prompt_batchsize,
+                prompt_chunksize: self.config.prompt_chunksize,
                 model_metadata: Some(model_metadata),
             }),
             processor,

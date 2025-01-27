@@ -24,6 +24,8 @@ pub use scheduler::{
 use crate::MemoryUsage;
 use tracing::info;
 
+pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
+
 /// All memory counts in MB. Default for block size is 32.
 #[derive(Clone, Copy)]
 pub struct PagedAttentionConfig {
@@ -99,7 +101,7 @@ pub fn calculate_cache_config(
     layer_devices: &[Option<Device>],
     silent: bool,
 ) -> anyhow::Result<CacheConfig> {
-    let block_size = block_size.unwrap_or(32);
+    let block_size = block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
         anyhow::bail!("Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}");
     }

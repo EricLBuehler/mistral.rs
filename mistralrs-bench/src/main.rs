@@ -334,7 +334,7 @@ struct Args {
 
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
-    prompt_batchsize: Option<usize>,
+    prompt_chunksize: Option<usize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -348,9 +348,9 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "flash-attn")]
     let use_flash_attn = true;
 
-    let prompt_batchsize = match args.prompt_batchsize {
+    let prompt_chunksize = match args.prompt_chunksize {
         Some(0) => {
-            anyhow::bail!("`prompt_batchsize` must be a strictly positive integer, got 0.",)
+            anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
         }
         Some(x) => Some(NonZeroUsize::new(x).unwrap()),
         None => None,
@@ -361,7 +361,7 @@ fn main() -> anyhow::Result<()> {
 
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
-        .with_prompt_batchsize(prompt_batchsize)
+        .with_prompt_chunksize(prompt_chunksize)
         .build()?;
     let model_name = loader.get_id();
 

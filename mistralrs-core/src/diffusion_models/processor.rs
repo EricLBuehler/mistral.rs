@@ -69,10 +69,10 @@ impl InputsProcessor for DiffusionInputsProcessor {
         _return_raw_logits: bool,
         _other_config: Option<Arc<dyn Any>>,
         _paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-        prompt_batchsize: Option<NonZeroUsize>,
+        prompt_chunksize: Option<NonZeroUsize>,
         _mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>> {
-        let mut make_value = if prompt_batchsize.is_some() {
+        let mut make_value = if prompt_chunksize.is_some() {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
                 "Prompt batching is unsupported for diffusion models",
             ))));

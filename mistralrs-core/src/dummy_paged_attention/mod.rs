@@ -21,6 +21,8 @@ pub use scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
 };
 
+pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
+
 /// All memory counts in MB. Default for block size is 32.
 #[derive(Clone, Copy)]
 pub struct PagedAttentionConfig {

@@ -16,7 +16,7 @@ pub struct GgufModelBuilder {
     pub(crate) device_mapping: Option<DeviceMapSetting>,
 
     // Model running
-    pub(crate) prompt_batchsize: Option<NonZeroUsize>,
+    pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) force_cpu: bool,
     pub(crate) topology: Option<Topology>,
 
@@ -38,7 +38,7 @@ impl GgufModelBuilder {
         Self {
             model_id: model_id.to_string(),
             files: files.into_iter().map(|f| f.to_string()).collect::<Vec<_>>(),
-            prompt_batchsize: None,
+            prompt_chunksize: None,
             chat_template: None,
             tokenizer_json: None,
             force_cpu: false,
@@ -62,8 +62,8 @@ impl GgufModelBuilder {
     }
 
     /// Set the prompt batchsize to use for inference.
-    pub fn with_prompt_batchsize(mut self, prompt_batchsize: NonZeroUsize) -> Self {
-        self.prompt_batchsize = Some(prompt_batchsize);
+    pub fn with_prompt_chunksize(mut self, prompt_chunksize: NonZeroUsize) -> Self {
+        self.prompt_chunksize = Some(prompt_chunksize);
         self
     }
 
@@ -153,7 +153,7 @@ impl GgufModelBuilder {
 
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = GGUFSpecificConfig {
-            prompt_batchsize: self.prompt_batchsize,
+            prompt_chunksize: self.prompt_chunksize,
             topology: self.topology,
         };
 

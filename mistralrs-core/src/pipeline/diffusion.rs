@@ -224,7 +224,7 @@ impl Loader for DiffusionLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
-                prompt_batchsize: None,
+                prompt_chunksize: None,
                 model_metadata: None,
             }),
             dummy_cache: EitherCache::Full(Cache::new(0, false)),

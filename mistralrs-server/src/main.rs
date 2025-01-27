@@ -154,7 +154,7 @@ struct Args {
 
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
-    prompt_batchsize: Option<usize>,
+    prompt_chunksize: Option<usize>,
 
     /// Use CPU only
     #[arg(long)]
@@ -307,9 +307,9 @@ async fn main() -> Result<()> {
         args.max_seqs = 1;
     }
 
-    let prompt_batchsize = match args.prompt_batchsize {
+    let prompt_chunksize = match args.prompt_chunksize {
         Some(0) => {
-            anyhow::bail!("`prompt_batchsize` must be a strictly positive integer, got 0.",)
+            anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
         }
         Some(x) => Some(NonZeroUsize::new(x).unwrap()),
         None => None,
@@ -319,7 +319,7 @@ async fn main() -> Result<()> {
         .with_no_kv_cache(args.no_kv_cache)
         .with_chat_template(args.chat_template)
         .with_use_flash_attn(use_flash_attn)
-        .with_prompt_batchsize(prompt_batchsize)
+        .with_prompt_chunksize(prompt_chunksize)
         .build()?;
 
     #[cfg(feature = "metal")]

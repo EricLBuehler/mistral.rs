@@ -19,7 +19,7 @@ pub struct VisionModelBuilder {
 
     // Model running
     pub(crate) use_flash_attn: bool,
-    pub(crate) prompt_batchsize: Option<NonZeroUsize>,
+    pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) topology: Option<Topology>,
     pub(crate) loader_type: VisionLoaderType,
     pub(crate) dtype: ModelDType,
@@ -43,7 +43,7 @@ impl VisionModelBuilder {
             topology: None,
             write_uqff: None,
             from_uqff: None,
-            prompt_batchsize: None,
+            prompt_chunksize: None,
             chat_template: None,
             tokenizer_json: None,
             max_edge: None,
@@ -61,8 +61,8 @@ impl VisionModelBuilder {
     }
 
     /// Set the prompt batchsize to use for inference.
-    pub fn with_prompt_batchsize(mut self, prompt_batchsize: NonZeroUsize) -> Self {
-        self.prompt_batchsize = Some(prompt_batchsize);
+    pub fn with_prompt_chunksize(mut self, prompt_chunksize: NonZeroUsize) -> Self {
+        self.prompt_chunksize = Some(prompt_chunksize);
         self
     }
 
@@ -167,7 +167,7 @@ impl VisionModelBuilder {
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = VisionSpecificConfig {
             use_flash_attn: self.use_flash_attn,
-            prompt_batchsize: self.prompt_batchsize,
+            prompt_chunksize: self.prompt_chunksize,
             topology: self.topology,
             write_uqff: self.write_uqff,
             from_uqff: self.from_uqff,
