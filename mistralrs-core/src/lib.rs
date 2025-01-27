@@ -54,6 +54,8 @@ mod paged_attention;
 use dummy_paged_attention as paged_attention;
 mod attention;
 mod diffusion_models;
+#[cfg(feature = "nccl")]
+mod distributed;
 mod pipeline;
 mod prefix_cacher;
 mod prefix_cacher_v2;
