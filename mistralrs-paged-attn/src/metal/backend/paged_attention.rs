@@ -107,9 +107,10 @@ impl candle_core::CustomOp1 for PagedAttention {
             || head_size == 96
             || head_size == 112
             || head_size == 128
+            || head_size == 192
             || head_size == 256)
         {
-            candle_core::bail!("`head_size` must be one of 64, 80, 96, 112, 128 or 256");
+            candle_core::bail!("`head_size` must be one of 64, 80, 96, 112, 128, 192 or 256");
         }
 
         let (num_seqs_bt, max_num_blocks_per_seq) = bt_l.shape().dims2()?;
