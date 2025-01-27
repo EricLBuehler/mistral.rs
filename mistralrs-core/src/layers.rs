@@ -739,8 +739,6 @@ impl DeepSeekV2RotaryEmbedding {
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
 
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
-
         let sin = freqs.sin()?.to_dtype(dtype)?;
         let cos = freqs.cos()?.to_dtype(dtype)?;
 
@@ -830,8 +828,6 @@ impl DeepSeekV2RotaryEmbedding {
             .to_dtype(DType::F32)?
             .reshape((cfg.max_position_embeddings, 1))?;
         let freqs = t.matmul(&inv_freq)?;
-
-        let freqs = Tensor::cat(&[&freqs, &freqs], D::Minus1)?;
 
         let mscale =
             Self::yarn_get_mscale(factor, mscale) / Self::yarn_get_mscale(factor, mscale_all_dim);
