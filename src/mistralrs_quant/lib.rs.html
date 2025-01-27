@@ -538,7 +538,15 @@
 <a href="#537" id="537">537</a>
 <a href="#538" id="538">538</a>
 <a href="#539" id="539">539</a>
-<a href="#540" id="540">540</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
@@ -557,6 +565,7 @@
 </span><span class="kw">mod </span>metal_kernels;
 
 <span class="kw">mod </span>bitsandbytes;
+<span class="kw">mod </span>blockwise_fp8;
 <span class="kw">mod </span>cublaslt;
 <span class="kw">mod </span>dummy;
 <span class="kw">mod </span>fp8;
@@ -568,8 +577,8 @@
 <span class="kw">mod </span>utils;
 
 <span class="kw">pub use </span>bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
+<span class="kw">use </span>blockwise_fp8::blockwise_fp8_linear_b;
 <span class="kw">pub use </span>dummy::DummyLayer;
-<span class="kw">use </span>fp8::fp8_linear_b;
 <span class="kw">pub use </span>fp8::FP8Linear;
 <span class="kw">pub use </span>gguf::GgufMatMul;
 <span class="kw">use </span>gptq::gptq_linear;
@@ -674,6 +683,13 @@
         bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         params: BnbQuantParmas,
         quant_ty: BnbQuantType,
+    },
+    BlockwiseFP8 {
+        weight: Tensor,
+        weight_scale_inv: Tensor,
+        bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+        dequant_dtype: DType,
+        weight_block_size: Vec&lt;usize&gt;,
     },
 }
 
@@ -1014,7 +1030,7 @@
     <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
         <span class="kw">match </span>quant_conf.quant_method {
             QuantMethodType::Gptq =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
-            QuantMethodType::Fp8 =&gt; fp8_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">false</span>, vb)<span class="question-mark">?</span>,
+            QuantMethodType::Fp8 =&gt; blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">false</span>, vb)<span class="question-mark">?</span>,
             QuantMethodType::Bitsandbytes =&gt; {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">false</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
             }
@@ -1044,7 +1060,7 @@
     <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
         <span class="kw">match </span>quant_conf.quant_method {
             QuantMethodType::Gptq =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
-            QuantMethodType::Fp8 =&gt; fp8_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">true</span>, vb)<span class="question-mark">?</span>,
+            QuantMethodType::Fp8 =&gt; blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">true</span>, vb)<span class="question-mark">?</span>,
             QuantMethodType::Bitsandbytes =&gt; {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">true</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
             }

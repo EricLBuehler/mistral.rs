@@ -370,7 +370,8 @@
 <a href="#369" id="369">369</a>
 <a href="#370" id="370">370</a>
 <a href="#371" id="371">371</a>
-<a href="#372" id="372">372</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
     num::NonZeroUsize,
@@ -408,7 +409,8 @@
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
-            | QuantMethodConfig::Bnb { .. } =&gt; <span class="macro">unreachable!</span>(),
+            | QuantMethodConfig::Bnb { .. }
+            | QuantMethodConfig::BlockwiseFP8 { .. } =&gt; <span class="macro">unreachable!</span>(),
             QuantMethodConfig::Unquantized(l) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
                 w: l.weight().clone(),
                 b: l.bias().cloned(),

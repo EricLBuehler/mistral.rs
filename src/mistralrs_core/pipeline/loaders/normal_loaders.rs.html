@@ -3357,7 +3357,9 @@
 <a href="#3356" id="3356">3356</a>
 <a href="#3357" id="3357">3357</a>
 <a href="#3358" id="3358">3358</a>
-<a href="#3359" id="3359">3359</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#3359" id="3359">3359</a>
+<a href="#3360" id="3360">3360</a>
+<a href="#3361" id="3361">3361</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
@@ -3473,7 +3475,7 @@
     </span><span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
     <span class="kw">fn </span>get_device_for_tensor(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        _config: <span class="kw-2">&amp;</span>str,
+        config: <span class="kw-2">&amp;</span>str,
         _mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         loading_isq: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>Fn(String) -&gt; DeviceForLoadTensor + Send + Sync + <span class="lifetime">'static</span>&gt;&gt; {
@@ -3481,11 +3483,13 @@
             <span class="prelude-val">Ok</span>(Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base))
         } <span class="kw">else </span>{
             <span class="kw">let </span>re = Regex::new(<span class="string">r"\.layers\.(\d+)\."</span>).unwrap();
+            <span class="kw">let </span>num_layers = <span class="self">self</span>.model_config(config)<span class="question-mark">?</span>.num_layers();
             <span class="kw">let </span>closure = <span class="kw">move </span>|name: String| {
                 <span class="kw">if let </span><span class="prelude-val">Some</span>(captures) = re.captures(<span class="kw-2">&amp;</span>name) {
                     captures
                         .get(<span class="number">1</span>)
                         .and_then(|m| m.as_str().parse::&lt;usize&gt;().ok())
+                        .map(|l| l.min(num_layers))
                         .map(DeviceForLoadTensor::Idx)
                         .unwrap_or(DeviceForLoadTensor::Base)
                 } <span class="kw">else </span>{

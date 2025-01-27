@@ -141,7 +141,8 @@
 <a href="#140" id="140">140</a>
 <a href="#141" id="141">141</a>
 <a href="#142" id="142">142</a>
-<a href="#143" id="143">143</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde};
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::VarBuilder;
 <span class="kw">use </span>std::{
@@ -164,7 +165,8 @@
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
-            | QuantMethodConfig::Bnb { .. } =&gt; {
+            | QuantMethodConfig::Bnb { .. }
+            | QuantMethodConfig::BlockwiseFP8 { .. } =&gt; {
                 <span class="macro">unreachable!</span>()
             }
         }

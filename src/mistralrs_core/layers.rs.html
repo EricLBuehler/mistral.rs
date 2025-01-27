@@ -1303,7 +1303,8 @@
 <a href="#1302" id="1302">1302</a>
 <a href="#1303" id="1303">1303</a>
 <a href="#1304" id="1304">1304</a>
-<a href="#1305" id="1305">1305</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1305" id="1305">1305</a>
+<a href="#1306" id="1306">1306</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
@@ -2043,6 +2044,7 @@
             </span>.to_dtype(DType::F32)<span class="question-mark">?
             </span>.reshape((max_seq_len, <span class="number">1</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>freqs = t.matmul(<span class="kw-2">&amp;</span>inv_freq)<span class="question-mark">?</span>;
+
         <span class="kw">let </span>sin = freqs.sin()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
         <span class="kw">let </span>cos = freqs.cos()<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>;
 

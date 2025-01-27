@@ -890,7 +890,33 @@
 <a href="#889" id="889">889</a>
 <a href="#890" id="890">890</a>
 <a href="#891" id="891">891</a>
-<a href="#892" id="892">892</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
+<a href="#892" id="892">892</a>
+<a href="#893" id="893">893</a>
+<a href="#894" id="894">894</a>
+<a href="#895" id="895">895</a>
+<a href="#896" id="896">896</a>
+<a href="#897" id="897">897</a>
+<a href="#898" id="898">898</a>
+<a href="#899" id="899">899</a>
+<a href="#900" id="900">900</a>
+<a href="#901" id="901">901</a>
+<a href="#902" id="902">902</a>
+<a href="#903" id="903">903</a>
+<a href="#904" id="904">904</a>
+<a href="#905" id="905">905</a>
+<a href="#906" id="906">906</a>
+<a href="#907" id="907">907</a>
+<a href="#908" id="908">908</a>
+<a href="#909" id="909">909</a>
+<a href="#910" id="910">910</a>
+<a href="#911" id="911">911</a>
+<a href="#912" id="912">912</a>
+<a href="#913" id="913">913</a>
+<a href="#914" id="914">914</a>
+<a href="#915" id="915">915</a>
+<a href="#916" id="916">916</a>
+<a href="#917" id="917">917</a>
+<a href="#918" id="918">918</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
     backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
     <span class="prelude-ty">Result</span>, Shape, Tensor, WithDType, D,
 };
@@ -1451,8 +1477,13 @@
 <span class="kw">pub trait </span>TopKLastDimOp {
     <span class="doccomment">/// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
     /// This expects a contiguous tensor.
-    /// Note this implements torch.topk with sorted=True.
+    /// Note: this implements torch.topk with sorted=True.
     </span><span class="kw">fn </span>topk(<span class="kw-2">&amp;</span><span class="self">self</span>, topk: usize) -&gt; <span class="prelude-ty">Result</span>&lt;TopKOutput&gt;;
+
+    <span class="doccomment">/// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
+    /// This expects a contiguous tensor.
+    /// Note: this implements torch.topk with sorted=False.
+    </span><span class="kw">fn </span>topk_unsorted(<span class="kw-2">&amp;</span><span class="self">self</span>, topk: usize) -&gt; <span class="prelude-ty">Result</span>&lt;TopKOutput&gt;;
 }
 
 <span class="kw">impl </span>TopKLastDimOp <span class="kw">for </span>Tensor {
@@ -1463,6 +1494,27 @@
         <span class="prelude-val">Ok</span>(TopKOutput {
             values: <span class="self">self</span>.gather(<span class="kw-2">&amp;</span>topk_indices, D::Minus1)<span class="question-mark">?</span>,
             indices: topk_indices,
+        })
+    }
+
+    <span class="kw">fn </span>topk_unsorted(<span class="kw-2">&amp;</span><span class="self">self</span>, topk: usize) -&gt; <span class="prelude-ty">Result</span>&lt;TopKOutput&gt; {
+        <span class="comment">// Sorted descending
+        </span><span class="kw">let </span>sorted_indices_all = <span class="self">self</span>.arg_sort_last_dim(<span class="bool-val">false</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>topk_indices_sorted = sorted_indices_all
+            .narrow(D::Minus1, <span class="number">0</span>, topk)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span>topk_values_sorted = <span class="self">self</span>.gather(<span class="kw-2">&amp;</span>topk_indices_sorted, D::Minus1)<span class="question-mark">?</span>;
+
+        <span class="comment">// Reorder the indices ascending
+        </span><span class="kw">let </span>reorder_indices = topk_indices_sorted.arg_sort_last_dim(<span class="bool-val">true</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>topk_indices_unsorted = topk_indices_sorted
+            .to_dtype(DType::F32)<span class="question-mark">?
+            </span>.gather(<span class="kw-2">&amp;</span>reorder_indices, D::Minus1)<span class="question-mark">?
+            </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
+        <span class="kw">let </span>topk_values_unsorted = topk_values_sorted.gather(<span class="kw-2">&amp;</span>reorder_indices, D::Minus1)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(TopKOutput {
+            values: topk_values_unsorted,
+            indices: topk_indices_unsorted,
         })
     }
 }

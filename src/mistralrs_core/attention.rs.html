@@ -332,7 +332,8 @@
 <a href="#331" id="331">331</a>
 <a href="#332" id="332">332</a>
 <a href="#333" id="333">333</a>
-<a href="#334" id="334">334</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -522,6 +523,7 @@
 
         att = att.broadcast_add(mask)<span class="question-mark">?</span>;
         candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>att)<span class="question-mark">?</span>;
+
         MatMul.matmul(<span class="kw-2">&amp;</span>att, v)
     } <span class="kw">else </span>{
         <span class="kw">let </span><span class="kw-2">mut </span>att = MatMul.matmul_affine_mul(q, <span class="kw-2">&amp;</span>k.t()<span class="question-mark">?</span>, sdpa_params.softmax_scale.into())<span class="question-mark">?</span>;
