@@ -552,6 +552,7 @@ impl Moe {
             .to_dtype(topk_ids.dtype())?;
         let tokens_per_expert = cnts.sum(0)?.to_vec1::<u32>()?;
         let idxs = topk_ids.flatten_all()?.arg_sort_last_dim(true)?;
+        // NOTE: must cast to f32 and then back because the CUDA backend's affine impl will make the 1/topk_ids.dim(1) -> 0
         let sorted_tokens = xs.index_select(
             &(&idxs.to_dtype(DType::F32)? / topk_ids.dim(1)? as f64)?.to_dtype(idxs.dtype())?,
             0,
