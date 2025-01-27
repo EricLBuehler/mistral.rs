@@ -295,4 +295,9 @@ impl Model {
     pub fn inner(&self) -> &MistralRs {
         &self.runner
     }
+
+    /// Retrieve some information about this model.
+    pub fn get_model_category(&self) -> ModelCategory {
+        self.runner.get_model_category()
+    }
 }

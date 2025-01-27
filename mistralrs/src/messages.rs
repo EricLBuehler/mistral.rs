@@ -64,6 +64,7 @@ impl TextMessages {
         Self(Vec::new())
     }
 
+    #[must_use = "Updated message object is returned."]
     pub fn add_message(mut self, role: TextMessageRole, text: impl ToString) -> Self {
         self.0.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
@@ -132,6 +133,7 @@ impl VisionMessages {
         }
     }
 
+    #[must_use = "Updated message object is returned."]
     pub fn add_message(mut self, role: TextMessageRole, text: impl ToString) -> Self {
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
@@ -141,6 +143,7 @@ impl VisionMessages {
     }
 
     #[deprecated(since = "0.3.5", note = "use add_image_message")]
+    #[must_use = "Updated message object is returned."]
     /// This handles adding the `<|image_{N}|>` prefix to the prompt.
     pub fn add_phiv_image_message(
         mut self,
@@ -164,6 +167,7 @@ impl VisionMessages {
     }
 
     #[deprecated(since = "0.3.5", note = "use add_image_message")]
+    #[must_use = "Updated message object is returned."]
     /// This handles adding the `<|image|>` prefix to the prompt.
     pub fn add_vllama_image_message(
         mut self,
@@ -183,6 +187,7 @@ impl VisionMessages {
     }
 
     #[deprecated(since = "0.3.5", note = "use add_image_message")]
+    #[must_use = "Updated message object is returned."]
     /// This handles adding the `<image>` prefix to the prompt.
     pub fn add_llava_image_message(
         mut self,
@@ -202,6 +207,7 @@ impl VisionMessages {
     }
 
     #[deprecated(since = "0.3.5", note = "use add_image_message")]
+    #[must_use = "Updated message object is returned."]
     pub fn add_idefics_image_message(
         mut self,
         role: TextMessageRole,
