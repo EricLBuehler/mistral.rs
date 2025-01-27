@@ -32,7 +32,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     let loader = NormalLoaderBuilder::new(
         NormalSpecificConfig {
             use_flash_attn: false,
-            prompt_batchsize: None,
+            prompt_chunksize: None,
             topology: None,
             organization: Default::default(),
             write_uqff: None,

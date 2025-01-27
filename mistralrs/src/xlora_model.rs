@@ -32,7 +32,7 @@ impl XLoraModelBuilder {
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             use_flash_attn: self.text_model.use_flash_attn,
-            prompt_batchsize: self.text_model.prompt_batchsize,
+            prompt_chunksize: self.text_model.prompt_chunksize,
             topology: self.text_model.topology,
             organization: self.text_model.organization,
             write_uqff: self.text_model.write_uqff,

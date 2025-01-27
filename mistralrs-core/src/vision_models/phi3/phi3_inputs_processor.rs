@@ -81,7 +81,7 @@ impl InputsProcessor for Phi3InputsProcessor {
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-        prompt_batchsize: Option<NonZeroUsize>,
+        prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
         if is_xlora {
@@ -95,8 +95,8 @@ impl InputsProcessor for Phi3InputsProcessor {
             ))));
         }
         // TODO(EricLBuehler): support this? Would require some handling of image tokens.
-        if prompt_batchsize.is_some() {
-            warn!("`prompt_batchsize` is set. Idefics 2 does not support prompt batching.");
+        if prompt_chunksize.is_some() {
+            warn!("`prompt_chunksize` is set. Idefics 2 does not support prompt batching.");
         }
         let Some(tokenizer) = tokenizer else {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(

@@ -36,7 +36,9 @@ pub use diffusion_loaders::{
 
 use crate::{
     lora::LoraConfig,
-    paged_attention::{calculate_cache_config, ModelConfigLike},
+    paged_attention::{
+        calculate_cache_config, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+    },
     utils::debug::DeviceRepr,
     xlora_models::XLoraConfig,
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryGpuConfig, MemoryUsage,
@@ -383,6 +385,14 @@ pub enum AutoDeviceMapParams {
     },
 }
 
+impl AutoDeviceMapParams {
+    pub fn max_seq_len(&self) -> usize {
+        match self {
+            Self::Text { max_seq_len, .. } | Self::Vision { max_seq_len, .. } => *max_seq_len,
+        }
+    }
+}
+
 impl Display for AutoDeviceMapParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -484,6 +494,7 @@ pub trait DeviceMappedModelLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize>;
     /// weight_pack_factor only applies to quantized weights.
     fn non_mapped_size_in_bytes(
@@ -516,10 +527,12 @@ pub trait DeviceMappedModelLoader {
         devices: &[Device],
         dtype: DType,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
         paged_attn_config: Option<&PagedAttentionConfig>,
     ) -> Result<DeviceMapMetadata> {
         let mapped_max_act_size_in_bytes =
-            self.mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
+            self.mapped_max_act_size_elems(config, params, prompt_chunksize)?
+                * dtype.size_in_bytes();
         let non_mapped_max_act_size_in_bytes =
             self.non_mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
 
@@ -540,7 +553,11 @@ pub trait DeviceMappedModelLoader {
                 let cache_config = calculate_cache_config(
                     MemoryGpuConfig::ContextSize(max_seq_len),
                     0,
-                    Some(paged_attn_config.block_size.unwrap_or(32)),
+                    Some(
+                        paged_attn_config
+                            .block_size
+                            .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE),
+                    ),
                     dtype,
                     &*model_cfg,
                     &devices[0],
@@ -726,6 +743,7 @@ pub trait DeviceMappedModelLoader {
                 devices,
                 dtype,
                 params,
+                prompt_chunksize,
                 None,
             );
         }

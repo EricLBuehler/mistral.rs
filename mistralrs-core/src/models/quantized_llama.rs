@@ -663,6 +663,13 @@ impl ModelWeights {
             self.dtype,
             self.layers[0].n_head,
         )?;
+        // PagedAttention prompt chunking
+        let mask = mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;

@@ -218,9 +218,10 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
         &self,
         _config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -228,7 +229,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
         };
         let num_heads = self.model.get_metadata()[&format!("{}.attention.head_count", self.arch)]
             .to_u32()? as usize;
-        Ok(max_batch_size * num_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * num_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,

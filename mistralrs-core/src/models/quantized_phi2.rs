@@ -362,6 +362,12 @@ impl ModelWeights {
             self.dtype,
             self.layers[0].n_head,
         )?;
+        let mask = mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             let residual = &xs;

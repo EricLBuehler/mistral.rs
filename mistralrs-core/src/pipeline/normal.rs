@@ -1,4 +1,5 @@
 use super::cache_manager::{FullCacheManager, NormalCacheManager};
+use super::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use super::isq::ImatrixDataSource;
 use super::llg::build_tok_env;
 use super::{
@@ -46,7 +47,7 @@ use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
 use std::fs;
-use std::num::NonZeroUsize;
+use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
@@ -109,7 +110,7 @@ pub struct NormalLoaderBuilder {
 /// Config specific to loading a normal model.
 pub struct NormalSpecificConfig {
     pub use_flash_attn: bool,
-    pub prompt_batchsize: Option<NonZeroUsize>,
+    pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
     pub write_uqff: Option<PathBuf>,
@@ -281,6 +282,15 @@ impl Loader for NormalLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
+        // Apply default prompt size here
+        let prompt_chunksize = self
+            .config
+            .prompt_chunksize
+            .unwrap_or(DEFAULT_PROMPT_CHUNK_SIZE.try_into().unwrap())
+            .get();
+
+        info!("Prompt chunk size is {prompt_chunksize}.",);
+
         // If auto, convert to Map
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let devices = device_map::get_all_similar_devices(device)?;
@@ -368,6 +378,7 @@ impl Loader for NormalLoader {
                 &devices,
                 dtype,
                 &params,
+                prompt_chunksize,
                 paged_attn_config.as_ref(),
             )?;
             mapper = DeviceMapSetting::Map(new);
@@ -674,7 +685,7 @@ impl Loader for NormalLoader {
                 sliding_window,
                 cache_config,
                 cache_engine,
-                prompt_batchsize: self.config.prompt_batchsize,
+                prompt_chunksize: Some(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: Some(model_metadata),
             }),
             topology: self.config.topology.clone(),

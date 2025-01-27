@@ -39,17 +39,6 @@ pub trait PastKvLenCache {
     fn get_past_kv_len(&self) -> Result<usize>;
 }
 
-impl PastKvLenCache for &[Option<(Tensor, Tensor)>] {
-    fn get_past_kv_len(&self) -> Result<usize> {
-        let kv_cache_1 = &self[0];
-        if kv_cache_1.is_none() {
-            return Ok(0);
-        }
-        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        Ok(k_cache_1.dims()[2])
-    }
-}
-
 impl PastKvLenCache for Vec<KvCache> {
     fn get_past_kv_len(&self) -> Result<usize> {
         let kv_cache_1 = &self[0];
@@ -75,16 +64,6 @@ impl PastKvLenCache for Vec<Option<(Tensor, Tensor)>> {
         }
         let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
         Ok(k_cache_1.dims()[2])
-    }
-}
-
-impl PastKvLenCache for Option<&[(Tensor, Tensor)]> {
-    fn get_past_kv_len(&self) -> Result<usize> {
-        match self {
-            None => Ok(0),
-            Some([(k_cache_1, _), ..]) => Ok(k_cache_1.dims()[2]),
-            _ => candle_core::bail!("Unreachable"),
-        }
     }
 }
 
