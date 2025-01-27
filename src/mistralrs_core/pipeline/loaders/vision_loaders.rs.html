@@ -2517,7 +2517,15 @@
 <a href="#2516" id="2516">2516</a>
 <a href="#2517" id="2517">2517</a>
 <a href="#2518" id="2518">2518</a>
-<a href="#2519" id="2519">2519</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#2519" id="2519">2519</a>
+<a href="#2520" id="2520">2520</a>
+<a href="#2521" id="2521">2521</a>
+<a href="#2522" id="2522">2522</a>
+<a href="#2523" id="2523">2523</a>
+<a href="#2524" id="2524">2524</a>
+<a href="#2525" id="2525">2525</a>
+<a href="#2526" id="2526">2526</a>
+<a href="#2527" id="2527">2527</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -2810,10 +2818,11 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="comment">// NOTE: we ignore max_num_images although it can only be one...
         </span><span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -2831,7 +2840,7 @@
 
         <span class="kw">let </span>max_text_attn = {
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -3085,9 +3094,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -3103,7 +3113,7 @@
 
         <span class="kw">let </span>max_text_attn = {
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -3413,9 +3423,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
             max_image_shape,
             max_num_images,
@@ -3437,7 +3448,7 @@
         <span class="kw">let </span>max_text_attn = {
             <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>config.text_config;
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
 
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
@@ -3665,9 +3676,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -3685,7 +3697,7 @@
         <span class="kw">let </span>max_text_attn = {
             <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>config.text_config;
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
 
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
@@ -3962,9 +3974,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -3990,7 +4003,7 @@
 
         <span class="kw">let </span>max_self_text_attn = {
             <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>config.text_config;
-            max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
+            max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize
         };
 
         <span class="prelude-val">Ok</span>(max_self_text_attn.max(max_cross_text_attn))
@@ -4290,9 +4303,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
             max_image_shape,
             max_num_images,
@@ -4314,7 +4328,7 @@
 
         <span class="kw">let </span>max_text_attn = {
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -4578,9 +4592,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -4596,7 +4611,7 @@
 
         <span class="kw">let </span>max_text_attn = {
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -4858,9 +4873,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -4876,7 +4892,7 @@
 
         <span class="kw">let </span>max_text_attn = {
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 

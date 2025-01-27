@@ -339,7 +339,7 @@
 
     <span class="comment">// Model running
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) organization: IsqOrganization,
     <span class="kw">pub</span>(<span class="kw">crate</span>) loader_type: <span class="prelude-ty">Option</span>&lt;NormalLoaderType&gt;,
@@ -399,7 +399,7 @@
         <span class="self">Self </span>{
             model_id: model_id.to_string(),
             use_flash_attn: <span class="macro">cfg!</span>(feature = <span class="string">"flash-attn"</span>),
-            prompt_batchsize: <span class="prelude-val">None</span>,
+            prompt_chunksize: <span class="prelude-val">None</span>,
             topology: <span class="prelude-val">None</span>,
             organization: IsqOrganization::Default,
             write_uqff: <span class="prelude-val">None</span>,
@@ -424,8 +424,8 @@
     }
 
     <span class="doccomment">/// Set the prompt batchsize to use for inference.
-    </span><span class="kw">pub fn </span>with_prompt_batchsize(<span class="kw-2">mut </span><span class="self">self</span>, prompt_batchsize: NonZeroUsize) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.prompt_batchsize = <span class="prelude-val">Some</span>(prompt_batchsize);
+    </span><span class="kw">pub fn </span>with_prompt_chunksize(<span class="kw-2">mut </span><span class="self">self</span>, prompt_chunksize: NonZeroUsize) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.prompt_chunksize = <span class="prelude-val">Some</span>(prompt_chunksize);
         <span class="self">self
     </span>}
 
@@ -570,7 +570,7 @@
     <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
         <span class="kw">let </span>config = NormalSpecificConfig {
             use_flash_attn: <span class="self">self</span>.use_flash_attn,
-            prompt_batchsize: <span class="self">self</span>.prompt_batchsize,
+            prompt_chunksize: <span class="self">self</span>.prompt_chunksize,
             topology: <span class="self">self</span>.topology,
             organization: <span class="self">self</span>.organization,
             write_uqff: <span class="self">self</span>.write_uqff,

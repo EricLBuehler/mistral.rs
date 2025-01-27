@@ -872,6 +872,8 @@
 
 <span class="kw">use crate</span>::{device_map::DeviceMapper, sequence::Sequence};
 
+<span class="kw">pub const </span>DEFAULT_PROMPT_CHUNK_SIZE: usize = <span class="number">512</span>;
+
 <span class="attr">#[derive(PartialEq)]
 </span><span class="kw">pub enum </span>InputsProcessorType {
     Text,
@@ -902,7 +904,7 @@
         return_raw_logits: bool,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
-        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
         mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;&gt;&gt;;
 
@@ -960,6 +962,7 @@
         <span class="kw">pub </span>context_lens: <span class="prelude-ty">Option</span>&lt;HashMap&lt;DeviceLocation, Tensor&gt;&gt;,
         <span class="kw">pub </span>slot_mappings: HashMap&lt;DeviceLocation, Tensor&gt;,
         <span class="kw">pub </span>max_context_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        <span class="kw">pub </span>is_first_prompt_chunk: bool,
     }
 
     <span class="kw">impl </span>PagedAttentionInputMetadata {
@@ -971,6 +974,7 @@
                 context_lens: <span class="prelude-val">None</span>,
                 max_context_len: <span class="prelude-val">None</span>,
                 slot_mappings: HashMap::from([(dev.location(), Tensor::new(<span class="kw-2">&amp;</span>[<span class="number">0f32</span>], dev)<span class="question-mark">?</span>)]),
+                is_first_prompt_chunk: <span class="bool-val">true</span>,
             })
         }
     }
@@ -998,7 +1002,7 @@
     }
 
     <span class="comment">// chunk_offset_toks is the number of tokens by which the tokens are offset,
-    // chunk_offset_toks / prompt_batchsize = number of batches
+    // chunk_offset_toks / prompt_chunksize = number of batches
     </span><span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>make_prompt_chunk&lt;T: WithDType + Debug&gt;(
         chunk_offset_toks: usize,
@@ -1178,6 +1182,7 @@
                 block_tables: <span class="prelude-val">Some</span>(block_tables_map),
                 context_lens: <span class="prelude-val">Some</span>(context_lens_map),
                 max_context_len: <span class="prelude-val">Some</span>(max_context_len),
+                is_first_prompt_chunk: chunk_offset_toks == <span class="number">0</span>,
             })
         } <span class="kw">else </span>{
             <span class="prelude-val">None
@@ -1334,6 +1339,7 @@
                 block_tables: <span class="prelude-val">Some</span>(block_tables_map),
                 context_lens: <span class="prelude-val">Some</span>(context_lens_map),
                 max_context_len: <span class="prelude-val">Some</span>(<span class="kw-2">*</span>max_context_len),
+                is_first_prompt_chunk: <span class="bool-val">false</span>,
             })
         } <span class="kw">else </span>{
             <span class="prelude-val">None
@@ -1362,17 +1368,17 @@
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         return_raw_logits: bool,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
-        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
         mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt;&gt;&gt; {
-        <span class="kw">if let </span>(<span class="prelude-val">Some</span>(prompt_batchsize), <span class="bool-val">true</span>) = (prompt_batchsize, paged_attn_metadata.is_none()) {
+        <span class="kw">if let </span>(<span class="prelude-val">Some</span>(prompt_chunksize), <span class="bool-val">true</span>) = (prompt_chunksize, paged_attn_metadata.is_none()) {
             <span class="kw">let </span><span class="kw-2">mut </span>seq_chunks = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>n_chunks = Vec::new();
-            <span class="kw">let </span>prompt_batchsize: usize = prompt_batchsize.into();
+            <span class="kw">let </span>prompt_chunksize: usize = prompt_chunksize.into();
 
             <span class="comment">// Pad each sequence by the padding token to the max len.
             </span><span class="kw">for </span>ctxt <span class="kw">in </span>toks.iter() {
-                <span class="kw">let </span>chunks = ctxt.chunks(prompt_batchsize).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+                <span class="kw">let </span>chunks = ctxt.chunks(prompt_chunksize).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
                 n_chunks.push(chunks.len());
                 seq_chunks.push(chunks);
             }
@@ -1392,7 +1398,7 @@
                 .map(|(i, chunk)| {
                     <span class="kw">let </span>(toks, seq_ns): (Vec&lt;Vec&lt;T&gt;&gt;, Vec&lt;usize&gt;) = chunk.into_iter().unzip();
                     make_prompt_chunk(
-                        i * prompt_batchsize,
+                        i * prompt_chunksize,
                         toks,
                         <span class="kw-2">&amp;</span>seq_ns
                             .iter()
@@ -1412,12 +1418,6 @@
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
             Box::new(chunks.into_iter())
         } <span class="kw">else </span>{
-            <span class="kw">if </span>prompt_batchsize.is_some() {
-                <span class="comment">// TODO(EricLBuehler)
-                </span><span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
-                    <span class="string">"PagedAttention does not yet support prompt batching."</span>,
-                ))));
-            }
             <span class="kw">let </span>offset = input_seqs[<span class="number">0</span>].token_offset();
             <span class="kw">if </span>offset != <span class="number">0 </span>&amp;&amp; paged_attn_metadata.is_some() {
                 <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
@@ -1452,7 +1452,7 @@
         last_n_context_len: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
         return_raw_logits: bool,
         paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;mut </span>PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
-        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
         mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InnerInputProcessorOutput&gt;&gt;&gt; {
         <span class="kw">if </span>no_kv_cache {
@@ -1463,7 +1463,7 @@
                 last_n_context_len,
                 return_raw_logits,
                 paged_attn_metadata,
-                prompt_batchsize,
+                prompt_chunksize,
                 mapper,
             );
         }
@@ -1506,7 +1506,7 @@
             return_raw_logits: bool,
             <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
             <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
-            prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+            prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
             mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
         ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;&gt;&gt; {
             <span class="kw">if </span>is_xlora &amp;&amp; !is_prompt {
@@ -1521,7 +1521,7 @@
                         last_n_context_len,
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
-                        prompt_batchsize,
+                        prompt_chunksize,
                         mapper,
                     )
                     .zip(get_completion_input(
@@ -1535,7 +1535,7 @@
                         last_n_context_len,
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
-                        prompt_batchsize,
+                        prompt_chunksize,
                         mapper,
                     ))
                     .map(|(prompt, completion)| {
@@ -1592,7 +1592,7 @@
                         last_n_context_len,
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
-                        prompt_batchsize,
+                        prompt_chunksize,
                         mapper,
                     )
                     .map(|metadata| {
@@ -1637,7 +1637,7 @@
                         last_n_context_len,
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
-                        prompt_batchsize,
+                        prompt_chunksize,
                         mapper,
                     )
                     .map(|metadata| {
@@ -1683,7 +1683,7 @@
                         last_n_context_len,
                         return_raw_logits,
                         paged_attn_metadata.as_mut(),
-                        prompt_batchsize,
+                        prompt_chunksize,
                         mapper,
                     )
                     .map(|metadata| {

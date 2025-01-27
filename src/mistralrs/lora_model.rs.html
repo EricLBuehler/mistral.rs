@@ -122,7 +122,7 @@
     <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
         <span class="kw">let </span>config = NormalSpecificConfig {
             use_flash_attn: <span class="self">self</span>.text_model.use_flash_attn,
-            prompt_batchsize: <span class="self">self</span>.text_model.prompt_batchsize,
+            prompt_chunksize: <span class="self">self</span>.text_model.prompt_chunksize,
             topology: <span class="self">self</span>.text_model.topology,
             organization: <span class="self">self</span>.text_model.organization,
             write_uqff: <span class="self">self</span>.text_model.write_uqff,

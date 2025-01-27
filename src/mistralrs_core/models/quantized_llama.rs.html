@@ -698,7 +698,14 @@
 <a href="#697" id="697">697</a>
 <a href="#698" id="698">698</a>
 <a href="#699" id="699">699</a>
-<a href="#700" id="700">700</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#700" id="700">700</a>
+<a href="#701" id="701">701</a>
+<a href="#702" id="702">702</a>
+<a href="#703" id="703">703</a>
+<a href="#704" id="704">704</a>
+<a href="#705" id="705">705</a>
+<a href="#706" id="706">706</a>
+<a href="#707" id="707">707</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::sync::Arc;
@@ -1363,6 +1370,13 @@
             <span class="self">self</span>.dtype,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
+        <span class="comment">// PagedAttention prompt chunking
+        </span><span class="kw">let </span>mask = mask.filter(|<span class="kw">_</span>| {
+            metadata
+                .as_ref()
+                .map(|(<span class="kw">_</span>, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(<span class="bool-val">true</span>)
+        });
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>mapper) = <span class="self">self</span>.mapper {
                 layer_in = mapper.map(layer_in, i)<span class="question-mark">?</span>;

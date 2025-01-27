@@ -557,7 +557,8 @@
 <a href="#556" id="556">556</a>
 <a href="#557" id="557">557</a>
 <a href="#558" id="558">558</a>
-<a href="#559" id="559">559</a></pre></div><pre class="rust"><code><span class="kw">use </span>akin::akin;
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a></pre></div><pre class="rust"><code><span class="kw">use </span>akin::akin;
 <span class="kw">use </span>anyhow::ensure;
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::gguf_file;
@@ -777,9 +778,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -787,7 +789,7 @@
         };
         <span class="kw">let </span>num_heads = <span class="self">self</span>.model.get_metadata()[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{}.attention.head_count"</span>, <span class="self">self</span>.arch)]
             .to_u32()<span class="question-mark">? </span><span class="kw">as </span>usize;
-        <span class="prelude-val">Ok</span>(max_batch_size * num_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * num_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,

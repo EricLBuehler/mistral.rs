@@ -733,7 +733,13 @@
 <a href="#732" id="732">732</a>
 <a href="#733" id="733">733</a>
 <a href="#734" id="734">734</a>
-<a href="#735" id="735">735</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a>
+<a href="#740" id="740">740</a>
+<a href="#741" id="741">741</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
 </span><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -1269,6 +1275,12 @@
             x.dtype(),
             <span class="self">self</span>.blocks[<span class="number">0</span>].attn.num_attention_heads,
         )<span class="question-mark">?</span>;
+        <span class="kw">let </span>mask = mask.filter(|<span class="kw">_</span>| {
+            metadata
+                .as_ref()
+                .map(|(<span class="kw">_</span>, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(<span class="bool-val">true</span>)
+        });
         <span class="kw">for </span>(block_idx, block) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
             x = <span class="self">self</span>.mapper.map(x, block_idx)<span class="question-mark">?</span>;
             x = block.forward(

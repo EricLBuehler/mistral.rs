@@ -1015,7 +1015,7 @@
     <span class="comment">// PagedAttention stuff
     </span><span class="kw">pub </span>cache_config: <span class="prelude-ty">Option</span>&lt;CacheConfig&gt;,
     <span class="kw">pub </span>cache_engine: <span class="prelude-ty">Option</span>&lt;CacheEngine&gt;,
-    <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    <span class="kw">pub </span>prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     <span class="kw">pub </span>model_metadata: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>ModelConfigLike + Send + Sync&gt;&gt;,
 }
 
@@ -1259,19 +1259,19 @@
                     return_raw_logits,
                     <span class="self">self</span>.get_input_processor_config(),
                     <span class="prelude-val">None</span>,
-                    <span class="self">self</span>.get_metadata().prompt_batchsize,
+                    <span class="self">self</span>.get_metadata().prompt_chunksize,
                     <span class="self">self</span>.device_mapper(),
                 );
 
                 <span class="kw">let </span><span class="kw-2">mut </span>logits = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; input_seqs.len()];
-                <span class="kw">let </span>prompt_batchsize = <span class="self">self
+                <span class="kw">let </span>prompt_chunksize = <span class="self">self
                     </span>.get_metadata()
-                    .prompt_batchsize
+                    .prompt_chunksize
                     .map(NonZeroUsize::get)
                     .unwrap_or(<span class="number">1</span>);
                 <span class="kw">let </span>len_inputs = input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().len().div_ceil(prompt_batchsize))
+                    .map(|seq| seq.get_toks().len().div_ceil(prompt_chunksize))
                     .max()
                     .unwrap();
                 <span class="kw">let </span><span class="kw-2">mut </span>raw_out_logits = <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="prelude-val">None</span>; len_inputs]; input_seqs.len()];
@@ -1472,19 +1472,19 @@
                     return_raw_logits,
                     <span class="self">self</span>.get_input_processor_config(),
                     <span class="prelude-val">Some</span>(metadata),
-                    <span class="self">self</span>.get_metadata().prompt_batchsize,
+                    <span class="self">self</span>.get_metadata().prompt_chunksize,
                     <span class="self">self</span>.device_mapper(),
                 );
 
                 <span class="kw">let </span><span class="kw-2">mut </span>logits = <span class="macro">vec!</span>[<span class="prelude-val">None</span>; input_seqs.len()];
-                <span class="kw">let </span>prompt_batchsize = <span class="self">self
+                <span class="kw">let </span>prompt_chunksize = <span class="self">self
                     </span>.get_metadata()
-                    .prompt_batchsize
+                    .prompt_chunksize
                     .map(NonZeroUsize::get)
                     .unwrap_or(<span class="number">1</span>);
                 <span class="kw">let </span>len_inputs = input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().len().div_ceil(prompt_batchsize))
+                    .map(|seq| seq.get_toks().len().div_ceil(prompt_chunksize))
                     .max()
                     .unwrap();
                 <span class="kw">let </span><span class="kw-2">mut </span>raw_out_logits = <span class="macro">vec!</span>[<span class="macro">vec!</span>[<span class="prelude-val">None</span>; len_inputs]; input_seqs.len()];

@@ -3359,7 +3359,20 @@
 <a href="#3358" id="3358">3358</a>
 <a href="#3359" id="3359">3359</a>
 <a href="#3360" id="3360">3360</a>
-<a href="#3361" id="3361">3361</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#3361" id="3361">3361</a>
+<a href="#3362" id="3362">3362</a>
+<a href="#3363" id="3363">3363</a>
+<a href="#3364" id="3364">3364</a>
+<a href="#3365" id="3365">3365</a>
+<a href="#3366" id="3366">3366</a>
+<a href="#3367" id="3367">3367</a>
+<a href="#3368" id="3368">3368</a>
+<a href="#3369" id="3369">3369</a>
+<a href="#3370" id="3370">3370</a>
+<a href="#3371" id="3371">3371</a>
+<a href="#3372" id="3372">3372</a>
+<a href="#3373" id="3373">3373</a>
+<a href="#3374" id="3374">3374</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
@@ -3724,8 +3737,9 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span><span class="kw">super</span>::AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.mapped_max_act_size_elems(config, params)
+        <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.mapped_max_act_size_elems(config, params, prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -3862,9 +3876,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -3873,7 +3888,7 @@
 
         <span class="kw">let </span>cfg = MistralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -4100,9 +4115,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -4111,7 +4127,7 @@
 
         <span class="kw">let </span>cfg = GemmaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -4336,9 +4352,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -4347,7 +4364,7 @@
 
         <span class="kw">let </span>cfg = LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -4564,9 +4581,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -4575,7 +4593,7 @@
 
         <span class="kw">let </span>cfg = MixtralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -4795,9 +4813,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -4806,7 +4825,7 @@
 
         <span class="kw">let </span>cfg = Phi2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -5023,9 +5042,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -5034,7 +5054,7 @@
 
         <span class="kw">let </span>cfg = Phi3BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -5235,9 +5255,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -5246,7 +5267,7 @@
 
         <span class="kw">let </span>cfg = Qwen2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -5478,9 +5499,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -5489,7 +5511,7 @@
 
         <span class="kw">let </span>cfg = Gemma2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -5708,9 +5730,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -5719,7 +5742,7 @@
 
         <span class="kw">let </span>cfg = Starcoder2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -5955,9 +5978,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -5966,7 +5990,7 @@
 
         <span class="kw">let </span>cfg = Phi3_5MoEBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -6241,9 +6265,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -6252,7 +6277,7 @@
 
         <span class="kw">let </span>cfg: <span class="kw">crate</span>::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -6568,9 +6593,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: <span class="kw">_</span>,
             max_batch_size,
         } = params
         <span class="kw">else </span>{
@@ -6579,7 +6605,7 @@
 
         <span class="kw">let </span>cfg: <span class="kw">crate</span>::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
 
-        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        <span class="prelude-val">Ok</span>(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     <span class="kw">fn </span>non_mapped_max_act_size_elems(
         <span class="kw-2">&amp;</span><span class="self">self</span>,

@@ -234,7 +234,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapSetting&gt;,
 
     <span class="comment">// Model running
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) force_cpu: bool,
     <span class="kw">pub</span>(<span class="kw">crate</span>) topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
 
@@ -256,7 +256,7 @@
         <span class="self">Self </span>{
             model_id: model_id.to_string(),
             files: files.into_iter().map(|f| f.to_string()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-            prompt_batchsize: <span class="prelude-val">None</span>,
+            prompt_chunksize: <span class="prelude-val">None</span>,
             chat_template: <span class="prelude-val">None</span>,
             tokenizer_json: <span class="prelude-val">None</span>,
             force_cpu: <span class="bool-val">false</span>,
@@ -280,8 +280,8 @@
     </span>}
 
     <span class="doccomment">/// Set the prompt batchsize to use for inference.
-    </span><span class="kw">pub fn </span>with_prompt_batchsize(<span class="kw-2">mut </span><span class="self">self</span>, prompt_batchsize: NonZeroUsize) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.prompt_batchsize = <span class="prelude-val">Some</span>(prompt_batchsize);
+    </span><span class="kw">pub fn </span>with_prompt_chunksize(<span class="kw-2">mut </span><span class="self">self</span>, prompt_chunksize: NonZeroUsize) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.prompt_chunksize = <span class="prelude-val">Some</span>(prompt_chunksize);
         <span class="self">self
     </span>}
 
@@ -371,7 +371,7 @@
 
     <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
         <span class="kw">let </span>config = GGUFSpecificConfig {
-            prompt_batchsize: <span class="self">self</span>.prompt_batchsize,
+            prompt_chunksize: <span class="self">self</span>.prompt_chunksize,
             topology: <span class="self">self</span>.topology,
         };
 

@@ -573,7 +573,17 @@
 <a href="#572" id="572">572</a>
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
-<a href="#575" id="575">575</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -588,6 +598,7 @@
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::get_chat_template;
+<span class="kw">use </span><span class="kw">crate</span>::pipeline::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{ChatTemplate, LocalModelPaths};
 <span class="kw">use </span><span class="kw">crate</span>::prefix_cacher_v2::PrefixCacheManagerV2;
@@ -612,7 +623,7 @@
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::fs;
-<span class="kw">use </span>std::num::NonZeroUsize;
+<span class="kw">use </span>std::num::{NonZero, NonZeroUsize};
 <span class="kw">use </span>std::path::PathBuf;
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::Arc;
@@ -654,7 +665,7 @@
 </span><span class="doccomment">/// Config for a GGML loader.
 </span><span class="kw">pub struct </span>GGMLSpecificConfig {
     <span class="kw">pub </span>gqa: usize,
-    <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    <span class="kw">pub </span>prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
 }
 
@@ -837,6 +848,15 @@
             paged_attn_config = <span class="prelude-val">None</span>;
         }
 
+        <span class="comment">// Apply default prompt size here
+        </span><span class="kw">let </span>prompt_chunksize = <span class="self">self
+            </span>.config
+            .prompt_chunksize
+            .unwrap_or(DEFAULT_PROMPT_CHUNK_SIZE.try_into().unwrap())
+            .get();
+
+        <span class="macro">info!</span>(<span class="string">"Prompt chunk size is {prompt_chunksize}."</span>,);
+
         <span class="macro">info!</span>(
             <span class="string">"Loading model `{}` on {}."</span>,
             <span class="self">self</span>.get_id(),
@@ -953,7 +973,7 @@
                 sliding_window: <span class="prelude-val">None</span>,
                 cache_config: <span class="prelude-val">None</span>,
                 cache_engine: <span class="prelude-val">None</span>,
-                prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
+                prompt_chunksize: <span class="prelude-val">Some</span>(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: <span class="prelude-val">None</span>,
             }),
         })))

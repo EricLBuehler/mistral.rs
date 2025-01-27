@@ -832,7 +832,14 @@
 <a href="#831" id="831">831</a>
 <a href="#832" id="832">832</a>
 <a href="#833" id="833">833</a>
-<a href="#834" id="834">834</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1403,6 +1410,13 @@
             xs.dtype(),
             <span class="self">self</span>.cfg.num_attn_heads,
         )<span class="question-mark">?</span>;
+        <span class="comment">// PagedAttention prompt chunking
+        </span><span class="kw">let </span>attention_mask = attention_mask.filter(|<span class="kw">_</span>| {
+            metadata
+                .as_ref()
+                .map(|(<span class="kw">_</span>, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(<span class="bool-val">true</span>)
+        });
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             xs = layer.forward(

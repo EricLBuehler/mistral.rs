@@ -866,7 +866,14 @@
 <a href="#865" id="865">865</a>
 <a href="#866" id="866">866</a>
 <a href="#867" id="867">867</a>
-<a href="#868" id="868">868</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#868" id="868">868</a>
+<a href="#869" id="869">869</a>
+<a href="#870" id="870">870</a>
+<a href="#871" id="871">871</a>
+<a href="#872" id="872">872</a>
+<a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mistral LLM, https://github.com/mistralai/mistral-src
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
@@ -1473,6 +1480,13 @@
             xs.dtype(),
             <span class="self">self</span>.cfg.num_attn_heads,
         )<span class="question-mark">?</span>;
+        <span class="comment">// PagedAttention prompt chunking
+        </span><span class="kw">let </span>attention_mask = attention_mask.filter(|<span class="kw">_</span>| {
+            metadata
+                .as_ref()
+                .map(|(<span class="kw">_</span>, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(<span class="bool-val">true</span>)
+        });
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             xs = layer.forward(

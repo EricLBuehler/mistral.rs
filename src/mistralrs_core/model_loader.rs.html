@@ -529,7 +529,7 @@
     no_kv_cache: bool,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     use_flash_attn: bool,
-    prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="kw">impl </span>LoaderBuilder {
@@ -539,7 +539,7 @@
             no_kv_cache: <span class="bool-val">false</span>,
             chat_template: <span class="prelude-val">None</span>,
             use_flash_attn: <span class="bool-val">false</span>,
-            prompt_batchsize: <span class="prelude-val">None</span>,
+            prompt_chunksize: <span class="prelude-val">None</span>,
         }
     }
 
@@ -555,8 +555,8 @@
         <span class="self">self</span>.use_flash_attn = use_flash_attn;
         <span class="self">self
     </span>}
-    <span class="kw">pub fn </span>with_prompt_batchsize(<span class="kw-2">mut </span><span class="self">self</span>, prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.prompt_batchsize = prompt_batchsize;
+    <span class="kw">pub fn </span>with_prompt_chunksize(<span class="kw-2">mut </span><span class="self">self</span>, prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.prompt_chunksize = prompt_chunksize;
         <span class="self">self
     </span>}
 
@@ -701,7 +701,7 @@
                 use_flash_attn,
                 chat_template: args.chat_template,
                 no_kv_cache: args.no_kv_cache,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
             };
             (selector, args).try_into()<span class="question-mark">?
         </span>}
@@ -721,7 +721,7 @@
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
@@ -751,7 +751,7 @@
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 organization: Default::default(),
                 write_uqff,
@@ -789,7 +789,7 @@
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 organization: Default::default(),
                 write_uqff,
@@ -825,7 +825,7 @@
                 .map(ToOwned::to_owned)
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
         )
@@ -848,7 +848,7 @@
                 .map(ToOwned::to_owned)
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
         )
@@ -880,7 +880,7 @@
                 .map(ToOwned::to_owned)
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
         )
@@ -904,7 +904,7 @@
         } =&gt; GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
@@ -929,7 +929,7 @@
         } =&gt; GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
@@ -962,7 +962,7 @@
         } =&gt; GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
@@ -997,7 +997,7 @@
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 write_uqff,
                 from_uqff,

@@ -912,7 +912,7 @@
 
     <span class="doccomment">/// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     </span><span class="attr">#[arg(long = <span class="string">"prompt-batchsize"</span>)]
-    </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    </span>prompt_chunksize: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="kw">fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
@@ -926,9 +926,9 @@
     <span class="attr">#[cfg(feature = <span class="string">"flash-attn"</span>)]
     </span><span class="kw">let </span>use_flash_attn = <span class="bool-val">true</span>;
 
-    <span class="kw">let </span>prompt_batchsize = <span class="kw">match </span>args.prompt_batchsize {
+    <span class="kw">let </span>prompt_chunksize = <span class="kw">match </span>args.prompt_chunksize {
         <span class="prelude-val">Some</span>(<span class="number">0</span>) =&gt; {
-            <span class="macro">anyhow::bail!</span>(<span class="string">"`prompt_batchsize` must be a strictly positive integer, got 0."</span>,)
+            <span class="macro">anyhow::bail!</span>(<span class="string">"`prompt_chunksize` must be a strictly positive integer, got 0."</span>,)
         }
         <span class="prelude-val">Some</span>(x) =&gt; <span class="prelude-val">Some</span>(NonZeroUsize::new(x).unwrap()),
         <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
@@ -939,7 +939,7 @@
 
     <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
-        .with_prompt_batchsize(prompt_batchsize)
+        .with_prompt_chunksize(prompt_chunksize)
         .build()<span class="question-mark">?</span>;
     <span class="kw">let </span>model_name = loader.get_id();
 

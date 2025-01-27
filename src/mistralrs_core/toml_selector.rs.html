@@ -1411,14 +1411,14 @@
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     no_kv_cache: bool,
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="kw">pub struct </span>TomlLoaderArgs {
     <span class="kw">pub </span>use_flash_attn: bool,
     <span class="kw">pub </span>chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>no_kv_cache: bool,
-    <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    <span class="kw">pub </span>prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 }
 
 <span class="kw">pub fn </span>get_toml_selected_model_dtype(model: <span class="kw-2">&amp;</span>TomlSelector) -&gt; ModelDType {
@@ -1524,7 +1524,7 @@
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
@@ -1552,7 +1552,7 @@
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 organization: Default::default(),
                 write_uqff,
@@ -1588,7 +1588,7 @@
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 organization: Default::default(),
                 write_uqff,
@@ -1625,7 +1625,7 @@
                 .map(ToOwned::to_owned)
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
         )
@@ -1650,7 +1650,7 @@
                 .map(ToOwned::to_owned)
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
         )
@@ -1681,7 +1681,7 @@
                 .map(ToOwned::to_owned)
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
         )
@@ -1705,7 +1705,7 @@
         } =&gt; GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
@@ -1730,7 +1730,7 @@
         } =&gt; GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
@@ -1763,7 +1763,7 @@
         } =&gt; GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
             args.chat_template,
@@ -1796,7 +1796,7 @@
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
                 write_uqff,
                 from_uqff,
@@ -1821,7 +1821,7 @@
             chat_template: args.chat_template,
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
-            prompt_batchsize: args.prompt_batchsize,
+            prompt_chunksize: args.prompt_chunksize,
         };
         <span class="kw">let </span>loader = loader_from_selected(args.clone(), selector.model)<span class="question-mark">?</span>;
         <span class="kw">let </span>loader = <span class="kw">if let </span><span class="prelude-val">Some</span>(speculative) = selector.speculative {

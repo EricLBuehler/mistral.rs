@@ -911,7 +911,9 @@
 <a href="#910" id="910">910</a>
 <a href="#911" id="911">911</a>
 <a href="#912" id="912">912</a>
-<a href="#913" id="913">913</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#913" id="913">913</a>
+<a href="#914" id="914">914</a>
+<a href="#915" id="915">915</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -1012,7 +1014,7 @@
 </span><span class="doccomment">/// Config specific to loading a vision model.
 </span><span class="kw">pub struct </span>VisionSpecificConfig {
     <span class="kw">pub </span>use_flash_attn: bool,
-    <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    <span class="kw">pub </span>prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
     <span class="kw">pub </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
@@ -1200,7 +1202,8 @@
                     )
                 };
 
-            <span class="kw">let </span>new = <span class="self">self</span>.inner.get_device_layers(
+            <span class="comment">// NOTE: Vision models don't support prompt chunking yet, so just using max seq len
+            </span><span class="kw">let </span>new = <span class="self">self</span>.inner.get_device_layers(
                 <span class="kw-2">&amp;</span>config,
                 <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
                 layer_sizes_in_bytes,
@@ -1209,6 +1212,7 @@
                 <span class="kw-2">&amp;</span>devices,
                 dtype,
                 <span class="kw-2">&amp;</span>params,
+                params.max_seq_len(),
                 paged_attn_config.as_ref(),
             )<span class="question-mark">?</span>;
             mapper = DeviceMapSetting::Map(new);
@@ -1479,7 +1483,7 @@
                 sliding_window,
                 cache_config,
                 cache_engine,
-                prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
+                prompt_chunksize: <span class="self">self</span>.config.prompt_chunksize,
                 model_metadata: <span class="prelude-val">Some</span>(model_metadata),
             }),
             processor,

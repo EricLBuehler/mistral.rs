@@ -1042,7 +1042,19 @@
 <a href="#1041" id="1041">1041</a>
 <a href="#1042" id="1042">1042</a>
 <a href="#1043" id="1043">1043</a>
-<a href="#1044" id="1044">1044</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1044" id="1044">1044</a>
+<a href="#1045" id="1045">1045</a>
+<a href="#1046" id="1046">1046</a>
+<a href="#1047" id="1047">1047</a>
+<a href="#1048" id="1048">1048</a>
+<a href="#1049" id="1049">1049</a>
+<a href="#1050" id="1050">1050</a>
+<a href="#1051" id="1051">1051</a>
+<a href="#1052" id="1052">1052</a>
+<a href="#1053" id="1053">1053</a>
+<a href="#1054" id="1054">1054</a>
+<a href="#1055" id="1055">1055</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<span class="kw">use </span><span class="kw">super</span>::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
@@ -1090,7 +1102,7 @@
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::borrow::Cow;
 <span class="kw">use </span>std::fs;
-<span class="kw">use </span>std::num::NonZeroUsize;
+<span class="kw">use </span>std::num::{NonZero, NonZeroUsize};
 <span class="kw">use </span>std::path::{Path, PathBuf};
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::{Arc, RwLock};
@@ -1153,7 +1165,7 @@
 </span><span class="doccomment">/// Config specific to loading a normal model.
 </span><span class="kw">pub struct </span>NormalSpecificConfig {
     <span class="kw">pub </span>use_flash_attn: bool,
-    <span class="kw">pub </span>prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    <span class="kw">pub </span>prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
     <span class="kw">pub </span>organization: IsqOrganization,
     <span class="kw">pub </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
@@ -1325,6 +1337,15 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
         <span class="kw">let </span>config = std::fs::read_to_string(paths.get_config_filename())<span class="question-mark">?</span>;
 
+        <span class="comment">// Apply default prompt size here
+        </span><span class="kw">let </span>prompt_chunksize = <span class="self">self
+            </span>.config
+            .prompt_chunksize
+            .unwrap_or(DEFAULT_PROMPT_CHUNK_SIZE.try_into().unwrap())
+            .get();
+
+        <span class="macro">info!</span>(<span class="string">"Prompt chunk size is {prompt_chunksize}."</span>,);
+
         <span class="comment">// If auto, convert to Map
         </span><span class="kw">if let </span>DeviceMapSetting::Auto(params) = mapper.clone() {
             <span class="kw">let </span>devices = device_map::get_all_similar_devices(device)<span class="question-mark">?</span>;
@@ -1412,6 +1433,7 @@
                 <span class="kw-2">&amp;</span>devices,
                 dtype,
                 <span class="kw-2">&amp;</span>params,
+                prompt_chunksize,
                 paged_attn_config.as_ref(),
             )<span class="question-mark">?</span>;
             mapper = DeviceMapSetting::Map(new);
@@ -1718,7 +1740,7 @@
                 sliding_window,
                 cache_config,
                 cache_engine,
-                prompt_batchsize: <span class="self">self</span>.config.prompt_batchsize,
+                prompt_chunksize: <span class="prelude-val">Some</span>(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: <span class="prelude-val">Some</span>(model_metadata),
             }),
             topology: <span class="self">self</span>.config.topology.clone(),

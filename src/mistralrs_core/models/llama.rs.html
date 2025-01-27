@@ -841,7 +841,14 @@
 <a href="#840" id="840">840</a>
 <a href="#841" id="841">841</a>
 <a href="#842" id="842">842</a>
-<a href="#843" id="843">843</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#843" id="843">843</a>
+<a href="#844" id="844">844</a>
+<a href="#845" id="845">845</a>
+<a href="#846" id="846">846</a>
+<a href="#847" id="847">847</a>
+<a href="#848" id="848">848</a>
+<a href="#849" id="849">849</a>
+<a href="#850" id="850">850</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{embedding, Embedding, Module, VarBuilder};
@@ -1425,6 +1432,13 @@
             x.dtype(),
             <span class="self">self</span>.blocks[<span class="number">0</span>].attn.num_attention_heads,
         )<span class="question-mark">?</span>;
+        <span class="comment">// PagedAttention prompt chunking
+        </span><span class="kw">let </span>mask = mask.filter(|<span class="kw">_</span>| {
+            metadata
+                .as_ref()
+                .map(|(<span class="kw">_</span>, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(<span class="bool-val">true</span>)
+        });
         <span class="kw">for </span>(block_idx, block) <span class="kw">in </span><span class="self">self</span>.blocks.iter().enumerate() {
             x = <span class="self">self</span>.mapper.map(x, block_idx)<span class="question-mark">?</span>;
             x = block.forward(

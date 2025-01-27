@@ -792,7 +792,25 @@
 <a href="#791" id="791">791</a>
 <a href="#792" id="792">792</a>
 <a href="#793" id="793">793</a>
-<a href="#794" id="794">794</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
 <span class="kw">mod </span>normal_loaders;
 <span class="kw">mod </span>vision_loaders;
 
@@ -830,7 +848,9 @@
 
 <span class="kw">use crate</span>::{
     lora::LoraConfig,
-    paged_attention::{calculate_cache_config, ModelConfigLike},
+    paged_attention::{
+        calculate_cache_config, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+    },
     utils::debug::DeviceRepr,
     xlora_models::XLoraConfig,
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryGpuConfig, MemoryUsage,
@@ -1177,6 +1197,14 @@
     },
 }
 
+<span class="kw">impl </span>AutoDeviceMapParams {
+    <span class="kw">pub fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+        <span class="kw">match </span><span class="self">self </span>{
+            <span class="self">Self</span>::Text { max_seq_len, .. } | <span class="self">Self</span>::Vision { max_seq_len, .. } =&gt; <span class="kw-2">*</span>max_seq_len,
+        }
+    }
+}
+
 <span class="kw">impl </span>Display <span class="kw">for </span>AutoDeviceMapParams {
     <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
         <span class="kw">match </span><span class="self">self </span>{
@@ -1278,6 +1306,7 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
     <span class="doccomment">/// weight_pack_factor only applies to quantized weights.
     </span><span class="kw">fn </span>non_mapped_size_in_bytes(
@@ -1310,10 +1339,12 @@
         devices: <span class="kw-2">&amp;</span>[Device],
         dtype: DType,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        prompt_chunksize: usize,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;DeviceMapMetadata&gt; {
         <span class="kw">let </span>mapped_max_act_size_in_bytes =
-            <span class="self">self</span>.mapped_max_act_size_elems(config, params)<span class="question-mark">? </span>* dtype.size_in_bytes();
+            <span class="self">self</span>.mapped_max_act_size_elems(config, params, prompt_chunksize)<span class="question-mark">?
+                </span>* dtype.size_in_bytes();
         <span class="kw">let </span>non_mapped_max_act_size_in_bytes =
             <span class="self">self</span>.non_mapped_max_act_size_elems(config, params)<span class="question-mark">? </span>* dtype.size_in_bytes();
 
@@ -1334,7 +1365,11 @@
                 <span class="kw">let </span>cache_config = calculate_cache_config(
                     MemoryGpuConfig::ContextSize(max_seq_len),
                     <span class="number">0</span>,
-                    <span class="prelude-val">Some</span>(paged_attn_config.block_size.unwrap_or(<span class="number">32</span>)),
+                    <span class="prelude-val">Some</span>(
+                        paged_attn_config
+                            .block_size
+                            .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE),
+                    ),
                     dtype,
                     <span class="kw-2">&amp;*</span>model_cfg,
                     <span class="kw-2">&amp;</span>devices[<span class="number">0</span>],
@@ -1520,6 +1555,7 @@
                 devices,
                 dtype,
                 params,
+                prompt_chunksize,
                 <span class="prelude-val">None</span>,
             );
         }

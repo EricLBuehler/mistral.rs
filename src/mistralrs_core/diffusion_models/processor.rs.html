@@ -167,10 +167,10 @@
         _return_raw_logits: bool,
         _other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         _paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
-        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
         _mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = <span class="prelude-ty">Result</span>&lt;InputProcessorOutput&gt;&gt;&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>make_value = <span class="kw">if </span>prompt_batchsize.is_some() {
+        <span class="kw">let </span><span class="kw-2">mut </span>make_value = <span class="kw">if </span>prompt_chunksize.is_some() {
             <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
                 <span class="string">"Prompt batching is unsupported for diffusion models"</span>,
             ))));

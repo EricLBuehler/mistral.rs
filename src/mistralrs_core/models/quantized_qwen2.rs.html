@@ -417,7 +417,13 @@
 <a href="#416" id="416">416</a>
 <a href="#417" id="417">417</a>
 <a href="#418" id="418">418</a>
-<a href="#419" id="419">419</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::sync::Arc;
@@ -802,6 +808,12 @@
             <span class="self">self</span>.dtype,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
+        <span class="kw">let </span>mask = mask.filter(|<span class="kw">_</span>| {
+            metadata
+                .as_ref()
+                .map(|(<span class="kw">_</span>, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(<span class="bool-val">true</span>)
+        });
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>mapper) = <span class="self">self</span>.mapper {
                 layer_in = mapper.map(layer_in, i)<span class="question-mark">?</span>;

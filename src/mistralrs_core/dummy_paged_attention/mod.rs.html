@@ -66,7 +66,9 @@
 <a href="#65" id="65">65</a>
 <a href="#66" id="66">66</a>
 <a href="#67" id="67">67</a>
-<a href="#68" id="68">68</a></pre></div><pre class="rust"><code><span class="doccomment">/// The higher-level manager of the blocks allocated. Operations performed by the block engine do
+<a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
+<a href="#70" id="70">70</a></pre></div><pre class="rust"><code><span class="doccomment">/// The higher-level manager of the blocks allocated. Operations performed by the block engine do
 /// not directly change memory.
 </span><span class="kw">mod </span>block_engine;
 <span class="kw">mod </span>block_engine_sequence;
@@ -88,6 +90,8 @@
 <span class="kw">pub use </span>scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
 };
+
+<span class="kw">pub const </span>DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = <span class="number">32</span>;
 
 <span class="doccomment">/// All memory counts in MB. Default for block size is 32.
 </span><span class="attr">#[derive(Clone, Copy)]

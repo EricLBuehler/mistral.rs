@@ -385,7 +385,13 @@
 <a href="#384" id="384">384</a>
 <a href="#385" id="385">385</a>
 <a href="#386" id="386">386</a>
-<a href="#387" id="387">387</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
@@ -749,6 +755,12 @@
             <span class="self">self</span>.dtype,
             <span class="self">self</span>.layers[<span class="number">0</span>].n_head,
         )<span class="question-mark">?</span>;
+        <span class="kw">let </span>mask = mask.filter(|<span class="kw">_</span>| {
+            metadata
+                .as_ref()
+                .map(|(<span class="kw">_</span>, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(<span class="bool-val">true</span>)
+        });
         <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             xs = <span class="self">self</span>.mapper.map(xs, i)<span class="question-mark">?</span>;
             <span class="kw">let </span>residual = <span class="kw-2">&amp;</span>xs;

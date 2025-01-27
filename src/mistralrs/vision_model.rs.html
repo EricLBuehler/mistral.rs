@@ -233,7 +233,7 @@
 
     <span class="comment">// Model running
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) loader_type: VisionLoaderType,
     <span class="kw">pub</span>(<span class="kw">crate</span>) dtype: ModelDType,
@@ -257,7 +257,7 @@
             topology: <span class="prelude-val">None</span>,
             write_uqff: <span class="prelude-val">None</span>,
             from_uqff: <span class="prelude-val">None</span>,
-            prompt_batchsize: <span class="prelude-val">None</span>,
+            prompt_chunksize: <span class="prelude-val">None</span>,
             chat_template: <span class="prelude-val">None</span>,
             tokenizer_json: <span class="prelude-val">None</span>,
             max_edge: <span class="prelude-val">None</span>,
@@ -275,8 +275,8 @@
     }
 
     <span class="doccomment">/// Set the prompt batchsize to use for inference.
-    </span><span class="kw">pub fn </span>with_prompt_batchsize(<span class="kw-2">mut </span><span class="self">self</span>, prompt_batchsize: NonZeroUsize) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.prompt_batchsize = <span class="prelude-val">Some</span>(prompt_batchsize);
+    </span><span class="kw">pub fn </span>with_prompt_chunksize(<span class="kw-2">mut </span><span class="self">self</span>, prompt_chunksize: NonZeroUsize) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.prompt_chunksize = <span class="prelude-val">Some</span>(prompt_chunksize);
         <span class="self">self
     </span>}
 
@@ -381,7 +381,7 @@
     <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
         <span class="kw">let </span>config = VisionSpecificConfig {
             use_flash_attn: <span class="self">self</span>.use_flash_attn,
-            prompt_batchsize: <span class="self">self</span>.prompt_batchsize,
+            prompt_chunksize: <span class="self">self</span>.prompt_chunksize,
             topology: <span class="self">self</span>.topology,
             write_uqff: <span class="self">self</span>.write_uqff,
             from_uqff: <span class="self">self</span>.from_uqff,

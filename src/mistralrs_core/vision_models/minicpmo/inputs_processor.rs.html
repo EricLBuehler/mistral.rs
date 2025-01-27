@@ -885,7 +885,7 @@
         return_raw_logits: bool,
         other_config: <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt;,
         <span class="kw-2">mut </span>paged_attn_metadata: <span class="prelude-ty">Option</span>&lt;PagedAttentionMeta&lt;<span class="lifetime">'_</span>&gt;&gt;,
-        prompt_batchsize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+        prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
         mapper: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt;,
     ) -&gt; Box&lt;<span class="kw">dyn </span>Iterator&lt;Item = anyhow::Result&lt;InputProcessorOutput&gt;&gt;&gt; {
         <span class="kw">if </span>is_xlora {
@@ -899,8 +899,8 @@
             ))));
         }
         <span class="comment">// TODO(EricLBuehler): support this? Would require some handling of image tokens.
-        </span><span class="kw">if </span>prompt_batchsize.is_some() {
-            <span class="macro">warn!</span>(<span class="string">"`prompt_batchsize` is set. MiniCpm-O does not support prompt batching."</span>);
+        </span><span class="kw">if </span>prompt_chunksize.is_some() {
+            <span class="macro">warn!</span>(<span class="string">"`prompt_chunksize` is set. MiniCpm-O does not support prompt batching."</span>);
         }
         <span class="kw">let </span><span class="prelude-val">Some</span>(tokenizer) = tokenizer <span class="kw">else </span>{
             <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
