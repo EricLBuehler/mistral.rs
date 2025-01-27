@@ -430,7 +430,12 @@ impl MoeGate {
     fn new(cfg: &DeepSeekV3Config, vb: VarBuilder, n_routed_experts: usize) -> Result<Self> {
         let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
         let e_score_correction_bias = if matches!(cfg.topk_method, TopkMethod::NoAuxTc) {
-            Some(vb.get(n_routed_experts, "e_score_correction_bias")?)
+            Some(vb.get_with_hints_dtype(
+                n_routed_experts,
+                "e_score_correction_bias",
+                Default::default(),
+                DType::F32,
+            )?)
         } else {
             None
         };
