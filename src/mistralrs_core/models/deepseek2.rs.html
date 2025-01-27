@@ -1121,7 +1121,23 @@
 <a href="#1120" id="1120">1120</a>
 <a href="#1121" id="1121">1121</a>
 <a href="#1122" id="1122">1122</a>
-<a href="#1123" id="1123">1123</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1123" id="1123">1123</a>
+<a href="#1124" id="1124">1124</a>
+<a href="#1125" id="1125">1125</a>
+<a href="#1126" id="1126">1126</a>
+<a href="#1127" id="1127">1127</a>
+<a href="#1128" id="1128">1128</a>
+<a href="#1129" id="1129">1129</a>
+<a href="#1130" id="1130">1130</a>
+<a href="#1131" id="1131">1131</a>
+<a href="#1132" id="1132">1132</a>
+<a href="#1133" id="1133">1133</a>
+<a href="#1134" id="1134">1134</a>
+<a href="#1135" id="1135">1135</a>
+<a href="#1136" id="1136">1136</a>
+<a href="#1137" id="1137">1137</a>
+<a href="#1138" id="1138">1138</a>
+<a href="#1139" id="1139">1139</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1139,7 +1155,7 @@
         DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
-    ops::{SplitOp, TopKLastDimOp, TopKOutput},
+    ops::{NonZeroOp, SplitOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -1429,32 +1445,44 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_out = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
             <span class="prelude-val">Some</span>(paged_attn) =&gt; <span class="kw">match </span>metadata {
-                <span class="prelude-val">Some</span>(((key_cache, value_cache), input_metadata)) =&gt; paged_attn.forward(
-                    <span class="kw-2">&amp;</span>q,
-                    <span class="kw-2">&amp;</span>k,
-                    <span class="kw-2">&amp;</span>v,
-                    attention_mask,
-                    <span class="prelude-val">Some</span>(key_cache),
-                    <span class="prelude-val">Some</span>(value_cache),
-                    input_metadata,
-                    <span class="prelude-val">None</span>,
-                )<span class="question-mark">?</span>,
+                <span class="prelude-val">Some</span>(((key_cache, value_cache), input_metadata)) =&gt; {
+                    <span class="kw">let </span>v = v
+                        .pad_with_zeros(D::Minus1, <span class="number">0</span>, <span class="self">self</span>.q_head_dim - <span class="self">self</span>.cfg.v_head_dim)<span class="question-mark">?
+                        </span>.contiguous()<span class="question-mark">?</span>;
+                    paged_attn
+                        .forward(
+                            <span class="kw-2">&amp;</span>q,
+                            <span class="kw-2">&amp;</span>k,
+                            <span class="kw-2">&amp;</span>v,
+                            attention_mask,
+                            <span class="prelude-val">Some</span>(key_cache),
+                            <span class="prelude-val">Some</span>(value_cache),
+                            input_metadata,
+                            <span class="prelude-val">None</span>,
+                        )<span class="question-mark">?
+                        </span>.narrow(D::Minus1, <span class="number">0</span>, <span class="self">self</span>.cfg.v_head_dim)<span class="question-mark">?
+                </span>}
                 <span class="prelude-val">None </span>=&gt; {
                     <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
                     // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
                     </span><span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata::dummy(q.device())<span class="question-mark">?</span>;
                     <span class="comment">// Sanity check.
                     </span><span class="macro">assert!</span>(attention_mask.is_some());
-                    paged_attn.forward(
-                        <span class="kw-2">&amp;</span>q,
-                        <span class="kw-2">&amp;</span>k,
-                        <span class="kw-2">&amp;</span>v,
-                        attention_mask,
-                        <span class="prelude-val">None</span>,
-                        <span class="prelude-val">None</span>,
-                        <span class="kw-2">&amp;mut </span>input_metadata,
-                        <span class="prelude-val">None</span>,
-                    )<span class="question-mark">?
+                    <span class="kw">let </span>v = v
+                        .pad_with_zeros(D::Minus1, <span class="number">0</span>, <span class="self">self</span>.q_head_dim - <span class="self">self</span>.cfg.v_head_dim)<span class="question-mark">?
+                        </span>.contiguous()<span class="question-mark">?</span>;
+                    paged_attn
+                        .forward(
+                            <span class="kw-2">&amp;</span>q,
+                            <span class="kw-2">&amp;</span>k,
+                            <span class="kw-2">&amp;</span>v,
+                            attention_mask,
+                            <span class="prelude-val">None</span>,
+                            <span class="prelude-val">None</span>,
+                            <span class="kw-2">&amp;mut </span>input_metadata,
+                            <span class="prelude-val">None</span>,
+                        )<span class="question-mark">?
+                        </span>.narrow(D::Minus1, <span class="number">0</span>, <span class="self">self</span>.cfg.v_head_dim)<span class="question-mark">?
                 </span>}
             },
             <span class="prelude-val">None </span>=&gt; {
@@ -1664,50 +1692,53 @@
         })
     }
 
-    <span class="kw">fn </span>moe_infer(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, topk_ids: <span class="kw-2">&amp;</span>Tensor, topk_weight: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>cnts: Tensor = Tensor::zeros(
-            (topk_ids.dim(<span class="number">0</span>)<span class="question-mark">?</span>, <span class="self">self</span>.experts.len()),
-            DType::F32,
-            topk_ids.device(),
-        )<span class="question-mark">?</span>;
-        cnts = cnts
-            .scatter_add(topk_ids, <span class="kw-2">&amp;</span>topk_ids.ones_like()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>, <span class="number">1</span>)<span class="question-mark">?
-            </span>.to_dtype(topk_ids.dtype())<span class="question-mark">?</span>;
-        <span class="kw">let </span>tokens_per_expert = cnts.sum(<span class="number">0</span>)<span class="question-mark">?</span>.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>;
-        <span class="kw">let </span>idxs = topk_ids.flatten_all()<span class="question-mark">?</span>.arg_sort_last_dim(<span class="bool-val">true</span>)<span class="question-mark">?</span>;
-        <span class="comment">// NOTE: must cast to f32 and then back because the CUDA backend's affine impl will make the 1/topk_ids.dim(1) -&gt; 0
-        </span><span class="kw">let </span>sorted_tokens = xs.index_select(
-            <span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span>idxs.to_dtype(DType::F32)<span class="question-mark">? </span>/ topk_ids.dim(<span class="number">1</span>)<span class="question-mark">? </span><span class="kw">as </span>f64)<span class="question-mark">?</span>.to_dtype(idxs.dtype())<span class="question-mark">?</span>,
-            <span class="number">0</span>,
-        )<span class="question-mark">?</span>;
+    <span class="kw">fn </span>bincount(values: <span class="kw-2">&amp;</span>[u32], minlength: u32) -&gt; Vec&lt;u32&gt; {
+        <span class="comment">// Find the maximum value in `values` (or zero if empty)
+        </span><span class="kw">let </span>max_val = values.iter().copied().max().unwrap_or(<span class="number">0</span>);
 
-        <span class="kw">let </span><span class="kw-2">mut </span>outputs = Vec::with_capacity(tokens_per_expert.len());
-        <span class="kw">let </span><span class="kw-2">mut </span>start_idx = <span class="number">0</span>;
-        <span class="kw">for </span>(i, num_tokens) <span class="kw">in </span>tokens_per_expert.into_iter().enumerate() {
-            <span class="kw">let </span>end_idx = start_idx + num_tokens;
-            <span class="kw">if </span>num_tokens == <span class="number">0 </span>{
-                <span class="kw">continue</span>;
-            }
-            <span class="kw">let </span>expert = <span class="kw-2">&amp;</span><span class="self">self</span>.experts[i];
-            <span class="kw">let </span>tokens_for_this_expert = sorted_tokens.i(start_idx <span class="kw">as </span>usize..end_idx <span class="kw">as </span>usize)<span class="question-mark">?</span>;
-            <span class="kw">let </span>expert_out = expert.forward(<span class="kw-2">&amp;</span>tokens_for_this_expert)<span class="question-mark">?</span>;
-            outputs.push(expert_out);
-            start_idx = end_idx;
+        <span class="comment">// The final size of the bin counts must be at least `minlength`
+        // and large enough to include the largest value in `values`.
+        </span><span class="kw">let </span>result_len = (max_val + <span class="number">1</span>).max(minlength);
+
+        <span class="kw">let </span><span class="kw-2">mut </span>counts = <span class="macro">vec!</span>[<span class="number">0</span>; result_len <span class="kw">as </span>usize];
+
+        <span class="comment">// Increment the bin for each value
+        </span><span class="kw">for </span><span class="kw-2">&amp;</span>val <span class="kw">in </span>values {
+            counts[val <span class="kw">as </span>usize] += <span class="number">1</span>;
         }
 
-        <span class="kw">let </span>outs = Tensor::cat(<span class="kw-2">&amp;</span>outputs, <span class="number">0</span>)<span class="question-mark">?</span>;
+        counts
+    }
 
-        <span class="kw">let </span><span class="kw-2">mut </span>new_x = outs.zeros_like()<span class="question-mark">?</span>;
-        new_x = new_x.index_add(<span class="kw-2">&amp;</span>idxs, <span class="kw-2">&amp;</span>outs, <span class="number">0</span>)<span class="question-mark">?</span>;
+    <span class="kw">fn </span>moe_infer(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, topk_ids: <span class="kw-2">&amp;</span>Tensor, topk_weight: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>y = xs.zeros_like()<span class="question-mark">?</span>;
+        <span class="kw">let </span>counts = <span class="self">Self</span>::bincount(
+            <span class="kw-2">&amp;</span>topk_ids.flatten_all()<span class="question-mark">?</span>.to_vec1::&lt;u32&gt;()<span class="question-mark">?</span>,
+            <span class="self">self</span>.experts.len() <span class="kw">as </span>u32,
+        );
+        <span class="kw">for </span>(i, expert) <span class="kw">in </span><span class="self">self</span>.experts.iter().enumerate() {
+            <span class="kw">if </span>counts[i] == <span class="number">0 </span>{
+                <span class="kw">continue</span>;
+            }
+            <span class="kw">let </span>idx_top = topk_ids.eq(i <span class="kw">as </span>f64)<span class="question-mark">?</span>.nonzero()<span class="question-mark">?</span>.t()<span class="question-mark">?</span>;
+            <span class="kw">let </span>idx = <span class="kw-2">&amp;</span>idx_top.i(<span class="number">0</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+            <span class="kw">let </span>top = <span class="kw-2">&amp;</span>idx_top.i(<span class="number">1</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>hole = new_x.elem_count() / topk_ids.elem_count();
+            y = y.index_add(
+                idx,
+                <span class="kw-2">&amp;</span>expert.forward(<span class="kw-2">&amp;</span>xs.index_select(idx, <span class="number">0</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>.broadcast_mul(
+                    <span class="kw-2">&amp;</span>topk_weight
+                        .index_select(idx, <span class="number">0</span>)<span class="question-mark">?
+                        </span>.gather(<span class="kw-2">&amp;</span>top.unsqueeze(<span class="number">1</span>)<span class="question-mark">?</span>, <span class="number">1</span>)<span class="question-mark">?
+                        </span>.squeeze(<span class="number">1</span>)<span class="question-mark">?
+                        </span>.unsqueeze(D::Minus1)<span class="question-mark">?
+                        </span>.to_dtype(xs.dtype())<span class="question-mark">?</span>,
+                )<span class="question-mark">?</span>,
+                <span class="number">0</span>,
+            )<span class="question-mark">?</span>;
+        }
 
-        new_x
-            .reshape([topk_ids.dims().to_vec(), <span class="macro">vec!</span>[hole]].concat())<span class="question-mark">?
-            </span>.to_dtype(topk_weight.dtype())<span class="question-mark">?
-            </span>.broadcast_mul(<span class="kw-2">&amp;</span>topk_weight.unsqueeze(D::Minus1)<span class="question-mark">?</span>)<span class="question-mark">?
-            </span>.sum(<span class="number">1</span>)<span class="question-mark">?
-            </span>.to_dtype(new_x.dtype())
+        <span class="prelude-val">Ok</span>(y)
     }
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1907,11 +1938,6 @@
                 )<span class="question-mark">?</span>),
             );
         }
-        <span class="kw">if </span>cfg.q_head_dim() != cfg.v_head_dim
-            &amp;&amp; <span class="macro">matches!</span>(attention_mechanism, AttentionImplementation::PagedAttention)
-        {
-            <span class="macro">candle_core::bail!</span>(<span class="string">"Head sizes do not match (q/k: {}, v: {}), PagedAttention is incompatible with this model. Please disable PagedAttention."</span>, cfg.q_head_dim(), cfg.v_head_dim);
-        }
 
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
@@ -1971,7 +1997,13 @@
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: <span class="prelude-val">None</span>,
                 k_head_dim: <span class="prelude-val">Some</span>(cfg.q_head_dim()),
-                v_head_dim: <span class="prelude-val">Some</span>(cfg.v_head_dim),
+                v_head_dim: <span class="prelude-val">Some</span>(
+                    <span class="kw">if </span><span class="macro">matches!</span>(attention_mechanism, AttentionImplementation::PagedAttention) {
+                        cfg.q_head_dim()
+                    } <span class="kw">else </span>{
+                        cfg.v_head_dim
+                    },
+                ),
             },
             mapper,
         })
