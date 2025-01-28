@@ -412,11 +412,7 @@
 <a href="#411" id="411">411</a>
 <a href="#412" id="412">412</a>
 <a href="#413" id="413">413</a>
-<a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a>
-<a href="#416" id="416">416</a>
-<a href="#417" id="417">417</a>
-<a href="#418" id="418">418</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
+<a href="#414" id="414">414</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
 <span class="kw">use </span>std::{
     collections::HashMap,
     error::Error,
@@ -467,12 +463,12 @@
 <span class="kw">impl </span>futures::Stream <span class="kw">for </span>Streamer {
     <span class="kw">type </span>Item = <span class="prelude-ty">Result</span>&lt;Event, axum::Error&gt;;
 
-    <span class="kw">fn </span>poll_next(<span class="kw-2">mut </span><span class="self">self</span>: Pin&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt;, _cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;) -&gt; Poll&lt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt;&gt; {
+    <span class="kw">fn </span>poll_next(<span class="kw-2">mut </span><span class="self">self</span>: Pin&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt;, cx: <span class="kw-2">&amp;mut </span>Context&lt;<span class="lifetime">'_</span>&gt;) -&gt; Poll&lt;<span class="prelude-ty">Option</span>&lt;<span class="self">Self</span>::Item&gt;&gt; {
         <span class="kw">if </span><span class="self">self</span>.is_done {
             <span class="kw">return </span>Poll::Ready(<span class="prelude-val">None</span>);
         }
-        <span class="kw">match </span><span class="self">self</span>.rx.try_recv() {
-            <span class="prelude-val">Ok</span>(resp) =&gt; <span class="kw">match </span>resp {
+        <span class="kw">match </span><span class="self">self</span>.rx.poll_recv(cx) {
+            Poll::Ready(<span class="prelude-val">Some</span>(resp)) =&gt; <span class="kw">match </span>resp {
                 Response::ModelError(msg, <span class="kw">_</span>) =&gt; {
                     MistralRs::maybe_log_error(
                         <span class="self">self</span>.state.clone(),
@@ -502,7 +498,7 @@
                 Response::ImageGeneration(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
                 Response::Raw { .. } =&gt; <span class="macro">unreachable!</span>(),
             },
-            <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; Poll::Pending,
+            Poll::Pending | Poll::Ready(<span class="prelude-val">None</span>) =&gt; Poll::Pending,
         }
     }
 }
@@ -794,11 +790,7 @@
         };
 
         ChatCompletionResponder::Sse(
-            Sse::new(streamer).keep_alive(
-                KeepAlive::new()
-                    .interval(Duration::from_millis(<span class="number">10</span>))
-                    .text(<span class="string">"keep-alive-text"</span>),
-            ),
+            Sse::new(streamer).keep_alive(KeepAlive::new().interval(Duration::from_secs(<span class="number">10</span>))),
         )
     } <span class="kw">else </span>{
         <span class="kw">let </span>response = <span class="kw">match </span>rx.recv().<span class="kw">await </span>{
