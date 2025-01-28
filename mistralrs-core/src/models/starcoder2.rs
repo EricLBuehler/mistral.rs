@@ -265,7 +265,8 @@ impl Attention {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
-                    None,
+                    &self.sdpa_params,
+                    Some(flash_params),
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -281,7 +282,8 @@ impl Attention {
                         None,
                         None,
                         &mut input_metadata,
-                        None,
+                        &self.sdpa_params,
+                        Some(flash_params),
                     )?
                 }
             },
@@ -457,15 +459,9 @@ impl Model {
                 .clone();
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
-                    cfg.num_attention_heads,
-                    head_dim,
-                    (1.0 / (head_dim as f64).sqrt()) as f32,
-                    Some(cfg.num_key_value_heads),
-                    cfg.sliding_window,
-                    device,
-                    None,
-                )?),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
             };
             layers.push(DecoderLayer::new(
                 rotary_emb.clone(),

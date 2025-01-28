@@ -323,7 +323,8 @@ impl Attention {
                             Some(key_cache),
                             Some(value_cache),
                             input_metadata,
-                            None,
+                            &self.sdpa_params,
+                            Some(flash_params),
                         )?
                         .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
                 }
@@ -345,7 +346,8 @@ impl Attention {
                             None,
                             None,
                             &mut input_metadata,
-                            None,
+                            &self.sdpa_params,
+                            Some(flash_params),
                         )?
                         .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
                 }
@@ -853,16 +855,8 @@ impl DeepSeekV3 {
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(
-                    PagedAttention::new(
-                        cfg.num_attention_heads,
-                        cfg.v_head_dim,
-                        cfg.softmax_scale(),
-                        Some(cfg.num_attention_heads),
-                        None,
-                        device,
-                        None,
-                    )
-                    .expect("Failed to create PagedAttention"),
+                    PagedAttention::new(cfg.v_head_dim, device, None)
+                        .expect("Failed to create PagedAttention"),
                 ),
             };
             let layer = DecoderLayer::new(

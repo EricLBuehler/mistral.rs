@@ -113,6 +113,7 @@ impl LayerWeights {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    &self.sdpa_params,
                     None,
                 )?
             }
@@ -281,15 +282,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let attn_output = QLinear::new(&mut ct, &format!("{prefix}.attn_output"), device)?;
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
-                    head_count,
-                    head_dim,
-                    (1.0 / (head_dim as f64).sqrt()) as f32,
-                    Some(head_count_kv),
-                    None,
-                    device,
-                    None,
-                )?),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
             };
             let QMatMul::QTensor(q_w) = attn_q.inner_ref().clone() else {
                 unreachable!()

@@ -96,7 +96,8 @@ impl CausalSelfAttention {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
-                    None,
+                    &self.sdpa_params,
+                    Some(flash_params),
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -112,7 +113,8 @@ impl CausalSelfAttention {
                         None,
                         None,
                         &mut input_metadata,
-                        None,
+                        &self.sdpa_params,
+                        Some(flash_params),
                     )?
                 }
             },
@@ -295,6 +297,7 @@ struct Block {
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
     mlp: Box<dyn MlpLayer>,
+    rope_parameter: (Tensor, Tensor),
 }
 
 impl Block {
@@ -305,7 +308,6 @@ impl Block {
         seqlen_offsets: &[usize],
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
-        rope_parameters: (&Tensor, &Tensor),
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -317,7 +319,7 @@ impl Block {
             seqlen_offsets,
             block_idx,
             kv_cache,
-            rope_parameters,
+            (&self.rope_parameter.0, &self.rope_parameter.1),
             metadata,
             flash_params,
         )? + residual)?;
@@ -333,6 +335,7 @@ impl Block {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        rope_parameter: (Tensor, Tensor),
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
@@ -355,6 +358,7 @@ impl Block {
             attn,
             rms_2,
             mlp: Box::new(mlp),
+            rope_parameter,
         })
     }
 }
@@ -367,7 +371,6 @@ pub struct Llama {
     kv_cache: crate::pipeline::EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    rope_parameters: (Tensor, Tensor),
     cfg: ModelConfigMetadata,
 }
 
@@ -420,39 +423,38 @@ impl Llama {
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
                 .into_iter()
                 .map(|i| {
+                    let vb_m = vb.pp(format!("model.layers.{i}"));
+                    let device = mapper
+                        .device_for(i, false)
+                        .unwrap_or(&normal_loading_metadata.real_device);
+                    let rope_parameters = OrdinaryRoPE::create_parameters(
+                        head_dim,
+                        cfg.max_position_embeddings,
+                        cfg.rope_theta,
+                        vb_m.dtype(),
+                        device,
+                    )
+                    .unwrap();
                     let paged_attn = match &attention_mechanism {
                         AttentionImplementation::Eager => None,
                         AttentionImplementation::PagedAttention => Some(
-                            PagedAttention::new(
-                                cfg.num_attention_heads,
-                                head_dim,
-                                (1.0 / (head_dim as f64).sqrt()) as f32,
-                                Some(cfg.num_key_value_heads),
-                                None,
-                                &normal_loading_metadata.real_device,
-                                None,
-                            )
-                            .expect("Failed to create PagedAttention"),
+                            PagedAttention::new(head_dim, device, None)
+                                .expect("Failed to create PagedAttention"),
                         ),
                     };
                     Block::load(
-                        vb.pp(format!("model.layers.{i}")),
+                        vb_m,
                         cfg,
                         &*mapper,
                         i,
                         normal_loading_metadata.loading_isq,
                         paged_attn,
+                        rope_parameters,
                     )
                     .expect("Failed to load block.")
                 })
                 .collect();
-        let rope_parameters = OrdinaryRoPE::create_parameters(
-            head_dim,
-            cfg.max_position_embeddings,
-            cfg.rope_theta,
-            vb.dtype(),
-            &normal_loading_metadata.real_device,
-        )?;
+
         Ok(Self {
             wte,
             blocks,
@@ -464,7 +466,6 @@ impl Llama {
             )),
             device: normal_loading_metadata.real_device,
             mapper,
-            rope_parameters,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
@@ -548,7 +549,6 @@ impl LLaVALLM for Llama {
                 seqlen_offsets,
                 block_idx,
                 &mut cache,
-                (&self.rope_parameters.0, &self.rope_parameters.1),
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), &mut **metadata)),
