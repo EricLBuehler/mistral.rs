@@ -114,7 +114,7 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize>;
     fn get_device_for_tensor(
         &self,
-        _config: &str,
+        config: &str,
         _mapper: &dyn DeviceMapper,
         loading_isq: bool,
     ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
@@ -122,11 +122,13 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
             Ok(Arc::new(|_| DeviceForLoadTensor::Base))
         } else {
             let re = Regex::new(r"\.layers\.(\d+)\.").unwrap();
+            let num_layers = self.model_config(config)?.num_layers();
             let closure = move |name: String| {
                 if let Some(captures) = re.captures(&name) {
                     captures
                         .get(1)
                         .and_then(|m| m.as_str().parse::<usize>().ok())
+                        .map(|l| l.min(num_layers))
                         .map(DeviceForLoadTensor::Idx)
                         .unwrap_or(DeviceForLoadTensor::Base)
                 } else {
@@ -361,8 +363,9 @@ impl DeviceMappedModelLoader for AutoLoader {
         &self,
         config: &str,
         params: &super::AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
-        Self::get_loader(config)?.mapped_max_act_size_elems(config, params)
+        Self::get_loader(config)?.mapped_max_act_size_elems(config, params, prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -499,9 +502,10 @@ impl DeviceMappedModelLoader for MistralLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -510,7 +514,7 @@ impl DeviceMappedModelLoader for MistralLoader {
 
         let cfg = MistralBasicConfig::deserialize(config, false)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -737,9 +741,10 @@ impl DeviceMappedModelLoader for GemmaLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -748,7 +753,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
 
         let cfg = GemmaBasicConfig::deserialize(config, false)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -973,9 +978,10 @@ impl DeviceMappedModelLoader for LlamaLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -984,7 +990,7 @@ impl DeviceMappedModelLoader for LlamaLoader {
 
         let cfg = LlamaBasicConfig::deserialize(config, false)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -1201,9 +1207,10 @@ impl DeviceMappedModelLoader for MixtralLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -1212,7 +1219,7 @@ impl DeviceMappedModelLoader for MixtralLoader {
 
         let cfg = MixtralBasicConfig::deserialize(config, false)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -1432,9 +1439,10 @@ impl DeviceMappedModelLoader for Phi2Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -1443,7 +1451,7 @@ impl DeviceMappedModelLoader for Phi2Loader {
 
         let cfg = Phi2BasicConfig::deserialize(config, false)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -1660,9 +1668,10 @@ impl DeviceMappedModelLoader for Phi3Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -1671,7 +1680,7 @@ impl DeviceMappedModelLoader for Phi3Loader {
 
         let cfg = Phi3BasicConfig::deserialize(config, false)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -1872,9 +1881,10 @@ impl DeviceMappedModelLoader for Qwen2Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -1883,7 +1893,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
 
         let cfg = Qwen2BasicConfig::deserialize(config, false)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -2115,9 +2125,10 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -2126,7 +2137,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
 
         let cfg = Gemma2BasicConfig::deserialize(config, false)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -2345,9 +2356,10 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -2356,7 +2368,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
 
         let cfg = Starcoder2BasicConfig::deserialize(config, false)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -2592,9 +2604,10 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -2603,7 +2616,7 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
 
         let cfg = Phi3_5MoEBasicConfig::deserialize(config, false)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -2878,9 +2891,10 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -2889,7 +2903,7 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
 
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -2926,7 +2940,9 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
-        let per_layer_elems = {
+        let mut per_layer_elems = Vec::new();
+
+        for layer_idx in 0..cfg.num_hidden_layers {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
 
@@ -2953,56 +2969,57 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
 
             let moe_block = {
                 let mut sum = 0;
-                for layer_idx in 0..cfg.num_hidden_layers {
-                    if cfg.n_routed_experts.is_some()
-                        && layer_idx >= cfg.first_k_dense_replace
-                        && layer_idx % cfg.moe_layer_freq == 0
-                    {
-                        let h_size = cfg.hidden_size;
-                        let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
-                            let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            let up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            let down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
-                                / weight_pack_factor;
-                            gate_proj + up_proj + down_proj
-                        } else {
-                            0
-                        };
-                        let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
-                        sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                if cfg.n_routed_experts.is_some()
+                    && layer_idx >= cfg.first_k_dense_replace
+                    && layer_idx % cfg.moe_layer_freq == 0
+                {
+                    let h_size = cfg.hidden_size;
+                    let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
+                        let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        let up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        let down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
+                            / weight_pack_factor;
+                        gate_proj + up_proj + down_proj
                     } else {
-                        let h_size = cfg.hidden_size;
-                        let i_size = cfg.intermediate_size;
-                        let gate_proj = h_size * i_size / weight_pack_factor;
-                        let up_proj = h_size * i_size / weight_pack_factor;
-                        let down_proj = i_size * h_size / weight_pack_factor;
-                        sum += gate_proj + up_proj + down_proj;
-                    }
+                        0
+                    };
+                    let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
+                    sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                } else {
+                    let h_size = cfg.hidden_size;
+                    let i_size = cfg.intermediate_size;
+                    let gate_proj = h_size * i_size / weight_pack_factor;
+                    let up_proj = h_size * i_size / weight_pack_factor;
+                    let down_proj = i_size * h_size / weight_pack_factor;
+                    sum += gate_proj + up_proj + down_proj;
                 }
                 sum
             };
 
-            input_layernorm
-                + post_attention_layernorm
-                + q_proj
-                + kv_a_layernorm
-                + kv_a_proj_with_mqa
-                + kv_b_proj
-                + o_proj
-                + moe_block
-        };
-        Ok(vec![
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
+            per_layer_elems.push(
+                input_layernorm
+                    + post_attention_layernorm
+                    + q_proj
+                    + kv_a_layernorm
+                    + kv_a_proj_with_mqa
+                    + kv_b_proj
+                    + o_proj
+                    + moe_block,
+            );
+        }
+
+        Ok(per_layer_elems
+            .into_iter()
+            .map(|x| x * dtype.size_in_bytes())
+            .collect())
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -3202,9 +3219,10 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Text {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
         } = params
         else {
@@ -3213,7 +3231,7 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
 
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -3250,7 +3268,9 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
-        let per_layer_elems = {
+        let mut per_layer_elems = Vec::new();
+
+        for layer_idx in 0..cfg.num_hidden_layers {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
 
@@ -3277,56 +3297,57 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
 
             let moe_block = {
                 let mut sum = 0;
-                for layer_idx in 0..cfg.num_hidden_layers {
-                    if cfg.n_routed_experts.is_some()
-                        && layer_idx >= cfg.first_k_dense_replace
-                        && layer_idx % cfg.moe_layer_freq == 0
-                    {
-                        let h_size = cfg.hidden_size;
-                        let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
-                            * cfg.n_routed_experts.unwrap();
-                        let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
-                            let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            let up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
-                                / weight_pack_factor;
-                            let down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
-                                / weight_pack_factor;
-                            gate_proj + up_proj + down_proj
-                        } else {
-                            0
-                        };
-                        let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
-                        sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                if cfg.n_routed_experts.is_some()
+                    && layer_idx >= cfg.first_k_dense_replace
+                    && layer_idx % cfg.moe_layer_freq == 0
+                {
+                    let h_size = cfg.hidden_size;
+                    let gate_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let up_proj = h_size * cfg.moe_intermediate_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let down_proj = cfg.moe_intermediate_size * h_size / weight_pack_factor
+                        * cfg.n_routed_experts.unwrap();
+                    let shared_experts = if let Some(n_shared_experts) = cfg.n_shared_experts {
+                        let gate_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        let up_proj = h_size * (cfg.intermediate_size * n_shared_experts)
+                            / weight_pack_factor;
+                        let down_proj = (cfg.intermediate_size * n_shared_experts) * h_size
+                            / weight_pack_factor;
+                        gate_proj + up_proj + down_proj
                     } else {
-                        let h_size = cfg.hidden_size;
-                        let i_size = cfg.intermediate_size;
-                        let gate_proj = h_size * i_size / weight_pack_factor;
-                        let up_proj = h_size * i_size / weight_pack_factor;
-                        let down_proj = i_size * h_size / weight_pack_factor;
-                        sum += gate_proj + up_proj + down_proj;
-                    }
+                        0
+                    };
+                    let gate_weight = cfg.n_routed_experts.unwrap() * cfg.hidden_size;
+                    sum += gate_proj + up_proj + down_proj + shared_experts + gate_weight;
+                } else {
+                    let h_size = cfg.hidden_size;
+                    let i_size = cfg.intermediate_size;
+                    let gate_proj = h_size * i_size / weight_pack_factor;
+                    let up_proj = h_size * i_size / weight_pack_factor;
+                    let down_proj = i_size * h_size / weight_pack_factor;
+                    sum += gate_proj + up_proj + down_proj;
                 }
                 sum
             };
 
-            input_layernorm
-                + post_attention_layernorm
-                + q_proj
-                + kv_a_layernorm
-                + kv_a_proj_with_mqa
-                + kv_b_proj
-                + o_proj
-                + moe_block
-        };
-        Ok(vec![
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
+            per_layer_elems.push(
+                input_layernorm
+                    + post_attention_layernorm
+                    + q_proj
+                    + kv_a_layernorm
+                    + kv_a_proj_with_mqa
+                    + kv_b_proj
+                    + o_proj
+                    + moe_block,
+            );
+        }
+
+        Ok(per_layer_elems
+            .into_iter()
+            .map(|x| x * dtype.size_in_bytes())
+            .collect())
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {

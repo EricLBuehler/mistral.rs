@@ -15,8 +15,8 @@ use crate::{
         Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
         DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
     },
-    layers_masker::PastKvLenCache,
-    ops::{SplitOp, TopKLastDimOp, TopKOutput},
+    layers_masker::{masked_fill, PastKvLenCache},
+    ops::{BincountOp, NonZeroOp, SplitOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -92,6 +92,8 @@ pub struct DeepSeekV2Config {
     #[serde(default = "use_flash_attn_default")]
     pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
+    pub(crate) n_group: usize,
+    pub(crate) topk_group: usize,
 }
 
 impl DeepSeekV2Config {
@@ -304,32 +306,44 @@ impl Attention {
 
         let mut attn_out = match &self.paged_attn {
             Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    None,
-                )?,
+                Some(((key_cache, value_cache), input_metadata)) => {
+                    let v = v
+                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+                        .contiguous()?;
+                    paged_attn
+                        .forward(
+                            &q,
+                            &k,
+                            &v,
+                            attention_mask,
+                            Some(key_cache),
+                            Some(value_cache),
+                            input_metadata,
+                            None,
+                        )?
+                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+                }
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
                     // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
                     let mut input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
                     // Sanity check.
                     assert!(attention_mask.is_some());
-                    paged_attn.forward(
-                        &q,
-                        &k,
-                        &v,
-                        attention_mask,
-                        None,
-                        None,
-                        &mut input_metadata,
-                        None,
-                    )?
+                    let v = v
+                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+                        .contiguous()?;
+                    paged_attn
+                        .forward(
+                            &q,
+                            &k,
+                            &v,
+                            attention_mask,
+                            None,
+                            None,
+                            &mut input_metadata,
+                            None,
+                        )?
+                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
                 }
             },
             None => {
@@ -416,6 +430,7 @@ struct MoeGate {
     weight: Tensor,
     cfg: DeepSeekV2Config,
     top_k: usize,
+    n_routed_experts: usize,
 }
 
 impl MoeGate {
@@ -425,15 +440,18 @@ impl MoeGate {
             weight,
             cfg: cfg.clone(),
             top_k: cfg.num_experts_per_tok.unwrap(),
+            n_routed_experts,
         })
     }
 
     /// (topk_idx, topk_weight)
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
-        let (_bs, _seq_len, h) = xs.dims3()?;
+        let (bs, seq_len, h) = xs.dims3()?;
         // Compute gating score
         let xs = xs.reshape(((), h))?;
-        let logits = xs.broadcast_matmul(&self.weight.t()?)?;
+        let logits = xs
+            .to_dtype(DType::F32)?
+            .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
         let scores = match self.cfg.scoring_func {
             ScoringFunc::Softmax => candle_nn::ops::softmax_last_dim(&logits)?,
         };
@@ -441,11 +459,38 @@ impl MoeGate {
         // Select top-k experts
         let (mut topk_weight, topk_idx) = match self.cfg.topk_method {
             TopkMethod::Greedy => {
-                let TopKOutput { values, indices } = scores.topk(self.top_k)?;
+                let TopKOutput { values, indices } = scores.topk_unsorted(self.top_k)?;
                 (values, indices)
             }
             TopkMethod::GroupLimitedGreedy => {
-                candle_core::bail!("GroupLimitedGreedy is not yet implemented!")
+                // (n, n_group)
+                let group_scores = scores
+                    .reshape((bs * seq_len, self.cfg.n_group, ()))?
+                    .max(D::Minus1)?;
+                // (n, topk_group)
+                let group_idx = scores.topk_unsorted(self.cfg.topk_group)?.indices;
+                // (n, n_group)
+                let mut group_mask = group_scores.zeros_like()?;
+                // (n, n_group)
+                group_mask = group_mask.scatter_add(
+                    &group_idx,
+                    &group_idx.ones_like()?.to_dtype(group_mask.dtype())?,
+                    1,
+                )?;
+                // (n, e)
+                let score_mask = group_mask
+                    .unsqueeze(D::Minus1)?
+                    .expand((
+                        bs * seq_len,
+                        self.cfg.n_group,
+                        self.n_routed_experts / self.cfg.n_group,
+                    ))?
+                    .reshape((bs, seq_len, ()))?;
+                // (n, e)
+                // Invert the mask
+                let tmp_scores = masked_fill(&score_mask, &(1. - &score_mask.ne(0.)?)?, 0.)?;
+                let TopKOutput { values, indices } = tmp_scores.topk_unsorted(self.top_k)?;
+                (values, indices)
             }
         };
 
@@ -509,45 +554,33 @@ impl Moe {
     }
 
     fn moe_infer(&self, xs: &Tensor, topk_ids: &Tensor, topk_weight: &Tensor) -> Result<Tensor> {
-        let mut cnts: Tensor = Tensor::zeros(
-            (topk_ids.dim(0)?, self.experts.len()),
-            DType::F32,
-            topk_ids.device(),
-        )?;
-        cnts = cnts
-            .scatter_add(topk_ids, &topk_ids.ones_like()?.to_dtype(DType::F32)?, 1)?
-            .to_dtype(topk_ids.dtype())?;
-        let tokens_per_expert = cnts.sum(0)?.to_vec1::<u32>()?;
-        let idxs = topk_ids.flatten_all()?.arg_sort_last_dim(true)?;
-        let sorted_tokens = xs.index_select(&(&idxs / topk_ids.dim(1)? as f64)?, 0)?;
-
-        let mut outputs = Vec::with_capacity(tokens_per_expert.len());
-        let mut start_idx = 0;
-        for (i, num_tokens) in tokens_per_expert.into_iter().enumerate() {
-            let end_idx = start_idx + num_tokens;
-            if num_tokens == 0 {
+        let mut y = xs.zeros_like()?;
+        let counts = topk_ids
+            .flatten_all()?
+            .bincount(self.experts.len() as u32)?;
+        for (i, expert) in self.experts.iter().enumerate() {
+            if counts[i] == 0 {
                 continue;
             }
-            let expert = &self.experts[i];
-            let tokens_for_this_expert = sorted_tokens.i(start_idx as usize..end_idx as usize)?;
-            let expert_out = expert.forward(&tokens_for_this_expert)?;
-            outputs.push(expert_out);
-            start_idx = end_idx;
+            let idx_top = topk_ids.eq(i as f64)?.nonzero()?.t()?;
+            let idx = &idx_top.i(0)?.contiguous()?;
+            let top = &idx_top.i(1)?.contiguous()?;
+
+            y = y.index_add(
+                idx,
+                &expert.forward(&xs.index_select(idx, 0)?)?.broadcast_mul(
+                    &topk_weight
+                        .index_select(idx, 0)?
+                        .gather(&top.unsqueeze(1)?, 1)?
+                        .squeeze(1)?
+                        .unsqueeze(D::Minus1)?
+                        .to_dtype(xs.dtype())?,
+                )?,
+                0,
+            )?;
         }
 
-        let outs = Tensor::cat(&outputs, 0)?;
-
-        let mut new_x = outs.zeros_like()?;
-        new_x = new_x.index_add(&idxs, &outs, 0)?;
-
-        let hole = new_x.elem_count() / topk_ids.elem_count();
-
-        new_x
-            .reshape([topk_ids.dims().to_vec(), vec![hole]].concat())?
-            .broadcast_mul(&topk_weight.unsqueeze(D::Minus1)?)?
-            .to_dtype(DType::F32)?
-            .sum(1)?
-            .to_dtype(new_x.dtype())
+        Ok(y)
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
@@ -747,11 +780,6 @@ impl DeepSeekV2 {
                 )?),
             );
         }
-        if cfg.q_head_dim() != cfg.v_head_dim
-            && matches!(attention_mechanism, AttentionImplementation::PagedAttention)
-        {
-            candle_core::bail!("Head sizes do not match (q/k: {}, v: {}), PagedAttention is incompatible with this model. Please disable PagedAttention.", cfg.q_head_dim(), cfg.v_head_dim);
-        }
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
@@ -811,7 +839,13 @@ impl DeepSeekV2 {
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
                 k_head_dim: Some(cfg.q_head_dim()),
-                v_head_dim: Some(cfg.v_head_dim),
+                v_head_dim: Some(
+                    if matches!(attention_mechanism, AttentionImplementation::PagedAttention) {
+                        cfg.q_head_dim()
+                    } else {
+                        cfg.v_head_dim
+                    },
+                ),
             },
             mapper,
         })
@@ -837,6 +871,13 @@ impl DeepSeekV2 {
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
+        // PagedAttention prompt chunking
+        let attention_mask = attention_mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(

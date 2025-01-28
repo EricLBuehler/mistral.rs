@@ -480,14 +480,14 @@ struct TomlLoaderInnerParams {
     chat_template: Option<String>,
     no_kv_cache: bool,
     tokenizer_json: Option<String>,
-    prompt_batchsize: Option<NonZeroUsize>,
+    prompt_chunksize: Option<NonZeroUsize>,
 }
 
 pub struct TomlLoaderArgs {
     pub use_flash_attn: bool,
     pub chat_template: Option<String>,
     pub no_kv_cache: bool,
-    pub prompt_batchsize: Option<NonZeroUsize>,
+    pub prompt_chunksize: Option<NonZeroUsize>,
 }
 
 pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
@@ -593,7 +593,7 @@ fn loader_from_selected(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
@@ -621,7 +621,7 @@ fn loader_from_selected(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
@@ -657,7 +657,7 @@ fn loader_from_selected(
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
@@ -694,7 +694,7 @@ fn loader_from_selected(
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
         )
@@ -719,7 +719,7 @@ fn loader_from_selected(
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
         )
@@ -750,7 +750,7 @@ fn loader_from_selected(
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
         )
@@ -774,7 +774,7 @@ fn loader_from_selected(
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -799,7 +799,7 @@ fn loader_from_selected(
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -832,7 +832,7 @@ fn loader_from_selected(
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -865,7 +865,7 @@ fn loader_from_selected(
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff,
@@ -890,7 +890,7 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             chat_template: args.chat_template,
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
-            prompt_batchsize: args.prompt_batchsize,
+            prompt_chunksize: args.prompt_chunksize,
         };
         let loader = loader_from_selected(args.clone(), selector.model)?;
         let loader = if let Some(speculative) = selector.speculative {

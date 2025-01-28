@@ -528,7 +528,8 @@ impl QuantMethod for HqqLayer {
             | QuantMethodConfig::Gptq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
-            | QuantMethodConfig::Bnb { .. } => {
+            | QuantMethodConfig::Bnb { .. }
+            | QuantMethodConfig::BlockwiseFP8 { .. } => {
                 unreachable!()
             }
             QuantMethodConfig::Hqq {

@@ -24,7 +24,7 @@ impl GgufLoraModelBuilder {
 
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = GGUFSpecificConfig {
-            prompt_batchsize: self.gguf_model.prompt_batchsize,
+            prompt_chunksize: self.gguf_model.prompt_chunksize,
             topology: self.gguf_model.topology,
         };
 

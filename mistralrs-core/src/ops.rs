@@ -2,6 +2,7 @@ use candle_core::{
     backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
     Result, Shape, Tensor, WithDType, D,
 };
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use std::{
     fmt::Display,
@@ -559,8 +560,13 @@ pub struct TopKOutput {
 pub trait TopKLastDimOp {
     /// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
     /// This expects a contiguous tensor.
-    /// Note this implements torch.topk with sorted=True.
+    /// Note: this implements torch.topk with sorted=True.
     fn topk(&self, topk: usize) -> Result<TopKOutput>;
+
+    /// Topk in the last dim. `values` retains a gradient but `indices` has none w.r.t self.
+    /// This expects a contiguous tensor.
+    /// Note: this implements torch.topk with sorted=False.
+    fn topk_unsorted(&self, topk: usize) -> Result<TopKOutput>;
 }
 
 impl TopKLastDimOp for Tensor {
@@ -571,6 +577,27 @@ impl TopKLastDimOp for Tensor {
         Ok(TopKOutput {
             values: self.gather(&topk_indices, D::Minus1)?,
             indices: topk_indices,
+        })
+    }
+
+    fn topk_unsorted(&self, topk: usize) -> Result<TopKOutput> {
+        // Sorted descending
+        let sorted_indices_all = self.arg_sort_last_dim(false)?;
+        let topk_indices_sorted = sorted_indices_all
+            .narrow(D::Minus1, 0, topk)?
+            .contiguous()?;
+        let topk_values_sorted = self.gather(&topk_indices_sorted, D::Minus1)?;
+
+        // Reorder the indices ascending
+        let reorder_indices = topk_indices_sorted.arg_sort_last_dim(true)?;
+        let topk_indices_unsorted = topk_indices_sorted
+            .to_dtype(DType::F32)?
+            .gather(&reorder_indices, D::Minus1)?
+            .to_dtype(DType::U32)?;
+        let topk_values_unsorted = topk_values_sorted.gather(&reorder_indices, D::Minus1)?;
+        Ok(TopKOutput {
+            values: topk_values_unsorted,
+            indices: topk_indices_unsorted,
         })
     }
 }
@@ -628,6 +655,53 @@ impl SplitOp for Tensor {
             index += *split;
         }
         Ok(split_res)
+    }
+}
+
+pub trait BincountOp {
+    fn bincount(&self, minlength: u32) -> Result<Vec<u32>>;
+}
+
+fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
+    // Find the maximum value in `values` (or zero if empty)
+    let max_val = values.par_iter().max().copied().unwrap_or(0);
+
+    // The final size of the bin counts must be at least `minlength`
+    // and large enough to include the largest value in `values`.
+    let result_len = (max_val + 1).max(minlength);
+
+    // Each thread creates a local histogram (`fold`),
+    // and then they are merged together (`reduce`).
+    values
+        .par_iter()
+        .fold(
+            // Create a local histogram
+            || vec![0u32; result_len as usize],
+            // Update the local histogram
+            |mut local_counts, &val| {
+                local_counts[val as usize] += 1;
+                local_counts
+            },
+        )
+        // Merge histograms from all threads
+        .reduce(
+            // Identity (empty histogram)
+            || vec![0u32; result_len as usize],
+            // Combine two histograms
+            |mut global_counts, local_counts| {
+                for (g, l) in global_counts.iter_mut().zip(local_counts) {
+                    *g += l;
+                }
+                global_counts
+            },
+        )
+}
+
+impl BincountOp for Tensor {
+    fn bincount(&self, minlength: u32) -> Result<Vec<u32>> {
+        let values = self.to_vec1::<u32>()?;
+
+        Ok(bincount(&values, minlength))
     }
 }
 

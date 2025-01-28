@@ -19,7 +19,7 @@ pub struct TextModelBuilder {
 
     // Model running
     pub(crate) use_flash_attn: bool,
-    pub(crate) prompt_batchsize: Option<NonZeroUsize>,
+    pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) topology: Option<Topology>,
     pub(crate) organization: IsqOrganization,
     pub(crate) loader_type: Option<NormalLoaderType>,
@@ -79,7 +79,7 @@ impl TextModelBuilder {
         Self {
             model_id: model_id.to_string(),
             use_flash_attn: cfg!(feature = "flash-attn"),
-            prompt_batchsize: None,
+            prompt_chunksize: None,
             topology: None,
             organization: IsqOrganization::Default,
             write_uqff: None,
@@ -104,8 +104,8 @@ impl TextModelBuilder {
     }
 
     /// Set the prompt batchsize to use for inference.
-    pub fn with_prompt_batchsize(mut self, prompt_batchsize: NonZeroUsize) -> Self {
-        self.prompt_batchsize = Some(prompt_batchsize);
+    pub fn with_prompt_chunksize(mut self, prompt_chunksize: NonZeroUsize) -> Self {
+        self.prompt_chunksize = Some(prompt_chunksize);
         self
     }
 
@@ -250,7 +250,7 @@ impl TextModelBuilder {
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             use_flash_attn: self.use_flash_attn,
-            prompt_batchsize: self.prompt_batchsize,
+            prompt_chunksize: self.prompt_chunksize,
             topology: self.topology,
             organization: self.organization,
             write_uqff: self.write_uqff,

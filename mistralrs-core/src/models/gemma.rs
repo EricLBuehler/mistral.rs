@@ -569,6 +569,13 @@ impl Model {
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
+        // PagedAttention prompt chunking
+        let attention_mask = attention_mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(

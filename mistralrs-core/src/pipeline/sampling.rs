@@ -36,10 +36,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     );
     // Handle streaming requests
     if seq.get_mut_group().is_streaming {
-        const STREAMING_RATE_LIMIT: usize = 3;
-
         let token_index = seq.get_toks().len();
-        let rate_limit_allowed = is_done.is_some() || token_index % STREAMING_RATE_LIMIT == 0;
 
         let mut tool_use_still_possible = false;
         let mut tool_use_is_done = false;
@@ -49,7 +46,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             }
         };
 
-        if (rate_limit_allowed && !tool_use_still_possible) || tool_use_is_done {
+        if !tool_use_still_possible || tool_use_is_done {
             if let Some(delta) = crate::handle_seq_error_ok!(seq.get_delta(), seq.responder()) {
                 if seq.get_mut_group().is_chat {
                     let (text_new, tool_calls) =
@@ -98,37 +95,36 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     );
                 }
 
-                if let Some(reason) = is_done {
-                    if use_prefix_cacher {
-                        prefix_cacher.add_sequence(seq);
-                        prefix_cacher.evict_to_cpu()?;
-                    }
-                    seq.set_state(crate::sequence::SequenceState::Done(reason));
-                    this.reset_non_granular_state();
+            if let Some(reason) = is_done {
+                if use_prefix_cacher {
+                    prefix_cacher.add_sequence(seq);
+                    prefix_cacher.evict_to_cpu()?;
                 }
+                seq.set_state(crate::sequence::SequenceState::Done(reason));
+                this.reset_non_granular_state();
+            }
 
-                // Send usage on final chunk.
-                let usage_opt = if is_done.is_some() {
-                    let usage = seq.get_mut_group().get_usage();
-                    seq.get_mut_group().total_prompt_toks = 0;
-                    seq.get_mut_group().total_toks = 0;
-                    Some(usage)
-                } else {
-                    None
-                };
+            // Send usage on final chunk.
+            let usage_opt = if is_done.is_some() {
+                let usage = seq.get_mut_group().get_usage();
+                seq.get_mut_group().total_prompt_toks = 0;
+                seq.get_mut_group().total_toks = 0;
+                Some(usage)
+            } else {
+                None
+            };
 
-                if seq
-                    .get_mut_group()
-                    .maybe_send_streaming_response(seq, this.name().clone(), usage_opt)
-                    .await
-                    .is_err()
-                {
-                    // If we can't send the response, cancel the sequence
-                    seq.set_state(crate::sequence::SequenceState::Done(
-                        crate::sequence::StopReason::Canceled,
-                    ));
-                    this.reset_non_granular_state();
-                }
+            if seq
+                .get_mut_group()
+                .maybe_send_streaming_response(seq, this.name().clone(), usage_opt)
+                .await
+                .is_err()
+            {
+                // If we can't send the response, cancel the sequence
+                seq.set_state(crate::sequence::SequenceState::Done(
+                    crate::sequence::StopReason::Canceled,
+                ));
+                this.reset_non_granular_state();
             }
         }
     } else if let Some(reason) = is_done {
