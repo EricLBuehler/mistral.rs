@@ -294,10 +294,7 @@ async fn main() -> Result<()> {
         None
     };
 
-    #[cfg(not(feature = "flash-attn"))]
-    let use_flash_attn = false;
-    #[cfg(feature = "flash-attn")]
-    let use_flash_attn = true;
+    let use_flash_attn = mistralrs_core::using_flash_attn();
 
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let dtype = get_model_dtype(&args.model)?;

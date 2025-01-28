@@ -343,10 +343,7 @@ fn main() -> anyhow::Result<()> {
 
     args.concurrency = Some(args.concurrency.unwrap_or(vec![1]));
 
-    #[cfg(not(feature = "flash-attn"))]
-    let use_flash_attn = false;
-    #[cfg(feature = "flash-attn")]
-    let use_flash_attn = true;
+    let use_flash_attn = mistralrs_core::using_flash_attn();
 
     let prompt_chunksize = match args.prompt_chunksize {
         Some(0) => {
