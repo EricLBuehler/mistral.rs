@@ -376,11 +376,7 @@ pub async fn chatcompletions(
         };
 
         ChatCompletionResponder::Sse(
-            Sse::new(streamer).keep_alive(
-                KeepAlive::new()
-                    .interval(Duration::from_millis(10))
-                    .text("keep-alive-text"),
-            ),
+            Sse::new(streamer).keep_alive(KeepAlive::new().interval(Duration::from_millis(10))),
         )
     } else {
         let response = match rx.recv().await {
