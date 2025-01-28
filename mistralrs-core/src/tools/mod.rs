@@ -4,7 +4,7 @@ mod response;
 pub use request::*;
 pub use response::*;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 
 pub struct ToolCallingMatcher {
@@ -137,4 +137,24 @@ where
         Err(e) if e.is_eof() => (true, false),
         _ => (false, false),
     }
+}
+
+/// Takes raw UTf8 text and parses any possible tool calls from it.
+pub fn parse_text_tools(
+    raw_text: &str,
+    matcher: Option<Arc<ToolCallingMatcher>>,
+) -> anyhow::Result<(Option<&str>, Vec<ToolCallResponse>)> {
+    let mut tool_calls = Vec::new();
+    let mut text_new = Some(raw_text);
+
+    if let Some(ref matcher) = matcher {
+        let calls = matcher
+            .get_call(raw_text)
+            .map_err(candle_core::Error::msg)?;
+        if !calls.is_empty() {
+            text_new = None;
+            tool_calls = calls;
+        }
+    };
+    Ok((text_new, tool_calls))
 }
