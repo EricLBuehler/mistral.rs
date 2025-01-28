@@ -6,6 +6,8 @@ pub(crate) mod model_config;
 pub(crate) mod normal;
 pub(crate) mod progress;
 pub(crate) mod safetensors;
+#[allow(dead_code)]
+pub(crate) mod supports_attn_softmax;
 pub(crate) mod tokenizer;
 pub(crate) mod tokens;
 pub(crate) mod unvarbuilder;

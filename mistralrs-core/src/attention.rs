@@ -1,16 +1,12 @@
 #![allow(clippy::cast_precision_loss)]
 
-#[cfg(feature = "metal")]
-use std::sync::atomic::AtomicUsize;
-
-use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::text_models_inputs_processor::FlashParams};
+use crate::{
+    cublaslt::CUBLASLT_HANDLE, cuda::SUPPORTS_ATTN_SOFTMAX,
+    pipeline::text_models_inputs_processor::FlashParams,
+};
 
 use candle_core::{Device, Result, Tensor};
 use mistralrs_quant::{get_use_matmul_via_f16, MatMul};
-
-#[cfg(feature = "metal")]
-/// Initial, sentinel value is usize::MAX
-static METAL_VERSION_CACHE: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 #[cfg(feature = "flash-attn")]
 fn flash_attn(
@@ -133,67 +129,6 @@ fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     }
 }
 
-fn supports_attn_softmax() -> Result<bool> {
-    #[cfg(feature = "metal")]
-    {
-        use std::sync::atomic::Ordering;
-        let cache = METAL_VERSION_CACHE.load(Ordering::Relaxed);
-
-        let version = if cache != usize::MAX {
-            cache
-        } else {
-            // echo "__METAL_VERSION__" | xcrun -sdk macosx metal -E -x metal -P -
-
-            use std::process::{Command, Stdio};
-
-            // Create the `echo` command and pipe its output into `xcrun`
-            let mut echo = Command::new("echo")
-                .arg("__METAL_VERSION__")
-                .stdout(Stdio::piped())
-                .spawn()
-                .expect("Failed to start echo command");
-
-            echo.wait()?;
-
-            // Run the `xcrun` command, taking input from the `echo` command's output
-            let output = Command::new("xcrun")
-                .arg("-sdk")
-                .arg("macosx")
-                .arg("metal")
-                .arg("-E")
-                .arg("-x")
-                .arg("metal")
-                .arg("-P")
-                .arg("-")
-                .stdin(echo.stdout.unwrap())
-                .output()
-                .expect("Failed to run xcrun command");
-
-            // Handle the output
-            if output.status.success() {
-                let version = String::from_utf8_lossy(&output.stdout)
-                    .split('\n')
-                    .nth(1)
-                    .unwrap()
-                    .trim()
-                    .to_string()
-                    .parse::<usize>()
-                    .unwrap();
-                METAL_VERSION_CACHE.store(version, Ordering::Relaxed);
-                version
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                panic!("Error:\n{}", stderr);
-            }
-        };
-        // Attn softmax is only supported for metal >= 310
-        Ok(version >= 310)
-    }
-
-    #[cfg(not(feature = "metal"))]
-    Ok(true)
-}
-
 /// Computes softmax(QK^T*sqrt(d_k))V
 fn naive_sdpa(
     q: &Tensor,
@@ -205,7 +140,7 @@ fn naive_sdpa(
     q.device().synchronize()?;
 
     // Use faster softmax if mask is rank 2 or it's rank 3
-    if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && supports_attn_softmax()? {
+    if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && SUPPORTS_ATTN_SOFTMAX {
         let mask = match mask {
             Some(mask) if mask.rank() == 3 || mask.rank() == 2 => mask.clone(),
             _ => candle_core::bail!("unsupported mask {mask:?}"),
