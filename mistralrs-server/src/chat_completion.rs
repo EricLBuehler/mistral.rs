@@ -49,12 +49,12 @@ pub struct Streamer {
 impl futures::Stream for Streamer {
     type Item = Result<Event, axum::Error>;
 
-    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.is_done {
             return Poll::Ready(None);
         }
-        match self.rx.try_recv() {
-            Ok(resp) => match resp {
+        match self.rx.poll_recv(cx) {
+            Poll::Ready(Some(resp)) => match resp {
                 Response::ModelError(msg, _) => {
                     MistralRs::maybe_log_error(
                         self.state.clone(),
@@ -84,7 +84,7 @@ impl futures::Stream for Streamer {
                 Response::ImageGeneration(_) => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             },
-            Err(_) => Poll::Pending,
+            Poll::Pending | Poll::Ready(None) => Poll::Pending,
         }
     }
 }
@@ -376,7 +376,7 @@ pub async fn chatcompletions(
         };
 
         ChatCompletionResponder::Sse(
-            Sse::new(streamer).keep_alive(KeepAlive::new().interval(Duration::from_millis(10))),
+            Sse::new(streamer).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))),
         )
     } else {
         let response = match rx.recv().await {
