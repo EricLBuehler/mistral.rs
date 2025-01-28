@@ -573,10 +573,7 @@
 <a href="#572" id="572">572</a>
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
-<a href="#575" id="575">575</a>
-<a href="#576" id="576">576</a>
-<a href="#577" id="577">577</a>
-<a href="#578" id="578">578</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
+<a href="#575" id="575">575</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
@@ -921,10 +918,7 @@
 
     args.concurrency = <span class="prelude-val">Some</span>(args.concurrency.unwrap_or(<span class="macro">vec!</span>[<span class="number">1</span>]));
 
-    <span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
-    </span><span class="kw">let </span>use_flash_attn = <span class="bool-val">false</span>;
-    <span class="attr">#[cfg(feature = <span class="string">"flash-attn"</span>)]
-    </span><span class="kw">let </span>use_flash_attn = <span class="bool-val">true</span>;
+    <span class="kw">let </span>use_flash_attn = mistralrs_core::using_flash_attn();
 
     <span class="kw">let </span>prompt_chunksize = <span class="kw">match </span>args.prompt_chunksize {
         <span class="prelude-val">Some</span>(<span class="number">0</span>) =&gt; {
