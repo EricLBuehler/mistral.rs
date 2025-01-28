@@ -447,7 +447,7 @@ impl Loader for VisionLoader {
 
                 let start = Instant::now();
                 let inputs =
-                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None, None)?;
+                    make_prompt_chunk(0, vec![chunk], &[0], &device, None, false, None, None)?;
                 let _ = model.forward(
                     &inputs.input,
                     None, // NOTE: We ONLY calibrate the text bits of these models!!

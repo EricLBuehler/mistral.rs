@@ -547,7 +547,7 @@ impl Loader for NormalLoader {
                     0,
                     vec![chunk],
                     &[0],
-                    &load_device,
+                    &device,
                     None,
                     false,
                     None,
