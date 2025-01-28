@@ -109,14 +109,7 @@ fn flash_attn(
         )?
         .reshape(qshape)
     } else {
-        candle_flash_attn_v3::flash_attn(
-            q,
-            k,
-            v,
-            sdpa_params.softmax_scale,
-            causal,
-            true,
-        )
+        candle_flash_attn_v3::flash_attn(q, k, v, sdpa_params.softmax_scale, causal, true)
     }
 }
 
