@@ -429,8 +429,8 @@ impl Loader for NormalLoader {
             );
         }
 
-        // Load onto the regular device if not using isq or if the calibration file is specified
-        let load_device = if !loading_isq || self.config.calibration_file.is_some() {
+        // Load onto the regular device if not using isq
+        let load_device = if !loading_isq {
             loading_isq = false;
             device.clone()
         } else {
