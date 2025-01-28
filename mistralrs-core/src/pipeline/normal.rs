@@ -2,6 +2,7 @@ use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use super::isq::ImatrixDataSource;
 use super::llg::build_tok_env;
+use super::quantized_cache::QuantizedCacheManager;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
@@ -572,6 +573,11 @@ impl Loader for NormalLoader {
                             layer.set_len(0);
                         }
                     }
+                    EitherCache::Quantized(quantized) => {
+                        for layer in &mut *quantized.lock().unwrap().0 {
+                            layer.set_len(0);
+                        }
+                    }
                 }
                 let end = Instant::now();
                 info!(
@@ -656,6 +662,7 @@ impl Loader for NormalLoader {
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
+            EitherCache::Quantized(quantized) => quantized.lock().unwrap().0.len(),
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = model.config().sliding_window;
@@ -749,6 +756,8 @@ impl CacheManagerMixin for NormalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
             FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+        } else if matches!(self.model.cache(), EitherCache::Quantized(_)) {
+            QuantizedCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
         } else {
             NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
         }
@@ -756,6 +765,8 @@ impl CacheManagerMixin for NormalPipeline {
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
             FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+        } else if matches!(self.model.cache(), EitherCache::Quantized(_)) {
+            QuantizedCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
         } else {
             NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
         }
@@ -769,6 +780,13 @@ impl CacheManagerMixin for NormalPipeline {
     ) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
             FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
+        } else if matches!(self.model.cache(), EitherCache::Quantized(_)) {
+            QuantizedCacheManager.set_none_cache(
+                self,
+                seqs,
+                modify_draft_cache,
+                load_preallocated_cache,
+            );
         } else {
             NormalCacheManager.set_none_cache(
                 self,

@@ -5,7 +5,7 @@ use std::ops::Add;
 use candle_core::{DType, Device, Result, Tensor, WithDType};
 use mistralrs_quant::get_use_matmul_via_f16;
 
-use crate::pipeline::KvCache;
+use crate::pipeline::{KvCache, QuantizedKvCache};
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 pub struct CausalMasker;
@@ -40,6 +40,13 @@ pub trait PastKvLenCache {
 }
 
 impl PastKvLenCache for Vec<KvCache> {
+    fn get_past_kv_len(&self) -> Result<usize> {
+        let kv_cache_1 = &self[0];
+        Ok(kv_cache_1.current_seq_len())
+    }
+}
+
+impl PastKvLenCache for Vec<QuantizedKvCache> {
     fn get_past_kv_len(&self) -> Result<usize> {
         let kv_cache_1 = &self[0];
         Ok(kv_cache_1.current_seq_len())
