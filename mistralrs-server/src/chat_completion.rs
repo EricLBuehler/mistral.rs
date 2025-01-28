@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    env,
     error::Error,
     ops::Deref,
     pin::Pin,
@@ -375,8 +376,12 @@ pub async fn chatcompletions(
             state,
         };
 
+        let keep_alive_interval = env::var("KEEP_ALIVE_INTERVAL")
+            .map(|val| val.parse::<u64>().unwrap_or(10000))
+            .unwrap_or(10000);
         ChatCompletionResponder::Sse(
-            Sse::new(streamer).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))),
+            Sse::new(streamer)
+                .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval))),
         )
     } else {
         let response = match rx.recv().await {
