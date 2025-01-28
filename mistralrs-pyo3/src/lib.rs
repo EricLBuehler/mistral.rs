@@ -77,10 +77,7 @@ fn parse_which(
     chat_template: Option<String>,
     prompt_chunksize: Option<NonZeroUsize>,
 ) -> PyApiResult<Box<dyn Loader>> {
-    #[cfg(not(feature = "flash-attn"))]
-    let use_flash_attn = false;
-    #[cfg(feature = "flash-attn")]
-    let use_flash_attn = true;
+    let use_flash_attn = mistralrs_core::using_flash_attn();
 
     Ok(match which {
         Which::Plain {

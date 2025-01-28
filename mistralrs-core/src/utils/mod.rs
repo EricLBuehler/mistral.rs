@@ -221,3 +221,13 @@ pub const fn paged_attn_supported() -> bool {
 pub const fn paged_attn_supported() -> bool {
     false
 }
+
+#[cfg(not(any(feature = "flash-attn", feature = "flash-attn-v3")))]
+pub const fn using_flash_attn() -> bool {
+    true
+}
+
+#[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
+pub const fn using_flash_attn() -> bool {
+    true
+}
