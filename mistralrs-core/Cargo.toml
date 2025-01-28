@@ -17,7 +17,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "e63db3e", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "6a06b89", optional = true }
 dirs = "5.0.1"
 hf-hub = { version = "0.3.3", package = "candle-hf-hub" }
 thiserror = "1.0.57"
@@ -84,7 +84,7 @@ objc = { version = "0.2.7", optional = true }
 metal = { workspace = true, optional = true }
 yoke = "0.7.5"
 memmap2 = "0.9.5"
-candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "e63db3e", optional = true }
+candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "6a06b89", optional = true }
 
 [features]
 pyo3_macros = ["pyo3"]
