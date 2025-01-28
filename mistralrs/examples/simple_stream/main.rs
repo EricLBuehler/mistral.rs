@@ -1,7 +1,7 @@
 use anyhow::Result;
 use mistralrs::{
-    IsqType, PagedAttentionMetaBuilder, RequestBuilder, Response, TextMessageRole, TextMessages,
-    TextModelBuilder,
+    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqType, PagedAttentionMetaBuilder,
+    RequestBuilder, Response, TextMessageRole, TextMessages, TextModelBuilder,
 };
 use std::io::Write;
 
@@ -44,8 +44,18 @@ async fn main() -> Result<()> {
     let lock = stdout.lock();
     let mut buf = std::io::BufWriter::new(lock);
     while let Some(chunk) = stream.next().await {
-        if let Response::Chunk(chunk) = chunk {
-            buf.write_all(chunk.choices[0].delta.content.as_bytes())?;
+        if let Response::Chunk(ChatCompletionChunkResponse { choices, .. }) = chunk {
+            if let Some(ChunkChoice {
+                delta:
+                    Delta {
+                        content: Some(content),
+                        ..
+                    },
+                ..
+            }) = choices.first()
+            {
+                buf.write_all(content.as_bytes())?;
+            };
         } else {
             // Handle errors
         }

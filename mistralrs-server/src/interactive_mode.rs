@@ -1,9 +1,9 @@
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    Constraint, DiffusionGenerationParams, DrySamplingParams, ImageGenerationResponseFormat,
-    MessageContent, MistralRs, ModelCategory, NormalRequest, Request, RequestMessage, Response,
-    ResponseOk, SamplingParams, TERMINATE_ALL_NEXT_STEP,
+    ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
+    ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
+    Request, RequestMessage, Response, ResponseOk, SamplingParams, TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -59,7 +59,7 @@ Commands:
 - `\system <system message here>`:
     Add a system message to the chat without running the model.
     Ex: `\system Always respond as a pirate.`
-- `\image <image URL or local path here> <message here>`: 
+- `\image <image URL or local path here> <message here>`:
     Add a message paired with an image. The image will be fed to the model as if it were the first item in this prompt.
     You do not need to modify your prompt for specific models.
     Ex: `\image path/to/image.jpg Describe what is in this image.`
@@ -187,16 +187,26 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
         while let Some(resp) = rx.recv().await {
             match resp {
                 Response::Chunk(chunk) => {
-                    let choice = &chunk.choices[0];
-                    assistant_output.push_str(&choice.delta.content);
-                    print!("{}", choice.delta.content);
-                    toks += 1usize;
-                    io::stdout().flush().unwrap();
-                    if choice.finish_reason.is_some() {
-                        if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
-                            print!("...");
+                    if let ChunkChoice {
+                        delta:
+                            Delta {
+                                content: Some(content),
+                                ..
+                            },
+                        finish_reason,
+                        ..
+                    } = &chunk.choices[0]
+                    {
+                        assistant_output.push_str(content);
+                        print!("{}", content);
+                        toks += 1usize; // NOTE: we send toks every 3.
+                        io::stdout().flush().unwrap();
+                        if finish_reason.is_some() {
+                            if matches!(finish_reason.as_ref().unwrap().as_str(), "length") {
+                                print!("...");
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
                 Response::InternalError(e) => {
@@ -408,16 +418,26 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
         while let Some(resp) = rx.recv().await {
             match resp {
                 Response::Chunk(chunk) => {
-                    let choice = &chunk.choices[0];
-                    assistant_output.push_str(&choice.delta.content);
-                    print!("{}", choice.delta.content);
-                    toks += 1usize;
-                    io::stdout().flush().unwrap();
-                    if choice.finish_reason.is_some() {
-                        if matches!(choice.finish_reason.as_ref().unwrap().as_str(), "length") {
-                            print!("...");
+                    if let ChunkChoice {
+                        delta:
+                            Delta {
+                                content: Some(content),
+                                ..
+                            },
+                        finish_reason,
+                        ..
+                    } = &chunk.choices[0]
+                    {
+                        assistant_output.push_str(content);
+                        print!("{}", content);
+                        toks += 1usize; // NOTE: we send toks every 3.
+                        io::stdout().flush().unwrap();
+                        if finish_reason.is_some() {
+                            if matches!(finish_reason.as_ref().unwrap().as_str(), "length") {
+                                print!("...");
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
                 Response::InternalError(e) => {
