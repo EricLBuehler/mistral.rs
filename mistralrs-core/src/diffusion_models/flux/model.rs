@@ -446,17 +446,9 @@ impl DoubleStreamBlock {
                 .bias()
                 .map(|x| x.to_device(device).unwrap()),
         );
-        self.img_norm1 = LayerNorm::new(
-            self.img_norm1.weight().to_device(device)?,
-            self.img_norm1.bias().to_device(device)?,
-            1e-6,
-        );
+        self.img_norm1 = LayerNorm::new_no_bias(self.img_norm1.weight().to_device(device)?, 1e-6);
         self.img_attn.cast_to(device)?;
-        self.img_norm2 = LayerNorm::new(
-            self.img_norm2.weight().to_device(device)?,
-            self.img_norm2.bias().to_device(device)?,
-            1e-6,
-        );
+        self.img_norm2 = LayerNorm::new_no_bias(self.img_norm2.weight().to_device(device)?, 1e-6);
         self.img_mlp.cast_to(device)?;
 
         self.txt_mod.lin = Linear::new(
@@ -466,17 +458,9 @@ impl DoubleStreamBlock {
                 .bias()
                 .map(|x| x.to_device(device).unwrap()),
         );
-        self.txt_norm1 = LayerNorm::new(
-            self.txt_norm1.weight().to_device(device)?,
-            self.txt_norm1.bias().to_device(device)?,
-            1e-6,
-        );
+        self.txt_norm1 = LayerNorm::new_no_bias(self.txt_norm1.weight().to_device(device)?, 1e-6);
         self.txt_attn.cast_to(device)?;
-        self.txt_norm2 = LayerNorm::new(
-            self.txt_norm2.weight().to_device(device)?,
-            self.txt_norm2.bias().to_device(device)?,
-            1e-6,
-        );
+        self.txt_norm2 = LayerNorm::new_no_bias(self.txt_norm2.weight().to_device(device)?, 1e-6);
         self.txt_mlp.cast_to(device)?;
 
         Ok(())
@@ -554,11 +538,7 @@ impl SingleStreamBlock {
                 1e-6,
             ),
         };
-        self.pre_norm = LayerNorm::new(
-            self.pre_norm.weight().to_device(device)?,
-            self.pre_norm.bias().to_device(device)?,
-            1e-6,
-        );
+        self.pre_norm = LayerNorm::new_no_bias(self.pre_norm.weight().to_device(device)?, 1e-6);
         self.modulation.lin = Linear::new(
             self.modulation.lin.weight().to_device(device)?,
             self.modulation

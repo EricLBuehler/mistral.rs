@@ -35,10 +35,12 @@ impl ToTensors for F32RmsNorm {
 
 impl ToTensors for LayerNorm {
     fn to_tensors(&self) -> HashMap<String, Tensor> {
-        HashMap::from_iter([
-            ("weight".to_string(), self.weight().clone()),
-            ("bias".to_string(), self.bias().clone()),
-        ])
+        let mut map = HashMap::new();
+        map.insert("weight".to_string(), self.weight().clone());
+        if let Some(bias) = self.bias() {
+            map.insert("bias".to_string(), bias.clone());
+        }
+        map
     }
 }
 
