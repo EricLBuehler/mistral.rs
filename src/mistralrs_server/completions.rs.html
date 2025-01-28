@@ -296,8 +296,14 @@
 <a href="#295" id="295">295</a>
 <a href="#296" id="296">296</a>
 <a href="#297" id="297">297</a>
-<a href="#298" id="298">298</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>std::{
+    env,
     error::Error,
     pin::Pin,
     sync::Arc,
@@ -557,8 +563,12 @@
             state,
         };
 
+        <span class="kw">let </span>keep_alive_interval = env::var(<span class="string">"KEEP_ALIVE_INTERVAL"</span>)
+            .map(|val| val.parse::&lt;u64&gt;().unwrap_or(<span class="number">10000</span>))
+            .unwrap_or(<span class="number">10000</span>);
         CompletionResponder::Sse(
-            Sse::new(streamer).keep_alive(KeepAlive::new().interval(Duration::from_secs(<span class="number">10</span>))),
+            Sse::new(streamer)
+                .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval))),
         )
     } <span class="kw">else </span>{
         <span class="kw">let </span>response = <span class="kw">match </span>rx.recv().<span class="kw">await </span>{

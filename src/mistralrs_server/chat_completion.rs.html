@@ -412,9 +412,15 @@
 <a href="#411" id="411">411</a>
 <a href="#412" id="412">412</a>
 <a href="#413" id="413">413</a>
-<a href="#414" id="414">414</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
 <span class="kw">use </span>std::{
     collections::HashMap,
+    env,
     error::Error,
     ops::Deref,
     pin::Pin,
@@ -789,8 +795,12 @@
             state,
         };
 
+        <span class="kw">let </span>keep_alive_interval = env::var(<span class="string">"KEEP_ALIVE_INTERVAL"</span>)
+            .map(|val| val.parse::&lt;u64&gt;().unwrap_or(<span class="number">10000</span>))
+            .unwrap_or(<span class="number">10000</span>);
         ChatCompletionResponder::Sse(
-            Sse::new(streamer).keep_alive(KeepAlive::new().interval(Duration::from_secs(<span class="number">10</span>))),
+            Sse::new(streamer)
+                .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval))),
         )
     } <span class="kw">else </span>{
         <span class="kw">let </span>response = <span class="kw">match </span>rx.recv().<span class="kw">await </span>{
