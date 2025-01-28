@@ -84,13 +84,31 @@ objc = { version = "0.2.7", optional = true }
 metal = { workspace = true, optional = true }
 yoke = "0.7.5"
 memmap2 = "0.9.5"
+candle-flash-attn-v3 = { git = "https://github.com/michaelfeil/candle-flash-attn-v3", version = "0.0.1", optional = true, package = "baseten-candle-flash-attn-v3"}
 
 [features]
 pyo3_macros = ["pyo3"]
-cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda", "mistralrs-quant/cuda", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/cuda", "float8/mistralrs_cudarc_fork"]
+cuda = [
+    "candle-core/cuda",
+    "candle-nn/cuda",
+    "dep:bindgen_cuda",
+    "mistralrs-quant/cuda",
+    "dep:mistralrs-paged-attn",
+    "mistralrs-paged-attn/cuda",
+    "float8/mistralrs_cudarc_fork",
+]
 cudnn = ["candle-core/cudnn"]
-metal = ["candle-core/metal", "candle-nn/metal", "mistralrs-quant/metal", "dep:objc", "dep:mistralrs-paged-attn", "mistralrs-paged-attn/metal", "dep:metal"]
+metal = [
+    "candle-core/metal",
+    "candle-nn/metal",
+    "mistralrs-quant/metal",
+    "dep:objc",
+    "dep:mistralrs-paged-attn",
+    "mistralrs-paged-attn/metal",
+    "dep:metal"
+]
 flash-attn = ["cuda", "dep:candle-flash-attn"]
+flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
 

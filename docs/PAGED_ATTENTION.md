@@ -27,6 +27,11 @@ Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and bl
 
 > Note: the prefix cacher will be disabled when using PagedAttention regardless of settings. This functionality will be added soon!
 
+## FlashAttention V2/V3 + PagedAttention in mistral.rs
+
+If mistral.rs is compiled with [FlashAttention](FLASH_ATTENTION.md) and PagedAttention is enabled, then FlashAttention will be used in tandem to accelerate
+the prefill phase.
+
 ## Using the CLI
 
 Add the `--pa-gpu-mem`/`--pa-gpu-mem-usage` and `--pa-blk-size` parameters before the model kind selector. The GPU memory is in MBs and the block size means the number of tokens per block. These parameters may be passed on any supported model type.

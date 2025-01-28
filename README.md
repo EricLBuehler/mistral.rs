@@ -111,7 +111,7 @@ Mistral.rs supports several model categories:
 **Fast**:
 - Apple silicon support: ARM NEON, Accelerate, Metal
 - Accelerated CPU inference with MKL, AVX support
-- CUDA support with flash attention and cuDNN.
+- CUDA support with FlashAttention and cuDNN.
 
 **Quantization**:
 - [Details](docs/QUANTS.md)
@@ -131,6 +131,7 @@ Mistral.rs supports several model categories:
 
 **Advanced features**:
 - [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching (CUDA and Metal support)
+- [FlashAttention](docs/FLASH_ATTENTION.md) V2/V3
 - Prefix caching
 - [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
 - [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
