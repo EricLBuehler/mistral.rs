@@ -3,41 +3,24 @@ use candle_core::{Device, Result, Tensor};
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
 use crate::{
-    attention::SdpaParams, layers::Sdpa,
-    pipeline::text_models_inputs_processor::PagedAttentionInputMetadata,
+    attention::SdpaParams,
+    layers::Sdpa,
+    pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
 };
 
 pub struct PagedAttention {
-    scale: f32,
-    sliding_window: Option<usize>,
-    n_kv_groups: usize,
     alibi_slopes: Option<Tensor>,
 }
 
 impl PagedAttention {
-    pub fn new(
-        num_attention_heads: usize,
-        head_dim: usize,
-        scale: f32,
-        num_key_value_heads: Option<usize>,
-        sliding_window: Option<usize>,
-        device: &Device,
-        alibi_slopes: Option<Vec<f32>>,
-    ) -> Result<Self> {
-        let num_key_value_heads = num_key_value_heads.unwrap_or(num_attention_heads);
-        let n_kv_groups = num_attention_heads / num_key_value_heads;
+    pub fn new(head_dim: usize, device: &Device, alibi_slopes: Option<Vec<f32>>) -> Result<Self> {
         let alibi_slopes = if let Some(alibi_slopes) = alibi_slopes {
             assert_eq!(alibi_slopes.len(), head_dim);
             Some(Tensor::new(alibi_slopes, device)?)
         } else {
             None
         };
-        Ok(Self {
-            scale,
-            sliding_window,
-            n_kv_groups,
-            alibi_slopes,
-        })
+        Ok(Self { alibi_slopes })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -59,7 +42,8 @@ impl PagedAttention {
         mut key_cache: Option<Tensor>,
         mut value_cache: Option<Tensor>,
         input_metadata: &mut PagedAttentionInputMetadata,
-        softcapping: Option<f64>,
+        sdpa_params: &SdpaParams,
+        flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
         let slot_mapping = input_metadata
             .slot_mappings
@@ -102,14 +86,8 @@ impl PagedAttention {
                 key,
                 value,
                 Some(&mask),
-                None,
-                &SdpaParams {
-                    n_kv_groups: self.n_kv_groups,
-                    use_flash_attn: false,
-                    softcap: softcapping.map(|x| x as f32),
-                    softmax_scale: self.scale,
-                    sliding_window: self.sliding_window,
-                },
+                flash_params,
+                sdpa_params,
             )?),
         };
 
@@ -176,8 +154,8 @@ impl PagedAttention {
             context_lens,
             alibi_slopes.as_ref(),
             input_metadata.max_context_len.unwrap(),
-            self.scale,
-            softcapping.unwrap_or(1.0f64) as f32,
+            sdpa_params.softmax_scale,
+            sdpa_params.softcap.unwrap_or(1.0f32),
         )
     }
 }

@@ -110,6 +110,7 @@ impl LayerWeights {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    &self.sdpa_params,
                     None,
                 )?
             }
@@ -284,15 +285,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
             )?;
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
-                    head_count,
-                    head_dim,
-                    (1.0 / (head_dim as f64).sqrt()) as f32,
-                    Some(head_count_kv),
-                    None, // TODO
-                    device,
-                    None,
-                )?),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
             };
             let qkv = QLinear::new(&mut ct, &format!("{prefix}.attn_qkv"), device)?;
             let out = QLinear::new(&mut ct, &format!("{prefix}.attn_output"), device)?;

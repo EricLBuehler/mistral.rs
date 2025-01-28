@@ -177,7 +177,6 @@ struct Attention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    attn_logit_softcapping: Option<f64>,
     use_sliding_window: bool,
     sliding_window: Option<usize>,
     paged_attn: Option<PagedAttention>,
@@ -240,7 +239,6 @@ impl Attention {
             num_kv_heads,
             head_dim,
             rotary_emb,
-            attn_logit_softcapping: cfg.attn_logit_softcapping,
             use_sliding_window: layer_idx % 2 == 0, // Order is SWA, global, SWA
             sliding_window,
             paged_attn,
@@ -317,7 +315,8 @@ impl Attention {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
-                    self.attn_logit_softcapping,
+                    &self.sdpa_params,
+                    Some(flash_params),
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -333,7 +332,8 @@ impl Attention {
                         None,
                         None,
                         &mut input_metadata,
-                        self.attn_logit_softcapping,
+                        &self.sdpa_params,
+                        Some(flash_params),
                     )?
                 }
             },
@@ -528,24 +528,11 @@ impl Model {
                 .get(&device.location())
                 .expect("No RoPE for device location!")
                 .clone();
-            let head_dim = cfg.head_dim;
-            let sliding_window = if layer_idx % 2 == 0 {
-                // ^ Order is SWA, global, SWA
-                Some(cfg.sliding_window)
-            } else {
-                None
-            };
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
-                    cfg.num_attention_heads,
-                    head_dim,
-                    (1.0 / (cfg.query_pre_attn_scalar as f64).sqrt()) as f32,
-                    Some(cfg.num_key_value_heads),
-                    sliding_window,
-                    device,
-                    None,
-                )?),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(cfg.head_dim, device, None)?)
+                }
             };
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),

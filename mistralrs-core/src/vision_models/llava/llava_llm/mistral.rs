@@ -243,7 +243,8 @@ impl Attention {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
-                    None,
+                    &self.sdpa_params,
+                    Some(flash_params),
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -259,7 +260,8 @@ impl Attention {
                         None,
                         None,
                         &mut input_metadata,
-                        None,
+                        &self.sdpa_params,
+                        Some(flash_params),
                     )?
                 }
             },
@@ -305,6 +307,7 @@ struct DecoderLayer {
     mlp: Box<dyn MlpLayer>,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
+    rope_parameter: (Tensor, Tensor),
 }
 
 impl DecoderLayer {
@@ -315,6 +318,7 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        rope_parameter: (Tensor, Tensor),
     ) -> Result<Self> {
         let self_attn = Attention::new(
             cfg,
@@ -337,6 +341,7 @@ impl DecoderLayer {
             mlp: Box::new(mlp),
             input_layernorm,
             post_attention_layernorm,
+            rope_parameter,
         })
     }
 
@@ -347,7 +352,6 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut Option<(Tensor, Tensor)>,
-        rope_parameter: (&Tensor, &Tensor),
         metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -358,7 +362,7 @@ impl DecoderLayer {
             attention_mask,
             seqlen_offsets,
             kv_cache,
-            rope_parameter,
+            (&self.rope_parameter.0, &self.rope_parameter.1),
             metadata,
             flash_params,
         )?;
@@ -381,7 +385,6 @@ pub struct Model {
     cache: EitherCache,
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    rope_parameters: (Tensor, Tensor),
     cfg: ModelConfigMetadata,
 }
 
@@ -422,27 +425,24 @@ impl Model {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        let rope_parameters = OrdinaryRoPE::create_parameters(
-            head_dim,
-            cfg.max_position_embeddings,
-            cfg.rope_theta as f32,
-            vb_m.dtype(),
-            &normal_loading_metadata.real_device,
-        )?;
         for layer_idx in
             NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
         {
+            let device = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rope_parameters = OrdinaryRoPE::create_parameters(
+                head_dim,
+                cfg.max_position_embeddings,
+                cfg.rope_theta as f32,
+                vb_m.dtype(),
+                device,
+            )?;
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
-                    cfg.num_attention_heads,
-                    head_dim,
-                    (1.0 / (head_dim as f64).sqrt()) as f32,
-                    Some(cfg.num_key_value_heads),
-                    cfg.sliding_window,
-                    &normal_loading_metadata.real_device,
-                    None,
-                )?),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
             };
             let layer = DecoderLayer::new(
                 cfg,
@@ -451,6 +451,7 @@ impl Model {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
+                rope_parameters,
             )?;
             layers.push(layer)
         }
@@ -474,7 +475,6 @@ impl Model {
             cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
-            rope_parameters,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
@@ -548,7 +548,6 @@ impl Model {
                     .as_ref(),
                 seqlen_offsets,
                 &mut cache[i],
-                (&self.rope_parameters.0, &self.rope_parameters.1),
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
