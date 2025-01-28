@@ -1336,11 +1336,7 @@
 <a href="#1335" id="1335">1335</a>
 <a href="#1336" id="1336">1336</a>
 <a href="#1337" id="1337">1337</a>
-<a href="#1338" id="1338">1338</a>
-<a href="#1339" id="1339">1339</a>
-<a href="#1340" id="1340">1340</a>
-<a href="#1341" id="1341">1341</a>
-<a href="#1342" id="1342">1342</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1338" id="1338">1338</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3_inputs_processor;
 
@@ -1616,7 +1612,8 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
-                    <span class="prelude-val">None</span>,
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                    <span class="prelude-val">Some</span>(flash_params),
                 )<span class="question-mark">?</span>,
                 <span class="prelude-val">None </span>=&gt; {
                     <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -1632,7 +1629,8 @@
                         <span class="prelude-val">None</span>,
                         <span class="prelude-val">None</span>,
                         <span class="kw-2">&amp;mut </span>input_metadata,
-                        <span class="prelude-val">None</span>,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                        <span class="prelude-val">Some</span>(flash_params),
                     )<span class="question-mark">?
                 </span>}
             },
@@ -2339,15 +2337,9 @@
                 .clone();
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
-                AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(
-                    cfg.num_attention_heads,
-                    cfg.head_dim(),
-                    (<span class="number">1.0 </span>/ (cfg.head_dim() <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
-                    <span class="prelude-val">Some</span>(cfg.num_key_value_heads),
-                    cfg.sliding_window,
-                    device,
-                    <span class="prelude-val">None</span>,
-                )<span class="question-mark">?</span>),
+                AttentionImplementation::PagedAttention =&gt; {
+                    <span class="prelude-val">Some</span>(PagedAttention::new(cfg.head_dim(), device, <span class="prelude-val">None</span>)<span class="question-mark">?</span>)
+                }
             };
             <span class="kw">let </span>layer = DecoderLayer::new(
                 rotary_emb.clone(),

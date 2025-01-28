@@ -837,7 +837,8 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
-                    <span class="prelude-val">None</span>,
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                    <span class="prelude-val">Some</span>(flash_params),
                 )<span class="question-mark">?</span>,
                 <span class="prelude-val">None </span>=&gt; {
                     <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -853,7 +854,8 @@
                         <span class="prelude-val">None</span>,
                         <span class="prelude-val">None</span>,
                         <span class="kw-2">&amp;mut </span>input_metadata,
-                        <span class="prelude-val">None</span>,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                        <span class="prelude-val">Some</span>(flash_params),
                     )<span class="question-mark">?
                 </span>}
             },
@@ -1036,6 +1038,7 @@
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
     mlp: Box&lt;<span class="kw">dyn </span>MlpLayer&gt;,
+    rope_parameter: (Tensor, Tensor),
 }
 
 <span class="kw">impl </span>Block {
@@ -1046,7 +1049,6 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         block_idx: usize,
         kv_cache: <span class="kw-2">&amp;mut </span><span class="kw">crate</span>::pipeline::LayerCaches,
-        rope_parameters: (<span class="kw-2">&amp;</span>Tensor, <span class="kw-2">&amp;</span>Tensor),
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1058,7 +1060,7 @@
             seqlen_offsets,
             block_idx,
             kv_cache,
-            rope_parameters,
+            (<span class="kw-2">&amp;</span><span class="self">self</span>.rope_parameter.<span class="number">0</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.rope_parameter.<span class="number">1</span>),
             metadata,
             flash_params,
         )<span class="question-mark">? </span>+ residual)<span class="question-mark">?</span>;
@@ -1074,6 +1076,7 @@
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
+        rope_parameter: (Tensor, Tensor),
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>attn = CausalSelfAttention::load(
             mapper.set_device(layer_idx, vb.pp(<span class="string">"self_attn"</span>), loading_isq),
@@ -1096,6 +1099,7 @@
             attn,
             rms_2,
             mlp: Box::new(mlp),
+            rope_parameter,
         })
     }
 }
@@ -1108,7 +1112,6 @@
     kv_cache: <span class="kw">crate</span>::pipeline::EitherCache,
     device: Device,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
-    rope_parameters: (Tensor, Tensor),
     cfg: ModelConfigMetadata,
 }
 
@@ -1161,39 +1164,38 @@
             NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
                 .into_iter()
                 .map(|i| {
+                    <span class="kw">let </span>vb_m = vb.pp(<span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>));
+                    <span class="kw">let </span>device = mapper
+                        .device_for(i, <span class="bool-val">false</span>)
+                        .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+                    <span class="kw">let </span>rope_parameters = OrdinaryRoPE::create_parameters(
+                        head_dim,
+                        cfg.max_position_embeddings,
+                        cfg.rope_theta,
+                        vb_m.dtype(),
+                        device,
+                    )
+                    .unwrap();
                     <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                         AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
                         AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(
-                            PagedAttention::new(
-                                cfg.num_attention_heads,
-                                head_dim,
-                                (<span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
-                                <span class="prelude-val">Some</span>(cfg.num_key_value_heads),
-                                <span class="prelude-val">None</span>,
-                                <span class="kw-2">&amp;</span>normal_loading_metadata.real_device,
-                                <span class="prelude-val">None</span>,
-                            )
-                            .expect(<span class="string">"Failed to create PagedAttention"</span>),
+                            PagedAttention::new(head_dim, device, <span class="prelude-val">None</span>)
+                                .expect(<span class="string">"Failed to create PagedAttention"</span>),
                         ),
                     };
                     Block::load(
-                        vb.pp(<span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>)),
+                        vb_m,
                         cfg,
                         <span class="kw-2">&amp;*</span>mapper,
                         i,
                         normal_loading_metadata.loading_isq,
                         paged_attn,
+                        rope_parameters,
                     )
                     .expect(<span class="string">"Failed to load block."</span>)
                 })
                 .collect();
-        <span class="kw">let </span>rope_parameters = OrdinaryRoPE::create_parameters(
-            head_dim,
-            cfg.max_position_embeddings,
-            cfg.rope_theta,
-            vb.dtype(),
-            <span class="kw-2">&amp;</span>normal_loading_metadata.real_device,
-        )<span class="question-mark">?</span>;
+
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             wte,
             blocks,
@@ -1205,7 +1207,6 @@
             )),
             device: normal_loading_metadata.real_device,
             mapper,
-            rope_parameters,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
@@ -1289,7 +1290,6 @@
                 seqlen_offsets,
                 block_idx,
                 <span class="kw-2">&amp;mut </span>cache,
-                (<span class="kw-2">&amp;</span><span class="self">self</span>.rope_parameters.<span class="number">0</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.rope_parameters.<span class="number">1</span>),
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), <span class="kw-2">&amp;mut **</span>metadata)),

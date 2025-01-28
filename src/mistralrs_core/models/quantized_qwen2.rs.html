@@ -418,12 +418,7 @@
 <a href="#417" id="417">417</a>
 <a href="#418" id="418">418</a>
 <a href="#419" id="419">419</a>
-<a href="#420" id="420">420</a>
-<a href="#421" id="421">421</a>
-<a href="#422" id="422">422</a>
-<a href="#423" id="423">423</a>
-<a href="#424" id="424">424</a>
-<a href="#425" id="425">425</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#420" id="420">420</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::collections::HashMap;
 <span class="kw">use </span>std::sync::Arc;
@@ -529,6 +524,7 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
                     <span class="prelude-val">None</span>,
                 )<span class="question-mark">?
             </span>}
@@ -727,15 +723,9 @@
             <span class="kw">let </span>ffn_norm = ct.tensor(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{prefix}.ffn_norm.weight"</span>), device)<span class="question-mark">?</span>;
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
-                AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(
-                    head_count,
-                    head_dim,
-                    (<span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
-                    <span class="prelude-val">Some</span>(head_count_kv),
-                    <span class="prelude-val">None</span>,
-                    device,
-                    <span class="prelude-val">None</span>,
-                )<span class="question-mark">?</span>),
+                AttentionImplementation::PagedAttention =&gt; {
+                    <span class="prelude-val">Some</span>(PagedAttention::new(head_dim, device, <span class="prelude-val">None</span>)<span class="question-mark">?</span>)
+                }
             };
             layers.push(LayerWeights {
                 attention_wq: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {

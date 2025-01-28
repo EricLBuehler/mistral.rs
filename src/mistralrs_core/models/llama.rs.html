@@ -842,13 +842,7 @@
 <a href="#841" id="841">841</a>
 <a href="#842" id="842">842</a>
 <a href="#843" id="843">843</a>
-<a href="#844" id="844">844</a>
-<a href="#845" id="845">845</a>
-<a href="#846" id="846">846</a>
-<a href="#847" id="847">847</a>
-<a href="#848" id="848">848</a>
-<a href="#849" id="849">849</a>
-<a href="#850" id="850">850</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#844" id="844">844</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{embedding, Embedding, Module, VarBuilder};
@@ -969,7 +963,8 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
-                    <span class="prelude-val">None</span>,
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                    <span class="prelude-val">Some</span>(flash_params),
                 )<span class="question-mark">?</span>,
                 <span class="prelude-val">None </span>=&gt; {
                     <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -985,7 +980,8 @@
                         <span class="prelude-val">None</span>,
                         <span class="prelude-val">None</span>,
                         <span class="kw-2">&amp;mut </span>input_metadata,
-                        <span class="prelude-val">None</span>,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                        <span class="prelude-val">Some</span>(flash_params),
                     )<span class="question-mark">?
                 </span>}
             },
@@ -1340,16 +1336,8 @@
                     <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                         AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
                         AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(
-                            PagedAttention::new(
-                                cfg.num_attention_heads,
-                                head_dim,
-                                (<span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
-                                <span class="prelude-val">Some</span>(cfg.num_key_value_heads),
-                                <span class="prelude-val">None</span>,
-                                device,
-                                <span class="prelude-val">None</span>,
-                            )
-                            .expect(<span class="string">"Failed to create PagedAttention"</span>),
+                            PagedAttention::new(head_dim, device, <span class="prelude-val">None</span>)
+                                .expect(<span class="string">"Failed to create PagedAttention"</span>),
                         ),
                     };
                     Block::load(

@@ -770,11 +770,7 @@
 <a href="#769" id="769">769</a>
 <a href="#770" id="770">770</a>
 <a href="#771" id="771">771</a>
-<a href="#772" id="772">772</a>
-<a href="#773" id="773">773</a>
-<a href="#774" id="774">774</a>
-<a href="#775" id="775">775</a>
-<a href="#776" id="776">776</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#772" id="772">772</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{layer_norm, LayerNorm, Linear, VarBuilder};
@@ -1041,7 +1037,8 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
-                    <span class="prelude-val">None</span>,
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                    <span class="prelude-val">Some</span>(flash_params),
                 )<span class="question-mark">?</span>,
                 <span class="prelude-val">None </span>=&gt; {
                     <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -1057,7 +1054,8 @@
                         <span class="prelude-val">None</span>,
                         <span class="prelude-val">None</span>,
                         <span class="kw-2">&amp;mut </span>input_metadata,
-                        <span class="prelude-val">None</span>,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                        <span class="prelude-val">Some</span>(flash_params),
                     )<span class="question-mark">?
                 </span>}
             },
@@ -1233,15 +1231,9 @@
                 .clone();
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
-                AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(
-                    cfg.num_attention_heads,
-                    head_dim,
-                    (<span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
-                    <span class="prelude-val">Some</span>(cfg.num_key_value_heads),
-                    cfg.sliding_window,
-                    device,
-                    <span class="prelude-val">None</span>,
-                )<span class="question-mark">?</span>),
+                AttentionImplementation::PagedAttention =&gt; {
+                    <span class="prelude-val">Some</span>(PagedAttention::new(head_dim, device, <span class="prelude-val">None</span>)<span class="question-mark">?</span>)
+                }
             };
             layers.push(DecoderLayer::new(
                 rotary_emb.clone(),

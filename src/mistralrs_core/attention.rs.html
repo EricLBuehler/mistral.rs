@@ -333,7 +333,53 @@
 <a href="#332" id="332">332</a>
 <a href="#333" id="333">333</a>
 <a href="#334" id="334">334</a>
-<a href="#335" id="335">335</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a>
+<a href="#343" id="343">343</a>
+<a href="#344" id="344">344</a>
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a>
+<a href="#350" id="350">350</a>
+<a href="#351" id="351">351</a>
+<a href="#352" id="352">352</a>
+<a href="#353" id="353">353</a>
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -375,8 +421,7 @@
         <span class="kw">let </span>window_size_left = sdpa_params.sliding_window;
         <span class="kw">let </span>window_size_right = <span class="kw">if </span>causal { <span class="prelude-val">Some</span>(<span class="number">0</span>) } <span class="kw">else </span>{ <span class="prelude-val">None </span>};
 
-        <span class="comment">//dbg!(&amp;qshape);
-        </span>candle_flash_attn::flash_attn_varlen_windowed_softcap(
+        candle_flash_attn::flash_attn_varlen_windowed_softcap(
             <span class="kw-2">&amp;</span>q,
             <span class="kw-2">&amp;</span>k,
             <span class="kw-2">&amp;</span>v,
@@ -402,7 +447,54 @@
     }
 }
 
-<span class="attr">#[cfg(not(feature = <span class="string">"flash-attn"</span>))]
+<span class="attr">#[cfg(feature = <span class="string">"flash-attn-v3"</span>)]
+</span><span class="kw">fn </span>flash_attn(
+    q: <span class="kw-2">&amp;</span>Tensor,
+    k: <span class="kw-2">&amp;</span>Tensor,
+    v: <span class="kw-2">&amp;</span>Tensor,
+    flash_params: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::FlashParams&gt;,
+    sdpa_params: <span class="kw-2">&amp;</span>SdpaParams,
+) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">let </span>(_b_sz, _n_attn_heads, seq_len, _head_dim) = q.dims4()<span class="question-mark">?</span>;
+    <span class="kw">let </span>causal = seq_len &gt; <span class="number">1</span>;
+
+    <span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::FlashParams;
+
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(FlashParams {
+        max_q,
+        max_k,
+        cumulative_seqlens_q,
+        cumulative_seqlens_k,
+    }) = flash_params
+    {
+        <span class="kw">let </span>qshape = q.shape();
+        <span class="kw">let </span>q = q.flatten_to(<span class="number">1</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>k = k.flatten_to(<span class="number">1</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>v = v.flatten_to(<span class="number">1</span>)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>window_size_left = sdpa_params.sliding_window;
+        <span class="kw">let </span>window_size_right = <span class="kw">if </span>causal { <span class="prelude-val">Some</span>(<span class="number">0</span>) } <span class="kw">else </span>{ <span class="prelude-val">None </span>};
+
+        candle_flash_attn_v3::flash_attn_varlen_windowed(
+            <span class="kw-2">&amp;</span>q,
+            <span class="kw-2">&amp;</span>k,
+            <span class="kw-2">&amp;</span>v,
+            cumulative_seqlens_q,
+            cumulative_seqlens_k,
+            <span class="kw-2">*</span>max_q <span class="kw">as </span>usize,
+            <span class="kw-2">*</span>max_k <span class="kw">as </span>usize,
+            sdpa_params.softmax_scale,
+            window_size_left,
+            window_size_right,
+            <span class="bool-val">true</span>,
+        )<span class="question-mark">?
+        </span>.reshape(qshape)
+    } <span class="kw">else </span>{
+        candle_flash_attn_v3::flash_attn(q, k, v, sdpa_params.softmax_scale, causal, <span class="bool-val">true</span>)
+    }
+}
+
+<span class="attr">#[cfg(not(any(feature = <span class="string">"flash-attn"</span>, feature = <span class="string">"flash-attn-v3"</span>)))]
 </span><span class="kw">fn </span>flash_attn(
     <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor,
     <span class="kw">_</span>: <span class="kw-2">&amp;</span>Tensor,
@@ -410,7 +502,7 @@
     <span class="kw">_</span>: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::FlashParams&gt;,
     <span class="kw">_</span>: <span class="kw-2">&amp;</span>SdpaParams,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="macro">unimplemented!</span>(<span class="string">"Compile with '--features flash-attn'"</span>)
+    <span class="macro">unimplemented!</span>(<span class="string">"Compile with `--features flash-attn` or `--features flash-attn-v3`."</span>)
 }
 
 <span class="kw">fn </span>repeat_kv(x: Tensor, n_rep: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -557,9 +649,9 @@
     /// - v: (b_sz, n_kv_heads, q_len, head_dim)
     ///
     /// The attention implementation is dispatched as follows:
-    /// 1) If `use_flash_attn == true`, use a flash attention V2 kernel
-    /// 2) If using CUDA and the cuBLASLt kernel is initialized, then it will use an optimized version.
-    /// 3) Otherwise, use the "naive" SDPA implementation.
+    /// 1) If `use_flash_attn == true` (CUDA), use a flash attention V2 kernel
+    /// 2) If decoding and using a Metal device, use a fused kkernel
+    /// 2) Otherwise, use the "naive" SDPA implementation (with optimized mask+softmax+scale application)
     </span><span class="attr">#[allow(unused_variables, clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>run_attention(
         <span class="kw-2">&amp;</span><span class="self">self</span>,

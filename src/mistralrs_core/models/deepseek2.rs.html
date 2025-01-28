@@ -1119,13 +1119,7 @@
 <a href="#1118" id="1118">1118</a>
 <a href="#1119" id="1119">1119</a>
 <a href="#1120" id="1120">1120</a>
-<a href="#1121" id="1121">1121</a>
-<a href="#1122" id="1122">1122</a>
-<a href="#1123" id="1123">1123</a>
-<a href="#1124" id="1124">1124</a>
-<a href="#1125" id="1125">1125</a>
-<a href="#1126" id="1126">1126</a>
-<a href="#1127" id="1127">1127</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1121" id="1121">1121</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1446,7 +1440,8 @@
                             <span class="prelude-val">Some</span>(key_cache),
                             <span class="prelude-val">Some</span>(value_cache),
                             input_metadata,
-                            <span class="prelude-val">None</span>,
+                            <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                            <span class="prelude-val">Some</span>(flash_params),
                         )<span class="question-mark">?
                         </span>.narrow(D::Minus1, <span class="number">0</span>, <span class="self">self</span>.cfg.v_head_dim)<span class="question-mark">?
                 </span>}
@@ -1468,7 +1463,8 @@
                             <span class="prelude-val">None</span>,
                             <span class="prelude-val">None</span>,
                             <span class="kw-2">&amp;mut </span>input_metadata,
-                            <span class="prelude-val">None</span>,
+                            <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                            <span class="prelude-val">Some</span>(flash_params),
                         )<span class="question-mark">?
                         </span>.narrow(D::Minus1, <span class="number">0</span>, <span class="self">self</span>.cfg.v_head_dim)<span class="question-mark">?
                 </span>}
@@ -1923,16 +1919,8 @@
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
                 AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(
-                    PagedAttention::new(
-                        cfg.num_attention_heads,
-                        cfg.v_head_dim,
-                        cfg.softmax_scale(),
-                        <span class="prelude-val">Some</span>(cfg.num_attention_heads),
-                        <span class="prelude-val">None</span>,
-                        device,
-                        <span class="prelude-val">None</span>,
-                    )
-                    .expect(<span class="string">"Failed to create PagedAttention"</span>),
+                    PagedAttention::new(cfg.v_head_dim, device, <span class="prelude-val">None</span>)
+                        .expect(<span class="string">"Failed to create PagedAttention"</span>),
                 ),
             };
             <span class="kw">let </span>layer = DecoderLayer::new(

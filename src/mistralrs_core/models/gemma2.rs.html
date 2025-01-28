@@ -904,20 +904,7 @@
 <a href="#903" id="903">903</a>
 <a href="#904" id="904">904</a>
 <a href="#905" id="905">905</a>
-<a href="#906" id="906">906</a>
-<a href="#907" id="907">907</a>
-<a href="#908" id="908">908</a>
-<a href="#909" id="909">909</a>
-<a href="#910" id="910">910</a>
-<a href="#911" id="911">911</a>
-<a href="#912" id="912">912</a>
-<a href="#913" id="913">913</a>
-<a href="#914" id="914">914</a>
-<a href="#915" id="915">915</a>
-<a href="#916" id="916">916</a>
-<a href="#917" id="917">917</a>
-<a href="#918" id="918">918</a>
-<a href="#919" id="919">919</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#906" id="906">906</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1096,7 +1083,6 @@
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc&lt;RotaryEmbedding&gt;,
-    attn_logit_softcapping: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     use_sliding_window: bool,
     sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
@@ -1159,7 +1145,6 @@
             num_kv_heads,
             head_dim,
             rotary_emb,
-            attn_logit_softcapping: cfg.attn_logit_softcapping,
             use_sliding_window: layer_idx % <span class="number">2 </span>== <span class="number">0</span>, <span class="comment">// Order is SWA, global, SWA
             </span>sliding_window,
             paged_attn,
@@ -1236,7 +1221,8 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
-                    <span class="self">self</span>.attn_logit_softcapping,
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                    <span class="prelude-val">Some</span>(flash_params),
                 )<span class="question-mark">?</span>,
                 <span class="prelude-val">None </span>=&gt; {
                     <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -1252,7 +1238,8 @@
                         <span class="prelude-val">None</span>,
                         <span class="prelude-val">None</span>,
                         <span class="kw-2">&amp;mut </span>input_metadata,
-                        <span class="self">self</span>.attn_logit_softcapping,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                        <span class="prelude-val">Some</span>(flash_params),
                     )<span class="question-mark">?
                 </span>}
             },
@@ -1447,24 +1434,11 @@
                 .get(<span class="kw-2">&amp;</span>device.location())
                 .expect(<span class="string">"No RoPE for device location!"</span>)
                 .clone();
-            <span class="kw">let </span>head_dim = cfg.head_dim;
-            <span class="kw">let </span>sliding_window = <span class="kw">if </span>layer_idx % <span class="number">2 </span>== <span class="number">0 </span>{
-                <span class="comment">// ^ Order is SWA, global, SWA
-                </span><span class="prelude-val">Some</span>(cfg.sliding_window)
-            } <span class="kw">else </span>{
-                <span class="prelude-val">None
-            </span>};
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
-                AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(
-                    cfg.num_attention_heads,
-                    head_dim,
-                    (<span class="number">1.0 </span>/ (cfg.query_pre_attn_scalar <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
-                    <span class="prelude-val">Some</span>(cfg.num_key_value_heads),
-                    sliding_window,
-                    device,
-                    <span class="prelude-val">None</span>,
-                )<span class="question-mark">?</span>),
+                AttentionImplementation::PagedAttention =&gt; {
+                    <span class="prelude-val">Some</span>(PagedAttention::new(cfg.head_dim, device, <span class="prelude-val">None</span>)<span class="question-mark">?</span>)
+                }
             };
             <span class="kw">let </span>layer = DecoderLayer::new(
                 rotary_emb.clone(),

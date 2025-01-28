@@ -768,7 +768,12 @@
 <a href="#767" id="767">767</a>
 <a href="#768" id="768">768</a>
 <a href="#769" id="769">769</a>
-<a href="#770" id="770">770</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1064,7 +1069,8 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
-                    <span class="prelude-val">None</span>,
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                    <span class="prelude-val">Some</span>(flash_params),
                 )<span class="question-mark">?</span>,
                 <span class="prelude-val">None </span>=&gt; {
                     <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -1072,7 +1078,17 @@
                     </span><span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata::dummy(q.device())<span class="question-mark">?</span>;
                     <span class="comment">// Sanity check.
                     </span><span class="macro">assert!</span>(mask.is_some());
-                    paged_attn.forward(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="kw-2">&amp;mut </span>input_metadata, <span class="prelude-val">None</span>)<span class="question-mark">?
+                    paged_attn.forward(
+                        <span class="kw-2">&amp;</span>q,
+                        <span class="kw-2">&amp;</span>k,
+                        <span class="kw-2">&amp;</span>v,
+                        mask,
+                        <span class="prelude-val">None</span>,
+                        <span class="prelude-val">None</span>,
+                        <span class="kw-2">&amp;mut </span>input_metadata,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                        <span class="prelude-val">Some</span>(flash_params),
+                    )<span class="question-mark">?
                 </span>}
             },
             <span class="prelude-val">None </span>=&gt; {
@@ -1227,15 +1243,9 @@
                 .clone();
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
-                AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(
-                    cfg.num_attention_heads,
-                    cfg.head_dim(),
-                    (<span class="number">1.0 </span>/ (cfg.head_dim() <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
-                    <span class="prelude-val">Some</span>(cfg.num_key_value_heads()),
-                    <span class="prelude-val">None</span>,
-                    device,
-                    <span class="prelude-val">None</span>,
-                )<span class="question-mark">?</span>),
+                AttentionImplementation::PagedAttention =&gt; {
+                    <span class="prelude-val">Some</span>(PagedAttention::new(cfg.head_dim(), device, <span class="prelude-val">None</span>)<span class="question-mark">?</span>)
+                }
             };
             <span class="kw">let </span>layer = DecoderLayer::new(
                 cfg,

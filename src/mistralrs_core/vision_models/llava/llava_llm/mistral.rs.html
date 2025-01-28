@@ -793,8 +793,7 @@
 <a href="#792" id="792">792</a>
 <a href="#793" id="793">793</a>
 <a href="#794" id="794">794</a>
-<a href="#795" id="795">795</a>
-<a href="#796" id="796">796</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#795" id="795">795</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
@@ -1039,7 +1038,8 @@
                     <span class="prelude-val">Some</span>(key_cache),
                     <span class="prelude-val">Some</span>(value_cache),
                     input_metadata,
-                    <span class="prelude-val">None</span>,
+                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                    <span class="prelude-val">Some</span>(flash_params),
                 )<span class="question-mark">?</span>,
                 <span class="prelude-val">None </span>=&gt; {
                     <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -1055,7 +1055,8 @@
                         <span class="prelude-val">None</span>,
                         <span class="prelude-val">None</span>,
                         <span class="kw-2">&amp;mut </span>input_metadata,
-                        <span class="prelude-val">None</span>,
+                        <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
+                        <span class="prelude-val">Some</span>(flash_params),
                     )<span class="question-mark">?
                 </span>}
             },
@@ -1101,6 +1102,7 @@
     mlp: Box&lt;<span class="kw">dyn </span>MlpLayer&gt;,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
+    rope_parameter: (Tensor, Tensor),
 }
 
 <span class="kw">impl </span>DecoderLayer {
@@ -1111,6 +1113,7 @@
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
+        rope_parameter: (Tensor, Tensor),
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>self_attn = Attention::new(
             cfg,
@@ -1133,6 +1136,7 @@
             mlp: Box::new(mlp),
             input_layernorm,
             post_attention_layernorm,
+            rope_parameter,
         })
     }
 
@@ -1143,7 +1147,6 @@
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         kv_cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
-        rope_parameter: (<span class="kw-2">&amp;</span>Tensor, <span class="kw-2">&amp;</span>Tensor),
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1154,7 +1157,7 @@
             attention_mask,
             seqlen_offsets,
             kv_cache,
-            rope_parameter,
+            (<span class="kw-2">&amp;</span><span class="self">self</span>.rope_parameter.<span class="number">0</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.rope_parameter.<span class="number">1</span>),
             metadata,
             flash_params,
         )<span class="question-mark">?</span>;
@@ -1177,7 +1180,6 @@
     cache: EitherCache,
     max_seq_len: usize,
     mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
-    rope_parameters: (Tensor, Tensor),
     cfg: ModelConfigMetadata,
 }
 
@@ -1218,27 +1220,24 @@
         <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
-        <span class="kw">let </span>rope_parameters = OrdinaryRoPE::create_parameters(
-            head_dim,
-            cfg.max_position_embeddings,
-            cfg.rope_theta <span class="kw">as </span>f32,
-            vb_m.dtype(),
-            <span class="kw-2">&amp;</span>normal_loading_metadata.real_device,
-        )<span class="question-mark">?</span>;
         <span class="kw">for </span>layer_idx <span class="kw">in
             </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
         {
+            <span class="kw">let </span>device = mapper
+                .device_for(layer_idx, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            <span class="kw">let </span>rope_parameters = OrdinaryRoPE::create_parameters(
+                head_dim,
+                cfg.max_position_embeddings,
+                cfg.rope_theta <span class="kw">as </span>f32,
+                vb_m.dtype(),
+                device,
+            )<span class="question-mark">?</span>;
             <span class="kw">let </span>paged_attn = <span class="kw">match </span><span class="kw-2">&amp;</span>attention_mechanism {
                 AttentionImplementation::Eager =&gt; <span class="prelude-val">None</span>,
-                AttentionImplementation::PagedAttention =&gt; <span class="prelude-val">Some</span>(PagedAttention::new(
-                    cfg.num_attention_heads,
-                    head_dim,
-                    (<span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt()) <span class="kw">as </span>f32,
-                    <span class="prelude-val">Some</span>(cfg.num_key_value_heads),
-                    cfg.sliding_window,
-                    <span class="kw-2">&amp;</span>normal_loading_metadata.real_device,
-                    <span class="prelude-val">None</span>,
-                )<span class="question-mark">?</span>),
+                AttentionImplementation::PagedAttention =&gt; {
+                    <span class="prelude-val">Some</span>(PagedAttention::new(head_dim, device, <span class="prelude-val">None</span>)<span class="question-mark">?</span>)
+                }
             };
             <span class="kw">let </span>layer = DecoderLayer::new(
                 cfg,
@@ -1247,6 +1246,7 @@
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
+                rope_parameters,
             )<span class="question-mark">?</span>;
             layers.push(layer)
         }
@@ -1270,7 +1270,6 @@
             cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, <span class="bool-val">false</span>)),
             max_seq_len: cfg.max_position_embeddings,
             mapper,
-            rope_parameters,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
@@ -1344,7 +1343,6 @@
                     .as_ref(),
                 seqlen_offsets,
                 <span class="kw-2">&amp;mut </span>cache[i],
-                (<span class="kw-2">&amp;</span><span class="self">self</span>.rope_parameters.<span class="number">0</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.rope_parameters.<span class="number">1</span>),
                 metadata
                     .as_mut()
                     .map(|(kv_cache, metadata)| (kv_cache[i].clone(), <span class="kw-2">&amp;mut **</span>metadata)),
