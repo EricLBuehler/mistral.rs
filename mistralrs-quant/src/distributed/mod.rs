@@ -25,10 +25,11 @@ mod ops {
             let Device::Cuda(device) = dev else {
                 candle_core::bail!("Expected CUDA device.")
             };
-            Ok(Self(
-                cudarc::nccl::Comm::from_rank(device.cuda_device(), rank, world_size, id.0)
-                    .expect("Failed to create `Comm`"),
-            ))
+            dbg!(&device.name());
+            let c = cudarc::nccl::Comm::from_rank(device.cuda_device(), rank, world_size, id.0)
+                .expect("Failed to create `Comm`");
+            println!("a");
+            Ok(Self(c))
         }
     }
 
