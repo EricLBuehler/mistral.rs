@@ -1,8 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{layer_norm, LayerNorm, Linear, VarBuilder};
-use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use candle_nn::{var_builder::ShardedVarBuilder, LayerNorm, Linear, VarBuilder};
+use mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, RowParallelLayer,
+    UnquantLinear,
+};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -10,7 +13,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{Activation, CausalMasker, MatMul, RotaryEmbedding, Sdpa},
+    layers::{embedding, layer_norm, Activation, CausalMasker, MatMul, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -56,20 +59,22 @@ struct MLP {
 }
 
 impl MLP {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: ShardedVarBuilder, comm: &Arc<mistralrs_quant::Comm>) -> Result<Self> {
         let (h_size, i_size) = (cfg.hidden_size, cfg.intermediate_size);
-        let c_fc = mistralrs_quant::linear_b(
+        let c_fc = ColumnParallelLayer::new(
             h_size,
             i_size,
-            cfg.use_bias,
             &cfg.quantization_config,
+            cfg.use_bias,
+            comm,
             vb.pp("c_fc"),
         )?;
-        let c_proj = mistralrs_quant::linear_b(
+        let c_proj = RowParallelLayer::new(
             i_size,
             h_size,
-            cfg.use_bias,
             &cfg.quantization_config,
+            cfg.use_bias,
+            comm,
             vb.pp("c_proj"),
         )?;
         Ok(Self {
@@ -154,38 +159,43 @@ impl Attention {
         cfg: &Config,
         vb: ShardedVarBuilder,
         paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = hidden_sz / num_heads;
         let b = cfg.use_bias;
-        let q_proj = mistralrs_quant::linear_b(
+        let q_proj = ColumnParallelLayer::new(
             hidden_sz,
             num_heads * head_dim,
-            b,
             &cfg.quantization_config,
+            b,
+            comm,
             vb.pp("q_proj"),
         )?;
-        let k_proj = mistralrs_quant::linear_b(
+        let k_proj = ColumnParallelLayer::new(
             hidden_sz,
             num_kv_heads * head_dim,
-            b,
             &cfg.quantization_config,
+            b,
+            comm,
             vb.pp("k_proj"),
         )?;
-        let v_proj = mistralrs_quant::linear_b(
+        let v_proj = ColumnParallelLayer::new(
             hidden_sz,
             num_kv_heads * head_dim,
-            b,
             &cfg.quantization_config,
+            b,
+            comm,
             vb.pp("v_proj"),
         )?;
-        let o_proj = mistralrs_quant::linear_b(
+        let o_proj = RowParallelLayer::new(
             num_heads * head_dim,
             hidden_sz,
-            b,
             &cfg.quantization_config,
+            b,
+            comm,
             vb.pp("o_proj"),
         )?;
         Ok(Self {
@@ -334,14 +344,20 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             paged_attn,
+            comm,
         )?;
-        let mlp = MLP::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
+        let mlp = MLP::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+            comm,
+        )?;
         let input_layernorm = layer_norm(
             cfg.hidden_size,
             cfg.norm_epsilon,
@@ -400,6 +416,7 @@ pub struct Model {
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
+    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Model {
@@ -409,6 +426,7 @@ impl Model {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
@@ -420,7 +438,7 @@ impl Model {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
@@ -471,6 +489,7 @@ impl Model {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
+                &comm,
             )?)
         }
         let norm = layer_norm(
@@ -507,6 +526,7 @@ impl Model {
                 k_head_dim: None,
                 v_head_dim: None,
             },
+            comm,
         })
     }
 
@@ -710,6 +730,7 @@ impl AnyMoeBaseModelMixin for Model {
                                 ..Default::default()
                             },
                             vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
+                            &self.comm,
                         )?));
                     }
                     AnyMoeExpertType::LoraAdapter {

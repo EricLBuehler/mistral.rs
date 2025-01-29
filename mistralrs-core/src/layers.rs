@@ -7,7 +7,8 @@ use candle_core::{
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
 use candle_nn::{
-    var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Embedding, Linear, Module, VarBuilder,
+    var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Embedding, LayerNorm, LayerNormConfig,
+    Linear, Module, VarBuilder,
 };
 use float8::F8E4M3;
 use half::{bf16, f16};
@@ -27,8 +28,23 @@ use crate::{
 pub use mistralrs_quant::MatMul;
 
 pub fn embedding(in_size: usize, out_size: usize, vb: ShardedVarBuilder) -> Result<Embedding> {
-    let embeddings = vb.get_with_hints((in_size, out_size), "weight", Defaut::default())?;
+    let embeddings = vb.get_with_hints((in_size, out_size), "weight", Default::default())?;
     Ok(Embedding::new(embeddings, out_size))
+}
+
+pub fn layer_norm<C: Into<LayerNormConfig>>(
+    size: usize,
+    config: C,
+    vb: ShardedVarBuilder,
+) -> Result<LayerNorm> {
+    let config = config.into();
+    let weight = vb.get(size, "weight")?;
+    if config.affine {
+        let bias = vb.get(size, "bias")?;
+        Ok(LayerNorm::new(weight, bias, config.eps))
+    } else {
+        Ok(LayerNorm::new_no_bias(weight, config.eps))
+    }
 }
 
 #[derive(Debug, Clone)]
