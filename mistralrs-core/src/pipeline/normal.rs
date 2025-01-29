@@ -294,7 +294,7 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-        if device.is_cuda() {
+        {
             mapper = DeviceMapSetting::dummy();
 
             // NCCL case
