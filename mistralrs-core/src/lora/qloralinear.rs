@@ -1,9 +1,11 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
 use candle_core::{bail, quantized::QMatMul, DType, Module, Result, Tensor};
-use candle_nn::{var_builder::ShardedVarBuilder, Linear, VarBuilder};
+use candle_nn::{Linear, VarBuilder};
 use either::Either;
-use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, UnquantLinear};
+use mistralrs_quant::{
+    GgufMatMul, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear,
+};
 
 use crate::layers::MatMul;
 

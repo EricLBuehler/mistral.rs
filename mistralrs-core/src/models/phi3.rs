@@ -2,10 +2,11 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::VarBuilder;
 use mistralrs_quant::{
-    QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer, UnquantLinear,
+    QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder,
+    UnquantLinear,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -22,6 +23,7 @@ use crate::{
         PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
+    ops::SplitOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -101,6 +103,7 @@ impl Attention {
         let head_dim = cfg.head_dim();
         let op_size = num_heads * head_dim + 2 * num_kv_heads * head_dim;
 
+        // No TP here.
         let qkv_proj = mistralrs_quant::linear_no_bias(
             cfg.hidden_size,
             op_size,
@@ -264,6 +267,7 @@ impl Mlp {
         let hidden_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
 
+        // No TP here.
         let gate_up_proj = mistralrs_quant::linear_no_bias(
             hidden_size,
             2 * i_size,

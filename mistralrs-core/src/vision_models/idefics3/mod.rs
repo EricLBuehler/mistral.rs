@@ -7,9 +7,10 @@ mod vision;
 use std::{any::Any, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
+use candle_nn::VarBuilder;
 pub use config::Idefics3Config;
 pub use inputs_processor::Idefics3Processor;
+use mistralrs_quant::ShardedVarBuilder;
 use vision::{Idefics3Connector, Idefics3VisionTransformer};
 
 use crate::{

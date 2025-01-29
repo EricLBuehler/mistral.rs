@@ -22,9 +22,9 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
+use candle_nn::VarBuilder;
 
-use mistralrs_quant::QuantizedConfig;
+use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -1162,6 +1162,7 @@ impl NormalModelLoader for MixtralLoader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
+            comm,
         )?))
     }
     fn load_xlora(
@@ -2567,6 +2568,7 @@ impl NormalModelLoader for Phi3_5MoELoader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
+            comm,
         )?))
     }
     fn load_xlora(
@@ -2774,6 +2776,7 @@ impl NormalModelLoader for DeepSeekV2Loader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
+            comm,
         )?))
     }
     fn load_xlora(
@@ -3104,6 +3107,7 @@ impl NormalModelLoader for DeepSeekV3Loader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
+            comm,
         )?))
     }
     fn load_xlora(

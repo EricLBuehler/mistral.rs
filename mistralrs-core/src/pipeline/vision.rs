@@ -356,6 +356,8 @@ impl Loader for VisionLoader {
             AttentionImplementation::Eager
         };
 
+        let comm = Arc::new(mistralrs_quant::Comm::dummy());
+
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
@@ -370,7 +372,8 @@ impl Loader for VisionLoader {
                 loading_isq,
                 self.config.from_uqff.is_some(),
                 device.clone(),
-                attention_mechanism
+                attention_mechanism,
+                comm
             ),
             _ => unreachable!(),
         };

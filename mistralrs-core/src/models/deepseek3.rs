@@ -3,8 +3,11 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use candle_nn::{Embedding, Module, VarBuilder};
+use mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder, UnquantLinear,
+};
 use serde::Deserialize;
 
 use crate::{
@@ -12,7 +15,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{
-        Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
+        embedding, Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
         DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
@@ -162,15 +165,17 @@ impl Attention {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let q_head_dim = cfg.q_head_dim();
         let q = match cfg.q_lora_rank {
             Some(lora_rank) => {
-                let a = mistralrs_quant::linear_b(
+                let a = ReplicatedLayer::new(
                     cfg.hidden_size,
                     lora_rank,
-                    cfg.attention_bias,
                     &cfg.quantization_config,
+                    cfg.attention_bias,
+                    comm,
                     mapper.set_device(layer_idx, vb.pp("q_a_proj"), loading_isq),
                 )?;
                 let norm = RmsNorm::new(
@@ -178,27 +183,32 @@ impl Attention {
                     cfg.rms_norm_eps,
                     mapper.set_device(layer_idx, vb.pp("q_a_layernorm"), false),
                 )?;
-                let b = mistralrs_quant::linear_no_bias(
+                let b = ColumnParallelLayer::new(
                     lora_rank,
                     cfg.num_attention_heads * q_head_dim,
                     &cfg.quantization_config,
+                    false,
+                    comm,
                     mapper.set_device(layer_idx, vb.pp("q_b_proj"), loading_isq),
                 )?;
                 QProj::Lora { a, norm, b }
             }
-            None => QProj::Plain(mistralrs_quant::linear_no_bias(
+            None => QProj::Plain(ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * q_head_dim,
                 &cfg.quantization_config,
+                false,
+                comm,
                 mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
             )?),
         };
 
-        let kv_a_proj_with_mqa = mistralrs_quant::linear_b(
+        let kv_a_proj_with_mqa = ReplicatedLayer::new(
             cfg.hidden_size,
             cfg.kv_lora_rank + cfg.qk_rope_head_dim,
-            cfg.attention_bias,
             &cfg.quantization_config,
+            cfg.attention_bias,
+            comm,
             mapper.set_device(layer_idx, vb.pp("kv_a_proj_with_mqa"), loading_isq),
         )?;
         let kv_a_layernorm = RmsNorm::new(
@@ -206,18 +216,21 @@ impl Attention {
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("kv_a_layernorm"), false),
         )?;
-        let kv_b_proj = mistralrs_quant::linear_no_bias(
+        let kv_b_proj = ColumnParallelLayer::new(
             cfg.kv_lora_rank,
             cfg.num_attention_heads * (q_head_dim - cfg.qk_rope_head_dim + cfg.v_head_dim),
             &cfg.quantization_config,
+            false,
+            comm,
             mapper.set_device(layer_idx, vb.pp("kv_b_proj"), loading_isq),
         )?;
 
-        let o_proj = mistralrs_quant::linear_b(
+        let o_proj = RowParallelLayer::new(
             cfg.num_attention_heads * cfg.v_head_dim,
             cfg.hidden_size,
-            cfg.attention_bias,
             &cfg.quantization_config,
+            cfg.attention_bias,
+            comm,
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
 
@@ -389,27 +402,34 @@ impl Mlp {
         vb: ShardedVarBuilder,
         hidden_size: Option<usize>,
         intermediate_size: Option<usize>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
         let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
 
         Ok(Self {
-            gate: mistralrs_quant::linear_no_bias(
+            gate: ColumnParallelLayer::new(
                 hidden_size,
                 intermediate_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("gate_proj"),
             )?,
-            up: mistralrs_quant::linear_no_bias(
+            up: ColumnParallelLayer::new(
                 hidden_size,
                 intermediate_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("up_proj"),
             )?,
-            down: mistralrs_quant::linear_no_bias(
+            down: RowParallelLayer::new(
                 intermediate_size,
                 hidden_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("down_proj"),
             )?,
             act: cfg.hidden_act,
@@ -578,6 +598,7 @@ impl Moe {
         loading_isq: bool,
         n_shared_experts: Option<usize>,
         n_routed_experts: usize,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let mut experts = Vec::with_capacity(n_routed_experts);
         for i in 0..n_routed_experts {
@@ -587,6 +608,7 @@ impl Moe {
                 mapper.set_device(layer_idx, vb_e, loading_isq),
                 None,
                 Some(cfg.moe_intermediate_size),
+                comm,
             )?);
         }
         let shared_experts = if let Some(n_shared_experts) = n_shared_experts {
@@ -596,6 +618,7 @@ impl Moe {
                 mapper.set_device(layer_idx, vb.pp("shared_experts"), loading_isq),
                 None,
                 Some(intermediate_size),
+                comm,
             )?)
         } else {
             None
@@ -688,6 +711,7 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let attn = Attention::new(
             rotary_emb,
@@ -697,6 +721,7 @@ impl DecoderLayer {
             layer_idx,
             loading_isq,
             paged_attn,
+            comm,
         )?;
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
@@ -720,6 +745,7 @@ impl DecoderLayer {
                 loading_isq,
                 cfg.n_shared_experts,
                 cfg.n_routed_experts.unwrap(),
+                comm,
             )?)
         } else {
             MoeOrMlp::Mlp(Mlp::new(
@@ -727,6 +753,7 @@ impl DecoderLayer {
                 mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
                 None,
                 None,
+                comm,
             )?)
         };
 
@@ -785,6 +812,7 @@ impl DeepSeekV3 {
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
 
@@ -796,22 +824,22 @@ impl DeepSeekV3 {
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
-            mistralrs_quant::linear_no_bias(
+            ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &None,
+                false,
+                &comm,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-            ))?)
+            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+                mapper.cast_nm_device(
+                    embed_tokens.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )?,
+                None,
+            ))?
         };
         let norm = RmsNorm::new(
             cfg.hidden_size,
@@ -867,6 +895,7 @@ impl DeepSeekV3 {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
+                &comm,
             )?;
             layers.push(layer)
         }

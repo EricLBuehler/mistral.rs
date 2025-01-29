@@ -8,6 +8,14 @@ use candle_core::{
 #[derive(Debug)]
 pub struct Comm(cudarc::nccl::Comm);
 
+impl Comm {
+    // TODO
+    #[deprecated]
+    pub fn dummy() -> Self {
+        todo!()
+    }
+}
+
 /// This is actually not safe: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/threadsafety.html
 unsafe impl Sync for Comm {}
 unsafe impl Send for Comm {}

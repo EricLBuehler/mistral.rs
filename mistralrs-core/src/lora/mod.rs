@@ -3,9 +3,9 @@
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use candle_core::{quantized::QTensor, DType, IndexOp, Result, Tensor, D};
-use candle_nn::{init, var_builder::ShardedVarBuilder, Linear, Module, VarBuilder};
+use candle_nn::{init, Linear, Module, VarBuilder};
 use loralinear::LoraLinear;
-use mistralrs_quant::QuantMethod;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 pub use qloralinear::QLoraLinear;
 use serde::Deserialize;
 

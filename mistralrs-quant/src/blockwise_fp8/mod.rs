@@ -4,10 +4,7 @@ use std::{
 };
 
 use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
-use candle_nn::{
-    var_builder::{Shard, ShardedVarBuilder},
-    Linear, Module, VarBuilder,
-};
+use candle_nn::{Linear, Module, VarBuilder};
 
 mod ops;
 
@@ -15,7 +12,7 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     DummyLayer, FP8Linear, GgufMatMul, HqqAxis, HqqBits, HqqConfig, HqqLayer, IsqType, QuantMethod,
-    QuantMethodConfig, QuantizedConfig, QuantizedSerde, UnquantLinear,
+    QuantMethodConfig, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 #[derive(Debug)]

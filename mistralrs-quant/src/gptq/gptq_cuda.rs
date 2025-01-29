@@ -14,7 +14,7 @@ use candle_core::{
     },
     from_storage_no_op, Context, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
-use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
+use candle_nn::VarBuilder;
 use half::f16;
 use lazy_static::lazy_static;
 
@@ -22,6 +22,7 @@ use crate::{
     gptq::marlin_backend::{gptq_marlin_matmul, gptq_weight_repack},
     utils::{get_cuda_device, get_cuda_slice},
     DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
+    ShardedVarBuilder,
 };
 
 use super::{

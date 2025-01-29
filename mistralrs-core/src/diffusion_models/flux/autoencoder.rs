@@ -1,7 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{Result, Tensor, D};
-use candle_nn::{var_builder::ShardedVarBuilder, Conv2d, GroupNorm, VarBuilder};
+use candle_nn::{Conv2d, GroupNorm, VarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
 use crate::layers::{conv2d, group_norm, MatMul};

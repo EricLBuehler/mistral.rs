@@ -1,9 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Embedding, LayerNorm, Module, VarBuilder,
-};
+use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module, VarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 use std::ops::Mul;
 
 use crate::{

@@ -20,8 +20,8 @@ use crate::{
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{var_builder::ShardedVarBuilder, Embedding, LayerNorm, VarBuilder};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{Embedding, LayerNorm, VarBuilder};
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use tqdm::Iter;
 use tracing::info;
 

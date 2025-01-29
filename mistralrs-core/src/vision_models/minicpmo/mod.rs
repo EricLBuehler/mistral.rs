@@ -1,10 +1,10 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
+use candle_nn::VarBuilder;
 pub use config::MiniCpmOConfig;
 pub use inputs_processor::MiniCpmOProcessor;
-use mistralrs_quant::QuantMethod;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use resampler::Resampler;
 
 use crate::{

@@ -2,8 +2,8 @@
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn as nn;
-use candle_nn::var_builder::ShardedVarBuilder;
 use candle_nn::Module;
+use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
 use crate::layers::{self, MatMul};

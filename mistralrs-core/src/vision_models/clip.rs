@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 // Sourced from https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/clip/vision_model.rs
 use candle_core::{IndexOp, Result, Shape, Tensor, D};
-use candle_nn::{var_builder::ShardedVarBuilder, Conv2dConfig, Module};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{Conv2dConfig, Module};
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
     layers::{self, MatMul},

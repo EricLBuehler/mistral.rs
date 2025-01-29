@@ -7,8 +7,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
-use candle_nn::var_builder::ShardedVarBuilder;
-use candle_nn::{Activation, Linear, VarBuilder};
+use candle_nn::{Activation, Linear};
+use mistralrs_quant::ShardedVarBuilder;
 
 use crate::amoe::{AnyMoeBaseModelMixin, MlpLayer};
 use crate::device_map::DeviceMapper;

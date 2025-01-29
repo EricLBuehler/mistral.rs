@@ -8,10 +8,12 @@ use candle_core::{
     quantized::{GgmlDType, QTensor},
     Context, DType, Device, Result, Shape, Tensor, D,
 };
-use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
+use candle_nn::VarBuilder;
 use serde::Deserialize;
 
-use crate::{GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
+use crate::{
+    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, ShardedVarBuilder,
+};
 
 #[cfg(feature = "cuda")]
 mod ffi;

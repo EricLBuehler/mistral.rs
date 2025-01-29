@@ -1,10 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    layer_norm::RmsNormNonQuantized, var_builder::ShardedVarBuilder, LayerNorm, Linear, RmsNorm,
-    VarBuilder,
-};
+use candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm, VarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
 use crate::layers::{self, MatMul};

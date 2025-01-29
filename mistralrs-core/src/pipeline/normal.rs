@@ -445,6 +445,8 @@ impl Loader for NormalLoader {
             AttentionImplementation::Eager
         };
 
+        let comm = Arc::new(mistralrs_quant::Comm::dummy());
+
         let mut model = match self.kind {
             ModelKind::Normal => normal_model_loader!(
                 paths,
@@ -460,7 +462,8 @@ impl Loader for NormalLoader {
                 self.config.from_uqff.is_some(),
                 device.clone(),
                 attention_mechanism,
-                matches!(self.config.organization, IsqOrganization::MoeExpertsOnly)
+                matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
+                comm
             ),
             ModelKind::Adapter {
                 adapter: AdapterKind::XLora,
@@ -475,7 +478,8 @@ impl Loader for NormalLoader {
                 silent,
                 mapper,
                 loading_isq,
-                device.clone()
+                device.clone(),
+                comm
             ),
             ModelKind::Adapter {
                 adapter: AdapterKind::Lora,
@@ -490,7 +494,8 @@ impl Loader for NormalLoader {
                 silent,
                 mapper,
                 loading_isq,
-                device.clone()
+                device.clone(),
+                comm
             ),
             _ => unreachable!(),
         };

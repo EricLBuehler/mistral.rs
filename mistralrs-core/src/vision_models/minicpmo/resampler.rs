@@ -3,8 +3,8 @@
 use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{var_builder::ShardedVarBuilder, LayerNorm, Linear, VarBuilder};
-use mistralrs_quant::MatMul;
+use candle_nn::{LayerNorm, Linear, VarBuilder};
+use mistralrs_quant::{MatMul, ShardedVarBuilder};
 
 use crate::{
     layers::{self, layer_norm, GetFloatInfo},

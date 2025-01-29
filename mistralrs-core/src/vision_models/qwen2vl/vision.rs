@@ -1,13 +1,11 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    layer_norm, var_builder::ShardedVarBuilder, LayerNorm, Linear, Module, VarBuilder,
-};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{LayerNorm, Linear, Module, VarBuilder};
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
-    layers::{Activation, Conv3dConfig, Conv3dNoBias, MatMul},
+    layers::{self, layer_norm, Activation, Conv3dConfig, Conv3dNoBias, MatMul},
     ops::RepeatInterleaveOp,
 };
 
@@ -212,8 +210,8 @@ impl PatchMerger {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let hidden_size = context_dim * spatial_merge_size.pow(2);
-        let mlp0 = candle_nn::linear(hidden_size, hidden_size, vb.pp("mlp.0"))?;
-        let mlp2 = candle_nn::linear(hidden_size, dim, vb.pp("mlp.2"))?;
+        let mlp0 = layers::linear(hidden_size, hidden_size, vb.pp("mlp.0"))?;
+        let mlp2 = layers::linear(hidden_size, dim, vb.pp("mlp.2"))?;
         Ok(Self {
             ln_q: layer_norm(context_dim, 1e-6, vb.pp("ln_q"))?,
             mlp0,

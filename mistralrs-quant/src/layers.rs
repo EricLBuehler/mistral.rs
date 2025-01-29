@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use candle_core::{Context, Result, Tensor};
-use candle_nn::{var_builder::ShardedVarBuilder, Linear};
+use candle_nn::Linear;
 
 use crate::{
     blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear, BnbLinear, DummyLayer,
-    QuantMethod, QuantMethodConfig, QuantMethodType, QuantizedConfig, QuantizedSerde,
-    UnquantLinear,
+    QuantMethod, QuantMethodConfig, QuantMethodType, QuantizedConfig, QuantizedSerde, Shard,
+    ShardedVarBuilder, UnquantLinear,
 };
 
-fn shard(dim: usize, rank: usize, world_size: usize) -> candle_nn::var_builder::Shard {
-    candle_nn::var_builder::Shard {
+fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
+    Shard {
         dim,
         rank,
         world_size,

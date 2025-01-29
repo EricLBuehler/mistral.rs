@@ -390,7 +390,8 @@ macro_rules! normal_model_loader {
         $loading_uqff:expr,
         $real_device:expr,
         $attention_mechanism:expr,
-        $is_moqe:expr
+        $is_moqe:expr,
+        $comm:expr
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -427,6 +428,7 @@ macro_rules! normal_model_loader {
                 real_device: $real_device,
             },
             $attention_mechanism,
+            $comm,
         )?
     }};
 }
@@ -447,7 +449,8 @@ macro_rules! vision_normal_model_loader {
         $loading_isq:expr,
         $loading_uqff:expr,
         $real_device:expr,
-        $attention_mechanism:expr
+        $attention_mechanism:expr,
+        $comm:expr
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -480,6 +483,7 @@ macro_rules! vision_normal_model_loader {
                 real_device: $real_device,
             },
             $attention_mechanism,
+            $comm,
         )?
     }};
 }
@@ -498,7 +502,8 @@ macro_rules! xlora_model_loader {
         $silent:expr,
         $mapper:expr,
         $loading_isq:expr,
-        $real_device:expr
+        $real_device:expr,
+        $comm:expr
     ) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
@@ -539,6 +544,7 @@ macro_rules! xlora_model_loader {
                 real_device: $real_device,
             },
             &None,
+            $comm,
         )?
     }};
 }
@@ -557,7 +563,8 @@ macro_rules! lora_model_loader {
         $silent:expr,
         $mapper:expr,
         $loading_isq:expr,
-        $real_device:expr
+        $real_device:expr,
+        $comm:expr
     ) => {{
         let safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
         let get_device_for_tensor =
@@ -602,6 +609,7 @@ macro_rules! lora_model_loader {
                 $device,
                 $silent,
             )?,
+            $comm,
         )?
     }};
 }

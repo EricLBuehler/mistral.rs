@@ -6,8 +6,8 @@ use std::{
 };
 
 use candle_core::{safetensors, DType, Device, Result, Tensor, Var, D};
-use candle_nn::{linear, var_builder::ShardedVarBuilder, Linear, ModuleT, VarMap};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{Linear, ModuleT, VarMap};
+use mistralrs_quant::{QuantMethod, ShardedSafeTensors, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 
 mod inputs;
@@ -16,6 +16,7 @@ pub use inputs::{AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingRes
 use tracing::info;
 
 use crate::{
+    layers::linear,
     ops::{TopKLastDimOp, TopKOutput},
     serde_default_fn,
 };
@@ -195,7 +196,7 @@ impl MoeMlp {
         let var_map = VarMap::new();
 
         let inference = gate_vb.is_some();
-        let empty_map = ShardedVarBuilder::from_varmap(&var_map, dtype, dev);
+        let empty_map = ShardedSafeTensors::wrap(Box::new(var_map.clone()), dtype, dev.clone());
         let vb = gate_vb.unwrap_or(&empty_map);
         let vb = vb
             .pp("moe_gate")

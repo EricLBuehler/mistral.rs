@@ -13,9 +13,8 @@ use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::ggml_file;
 use candle_core::quantized::QMatMul;
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::var_builder::ShardedVarBuilder;
 use candle_nn::{Embedding, Module, VarBuilder};
-use mistralrs_quant::MatMul;
+use mistralrs_quant::{MatMul, ShardedVarBuilder};
 use tqdm::Iter;
 use tracing::info;
 

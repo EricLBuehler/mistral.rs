@@ -13,8 +13,8 @@ use crate::{
     utils::progress::NiceProgressBar,
 };
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{var_builder::ShardedVarBuilder, Embedding, Module, VarBuilder};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{Embedding, Module, VarBuilder};
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;

@@ -1,10 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
+use candle_nn::VarBuilder;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, UnquantLinear,
+    RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 use std::{collections::HashMap, sync::Arc};
 

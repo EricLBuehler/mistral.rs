@@ -1,10 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{var_builder::ShardedVarBuilder, Embedding, Module, VarBuilder};
+use candle_nn::{Embedding, Module, VarBuilder};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantMethodConfig, ReplicatedLayer, RowParallelLayer,
-    UnquantLinear,
+    ShardedVarBuilder, UnquantLinear,
 };
 
 use crate::{
@@ -125,7 +125,7 @@ impl Attention {
             comm,
             vb.pp("v_proj"),
         )?;
-        let o_proj = RowParallelLayer::comm(
+        let o_proj = RowParallelLayer::new(
             num_heads * head_dim,
             hidden_sz,
             &cfg.quantization_config,

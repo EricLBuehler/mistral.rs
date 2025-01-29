@@ -7,10 +7,11 @@ pub(crate) mod phi3_inputs_processor;
 use candle_core::{
     shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D,
 };
-use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
+use candle_nn::VarBuilder;
 use either::Either;
 use mistralrs_quant::{
-    QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer, UnquantLinear,
+    QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder,
+    UnquantLinear,
 };
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
@@ -181,6 +182,7 @@ impl Attention {
         let head_dim = cfg.head_dim();
         let op_size = num_heads * head_dim + 2 * num_kv_heads * head_dim;
 
+        // No TP here.
         let qkv_proj = mistralrs_quant::linear_no_bias(
             cfg.hidden_size,
             op_size,
@@ -340,10 +342,11 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(cfg: &Config, vb: VarBuilder, comm: &Arc<mistralrs_quant::Comm>) -> Result<Self> {
+    fn new(cfg: &Config, vb: ShardedVarBuilder, comm: &Arc<mistralrs_quant::Comm>) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
 
+        // No TP here.
         let gate_up_proj = mistralrs_quant::linear_no_bias(
             hidden_size,
             2 * i_size,

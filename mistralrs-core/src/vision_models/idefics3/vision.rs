@@ -1,8 +1,6 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module,
-    VarBuilder,
-};
+use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module, VarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 use std::ops::Mul;
 
 use crate::{

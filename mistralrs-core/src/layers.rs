@@ -7,12 +7,12 @@ use candle_core::{
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
 use candle_nn::{
-    var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Embedding, GroupNorm, LayerNorm,
-    LayerNormConfig, Linear, Module, VarBuilder,
+    Conv2d, Conv2dConfig, Embedding, GroupNorm, LayerNorm, LayerNormConfig, Linear, Module,
+    VarBuilder,
 };
 use float8::F8E4M3;
 use half::{bf16, f16};
-use mistralrs_quant::get_use_matmul_via_f16;
+use mistralrs_quant::{get_use_matmul_via_f16, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 
 pub use crate::attention::Sdpa;

@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use blockwise_fp8::blockwise_fp8_linear_b;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
@@ -27,8 +28,12 @@ mod gptq;
 mod hqq;
 mod imatrix;
 mod layers;
+pub mod safetensors;
 mod unquantized;
 mod utils;
+
+use gptq::gptq_linear;
+pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use distributed::Comm;
@@ -43,7 +48,7 @@ pub use utils::UQFF_QUANT_TYPE_OFFSET;
 
 pub use layers::{ColumnParallelLayer, ReplicatedLayer, RowParallelLayer};
 
-use candle_nn::{var_builder::ShardedVarBuilder, Linear, Module, VarBuilder};
+use candle_nn::{Linear, Module, VarBuilder};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -471,5 +476,88 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 impl Module for dyn QuantMethod {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         Self::forward(self, xs)
+    }
+}
+
+pub fn linear_no_bias(
+    in_dim: usize,
+    out_dim: usize,
+    config: &Option<QuantizedConfig>,
+    vb: ShardedVarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    let layer = if let Some(quant_conf) = &config {
+        match quant_conf.quant_method {
+            QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Fp8 => {
+                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
+            }
+            QuantMethodType::Bitsandbytes => {
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
+            }
+            QuantMethodType::Unreachable => unreachable!(),
+        }
+    } else {
+        // Handle the case where the layer is dummy (no tensors)
+        if !vb.contains_tensor("weight") {
+            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        } else {
+            let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, None),
+            ))?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        }
+    };
+    Ok(layer)
+}
+
+pub fn linear(
+    in_dim: usize,
+    out_dim: usize,
+    config: &Option<QuantizedConfig>,
+    vb: ShardedVarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    let layer = if let Some(quant_conf) = &config {
+        match quant_conf.quant_method {
+            QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Fp8 => {
+                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
+            }
+            QuantMethodType::Bitsandbytes => {
+                Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
+            }
+            QuantMethodType::Unreachable => unreachable!(),
+        }
+    } else {
+        // Handle the case where the layer is dummy (no tensors)
+        if !(vb.contains_tensor("weight") && vb.contains_tensor("bias")) {
+            let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        } else {
+            let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+            let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
+
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, Some(bias)),
+            ))?;
+            Arc::new(layer) as Arc<dyn QuantMethod>
+        }
+    };
+    Ok(layer)
+}
+
+pub fn linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    config: &Option<QuantizedConfig>,
+    vb: ShardedVarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    if bias {
+        linear(in_dim, out_dim, config, vb)
+    } else {
+        linear_no_bias(in_dim, out_dim, config, vb)
     }
 }

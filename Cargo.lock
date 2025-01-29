@@ -2403,7 +2403,6 @@ dependencies = [
  "itertools 0.13.0",
  "llguidance",
  "lrtable",
- "memmap2",
  "metal",
  "minijinja",
  "minijinja-contrib",
@@ -2441,7 +2440,6 @@ dependencies = [
  "uuid 1.12.1",
  "variantly",
  "vob",
- "yoke",
 ]
 
 [[package]]
@@ -2493,14 +2491,18 @@ dependencies = [
  "float8",
  "half",
  "lazy_static",
+ "memmap2",
  "metal",
  "once_cell",
  "paste",
  "rayon",
+ "regex",
+ "safetensors",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tracing",
+ "yoke",
 ]
 
 [[package]]

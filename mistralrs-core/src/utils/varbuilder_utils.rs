@@ -9,12 +9,12 @@ use std::{
 
 use candle_core::{pickle::PthTensors, DType, Device, Result, Tensor};
 use candle_nn::{
-    var_builder::{ShardedSafeTensors, ShardedVarBuilder, SimpleBackend, VarBuilderArgs},
+    var_builder::{SimpleBackend, VarBuilderArgs},
     VarBuilder,
 };
+use mistralrs_quant::{safetensors::MmapedSafetensors, ShardedSafeTensors, ShardedVarBuilder};
 use regex::Regex;
 
-use super::safetensors::MmapedSafetensors;
 use crate::lora::LoraConfig;
 use crate::utils::progress::IterWithProgress;
 use derive_new::new;
@@ -78,6 +78,17 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
 ) -> Result<ShardedVarBuilder<'a>> {
+    {
+        return Ok(unsafe {
+            ShardedSafeTensors::sharded(
+                &paths,
+                dtype.unwrap_or(DType::F16),
+                base_device,
+                make_dummy_regexes,
+            )?
+        });
+    }
+
     #[allow(clippy::type_complexity)]
     let mut handles: Vec<JoinHandle<Result<HashMap<String, Tensor>>>> = Vec::new();
 
@@ -161,13 +172,15 @@ pub(crate) fn from_mmaped_safetensors<'a>(
         ws.extend(h.join().unwrap()?);
     }
 
-    // TODO(EricLBuehler): separation of concerns.
-    // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
-    Ok(VarBuilder::from_tensors(
-        ws,
-        dtype.unwrap_or(DType::F16),
-        base_device,
-    ))
+    todo!()
+
+    // // TODO(EricLBuehler): separation of concerns.
+    // // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
+    // Ok(VarBuilder::from_tensors(
+    //     ws,
+    //     dtype.unwrap_or(DType::F16),
+    //     base_device,
+    // ))
 }
 
 pub(crate) fn load_preload_adapters<'a>(
@@ -175,34 +188,35 @@ pub(crate) fn load_preload_adapters<'a>(
     dtype: DType,
     device: &Device,
     silent: bool,
-) -> Result<Option<HashMap<String, (VarBuilder<'a>, LoraConfig)>>> {
-    if let Some(paths) = paths {
-        let mut map = HashMap::new();
-        for (name, (path, config)) in paths {
-            let loader = Common::new();
-            let loaded_tensors = loader.load_tensors_from_path(
-                path,
-                device,
-                vec![None],
-                Arc::new(|_| DeviceForLoadTensor::Base),
-                Some(dtype),
-                silent,
-                |_| true,
-                |_| false,
-            )?;
+) -> Result<Option<HashMap<String, (ShardedVarBuilder<'a>, LoraConfig)>>> {
+    todo!()
+    // if let Some(paths) = paths {
+    //     let mut map = HashMap::new();
+    //     for (name, (path, config)) in paths {
+    //         let loader = Common::new();
+    //         let loaded_tensors = loader.load_tensors_from_path(
+    //             path,
+    //             device,
+    //             vec![None],
+    //             Arc::new(|_| DeviceForLoadTensor::Base),
+    //             Some(dtype),
+    //             silent,
+    //             |_| true,
+    //             |_| false,
+    //         )?;
 
-            map.insert(
-                name.clone(),
-                (
-                    VarBuilder::from_tensors(loaded_tensors, dtype, device),
-                    config.clone(),
-                ),
-            );
-        }
-        Ok(Some(map))
-    } else {
-        Ok(None)
-    }
+    //         map.insert(
+    //             name.clone(),
+    //             (
+    //                 VarBuilder::from_tensors(loaded_tensors, dtype, device),
+    //                 config.clone(),
+    //             ),
+    //         );
+    //     }
+    //     Ok(Some(map))
+    // } else {
+    //     Ok(None)
+    // }
 }
 
 // Presently this logic only needs to diverge for X-LoRA support via `get_name_key_pairs()`
@@ -231,7 +245,7 @@ trait LoadTensors {
             "pth" | "pt" | "bin" => Box::new(PickleBackend(
                 candle_core::pickle::PthTensors::new(path, None)?
             )),
-            other => candle_core::bail!("Unexpected extension `{other}`, this should have been handles by `get_model_paths`."),
+            other => candle_core::bail!("Unexpected extension `{other}`, this should have been handled by `get_model_paths`."),
         };
 
         // Extracts the tensor name and processes it, filtering tensors and deriving the key name:

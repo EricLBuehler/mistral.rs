@@ -14,8 +14,8 @@ use text::MLlamaTextModel;
 use vision::MLlamaVisionModel;
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{var_builder::ShardedVarBuilder, Linear, Module, VarBuilder};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{Linear, Module, VarBuilder};
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,

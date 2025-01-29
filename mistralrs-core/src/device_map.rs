@@ -6,7 +6,8 @@ use crate::{
     Topology, TryIntoDType,
 };
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
-use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
+use candle_nn::VarBuilder;
+use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use tracing::info;
 

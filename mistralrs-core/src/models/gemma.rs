@@ -3,10 +3,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{var_builder::ShardedVarBuilder, Linear, VarBuilder};
+use candle_nn::{Linear, VarBuilder};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, RowParallelLayer,
-    UnquantLinear,
+    ShardedVarBuilder, UnquantLinear,
 };
 
 use crate::{

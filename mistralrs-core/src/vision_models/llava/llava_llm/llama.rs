@@ -8,9 +8,10 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{var_builder::ShardedVarBuilder, Embedding, Module, VarBuilder};
+use candle_nn::{Embedding, Module, VarBuilder};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, RowParallelLayer, UnquantLinear,
+    ColumnParallelLayer, QuantMethod, QuantMethodConfig, RowParallelLayer, ShardedVarBuilder,
+    UnquantLinear,
 };
 
 use crate::{
