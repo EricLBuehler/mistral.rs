@@ -301,18 +301,32 @@ impl Loader for NormalLoader {
             let id = mistralrs_quant::Id::new();
             let world_size = 8; // TODO TODO TODO
             println!("A");
-            let handle = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
+            // let handle = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
+            //     println!("B");
+            //     Ok(Arc::new(mistralrs_quant::Comm::from_device(
+            //         id,
+            //         &Device::new_cuda(3)?,
+            //         3,
+            //         world_size,
+            //     )?))
+            // });
+
+            // std::thread::sleep(std::time::Duration::from_secs(10));
+            // let comm = handle.join().unwrap()?;
+            // println!("C");
+            // dbg!(&comm.world_size());
+
+            let comm =  {
                 println!("B");
-                Ok(Arc::new(mistralrs_quant::Comm::from_device(
+                Arc::new(mistralrs_quant::Comm::from_device(
                     id,
                     &Device::new_cuda(3)?,
                     3,
                     world_size,
-                )?))
-            });
+                )?)
+            };
 
             std::thread::sleep(std::time::Duration::from_secs(10));
-            let comm = handle.join().unwrap()?;
             println!("C");
             dbg!(&comm.world_size());
         }
