@@ -1,18 +1,25 @@
 use std::{fmt::Debug, ops::Deref, sync::Arc};
 
 use candle_core::{
-    backend::BackendStorage, cuda::cudarc, cuda_backend::WrapErr, CpuStorage, CustomOp1, DType,
-    Layout, Result, Shape,
+    backend::BackendStorage,
+    cuda::cudarc::{self, nccl::Id},
+    cuda_backend::WrapErr,
+    CpuStorage, CustomOp1, DType, Device, Layout, Result, Shape,
 };
 
 #[derive(Debug)]
 pub struct Comm(cudarc::nccl::Comm);
 
 impl Comm {
-    // TODO
-    #[deprecated]
-    pub fn dummy() -> Self {
-        todo!()
+    pub fn from_device(dev: &Device, rank: usize, world_size: usize) -> Result<Self> {
+        let id = Id::new().expect("Failed to create `Id`.");
+        let Device::Cuda(device) = dev else {
+            candle_core::bail!("Expected CUDA device.")
+        };
+        Ok(Self(
+            cudarc::nccl::Comm::from_rank(device.cuda_device(), rank, world_size, id)
+                .expect("Failed to create `Comm`"),
+        ))
     }
 }
 
