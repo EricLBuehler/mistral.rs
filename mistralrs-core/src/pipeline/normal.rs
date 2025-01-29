@@ -296,6 +296,23 @@ impl Loader for NormalLoader {
 
         if device.is_cuda() {
             mapper = DeviceMapSetting::dummy();
+
+            // NCCL case
+            let id = mistralrs_quant::Id::new();
+            let world_size = 8; // TODO TODO TODO
+            for rank in 0..world_size {
+                println!("A");
+                let comm = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
+                    println!("B");
+                    Ok(Arc::new(mistralrs_quant::Comm::from_device(
+                        id, rank, world_size,
+                    )?))
+                })
+                .join()
+                .unwrap()?;
+                println!("C");
+                dbg!(&comm.world_size());
+            }
         }
 
         // If auto, convert to Map
