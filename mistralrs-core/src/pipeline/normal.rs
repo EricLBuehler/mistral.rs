@@ -294,14 +294,9 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-        let base_dev_clone = device.clone();
-        let available_devices = std::thread::spawn(move || device_map::get_all_similar_devices(&base_dev_clone))
-            .join()
-            .unwrap()?;
-        dbg!(&available_devices);
-
         // If auto, convert to Map
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
+            let available_devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 
@@ -453,14 +448,14 @@ impl Loader for NormalLoader {
             AttentionImplementation::Eager
         };
 
-        let mut parallel_models = if available_devices[0].is_cuda() && available_devices.len() > 1 {
+        let mut parallel_models = if device.is_cuda() {
             // NCCL case
             let id = mistralrs_quant::Id::new();
 
             let mut parallel_models = Vec::new();
 
-            let world_size = available_devices.len();
-            for (rank, device) in available_devices.iter().enumerate() {
+            let world_size = 8; // TODO TODO TODO
+            for rank in 0..world_size {
                 println!("A");
                 let comm = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
                     println!("B");
