@@ -1,11 +1,24 @@
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, ops::Deref, sync::Arc};
 
 use candle_core::{
     backend::BackendStorage, cuda::cudarc, cuda_backend::WrapErr, CpuStorage, CustomOp1, DType,
     Layout, Result, Shape,
 };
 
-pub use cudarc::nccl::Comm;
+#[derive(Debug)]
+pub struct Comm(cudarc::nccl::Comm);
+
+/// This is actually not safe: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/threadsafety.html
+unsafe impl Sync for Comm {}
+unsafe impl Send for Comm {}
+
+impl Deref for Comm {
+    type Target = cudarc::nccl::Comm;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct AllReduce {
@@ -17,11 +30,6 @@ impl AllReduce {
         Self { comm: comm.clone() }
     }
 }
-
-/// This is actually not safe: https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/threadsafety.html
-/// But for this example purposes, this will work
-unsafe impl Sync for AllReduce {}
-unsafe impl Send for AllReduce {}
 
 impl CustomOp1 for AllReduce {
     fn name(&self) -> &'static str {
@@ -51,6 +59,7 @@ impl CustomOp1 for AllReduce {
                 };
                 let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
                 self.comm
+                    .0
                     .all_reduce(s, &mut dst, &ReduceOp::Sum)
                     .map_err(candle_core::Error::debug)?;
                 candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
@@ -63,6 +72,7 @@ impl CustomOp1 for AllReduce {
                 };
                 let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
                 self.comm
+                    .0
                     .all_reduce(s, &mut dst, &ReduceOp::Sum)
                     .map_err(candle_core::Error::debug)?;
                 candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
@@ -75,6 +85,7 @@ impl CustomOp1 for AllReduce {
                 };
                 let mut dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
                 self.comm
+                    .0
                     .all_reduce(s, &mut dst, &ReduceOp::Sum)
                     .map_err(candle_core::Error::debug)?;
                 candle_core::CudaStorage::wrap_cuda_slice(dst, dev)

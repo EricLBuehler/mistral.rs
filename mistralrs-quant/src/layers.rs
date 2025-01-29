@@ -357,6 +357,12 @@ impl QuantizedSerde for ColumnParallelLayer {
 pub struct ReplicatedLayer(Arc<dyn QuantMethod>);
 
 impl ReplicatedLayer {
+    pub fn from_linear(lin: Linear) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(lin),
+        )?))
+    }
+
     pub fn new(
         in_dim: usize,
         out_dim: usize,

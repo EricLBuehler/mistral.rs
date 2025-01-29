@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, var_builder::ShardedVarBuilder, Embedding, Module, VarBuilder};
+use candle_nn::{var_builder::ShardedVarBuilder, Embedding, Module, VarBuilder};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer,
     RowParallelLayer, UnquantLinear,
@@ -17,7 +17,9 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{CausalMasker, Llama3RopeConfig, Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa},
+    layers::{
+        embedding, CausalMasker, Llama3RopeConfig, Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa,
+    },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -482,14 +484,12 @@ impl Llama {
                 false,
                 &comm,
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )
+            )?
         } else {
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
-                    None,
-                ),
-            ))?)
+            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+                mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
+                None,
+            ))?
         };
         let ln_f = RmsNorm::new(
             cfg.hidden_size,

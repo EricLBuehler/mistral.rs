@@ -6,7 +6,9 @@ use candle_core::{
     quantized::{QMatMul, QTensor},
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
-use candle_nn::{var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
+use candle_nn::{
+    var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Embedding, Linear, Module, VarBuilder,
+};
 use float8::F8E4M3;
 use half::{bf16, f16};
 use mistralrs_quant::get_use_matmul_via_f16;
@@ -23,6 +25,11 @@ use crate::{
 };
 
 pub use mistralrs_quant::MatMul;
+
+pub fn embedding(in_size: usize, out_size: usize, vb: ShardedVarBuilder) -> Result<Embedding> {
+    let embeddings = vb.get_with_hints((in_size, out_size), "weight", Defaut::default())?;
+    Ok(Embedding::new(embeddings, out_size))
+}
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {

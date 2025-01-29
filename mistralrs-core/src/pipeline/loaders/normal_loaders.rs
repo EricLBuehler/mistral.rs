@@ -95,6 +95,7 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     #[allow(clippy::too_many_arguments)]
     fn load_xlora(
@@ -107,6 +108,7 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self, config: &str) -> Result<bool>;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
@@ -291,6 +293,7 @@ impl NormalModelLoader for AutoLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Self::get_loader(config)?.load(
             config,
@@ -298,6 +301,7 @@ impl NormalModelLoader for AutoLoader {
             vb,
             normal_loading_metadata,
             attention_mechanism,
+            comm,
         )
     }
     fn load_xlora(
@@ -310,6 +314,7 @@ impl NormalModelLoader for AutoLoader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Self::get_loader(config)?.load_xlora(
             config,
@@ -320,6 +325,7 @@ impl NormalModelLoader for AutoLoader {
             xlora_ordering,
             normal_loading_metadata,
             preload_adapters,
+            comm,
         )
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
@@ -911,6 +917,7 @@ impl NormalModelLoader for LlamaLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::llama::Llama::new(
             &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
@@ -918,6 +925,7 @@ impl NormalModelLoader for LlamaLoader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
+            comm,
         )?))
     }
     fn load_xlora(
