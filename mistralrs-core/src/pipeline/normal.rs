@@ -295,13 +295,17 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-        {
+        let comms = if device.is_cuda() {
             let id = mistralrs_quant::Id::new();
-            let world_size = 3;
 
-            let total_devices =
-                candle_core::cuda::cudarc::driver::result::device::get_count().unwrap();
-            dbg!(&total_devices);
+            #[cfg(feature = "cuda")]
+            let total_devices = candle_core::cuda::cudarc::driver::result::device::get_count()
+                .expect("Could not get count of cuda devices")
+                as usize;
+            #[cfg(not(feature = "cuda"))]
+            let total_devices = 0;
+
+            let world_size = total_devices;
 
             // They each block on each other
             // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
@@ -317,8 +321,12 @@ impl Loader for NormalLoader {
                 })
                 .collect::<candle_core::Result<Vec<_>>>()?;
 
-            dbg!(&comms);
-        }
+            comms.into_iter().map(Arc::new).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        dbg!(&comms);
 
         let available_devices = device_map::get_all_similar_devices(device)?;
 
@@ -475,38 +483,34 @@ impl Loader for NormalLoader {
             AttentionImplementation::Eager
         };
 
-        let mut parallel_models = if device.is_cuda() && available_devices.len() > 0 {
+        let mut parallel_models = if device.is_cuda() && available_devices.len() > 1 {
             // NCCL case
-
             let id = mistralrs_quant::Id::new();
-            let world_size = available_devices.len();
 
-            let total_devices =
-                candle_core::cuda::cudarc::driver::result::device::get_count().unwrap();
+            let world_size = available_devices.len();
 
             // They each block on each other
             // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
             let comms = (0..world_size)
                 .into_par_iter()
-                .zip(available_devices)
-                .map(|(rank, device)| {
-                    mistralrs_quant::Comm::from_device(id, &device, rank, world_size)
+                .map(|rank| {
+                    mistralrs_quant::Comm::from_device(
+                        id,
+                        &Device::new_cuda(rank)?,
+                        rank,
+                        world_size,
+                    )
                 })
                 .collect::<candle_core::Result<Vec<_>>>()?;
 
-            dbg!(&comms);
-
             let mut parallel_models = Vec::new();
-
-            for comm in comms {
+            for comm in comms.into_iter().map(Arc::new) {
                 // Redefine mapper
                 let mapper = DeviceMapSetting::dummy().into_mapper(
                     self.inner.get_total_device_mapping_num_layers(&config)?,
                     device,
                     None,
                 )?;
-
-                let comm = Arc::new(comm);
 
                 let model = match self.kind {
                     ModelKind::Normal => normal_model_loader!(
