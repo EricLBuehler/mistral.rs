@@ -3,10 +3,8 @@ mod ops {
     use std::{fmt::Debug, ops::Deref, sync::Arc};
 
     use candle_core::{
-        backend::BackendStorage,
-        cuda::cudarc::{self, driver::CudaDevice},
-        cuda_backend::WrapErr,
-        CpuStorage, CustomOp1, DType, Device, Layout, Result, Shape, Tensor,
+        backend::BackendStorage, cuda::cudarc, cuda_backend::WrapErr, CpuStorage, CustomOp1, DType,
+        Device, Layout, Result, Shape, Tensor,
     };
 
     #[derive(Debug, Clone, Copy)]
@@ -25,11 +23,10 @@ mod ops {
     impl Comm {
         pub fn from_device(id: Id, dev: &Device, rank: usize, world_size: usize) -> Result<Self> {
             let device = dev.as_cuda_device()?.cuda_device();
-            dbg!(&device.name());
-            let c = cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
-                .expect("Failed to create `Comm`");
-            println!("a");
-            Ok(Self(c))
+            Ok(Self(
+                cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
+                    .expect("Failed to create `Comm`"),
+            ))
         }
     }
 

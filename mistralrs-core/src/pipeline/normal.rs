@@ -44,7 +44,8 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
+    IntoParallelRefMutIterator, ParallelIterator,
 };
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -294,51 +295,10 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-        {
-            mapper = DeviceMapSetting::dummy();
-
-            // NCCL case
-            let id = mistralrs_quant::Id::new();
-            let world_size = 3; // TODO TODO TODO
-            println!("A");
-
-            for i in 0..3 {
-                let handle = std::thread::spawn(move || -> Result<()> {
-                    let comm = mistralrs_quant::Comm::from_device(
-                        id,
-                        &Device::new_cuda(i)?,
-                        i,
-                        world_size,
-                    )?;
-
-                    dbg!(&comm.rank());
-
-                    Ok(())
-                });
-            }
-            // let handle = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
-            //     println!("B");
-            //     Ok(Arc::new(mistralrs_quant::Comm::from_device(
-            //         id,
-            //         &Device::new_cuda(3)?,
-            //         3,
-            //         world_size,
-            //     )?))
-            // });
-
-            // std::thread::sleep(std::time::Duration::from_secs(10));
-            // let comm = handle.join().unwrap()?;
-            // println!("C");
-            // dbg!(&comm.world_size());
-
-            std::thread::sleep(std::time::Duration::from_secs(10));
-            println!("C");
-            // dbg!(&comm.world_size());
-        }
+        let available_devices = device_map::get_all_similar_devices(device)?;
 
         // If auto, convert to Map
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
-            let available_devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 
@@ -490,35 +450,35 @@ impl Loader for NormalLoader {
             AttentionImplementation::Eager
         };
 
-        let mut parallel_models = if device.is_cuda() {
+        let mut parallel_models = if device.is_cuda() && available_devices.len() > 0 {
             // NCCL case
+
             let id = mistralrs_quant::Id::new();
+            let world_size = available_devices.len();
+
+            // They each block on each other
+            // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
+            let comms = (0..world_size)
+                .into_par_iter()
+                .zip(available_devices)
+                .map(|(rank, device)| {
+                    mistralrs_quant::Comm::from_device(id, &device, rank, world_size)
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?;
+
+            dbg!(&comms);
 
             let mut parallel_models = Vec::new();
 
-            let world_size = 8; // TODO TODO TODO
-            for rank in 0..world_size {
-                println!("A");
-                let device_clone = device.clone();
-                let comm = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
-                    println!("B");
-                    Ok(Arc::new(mistralrs_quant::Comm::from_device(
-                        id,
-                        &device_clone,
-                        rank,
-                        world_size,
-                    )?))
-                })
-                .join()
-                .unwrap()?;
-                println!("C");
-                dbg!(&comm.world_size());
+            for comm in comms {
                 // Redefine mapper
                 let mapper = DeviceMapSetting::dummy().into_mapper(
                     self.inner.get_total_device_mapping_num_layers(&config)?,
                     device,
                     None,
                 )?;
+
+                let comm = Arc::new(comm);
 
                 let model = match self.kind {
                     ModelKind::Normal => normal_model_loader!(
