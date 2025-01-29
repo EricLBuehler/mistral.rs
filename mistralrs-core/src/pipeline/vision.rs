@@ -356,7 +356,8 @@ impl Loader for VisionLoader {
             AttentionImplementation::Eager
         };
 
-        let comm = Arc::new(mistralrs_quant::Comm::from_device(device, 0, 1)?);
+        let id = mistralrs_quant::Id::new();
+        let comm = Arc::new(mistralrs_quant::Comm::from_device(id, device, 0, 1)?);
 
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
@@ -570,7 +571,7 @@ impl Loader for VisionLoader {
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,
-                cache_engine,
+                cache_engines: cache_engine.map(|x| vec![x]),
                 prompt_chunksize: self.config.prompt_chunksize,
                 model_metadata: Some(model_metadata),
             }),
@@ -714,14 +715,20 @@ impl Pipeline for VisionPipeline {
             position_ids,
             pixel_values,
             model_specific_args,
-            mut paged_attn_meta,
+            paged_attn_meta,
             flash_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
-        let paged_attn_meta = match (
-            self.get_metadata().cache_engine.as_ref(),
-            &mut paged_attn_meta,
-        ) {
-            (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
+        let metadata = self.get_metadata();
+        assert_eq!(
+            metadata
+                .cache_engines
+                .as_ref()
+                .map(|x| x.len())
+                .unwrap_or(1),
+            1
+        );
+        let paged_attn_meta = match (&metadata.cache_engines, &paged_attn_meta) {
+            (Some(engine), Some(meta)) => Some((engine[0].get_kv_cache().clone(), meta)),
             (Some(_), None) => {
                 // This can happen if Rust-side user code is wrong
                 candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")

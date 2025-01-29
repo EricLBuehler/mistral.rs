@@ -223,7 +223,7 @@ impl Loader for DiffusionLoader {
                 activation_dtype: dtype,
                 sliding_window: None,
                 cache_config: None,
-                cache_engine: None,
+                cache_engines: None,
                 prompt_chunksize: None,
                 model_metadata: None,
             }),

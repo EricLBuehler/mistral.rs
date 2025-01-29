@@ -43,6 +43,9 @@ use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
@@ -57,7 +60,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 pub struct NormalPipeline {
-    model: Box<dyn NormalModel + Send + Sync>,
+    parallel_models: Vec<Box<dyn NormalModel + Send + Sync>>,
     tokenizer: Arc<Tokenizer>,
     no_kv_cache: bool,
     chat_template: Arc<ChatTemplate>,
@@ -291,11 +294,12 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
+        let available_devices = device_map::get_all_similar_devices(device)?;
+
         // If auto, convert to Map
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
-            let devices = device_map::get_all_similar_devices(device)?;
             // Initial dtype
-            let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
+            let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
@@ -375,7 +379,7 @@ impl Loader for NormalLoader {
                 layer_sizes_in_bytes,
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
-                &devices,
+                &available_devices,
                 dtype,
                 &params,
                 prompt_chunksize,
@@ -445,59 +449,141 @@ impl Loader for NormalLoader {
             AttentionImplementation::Eager
         };
 
-        let comm = Arc::new(mistralrs_quant::Comm::from_device(device, 0, 1)?);
+        let mut parallel_models = if available_devices[0].is_cuda() && available_devices.len() > 1 {
+            // NCCL case
+            let id = mistralrs_quant::Id::new();
 
-        let mut model = match self.kind {
-            ModelKind::Normal => normal_model_loader!(
-                paths,
-                Some(dtype),
-                &load_device,
-                layer_devices.clone(),
-                config,
-                self.inner,
-                self.config.use_flash_attn,
-                silent,
-                mapper,
-                loading_isq,
-                self.config.from_uqff.is_some(),
-                device.clone(),
-                attention_mechanism,
-                matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
-                comm
-            ),
-            ModelKind::Adapter {
-                adapter: AdapterKind::XLora,
-            } => xlora_model_loader!(
-                paths,
-                Some(dtype),
-                &load_device,
-                layer_devices.clone(),
-                config,
-                self.inner,
-                self.config.use_flash_attn,
-                silent,
-                mapper,
-                loading_isq,
-                device.clone(),
-                comm
-            ),
-            ModelKind::Adapter {
-                adapter: AdapterKind::Lora,
-            } => lora_model_loader!(
-                paths,
-                dtype,
-                &load_device,
-                layer_devices.clone(),
-                config,
-                self.inner,
-                self.config.use_flash_attn,
-                silent,
-                mapper,
-                loading_isq,
-                device.clone(),
-                comm
-            ),
-            _ => unreachable!(),
+            let mut parallel_models = Vec::new();
+
+            for (rank, device) in available_devices.iter().enumerate() {
+                let comm = Arc::new(mistralrs_quant::Comm::from_device(
+                    id,
+                    device,
+                    rank,
+                    available_devices.len(),
+                )?);
+                // Redefine mapper
+                let mapper = DeviceMapSetting::dummy().into_mapper(
+                    self.inner.get_total_device_mapping_num_layers(&config)?,
+                    device,
+                    None,
+                )?;
+
+                let model = match self.kind {
+                    ModelKind::Normal => normal_model_loader!(
+                        paths,
+                        Some(dtype),
+                        &load_device,
+                        layer_devices.clone(),
+                        config,
+                        self.inner,
+                        self.config.use_flash_attn,
+                        silent,
+                        mapper,
+                        loading_isq,
+                        self.config.from_uqff.is_some(),
+                        device.clone(),
+                        attention_mechanism,
+                        matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
+                        comm
+                    ),
+                    ModelKind::Adapter {
+                        adapter: AdapterKind::XLora,
+                    } => xlora_model_loader!(
+                        paths,
+                        Some(dtype),
+                        &load_device,
+                        layer_devices.clone(),
+                        config,
+                        self.inner,
+                        self.config.use_flash_attn,
+                        silent,
+                        mapper,
+                        loading_isq,
+                        device.clone(),
+                        comm
+                    ),
+                    ModelKind::Adapter {
+                        adapter: AdapterKind::Lora,
+                    } => lora_model_loader!(
+                        paths,
+                        dtype,
+                        &load_device,
+                        layer_devices.clone(),
+                        config,
+                        self.inner,
+                        self.config.use_flash_attn,
+                        silent,
+                        mapper,
+                        loading_isq,
+                        device.clone(),
+                        comm
+                    ),
+                    _ => unreachable!(),
+                };
+
+                parallel_models.push(model);
+            }
+
+            parallel_models
+        } else {
+            // Dummy comm
+            let id = mistralrs_quant::Id::new();
+            let comm = Arc::new(mistralrs_quant::Comm::from_device(id, device, 0, 1)?);
+
+            let model = match self.kind {
+                ModelKind::Normal => normal_model_loader!(
+                    paths,
+                    Some(dtype),
+                    &load_device,
+                    layer_devices.clone(),
+                    config,
+                    self.inner,
+                    self.config.use_flash_attn,
+                    silent,
+                    mapper,
+                    loading_isq,
+                    self.config.from_uqff.is_some(),
+                    device.clone(),
+                    attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
+                    comm
+                ),
+                ModelKind::Adapter {
+                    adapter: AdapterKind::XLora,
+                } => xlora_model_loader!(
+                    paths,
+                    Some(dtype),
+                    &load_device,
+                    layer_devices.clone(),
+                    config,
+                    self.inner,
+                    self.config.use_flash_attn,
+                    silent,
+                    mapper,
+                    loading_isq,
+                    device.clone(),
+                    comm
+                ),
+                ModelKind::Adapter {
+                    adapter: AdapterKind::Lora,
+                } => lora_model_loader!(
+                    paths,
+                    dtype,
+                    &load_device,
+                    layer_devices.clone(),
+                    config,
+                    self.inner,
+                    self.config.use_flash_attn,
+                    silent,
+                    mapper,
+                    loading_isq,
+                    device.clone(),
+                    comm
+                ),
+                _ => unreachable!(),
+            };
+            vec![model]
         };
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
@@ -535,9 +621,13 @@ impl Loader for NormalLoader {
                 .token_to_id(&bos_toks[0])
                 .expect("Somehow the bos token is not present.");
 
-            match self.config.organization {
-                IsqOrganization::Default => model.begin_track_stats()?,
-                IsqOrganization::MoeExpertsOnly => model.begin_track_stats_moe_experts_only()?,
+            for model in &mut parallel_models {
+                match self.config.organization {
+                    IsqOrganization::Default => model.begin_track_stats()?,
+                    IsqOrganization::MoeExpertsOnly => {
+                        model.begin_track_stats_moe_experts_only()?
+                    }
+                }
             }
 
             const CHUNK_SIZE: usize = 1024;
@@ -558,23 +648,30 @@ impl Loader for NormalLoader {
                     None,
                     Some(pipeline_mapper.as_ref()),
                 )?;
-                let _ = model.forward(
-                    &inputs.input,
-                    &inputs.positions,
-                    inputs.context_lens,
-                    inputs.position_ids,
-                    None,
-                    &inputs.flash_meta,
-                )?;
-                match model.cache_mut() {
-                    EitherCache::Full(full) => {
-                        for layer in &mut *full.lock() {
-                            *layer = None
+                let _ = parallel_models
+                    .par_iter()
+                    .map(|model| {
+                        model.forward(
+                            &inputs.input,
+                            &inputs.positions,
+                            inputs.context_lens.clone(),
+                            inputs.position_ids.clone(),
+                            None,
+                            &inputs.flash_meta,
+                        )
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
+                for model in &mut parallel_models {
+                    match model.cache_mut() {
+                        EitherCache::Full(full) => {
+                            for layer in &mut *full.lock() {
+                                *layer = None
+                            }
                         }
-                    }
-                    EitherCache::Normal(normal) => {
-                        for layer in &mut *normal.lock().unwrap().0 {
-                            layer.set_len(0);
+                        EitherCache::Normal(normal) => {
+                            for layer in &mut *normal.lock().unwrap().0 {
+                                layer.set_len(0);
+                            }
                         }
                     }
                 }
@@ -605,68 +702,89 @@ impl Loader for NormalLoader {
                 (None, true) => Some(ImatrixDataSource::Collected),
                 (Some(_), true) => unreachable!(),
             };
-            model.quantize(
-                in_situ_quant,
-                device.clone(),
-                self.config.topology.as_ref(),
-                silent,
-                imatrix_source,
-                self.config.organization,
-                self.config.write_uqff.as_ref(),
-                UqffFullSer {
-                    tokenizer: &tokenizer,
-                    template_filename: paths.get_template_filename(),
-                    generation_config: paths.get_gen_conf_filename(),
-                    config: config.clone(),
-                    processor_filename: &None,
-                    preprocessor_filename: &None,
-                },
-            )?;
+            let _ = parallel_models
+                .par_iter_mut()
+                .map(|model| {
+                    model.quantize(
+                        in_situ_quant,
+                        device.clone(),
+                        self.config.topology.as_ref(),
+                        silent,
+                        imatrix_source,
+                        self.config.organization,
+                        self.config.write_uqff.as_ref(),
+                        UqffFullSer {
+                            tokenizer: &tokenizer,
+                            template_filename: paths.get_template_filename(),
+                            generation_config: paths.get_gen_conf_filename(),
+                            config: config.clone(),
+                            processor_filename: &None,
+                            preprocessor_filename: &None,
+                        },
+                    )
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?;
         } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
-            model.load_from_artifacts(
-                device.clone(),
-                self.config.topology.as_ref(),
-                silent,
-                from_uqff,
-            )?;
+            let _ = parallel_models
+                .par_iter_mut()
+                .map(|model| {
+                    model.load_from_artifacts(
+                        device.clone(),
+                        self.config.topology.as_ref(),
+                        silent,
+                        from_uqff,
+                    )
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?;
         }
 
         let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
-            warn!("Adapter models do not currently support PagedAttention, running without");
+            warn!(
+                "Adapter parallel_models do not currently support PagedAttention, running without"
+            );
             None
         } else {
             paged_attn_config
         };
 
-        let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
+        let (cache_config, cache_engines) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
                 dtype,
-                model.config(),
+                parallel_models[0].config(),
                 device,
                 &layer_devices,
                 silent,
             )?;
-            let cache_engine =
-                CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;
-            (Some(cache_config), Some(cache_engine))
+            let mut cache_engines = Vec::new();
+            for model in &parallel_models {
+                let cache_engine = CacheEngine::new(
+                    model.config(),
+                    &cache_config,
+                    dtype,
+                    device,
+                    layer_devices.clone(),
+                )?;
+                cache_engines.push(cache_engine)
+            }
+            (Some(cache_config), Some(cache_engines))
         } else {
             (None, None)
         };
 
-        let max_seq_len = model.max_seq_len();
+        let max_seq_len = parallel_models[0].max_seq_len();
         let tok_env = build_tok_env(tokenizer.clone());
-        let num_hidden_layers = match model.cache() {
+        let num_hidden_layers = match parallel_models[0].cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
         };
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
-        let sliding_window = model.config().sliding_window;
-        let model_metadata = Arc::new(model.config().clone());
+        let sliding_window = parallel_models[0].config().sliding_window;
+        let model_metadata = Arc::new(parallel_models[0].config().clone());
         Ok(Arc::new(Mutex::new(NormalPipeline {
-            model,
+            parallel_models,
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
             chat_template: Arc::new(chat_template),
@@ -689,7 +807,7 @@ impl Loader for NormalLoader {
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,
-                cache_engine,
+                cache_engines,
                 prompt_chunksize: Some(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: Some(model_metadata),
             }),
@@ -728,38 +846,46 @@ impl PreProcessingMixin for NormalPipeline {
 impl IsqPipelineMixin for NormalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
-        self.model
-            .quantize(
-                Some(dtype),
-                device,
-                self.topology.as_ref(),
-                self.silent,
-                self.imatrix.as_ref().map(ImatrixDataSource::File),
-                self.organization,
-                None,
-                UqffFullSer {
-                    tokenizer: &self.tokenizer,
-                    template_filename: &self.template_filename,
-                    generation_config: self.generation_config.as_ref(),
-                    config: self.config.clone(),
-                    processor_filename: &None,
-                    preprocessor_filename: &None,
-                },
-            )
-            .map_err(anyhow::Error::msg)
+        let _ = self
+            .parallel_models
+            .par_iter_mut()
+            .map(|model| {
+                model
+                    .quantize(
+                        Some(dtype),
+                        device.clone(),
+                        self.topology.as_ref(),
+                        self.silent,
+                        self.imatrix.as_ref().map(ImatrixDataSource::File),
+                        self.organization,
+                        None,
+                        UqffFullSer {
+                            tokenizer: &self.tokenizer,
+                            template_filename: &self.template_filename,
+                            generation_config: self.generation_config.as_ref(),
+                            config: self.config.clone(),
+                            processor_filename: &None,
+                            preprocessor_filename: &None,
+                        },
+                    )
+                    .map_err(anyhow::Error::msg)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(())
     }
 }
 
 impl CacheManagerMixin for NormalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
+        if matches!(self.parallel_models[0].cache(), EitherCache::Full(_)) {
             FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
         } else {
             NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
         }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
+        if matches!(self.parallel_models[0].cache(), EitherCache::Full(_)) {
             FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
         } else {
             NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
@@ -772,7 +898,7 @@ impl CacheManagerMixin for NormalPipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        if matches!(self.model.cache(), EitherCache::Full(_)) {
+        if matches!(self.parallel_models[0].cache(), EitherCache::Full(_)) {
             FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
         } else {
             NormalCacheManager.set_none_cache(
@@ -787,21 +913,34 @@ impl CacheManagerMixin for NormalPipeline {
         }
     }
     fn cache(&self) -> &EitherCache {
-        self.model.cache()
+        if self.parallel_models.len() != 1 {
+            panic!("Number of parallel models is not 1.");
+        }
+        self.parallel_models[0].cache()
     }
 }
 
 impl AdapterActivationMixin for NormalPipeline {
     fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        self.model
-            .activate_adapters(adapter_names)
-            .map_err(anyhow::Error::msg)
+        let sum = self
+            .parallel_models
+            .par_iter_mut()
+            .map(|model| {
+                model
+                    .activate_adapters(adapter_names.clone())
+                    .map_err(anyhow::Error::msg)
+            })
+            .collect::<Result<Vec<_>>>()?
+            .iter()
+            .sum();
+
+        Ok(sum)
     }
 }
 
 impl MetadataMixin for NormalPipeline {
     fn device(&self) -> Device {
-        self.model.device().clone()
+        self.parallel_models[0].device().clone()
     }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
         Some(self.tokenizer.clone())
@@ -837,15 +976,13 @@ impl Pipeline for NormalPipeline {
             seqlen_offsets_full,
             context_lens,
             position_ids,
-            mut paged_attn_meta,
+            paged_attn_meta,
             flash_meta,
             flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
-        let paged_attn_meta = match (
-            self.get_metadata().cache_engine.as_ref(),
-            &mut paged_attn_meta,
-        ) {
-            (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
+        let metadata = self.get_metadata();
+        let paged_attn_meta = match (&metadata.cache_engines, &paged_attn_meta) {
+            (Some(cache_engines), Some(meta)) => Some((cache_engines, meta)),
             (Some(_), None) => {
                 // This can happen if Rust-side user code is wrong
                 candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
@@ -880,16 +1017,30 @@ impl Pipeline for NormalPipeline {
             ),
         })?;
         #[cfg(not(feature = "metal"))]
-        let logits = match self.model.is_xlora() {
-            false => self.model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                context_lens,
-                position_ids,
-                paged_attn_meta,
-                &flash_meta,
-            )?,
-            true => self.model.xlora_forward(
+        let logits = match self.parallel_models[0].is_xlora() {
+            false => {
+                let logits_vec = self
+                    .parallel_models
+                    .par_iter()
+                    .enumerate()
+                    .map(|(i, model)| {
+                        let paged_attn_meta = paged_attn_meta
+                            .as_ref()
+                            .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1));
+                        model.forward(
+                            &input_ids,
+                            &seqlen_offsets,
+                            context_lens.clone(),
+                            position_ids.clone(),
+                            paged_attn_meta,
+                            &flash_meta,
+                        )
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
+
+                logits_vec[0].clone()
+            }
+            true => self.parallel_models[0].xlora_forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
@@ -925,16 +1076,29 @@ impl Pipeline for NormalPipeline {
 
 impl AnyMoePipelineMixin for NormalPipeline {
     fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> candle_core::Result<()> {
-        self.model.finish_training(gate_model_id)
+        self.parallel_models
+            .par_iter_mut()
+            .map(|model| model.finish_training(gate_model_id.clone()))
+            .collect::<candle_core::Result<Vec<_>>>()?;
+        Ok(())
     }
     fn amoe_layer_vars(&self) -> Vec<Vec<Var>> {
-        self.model.get_vars()
+        self.parallel_models
+            .par_iter()
+            .flat_map(|model| model.get_vars())
+            .collect::<Vec<_>>()
     }
     fn amoe_base_model_trainable_params(&self) -> usize {
-        self.model.trainable_params()
+        self.parallel_models
+            .par_iter()
+            .map(|model| model.trainable_params())
+            .sum()
     }
     fn amoe_take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
-        self.model.take_cached_gating_outputs()
+        self.parallel_models
+            .par_iter_mut()
+            .flat_map(|model| model.take_cached_gating_outputs())
+            .collect::<Vec<_>>()
     }
     fn amoe_create_layers(
         &mut self,
@@ -1051,10 +1215,25 @@ impl AnyMoePipelineMixin for NormalPipeline {
             None
         };
 
-        self.model
-            .create_anymoe_layers(vbs, config, (prefix, mlp), layers, expert_type, gate_vb)
+        self.parallel_models
+            .iter_mut()
+            .map(|model| {
+                model.create_anymoe_layers(
+                    vbs.clone(),
+                    config.clone(),
+                    (prefix.clone(), mlp.clone()),
+                    layers.clone(),
+                    expert_type.clone(),
+                    gate_vb.clone(),
+                )
+            })
+            .collect::<candle_core::Result<Vec<_>>>()?;
+
+        Ok(())
     }
     fn amoe_supported(&self) -> bool {
-        self.model.amoe_supported()
+        self.parallel_models
+            .iter()
+            .all(|model| model.amoe_supported())
     }
 }

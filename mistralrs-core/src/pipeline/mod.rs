@@ -84,7 +84,7 @@ pub struct GeneralMetadata {
     pub sliding_window: Option<usize>,
     // PagedAttention stuff
     pub cache_config: Option<CacheConfig>,
-    pub cache_engine: Option<CacheEngine>,
+    pub cache_engines: Option<Vec<CacheEngine>>,
     pub prompt_chunksize: Option<NonZeroUsize>,
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
 }
@@ -525,11 +525,19 @@ pub trait Pipeline:
                 blocks_to_swap_in,
                 blocks_to_swap_out,
             } => {
-                self.get_metadata()
-                    .cache_engine
+                for engine in self
+                    .get_metadata()
+                    .cache_engines
                     .as_ref()
-                    .expect("PagedAttention must have cache engine.")
-                    .execute_scheduler_ops(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)?;
+                    .expect("PagedAttention must have cache engines.")
+                {
+                    // Cloning might be bad?
+                    engine.execute_scheduler_ops(
+                        blocks_to_swap_in.clone(),
+                        blocks_to_swap_out.clone(),
+                        blocks_to_copy.clone(),
+                    )?;
+                }
 
                 let inputs_iter = self.get_processor().inputs_processor().process_inputs(
                     self.tokenizer(),

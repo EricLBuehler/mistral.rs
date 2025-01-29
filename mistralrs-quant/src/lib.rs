@@ -36,7 +36,7 @@ use gptq::gptq_linear;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
-pub use distributed::Comm;
+pub use distributed::{Comm, Id};
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;

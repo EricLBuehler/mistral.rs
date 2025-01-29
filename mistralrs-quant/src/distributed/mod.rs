@@ -3,23 +3,30 @@ mod ops {
     use std::{fmt::Debug, ops::Deref, sync::Arc};
 
     use candle_core::{
-        backend::BackendStorage,
-        cuda::cudarc::{self, nccl::Id},
-        cuda_backend::WrapErr,
-        CpuStorage, CustomOp1, DType, Device, Layout, Result, Shape, Tensor,
+        backend::BackendStorage, cuda::cudarc, cuda_backend::WrapErr, CpuStorage, CustomOp1, DType,
+        Device, Layout, Result, Shape, Tensor,
     };
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Id(cudarc::nccl::Id);
+
+    impl Id {
+        pub fn new() -> Self {
+            let id = cudarc::nccl::Id::new().expect("Failed to create `Id`.");
+            Self(id)
+        }
+    }
 
     #[derive(Debug)]
     pub struct Comm(cudarc::nccl::Comm);
 
     impl Comm {
-        pub fn from_device(dev: &Device, rank: usize, world_size: usize) -> Result<Self> {
-            let id = Id::new().expect("Failed to create `Id`.");
+        pub fn from_device(id: Id, dev: &Device, rank: usize, world_size: usize) -> Result<Self> {
             let Device::Cuda(device) = dev else {
                 candle_core::bail!("Expected CUDA device.")
             };
             Ok(Self(
-                cudarc::nccl::Comm::from_rank(device.cuda_device(), rank, world_size, id)
+                cudarc::nccl::Comm::from_rank(device.cuda_device(), rank, world_size, id.0)
                     .expect("Failed to create `Comm`"),
             ))
         }
@@ -124,11 +131,25 @@ mod ops {
 
     use candle_core::{Device, Result, Tensor};
 
+    #[derive(Debug, Clone, Copy)]
+    pub struct Id;
+
+    impl Id {
+        pub fn new() -> Self {
+            Self
+        }
+    }
+
     #[derive(Debug)]
     pub struct Comm;
 
     impl Comm {
-        pub fn from_device(_dev: &Device, _rank: usize, _world_size: usize) -> Result<Self> {
+        pub fn from_device(
+            _id: Id,
+            _dev: &Device,
+            _rank: usize,
+            _world_size: usize,
+        ) -> Result<Self> {
             Ok(Self)
         }
 
@@ -155,4 +176,4 @@ mod ops {
     }
 }
 
-pub use ops::{AllReduce, Comm};
+pub use ops::{AllReduce, Comm, Id};

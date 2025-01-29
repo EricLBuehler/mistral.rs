@@ -125,6 +125,7 @@ pub struct UqffFullSer<'a> {
     pub preprocessor_filename: &'a Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum ImatrixDataSource<'a> {
     File(&'a PathBuf),
     Collected,
