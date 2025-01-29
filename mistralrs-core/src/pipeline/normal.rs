@@ -301,6 +301,21 @@ impl Loader for NormalLoader {
             let id = mistralrs_quant::Id::new();
             let world_size = 8; // TODO TODO TODO
             println!("A");
+
+            for i in 0..3 {
+                let handle = std::thread::spawn(move || -> Result<()> {
+                    let comm = mistralrs_quant::Comm::from_device(
+                        id,
+                        &Device::new_cuda(i)?,
+                        3,
+                        world_size,
+                    )?;
+
+                    dbg!(&comm.rank());
+
+                    Ok(())
+                });
+            }
             // let handle = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
             //     println!("B");
             //     Ok(Arc::new(mistralrs_quant::Comm::from_device(
@@ -316,19 +331,9 @@ impl Loader for NormalLoader {
             // println!("C");
             // dbg!(&comm.world_size());
 
-            let comm =  {
-                println!("B");
-                Arc::new(mistralrs_quant::Comm::from_device(
-                    id,
-                    &Device::new_cuda(3)?,
-                    3,
-                    world_size,
-                )?)
-            };
-
             std::thread::sleep(std::time::Duration::from_secs(10));
             println!("C");
-            dbg!(&comm.world_size());
+            // dbg!(&comm.world_size());
         }
 
         // If auto, convert to Map
@@ -498,7 +503,10 @@ impl Loader for NormalLoader {
                 let comm = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
                     println!("B");
                     Ok(Arc::new(mistralrs_quant::Comm::from_device(
-                        id, &device_clone, rank, world_size,
+                        id,
+                        &device_clone,
+                        rank,
+                        world_size,
                     )?))
                 })
                 .join()
