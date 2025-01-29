@@ -295,6 +295,31 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
+        {
+            let id = mistralrs_quant::Id::new();
+            let world_size = 3;
+
+            let total_devices =
+                candle_core::cuda::cudarc::driver::result::device::get_count().unwrap();
+            dbg!(&total_devices);
+
+            // They each block on each other
+            // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
+            let comms = (0..world_size)
+                .into_par_iter()
+                .map(|rank| {
+                    mistralrs_quant::Comm::from_device(
+                        id,
+                        &Device::new_cuda(rank)?,
+                        rank,
+                        world_size,
+                    )
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?;
+
+            dbg!(&comms);
+        }
+
         let available_devices = device_map::get_all_similar_devices(device)?;
 
         // If auto, convert to Map
@@ -455,6 +480,9 @@ impl Loader for NormalLoader {
 
             let id = mistralrs_quant::Id::new();
             let world_size = available_devices.len();
+
+            let total_devices =
+                candle_core::cuda::cudarc::driver::result::device::get_count().unwrap();
 
             // They each block on each other
             // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
