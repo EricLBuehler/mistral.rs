@@ -1,7 +1,8 @@
+use crate::layers::{linear, linear_no_bias};
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{
-    activation, linear, linear_no_bias, ops::softmax_last_dim, Dropout, Linear, Module, ModuleT,
-    VarBuilder,
+    activation, ops::softmax_last_dim, var_builder::ShardedVarBuilder, Dropout, Linear, Module,
+    ModuleT, VarBuilder,
 };
 
 use crate::ops::{TopKLastDimOp, TopKOutput};

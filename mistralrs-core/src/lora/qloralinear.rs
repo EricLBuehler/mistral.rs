@@ -1,7 +1,7 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
 use candle_core::{bail, quantized::QMatMul, DType, Module, Result, Tensor};
-use candle_nn::{Linear, VarBuilder};
+use candle_nn::{var_builder::ShardedVarBuilder, Linear, VarBuilder};
 use either::Either;
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, UnquantLinear};
 
@@ -31,11 +31,11 @@ impl QLoraLinear {
         old: QMatMul,
         linear_config: &LoraLinearConfig,
         config: &[((String, String), LoraConfig)],
-        vb: &VarBuilder,
+        vb: &ShardedVarBuilder,
         ordering: &Ordering,
         prefix: String,
         count: &mut usize,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let target_modules = &config.first().map(|c| &c.1.target_modules);
         for (_, cfg) in config {

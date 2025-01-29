@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, fs::File, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Module, VarBuilder};
+use candle_nn::{var_builder::ShardedVarBuilder, Module, VarBuilder};
 use hf_hub::api::sync::{Api, ApiError};
 use tokenizers::Tokenizer;
 use tracing::info;
@@ -163,8 +163,8 @@ fn get_tokenization(tok: &Tokenizer, prompts: Vec<String>, device: &Device) -> R
 impl FluxStepper {
     pub fn new(
         cfg: FluxStepperConfig,
-        (flux_vb, flux_cfg): (VarBuilder, &flux::model::Config),
-        (flux_ae_vb, flux_ae_cfg): (VarBuilder, &flux::autoencoder::Config),
+        (flux_vb, flux_cfg): (ShardedVarBuilder, &flux::model::Config),
+        (flux_ae_vb, flux_ae_cfg): (ShardedVarBuilder, &flux::autoencoder::Config),
         dtype: DType,
         device: &Device,
         silent: bool,

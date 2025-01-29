@@ -7,8 +7,8 @@ use candle_core::{
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
 use candle_nn::{
-    var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Embedding, LayerNorm, LayerNormConfig,
-    Linear, Module, VarBuilder,
+    var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Embedding, GroupNorm, LayerNorm,
+    LayerNormConfig, Linear, Module, VarBuilder,
 };
 use float8::F8E4M3;
 use half::{bf16, f16};
@@ -45,6 +45,17 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     } else {
         Ok(LayerNorm::new_no_bias(weight, config.eps))
     }
+}
+
+pub fn group_norm(
+    num_groups: usize,
+    num_channels: usize,
+    eps: f64,
+    vb: ShardedVarBuilder,
+) -> Result<GroupNorm> {
+    let weight = vb.get(num_channels, "weight")?;
+    let bias = vb.get(num_channels, "bias")?;
+    GroupNorm::new(weight, bias, num_channels, num_groups, eps)
 }
 
 pub fn conv2d(
@@ -118,15 +129,14 @@ pub struct RmsNorm {
 
 impl RmsNorm {
     pub fn new(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        let w = inner.inner().weight().clone();
+        let w = vb.get(size, "weight")?;
         Ok(Self { eps, weight: w })
     }
 
     /// Gemma uses weight + 1.0
     pub fn new_gemma(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        let w = (inner.inner().weight().clone() + 1.0)?;
+        let w = vb.get(size, "weight")?;
+        let w = (w + 1.0)?;
         Ok(Self { eps, weight: w })
     }
 

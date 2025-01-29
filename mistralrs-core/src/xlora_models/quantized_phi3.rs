@@ -22,6 +22,7 @@ use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_nn::var_builder::ShardedVarBuilder;
 use candle_nn::Embedding;
 use candle_nn::VarBuilder;
 use tqdm::Iter;
@@ -229,11 +230,11 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         mut ct: Content<'_, R>,
         device: &Device,
         lora_config: &[((String, String), LoraConfig)],
-        vb: &VarBuilder,
+        vb: &ShardedVarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: Box<dyn DeviceMapper + Send + Sync>,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         dtype: DType,
     ) -> Result<Self> {
         verify_sanity_adapters(ordering, &SUPPORTED_LAYERS)?;

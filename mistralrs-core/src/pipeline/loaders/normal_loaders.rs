@@ -107,7 +107,7 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self, config: &str) -> Result<bool>;
@@ -313,7 +313,7 @@ impl NormalModelLoader for AutoLoader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Self::get_loader(config)?.load_xlora(
@@ -461,7 +461,7 @@ impl NormalModelLoader for MistralLoader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraMistral::new(
@@ -703,7 +703,7 @@ impl NormalModelLoader for GemmaLoader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraGemma::new(
@@ -943,7 +943,7 @@ impl NormalModelLoader for LlamaLoader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraLlama::new(
@@ -1173,7 +1173,7 @@ impl NormalModelLoader for MixtralLoader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraMixtral::new(
@@ -1410,7 +1410,7 @@ impl NormalModelLoader for Phi2Loader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraPhi2::new(
@@ -1643,7 +1643,7 @@ impl NormalModelLoader for Phi3Loader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraPhi3::new(
@@ -1866,7 +1866,7 @@ impl NormalModelLoader for Qwen2Loader {
         _xlora_config: Option<XLoraConfig>,
         _xlora_ordering: Ordering,
         _normal_loading_metadata: NormalLoadingMetadata,
-        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         _comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         todo!()
@@ -2103,7 +2103,7 @@ impl NormalModelLoader for Gemma2Loader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraGemma2::new(
@@ -2340,7 +2340,7 @@ impl NormalModelLoader for Starcoder2Loader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraStarcoder2::new(
@@ -2578,7 +2578,7 @@ impl NormalModelLoader for Phi3_5MoELoader {
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraPhi3::new(
@@ -2785,7 +2785,7 @@ impl NormalModelLoader for DeepSeekV2Loader {
         _xlora_config: Option<XLoraConfig>,
         _xlora_ordering: Ordering,
         _normal_loading_metadata: NormalLoadingMetadata,
-        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         _comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         todo!()
@@ -3115,7 +3115,7 @@ impl NormalModelLoader for DeepSeekV3Loader {
         _xlora_config: Option<XLoraConfig>,
         _xlora_ordering: Ordering,
         _normal_loading_metadata: NormalLoadingMetadata,
-        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         _comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         todo!()

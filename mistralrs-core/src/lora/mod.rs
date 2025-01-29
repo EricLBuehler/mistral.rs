@@ -3,7 +3,7 @@
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use candle_core::{quantized::QTensor, DType, IndexOp, Result, Tensor, D};
-use candle_nn::{init, Linear, Module, VarBuilder};
+use candle_nn::{init, var_builder::ShardedVarBuilder, Linear, Module, VarBuilder};
 use loralinear::LoraLinear;
 use mistralrs_quant::QuantMethod;
 pub use qloralinear::QLoraLinear;
@@ -13,6 +13,8 @@ mod loralinear;
 mod qloralinear;
 
 use std::collections::HashMap;
+
+use crate::layers;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct PreloadAdapter {
@@ -77,13 +79,9 @@ fn make_adapter(
     linear_cfg: &LoraLinearConfig,
 ) -> Result<Adapter> {
     assert!(a_vb.contains_tensor("weight"));
-    let a = a_vb.get_with_hints(
-        (cfg.rank, linear_cfg.in_features),
-        "weight",
-        init::DEFAULT_KAIMING_NORMAL,
-    )?;
+    let a = a_vb.get((cfg.rank, linear_cfg.in_features), "weight")?;
     assert!(b_vb.contains_tensor("weight"));
-    let b = b_vb.get_with_hints((linear_cfg.out_features, cfg.rank), "weight", init::ZERO)?;
+    let b = b_vb.get((linear_cfg.out_features, cfg.rank), "weight")?;
     let a = Linear::new(a, None);
     let b = Linear::new(b, None);
     let scale = if cfg.rank > 0 {
@@ -184,13 +182,13 @@ pub fn linear(
     lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
-    preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
     let module = prefix.split('.').last().unwrap();
 
     let linear_config = LoraLinearConfig::new(d1, d2);
-    let inner = candle_nn::linear(d1, d2, base_vb.clone())?;
+    let inner = layers::linear(d1, d2, base_vb.clone())?;
 
     let target_modules = &lora_config.first().map(|c| &c.1.target_modules);
     for (_, cfg) in lora_config {
@@ -236,13 +234,13 @@ pub fn linear_no_bias(
     lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
-    preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
     let module = prefix.split('.').last().unwrap();
 
     let linear_config = LoraLinearConfig::new(d1, d2);
-    let inner = candle_nn::linear_no_bias(d1, d2, base_vb.clone())?;
+    let inner = layers::linear_no_bias(d1, d2, base_vb.clone())?;
 
     let target_modules = &lora_config.first().map(|c| &c.1.target_modules);
     for (_, cfg) in lora_config {
@@ -293,7 +291,7 @@ pub fn linear_b(
     lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
-    preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+    preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     if bias {
         linear(

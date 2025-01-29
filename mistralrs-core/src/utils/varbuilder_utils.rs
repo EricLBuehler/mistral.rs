@@ -9,7 +9,7 @@ use std::{
 
 use candle_core::{pickle::PthTensors, DType, Device, Result, Tensor};
 use candle_nn::{
-    var_builder::{SimpleBackend, VarBuilderArgs},
+    var_builder::{ShardedSafeTensors, ShardedVarBuilder, SimpleBackend, VarBuilderArgs},
     VarBuilder,
 };
 use regex::Regex;
@@ -77,7 +77,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     make_dummy_regexes: Option<Arc<Vec<Regex>>>,
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
-) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
+) -> Result<ShardedVarBuilder<'a>> {
     #[allow(clippy::type_complexity)]
     let mut handles: Vec<JoinHandle<Result<HashMap<String, Tensor>>>> = Vec::new();
 

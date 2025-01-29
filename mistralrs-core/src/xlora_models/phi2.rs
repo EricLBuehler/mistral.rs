@@ -20,14 +20,14 @@ use crate::{
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, layer_norm, Embedding, LayerNorm, VarBuilder};
+use candle_nn::{var_builder::ShardedVarBuilder, Embedding, LayerNorm, VarBuilder};
 use mistralrs_quant::QuantMethod;
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::CausalMasker,
+    layers::{embedding, layer_norm, CausalMasker},
     models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
 };
@@ -53,7 +53,7 @@ impl MLP {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let fc1 = linear(
             cfg.hidden_size,
@@ -143,7 +143,7 @@ impl Attention {
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc<RotaryEmbedding>,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads();
@@ -329,7 +329,7 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc<RotaryEmbedding>,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             cfg,
@@ -421,7 +421,7 @@ impl Model {
         xlora_ordering: Ordering,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(

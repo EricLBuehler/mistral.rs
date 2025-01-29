@@ -4,11 +4,11 @@
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, VarBuilder};
+use candle_nn::{var_builder::ShardedVarBuilder, Activation, Embedding, Linear, VarBuilder};
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::layers::{clamp_for_f16, MatMul};
+use crate::layers::{clamp_for_f16, embedding, linear_no_bias, MatMul};
 
 fn default_relative_attention_max_distance() -> usize {
     128
@@ -137,7 +137,7 @@ struct T5LayerNorm {
 }
 
 impl T5LayerNorm {
-    fn load(h: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+    fn load(h: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         let weight = vb.get(h, "weight")?;
         Ok(Self {
             weight,

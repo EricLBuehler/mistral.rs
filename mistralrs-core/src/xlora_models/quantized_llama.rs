@@ -13,6 +13,7 @@ use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::ggml_file;
 use candle_core::quantized::QMatMul;
 use candle_core::{DType, Device, Result, Tensor};
+use candle_nn::var_builder::ShardedVarBuilder;
 use candle_nn::{Embedding, Module, VarBuilder};
 use mistralrs_quant::MatMul;
 use tqdm::Iter;
@@ -272,10 +273,10 @@ impl ModelConfig::FromAdapterGGML for ModelWeights {
         mut ct: ggml_file::Content,
         gqa: usize,
         lora_config: &[((String, String), LoraConfig)],
-        vb: &VarBuilder,
+        vb: &ShardedVarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         dtype: DType,
     ) -> Result<Self> {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
@@ -471,11 +472,11 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         mut ct: Content<'_, R>,
         device: &Device,
         lora_config: &[((String, String), LoraConfig)],
-        vb: &VarBuilder,
+        vb: &ShardedVarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: Box<dyn DeviceMapper + Send + Sync>,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         dtype: DType,
     ) -> Result<Self> {
         verify_sanity_adapters(ordering, &SUPPORTED_LAYERS)?;
