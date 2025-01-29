@@ -1032,12 +1032,12 @@ impl Pipeline for NormalPipeline {
                                 .as_ref()
                                 .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1));
                             model.forward(
-                                &input_ids,
+                                &input_ids.to_device(model.device())?,
                                 &seqlen_offsets,
                                 context_lens.clone(),
                                 position_ids.clone(),
                                 paged_attn_meta,
-                                &flash_meta,
+                                &flash_meta.to_device(model.device())?,
                             )
                         })
                         .collect::<candle_core::Result<Vec<_>>>()?;
@@ -1070,12 +1070,12 @@ impl Pipeline for NormalPipeline {
                             .as_ref()
                             .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1));
                         model.forward(
-                            &input_ids,
+                            &input_ids.to_device(model.device())?,
                             &seqlen_offsets,
                             context_lens.clone(),
                             position_ids.clone(),
                             paged_attn_meta,
-                            &flash_meta,
+                            &flash_meta.to_device(model.device())?,
                         )
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
