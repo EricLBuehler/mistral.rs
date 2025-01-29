@@ -2,7 +2,6 @@ use candle_core::{DType, Device, Error, Result, Shape, Tensor, WithDType};
 use candle_nn::var_builder::{Backend, SimpleBackend, VarBuilderArgs};
 use float8::F8E4M3;
 use regex::Regex;
-use safetensors::slice::IndexOp;
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
 use std::collections::HashMap;
@@ -330,7 +329,7 @@ impl<'a> Backend for ShardedSafeTensors<'a> {
 
     fn get(
         &self,
-        target_shape: Shape, // The size is only checked when the world size is 1.
+        target_shape: Shape,
         path: &str,
         h: Self::Hints,
         dtype: DType,
@@ -373,67 +372,94 @@ impl<'a> Backend for ShardedSafeTensors<'a> {
             }
         }
 
-        let Self::Sharded {
-            b,
-            make_dummy_regexes,
-        } = self
-        else {
-            candle_core::bail!("World size is != 1 but got a SimpleBackend.");
-        };
-
-        if let Some(make_dummy_regexes) = make_dummy_regexes {
-            if make_dummy_regexes.iter().any(|x| x.is_match(path)) {
-                return Err(Error::CannotFindTensor {
-                    path: path.to_string(),
-                });
-            }
-        }
-
         let Shard {
             dim,
             rank,
             world_size,
         } = h;
-        let view = b.get(path)?;
-        let view_dtype = view.dtype();
-        let mut shape = view.shape().to_vec();
-        let size = shape[dim];
+        match self {
+            Self::Sharded {
+                b,
+                make_dummy_regexes,
+            } => {
+                use safetensors::slice::IndexOp;
 
-        if size % world_size != 0 {
-            return Err(Error::ShapeMismatchSplit {
-                shape: shape.into(),
-                dim,
-                n_parts: world_size,
-            });
+                if let Some(make_dummy_regexes) = make_dummy_regexes {
+                    if make_dummy_regexes.iter().any(|x| x.is_match(path)) {
+                        return Err(Error::CannotFindTensor {
+                            path: path.to_string(),
+                        });
+                    }
+                }
+
+                let view = b.get(path)?;
+                let view_dtype = view.dtype();
+                let mut shape = view.shape().to_vec();
+                let size = shape[dim];
+
+                if size % world_size != 0 {
+                    return Err(Error::ShapeMismatchSplit {
+                        shape: shape.into(),
+                        dim,
+                        n_parts: world_size,
+                    });
+                }
+                let block_size = size / world_size;
+                let start = rank * block_size;
+                let stop = (rank + 1) * block_size;
+
+                // Everything is expressed in tensor dimension
+                // bytes offsets is handled automatically for safetensors.
+
+                let iterator = if dim == 0 {
+                    view.slice(start..stop).map_err(|_| {
+                        Error::Msg(format!(
+                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                ))
+                    })?
+                } else if dim == 1 {
+                    view.slice((.., start..stop)).map_err(|_| {
+                        Error::Msg(format!(
+                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                ))
+                    })?
+                } else {
+                    candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                };
+
+                shape[dim] = block_size;
+
+                let view_dtype: DType = view_dtype.try_into()?;
+                let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
+                Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)
+            }
+            Self::SimpleBackend(b) => {
+                use candle_core::IndexOp;
+                let tensor = b.get(target_shape, path, Default::default(), dtype, dev)?;
+
+                let size = tensor.dim(dim)?;
+                let shape = tensor.dims().to_vec();
+
+                if size % world_size != 0 {
+                    return Err(Error::ShapeMismatchSplit {
+                        shape: shape.into(),
+                        dim,
+                        n_parts: world_size,
+                    });
+                }
+                let block_size = size / world_size;
+                let start = rank * block_size;
+                let stop = (rank + 1) * block_size;
+
+                if dim == 0 {
+                    tensor.i((start..stop, ..))
+                } else if dim == 1 {
+                    tensor.i((.., start..stop))
+                } else {
+                    candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                }
+            }
         }
-        let block_size = size / world_size;
-        let start = rank * block_size;
-        let stop = (rank + 1) * block_size;
-
-        // Everything is expressed in tensor dimension
-        // bytes offsets is handled automatically for safetensors.
-
-        let iterator = if dim == 0 {
-            view.slice(start..stop).map_err(|_| {
-                Error::Msg(format!(
-                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
-                ))
-            })?
-        } else if dim == 1 {
-            view.slice((.., start..stop)).map_err(|_| {
-                Error::Msg(format!(
-                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
-                ))
-            })?
-        } else {
-            candle_core::bail!("Get sharded on dimensions != 0 or 1")
-        };
-
-        shape[dim] = block_size;
-
-        let view_dtype: DType = view_dtype.try_into()?;
-        let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
-        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)
     }
 
     fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {
