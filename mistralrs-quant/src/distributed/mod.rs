@@ -25,7 +25,8 @@ mod ops {
             let device = dev.as_cuda_device()?.cuda_device();
             Ok(Self(
                 cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
-                    .expect("Failed to create `Comm`"),
+                    .map_err(|e| e.0)
+                    .expect("Failed to create `Comm`, error code"),
             ))
         }
     }
