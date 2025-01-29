@@ -480,10 +480,11 @@ impl Loader for NormalLoader {
             let world_size = 8; // TODO TODO TODO
             for rank in 0..world_size {
                 println!("A");
+                let device_clone = device.clone();
                 let comm = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
                     println!("B");
                     Ok(Arc::new(mistralrs_quant::Comm::from_device(
-                        id, rank, world_size,
+                        id, &device_clone, rank, world_size,
                     )?))
                 })
                 .join()
@@ -557,7 +558,7 @@ impl Loader for NormalLoader {
         } else {
             // Dummy comm
             let id = mistralrs_quant::Id::new();
-            let comm = Arc::new(mistralrs_quant::Comm::from_device(id, 0, 1)?);
+            let comm = Arc::new(mistralrs_quant::Comm::from_device(id, device, 0, 1)?);
 
             let model = match self.kind {
                 ModelKind::Normal => normal_model_loader!(
