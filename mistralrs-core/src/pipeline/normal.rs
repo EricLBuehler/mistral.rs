@@ -898,6 +898,9 @@ impl IsqPipelineMixin for NormalPipeline {
 
 impl CacheManagerMixin for NormalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        if self.parallel_models.len() != 1 {
+            panic!("Number of parallel models is not 1.");
+        }
         if matches!(self.parallel_models[0].cache(), EitherCache::Full(_)) {
             FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
         } else {
@@ -905,6 +908,9 @@ impl CacheManagerMixin for NormalPipeline {
         }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+        if self.parallel_models.len() != 1 {
+            panic!("Number of parallel models is not 1.");
+        }
         if matches!(self.parallel_models[0].cache(), EitherCache::Full(_)) {
             FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
         } else {
@@ -918,6 +924,9 @@ impl CacheManagerMixin for NormalPipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
+        if self.parallel_models.len() != 1 {
+            panic!("Number of parallel models is not 1.");
+        }
         if matches!(self.parallel_models[0].cache(), EitherCache::Full(_)) {
             FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
         } else {
@@ -933,9 +942,6 @@ impl CacheManagerMixin for NormalPipeline {
         }
     }
     fn cache(&self) -> &EitherCache {
-        if self.parallel_models.len() != 1 {
-            panic!("Number of parallel models is not 1.");
-        }
         self.parallel_models[0].cache()
     }
 }
