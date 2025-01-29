@@ -295,6 +295,7 @@ impl Loader for NormalLoader {
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
         let available_devices = device_map::get_all_similar_devices(device)?;
+        dbg!(&available_devices);
 
         // If auto, convert to Map
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
@@ -455,13 +456,20 @@ impl Loader for NormalLoader {
 
             let mut parallel_models = Vec::new();
 
+            let world_size = available_devices.len();
             for (rank, device) in available_devices.iter().enumerate() {
-                let comm = Arc::new(mistralrs_quant::Comm::from_device(
-                    id,
-                    &device,
-                    rank,
-                    available_devices.len(),
-                )?);
+                println!("A");
+                let comm = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
+                    let dev = Device::new_cuda_with_stream(7)?;
+                    println!("B");
+                    Ok(Arc::new(mistralrs_quant::Comm::from_device(
+                        id, &dev, rank, world_size,
+                    )?))
+                })
+                .join()
+                .unwrap()?;
+                println!("C");
+                dbg!(&comm.world_size());
                 // Redefine mapper
                 let mapper = DeviceMapSetting::dummy().into_mapper(
                     self.inner.get_total_device_mapping_num_layers(&config)?,
