@@ -294,6 +294,10 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
+        if device.is_cuda() {
+            mapper = DeviceMapSetting::dummy();
+        }
+
         // If auto, convert to Map
         if let DeviceMapSetting::Auto(params) = mapper.clone() {
             let available_devices = device_map::get_all_similar_devices(device)?;
