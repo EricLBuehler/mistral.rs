@@ -389,7 +389,7 @@ impl Loader for NormalLoader {
             mapper = DeviceMapSetting::Map(new);
         }
 
-        let pipeline_mapper = mapper.into_mapper(
+        let mut pipeline_mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
             self.config.topology.as_ref(),
@@ -474,7 +474,7 @@ impl Loader for NormalLoader {
 
             let mut parallel_models = Vec::new();
             for (comm, device) in comms.into_iter().map(Arc::new).zip(available_devices) {
-                info!("Loading rank {}", comm.rank());
+                info!("Loading rank {}/{world_size}", comm.rank() + 1);
                 // Redefine mapper
                 let mapper = DeviceMapSetting::dummy().into_mapper(
                     self.inner.get_total_device_mapping_num_layers(&config)?,
@@ -537,6 +537,13 @@ impl Loader for NormalLoader {
 
                 parallel_models.push(model);
             }
+
+            // Redefine mappers
+            pipeline_mapper = DeviceMapSetting::dummy().into_mapper(
+                self.inner.get_total_device_mapping_num_layers(&config)?,
+                &device,
+                None,
+            )?;
 
             parallel_models
         } else {
@@ -715,40 +722,40 @@ impl Loader for NormalLoader {
                 (None, true) => Some(ImatrixDataSource::Collected),
                 (Some(_), true) => unreachable!(),
             };
-            let _ = parallel_models
-                .par_iter_mut()
-                .map(|model| {
-                    model.quantize(
-                        in_situ_quant,
-                        device.clone(),
-                        self.config.topology.as_ref(),
-                        silent,
-                        imatrix_source,
-                        self.config.organization,
-                        self.config.write_uqff.as_ref(),
-                        UqffFullSer {
-                            tokenizer: &tokenizer,
-                            template_filename: paths.get_template_filename(),
-                            generation_config: paths.get_gen_conf_filename(),
-                            config: config.clone(),
-                            processor_filename: &None,
-                            preprocessor_filename: &None,
-                        },
-                    )
-                })
-                .collect::<candle_core::Result<Vec<_>>>()?;
+            let world_size = parallel_models.len();
+            for (rank, model) in parallel_models.iter_mut().enumerate() {
+                info!("Applying ISQ for rank {}/{world_size}", rank + 1);
+
+                model.quantize(
+                    in_situ_quant,
+                    device.clone(),
+                    self.config.topology.as_ref(),
+                    silent,
+                    imatrix_source,
+                    self.config.organization,
+                    self.config.write_uqff.as_ref(),
+                    UqffFullSer {
+                        tokenizer: &tokenizer,
+                        template_filename: paths.get_template_filename(),
+                        generation_config: paths.get_gen_conf_filename(),
+                        config: config.clone(),
+                        processor_filename: &None,
+                        preprocessor_filename: &None,
+                    },
+                )?;
+            }
         } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
-            let _ = parallel_models
-                .par_iter_mut()
-                .map(|model| {
-                    model.load_from_artifacts(
-                        device.clone(),
-                        self.config.topology.as_ref(),
-                        silent,
-                        from_uqff,
-                    )
-                })
-                .collect::<candle_core::Result<Vec<_>>>()?;
+            let world_size = parallel_models.len();
+            for (rank, model) in parallel_models.iter_mut().enumerate() {
+                info!("Applying ISQ to rank {}/{world_size}", rank + 1);
+
+                model.load_from_artifacts(
+                    device.clone(),
+                    self.config.topology.as_ref(),
+                    silent,
+                    from_uqff,
+                )?;
+            }
         }
 
         let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
