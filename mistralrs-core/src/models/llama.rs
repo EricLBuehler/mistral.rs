@@ -217,19 +217,21 @@ impl CausalSelfAttention {
             comm,
             vb.pp("o_proj"),
         )?;
+        let num_attention_heads = cfg.num_attention_heads / comm.world_size();
+        let num_key_value_heads = (cfg.num_key_value_heads / comm.world_size()).max(1);
         Ok(Self {
             q_proj,
             k_proj,
             v_proj,
             o_proj,
-            num_attention_heads: cfg.num_attention_heads,
-            num_key_value_heads: cfg.num_key_value_heads,
+            num_attention_heads,
+            num_key_value_heads,
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                n_kv_groups: num_attention_heads / num_key_value_heads,
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
@@ -559,8 +561,8 @@ impl Llama {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: cfg.num_key_value_heads,
-                num_attn_heads: cfg.num_attention_heads,
+                num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
+                num_attn_heads: cfg.num_attention_heads / comm.world_size(),
                 sliding_window: None,
                 k_head_dim: None,
                 v_head_dim: None,
