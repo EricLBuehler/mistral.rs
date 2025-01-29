@@ -23,7 +23,6 @@ use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
-use candle_nn::VarBuilder;
 use mistralrs_quant::ShardedVarBuilder;
 use tqdm::Iter;
 use tracing::info;

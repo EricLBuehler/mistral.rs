@@ -3,7 +3,6 @@
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::VarBuilder;
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use text::Qwen2VLTextModel;
 use vision::Qwen2VLVisionModel;

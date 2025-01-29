@@ -4,7 +4,7 @@ use std::{fmt::Debug, str::FromStr};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use candle_nn::{Conv2dConfig, VarBuilder};
+use candle_nn::Conv2dConfig;
 use mistralrs_quant::ShardedVarBuilder;
 
 #[cfg(feature = "pyo3_macros")]

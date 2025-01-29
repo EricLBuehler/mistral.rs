@@ -7,7 +7,6 @@ use std::{
 
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
-use candle_nn::VarBuilder;
 
 use hf_hub::api::sync::ApiRepo;
 use mistralrs_quant::ShardedVarBuilder;

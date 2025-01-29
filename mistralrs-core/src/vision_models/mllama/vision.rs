@@ -3,7 +3,7 @@
 use std::{ops::Mul, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, LayerNormConfig, Module, VarBuilder};
+use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, LayerNormConfig, Module};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{

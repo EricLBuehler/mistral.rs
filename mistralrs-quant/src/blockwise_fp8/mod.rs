@@ -4,7 +4,7 @@ use std::{
 };
 
 use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_nn::{Linear, Module};
 
 mod ops;
 

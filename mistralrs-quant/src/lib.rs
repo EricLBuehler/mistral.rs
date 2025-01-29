@@ -48,7 +48,7 @@ pub use utils::UQFF_QUANT_TYPE_OFFSET;
 
 pub use layers::{ColumnParallelLayer, ReplicatedLayer, RowParallelLayer};
 
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_nn::{Linear, Module};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

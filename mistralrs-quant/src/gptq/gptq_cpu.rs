@@ -1,6 +1,5 @@
 use crate::{DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde};
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::VarBuilder;
 use std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},

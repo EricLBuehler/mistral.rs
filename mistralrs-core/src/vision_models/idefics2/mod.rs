@@ -3,7 +3,7 @@
 pub(crate) mod idefics2_input_processor;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module, VarBuilder};
+use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use std::{any::Any, ops::Mul, sync::Arc};

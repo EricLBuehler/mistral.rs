@@ -3,7 +3,6 @@ use super::varbuilder_utils::{
 };
 use anyhow::Result;
 use candle_core::{quantized::ggml_file, DType};
-use candle_nn::VarBuilder;
 use mistralrs_quant::ShardedVarBuilder;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 

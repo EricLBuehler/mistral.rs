@@ -24,7 +24,7 @@ use crate::vision_models::llava::config::Config;
 use crate::AnyMoeConfig;
 use crate::AnyMoeExpertType;
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{Activation, Linear, VarBuilder};
+use candle_nn::{Activation, Linear};
 use mistralrs_quant::ShardedVarBuilder;
 
 pub(crate) struct LLaVAVisionSpecificArgs; // only a dumb struct to satisfy the trait

@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, fs::File, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Module, VarBuilder};
+use candle_nn::Module;
 use hf_hub::api::sync::{Api, ApiError};
 use mistralrs_quant::ShardedVarBuilder;
 use tokenizers::Tokenizer;

@@ -8,7 +8,6 @@ use candle_core::{
     quantized::{GgmlDType, QTensor},
     Context, DType, Device, Result, Shape, Tensor, D,
 };
-use candle_nn::VarBuilder;
 use serde::Deserialize;
 
 use crate::{

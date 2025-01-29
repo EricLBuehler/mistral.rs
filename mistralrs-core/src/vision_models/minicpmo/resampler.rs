@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{LayerNorm, Linear, VarBuilder};
+use candle_nn::{LayerNorm, Linear};
 use mistralrs_quant::{MatMul, ShardedVarBuilder};
 
 use crate::{

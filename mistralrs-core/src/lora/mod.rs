@@ -3,7 +3,7 @@
 use std::{collections::HashSet, fmt::Debug, sync::Arc};
 
 use candle_core::{quantized::QTensor, DType, IndexOp, Result, Tensor, D};
-use candle_nn::{init, Linear, Module, VarBuilder};
+use candle_nn::{Linear, Module};
 use loralinear::LoraLinear;
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 pub use qloralinear::QLoraLinear;

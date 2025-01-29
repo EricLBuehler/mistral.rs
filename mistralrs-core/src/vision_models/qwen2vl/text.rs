@@ -1,10 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module, VarBuilder};
+use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder, UnquantLinear,
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 
 use crate::{
@@ -309,7 +308,6 @@ pub struct Qwen2VLTextModel {
     pub(super) device: Device,
     pub(super) dtype: DType,
     pub(super) max_seq_len: usize,
-    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Qwen2VLTextModel {
@@ -419,7 +417,6 @@ impl Qwen2VLTextModel {
             },
             device: normal_loading_metadata.real_device.clone(),
             dtype: vb.dtype(),
-            comm,
         })
     }
 

@@ -4,7 +4,7 @@
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Activation, Embedding, Linear, VarBuilder};
+use candle_nn::{Activation, Embedding, Linear};
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use std::sync::Arc;

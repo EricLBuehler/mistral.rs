@@ -2,12 +2,8 @@
 
 // This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
-use candle_nn::VarBuilder;
-use mistralrs_quant::{
-    QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder,
-    UnquantLinear,
-};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
+use mistralrs_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -23,7 +19,6 @@ use crate::{
         PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
-    ops::SplitOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -96,7 +91,6 @@ impl Attention {
         cfg: &Config,
         vb: ShardedVarBuilder,
         paged_attn: Option<PagedAttention>,
-        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -263,7 +257,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(cfg: &Config, vb: ShardedVarBuilder, comm: &Arc<mistralrs_quant::Comm>) -> Result<Self> {
+    fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
 
@@ -363,20 +357,14 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
-        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             paged_attn,
-            comm,
         )?;
-        let mlp = Mlp::new(
-            cfg,
-            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-            comm,
-        )?;
+        let mlp = Mlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -437,7 +425,6 @@ pub struct Model {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
     cfg: ModelConfigMetadata,
-    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Model {
@@ -500,7 +487,6 @@ impl Model {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
-                &comm,
             )?;
             layers.push(layer)
         }
@@ -550,7 +536,6 @@ impl Model {
                 k_head_dim: None,
                 v_head_dim: None,
             },
-            comm,
         })
     }
 
@@ -771,7 +756,6 @@ impl AnyMoeBaseModelMixin for Model {
                                 ..Default::default()
                             },
                             vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
-                            &self.comm,
                         )?));
                     }
                     AnyMoeExpertType::LoraAdapter {

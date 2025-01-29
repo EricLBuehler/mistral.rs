@@ -14,7 +14,7 @@ use text::MLlamaTextModel;
 use vision::MLlamaVisionModel;
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_nn::{Linear, Module};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{

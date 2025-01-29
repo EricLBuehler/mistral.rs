@@ -14,7 +14,6 @@ use candle_core::{
     },
     from_storage_no_op, Context, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
-use candle_nn::VarBuilder;
 use half::f16;
 use lazy_static::lazy_static;
 
