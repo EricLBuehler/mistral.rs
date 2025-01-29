@@ -456,6 +456,8 @@ impl Loader for NormalLoader {
 
             let world_size = available_devices.len();
 
+            info!("NCCL world size is {world_size}");
+
             // They each block on each other
             // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
             let comms = (0..world_size)
@@ -471,12 +473,12 @@ impl Loader for NormalLoader {
                 .collect::<candle_core::Result<Vec<_>>>()?;
 
             let mut parallel_models = Vec::new();
-            for comm in comms.into_iter().map(Arc::new) {
-                dbg!(&comm);
+            for (comm, device) in comms.into_iter().map(Arc::new).zip(available_devices) {
+                info!("Loading rank {}", comm.rank());
                 // Redefine mapper
                 let mapper = DeviceMapSetting::dummy().into_mapper(
                     self.inner.get_total_device_mapping_num_layers(&config)?,
-                    device,
+                    &device,
                     None,
                 )?;
 
@@ -493,7 +495,7 @@ impl Loader for NormalLoader {
                         mapper,
                         loading_isq,
                         self.config.from_uqff.is_some(),
-                        device.clone(),
+                        device,
                         attention_mechanism,
                         matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                         comm
@@ -511,7 +513,7 @@ impl Loader for NormalLoader {
                         silent,
                         mapper,
                         loading_isq,
-                        device.clone(),
+                        device,
                         comm
                     ),
                     ModelKind::Adapter {
@@ -527,7 +529,7 @@ impl Loader for NormalLoader {
                         silent,
                         mapper,
                         loading_isq,
-                        device.clone(),
+                        device,
                         comm
                     ),
                     _ => unreachable!(),
@@ -1005,27 +1007,43 @@ impl Pipeline for NormalPipeline {
             (None, None) => None,
         };
         #[cfg(feature = "metal")]
-        let logits = objc::rc::autoreleasepool(|| match self.model.is_xlora() {
-            false => self.model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                context_lens,
-                position_ids,
-                paged_attn_meta,
-                &flash_meta,
-            ),
-            true => self.model.xlora_forward(
-                &input_ids,
-                input_ids_full.as_ref().unwrap_or(&input_ids),
-                &seqlen_offsets,
-                seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                self.no_kv_cache,
-                &self.non_granular_state,
-                context_lens,
-                position_ids,
-                &flash_meta,
-                flash_meta_full.as_ref().unwrap_or(&flash_meta),
-            ),
+        let logits = objc::rc::autoreleasepool(|| -> candle_core::Result<Tensor> {
+            match self.parallel_models[0].is_xlora() {
+                false => {
+                    let logits_vec = self
+                        .parallel_models
+                        .par_iter()
+                        .enumerate()
+                        .map(|(i, model)| {
+                            let paged_attn_meta = paged_attn_meta
+                                .as_ref()
+                                .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1));
+                            model.forward(
+                                &input_ids,
+                                &seqlen_offsets,
+                                context_lens.clone(),
+                                position_ids.clone(),
+                                paged_attn_meta,
+                                &flash_meta,
+                            )
+                        })
+                        .collect::<candle_core::Result<Vec<_>>>()?;
+
+                    Ok(logits_vec[0].clone())
+                }
+                true => self.parallel_models[0].xlora_forward(
+                    &input_ids,
+                    input_ids_full.as_ref().unwrap_or(&input_ids),
+                    &seqlen_offsets,
+                    seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
+                    self.no_kv_cache,
+                    &self.non_granular_state,
+                    context_lens,
+                    position_ids,
+                    &flash_meta,
+                    flash_meta_full.as_ref().unwrap_or(&flash_meta),
+                ),
+            }
         })?;
         #[cfg(not(feature = "metal"))]
         let logits = match self.parallel_models[0].is_xlora() {
