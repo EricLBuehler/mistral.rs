@@ -361,10 +361,7 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
                 if ord == 7 {
                     break;
                 }
-                if let Ok(dev) = std::thread::spawn(move || Device::new_cuda_with_stream(ord))
-                    .join()
-                    .unwrap()
-                {
+                if let Ok(dev) = Device::new_cuda_with_stream(ord) {
                     devices.push(dev);
                     ord += 1;
                 } else {

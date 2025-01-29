@@ -24,7 +24,7 @@ mod ops {
 
     impl Comm {
         pub fn from_device(id: Id, rank: usize, world_size: usize) -> Result<Self> {
-            let device = CudaDevice::new(rank).unwrap();
+            let device = CudaDevice::new(7).unwrap();
             dbg!(&device.name());
             let c = cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
                 .expect("Failed to create `Comm`");
