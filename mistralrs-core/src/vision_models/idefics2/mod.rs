@@ -4,16 +4,18 @@ pub(crate) mod idefics2_input_processor;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{
-    conv2d, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
-    LayerNorm, Module, VarBuilder,
+    var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Embedding, LayerNorm, Module, VarBuilder,
 };
 use serde::Deserialize;
-use std::{any::Any, ops::Mul};
+use std::{any::Any, ops::Mul, sync::Arc};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    layers::{repeat_kv, Activation, CausalMasker, MatMul, QLinear, RmsNorm},
+    layers::{
+        conv2d, embedding, layer_norm, linear, linear_no_bias, repeat_kv, Activation, CausalMasker,
+        MatMul, QLinear, RmsNorm,
+    },
     models::mistral::Model as Mistral,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -249,7 +251,7 @@ fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Te
 }
 
 impl VisionEmbeddings {
-    fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_config = Conv2dConfig {
             stride: config.patch_size,
             ..Default::default()
@@ -379,7 +381,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(config: VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let embed_dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let head_dim = embed_dim / num_heads;
@@ -473,7 +475,7 @@ struct VisionMLP {
 }
 
 impl VisionMLP {
-    fn new(config: VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let fc1 = linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
         let fc2 = linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
@@ -516,7 +518,7 @@ struct EncoderLayer {
 }
 
 impl EncoderLayer {
-    fn new(config: VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mlp = VisionMLP::new(config.clone(), vb.pp("mlp"))?;
         let attn = Attention::new(config.clone(), vb.pp("self_attn"))?;
         let layer_norm_1 = layer_norm(
@@ -556,7 +558,7 @@ struct Encoder {
 }
 
 impl Encoder {
-    fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mut layers = Vec::new();
         let vb_l = vb.pp("layers");
         for i in 0..config.num_hidden_layers {
@@ -582,7 +584,7 @@ struct VisionTransformer {
 }
 
 impl VisionTransformer {
-    fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let embeddings = VisionEmbeddings::new(config, vb.pp("embeddings"))?;
         let post_layernorm = layer_norm(
             config.hidden_size,
@@ -723,7 +725,7 @@ struct PerceiverAttention {
 }
 
 impl PerceiverAttention {
-    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let hidden_size = config.text_config.hidden_size;
         let num_heads = config.perceiver_config.resampler_n_heads;
         let head_dim = config.perceiver_config.resampler_head_dim;
@@ -832,7 +834,7 @@ struct PerceiverLayer {
 }
 
 impl PerceiverLayer {
-    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let hidden_size = config.text_config.hidden_size;
         let mlp_act = config.perceiver_config.hidden_act;
         let rms_eps = config.text_config.rms_norm_eps;
@@ -881,7 +883,7 @@ struct PerceiverResampler {
 }
 
 impl PerceiverResampler {
-    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let n_latents = config.perceiver_config.resampler_n_latents;
         let hidden_size = config.text_config.hidden_size;
         let depth = config.perceiver_config.resampler_depth;
@@ -957,7 +959,7 @@ struct Connector {
 }
 
 impl Connector {
-    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let modality_projection = Mlp::new(
             config.vision_config.hidden_size,
             config.text_config.intermediate_size,
@@ -1009,6 +1011,7 @@ impl Idefics2 {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let text_model = Mistral::new_inner(
@@ -1018,6 +1021,7 @@ impl Idefics2 {
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
+            comm,
         )?;
         let vision_model = VisionTransformer::new(
             &config.vision_config,

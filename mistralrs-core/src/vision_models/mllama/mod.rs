@@ -14,13 +14,13 @@ use text::MLlamaTextModel;
 use vision::MLlamaVisionModel;
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{linear, Linear, Module, VarBuilder};
+use candle_nn::{var_builder::ShardedVarBuilder, Linear, Module, VarBuilder};
 use mistralrs_quant::QuantMethod;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::GetFloatInfo,
+    layers::{linear, GetFloatInfo},
     layers_masker::masked_fill,
     ops::RepeatInterleaveOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
@@ -86,6 +86,7 @@ impl MLlamaModel {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let real_dev = normal_loading_metadata.real_device.clone();
         Ok(Self {
@@ -100,6 +101,7 @@ impl MLlamaModel {
                 is_gptx,
                 normal_loading_metadata,
                 attention_mechanism,
+                comm,
             )?,
             multi_modal_projector: linear(
                 cfg.vision_config.vision_output_dim,

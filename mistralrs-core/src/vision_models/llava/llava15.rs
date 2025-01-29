@@ -4,11 +4,13 @@
     clippy::too_many_arguments
 )]
 use std::any::Any;
+use std::sync::Arc;
 
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::amoe::MlpLayer;
 use crate::device_map::DeviceMapper;
+use crate::layers;
 use crate::ops::NonZeroOp;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
@@ -22,7 +24,8 @@ use crate::vision_models::llava::config::Config;
 use crate::AnyMoeConfig;
 use crate::AnyMoeExpertType;
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{linear, Activation, Linear, VarBuilder};
+use candle_nn::var_builder::ShardedVarBuilder;
+use candle_nn::{Activation, Linear, VarBuilder};
 
 pub(crate) struct LLaVAVisionSpecificArgs; // only a dumb struct to satisfy the trait
 
@@ -33,8 +36,8 @@ pub struct MMProjector {
 }
 
 impl MMProjector {
-    pub fn new(vb: &VarBuilder, config: &Config, device: &Device) -> Result<Self> {
-        let linear_1 = linear(
+    pub fn new(vb: &ShardedVarBuilder, config: &Config, device: &Device) -> Result<Self> {
+        let linear_1 = layers::linear(
             config.vision_config.hidden_size,
             config.text_config.hidden_size,
             vb.pp("multi_modal_projector.linear_1")
@@ -49,7 +52,7 @@ impl MMProjector {
                 );
             }
         };
-        let linear_2 = linear(
+        let linear_2 = layers::linear(
             config.text_config.hidden_size,
             config.text_config.hidden_size,
             vb.pp("multi_modal_projector.linear_2")
@@ -124,6 +127,7 @@ impl Model {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let device = normal_loading_metadata.real_device.clone();
         let dtype = vb.dtype();
@@ -146,6 +150,7 @@ impl Model {
                     is_gptx,
                     normal_loading_metadata,
                     attention_mechanism,
+                    comm,
                 )?;
                 Box::new(llama)
             }
@@ -157,6 +162,7 @@ impl Model {
                     is_gptx,
                     normal_loading_metadata,
                     attention_mechanism,
+                    comm,
                 )?;
                 Box::new(mistral)
             }

@@ -3,7 +3,7 @@
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
 use mistralrs_quant::QuantMethod;
 use text::Qwen2VLTextModel;
 use vision::Qwen2VLVisionModel;
@@ -43,6 +43,7 @@ impl Qwen2VLModel {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         if cfg.use_sliding_window {
             // TODO!
@@ -60,6 +61,7 @@ impl Qwen2VLModel {
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
+            comm,
         )?;
         Ok(Self {
             text,

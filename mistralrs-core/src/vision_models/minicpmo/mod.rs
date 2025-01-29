@@ -1,7 +1,7 @@
 use std::{any::Any, collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::VarBuilder;
+use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
 pub use config::MiniCpmOConfig;
 pub use inputs_processor::MiniCpmOProcessor;
 use mistralrs_quant::QuantMethod;
@@ -41,6 +41,7 @@ impl MiniCpmOModel {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let real_device = normal_loading_metadata.real_device.clone();
         let llm = qwen2::Model::new(
@@ -49,6 +50,7 @@ impl MiniCpmOModel {
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
+            comm,
         )?;
         let vpm = SiglipVisionTransformer::new(
             &cfg.vision_config,

@@ -47,6 +47,69 @@ pub fn layer_norm<C: Into<LayerNormConfig>>(
     }
 }
 
+pub fn conv2d(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv2dConfig,
+    vb: ShardedVarBuilder,
+) -> Result<Conv2d> {
+    let ws = vb.get(
+        (
+            out_channels,
+            in_channels / cfg.groups,
+            kernel_size,
+            kernel_size,
+        ),
+        "weight",
+    )?;
+    let bs = vb.get(out_channels, "bias")?;
+    Ok(Conv2d::new(ws, Some(bs), cfg))
+}
+
+pub fn conv2d_no_bias(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv2dConfig,
+    vb: ShardedVarBuilder,
+) -> Result<Conv2d> {
+    let ws = vb.get(
+        (
+            out_channels,
+            in_channels / cfg.groups,
+            kernel_size,
+            kernel_size,
+        ),
+        "weight",
+    )?;
+    Ok(Conv2d::new(ws, None, cfg))
+}
+
+pub fn linear(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -> Result<Linear> {
+    let ws = vb.get((out_dim, in_dim), "weight")?;
+    let bs = vb.get(out_dim, "bias")?;
+    Ok(Linear::new(ws, Some(bs)))
+}
+
+pub fn linear_no_bias(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -> Result<Linear> {
+    let ws = vb.get((out_dim, in_dim), "weight")?;
+    Ok(Linear::new(ws, None))
+}
+
+pub fn linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: ShardedVarBuilder,
+) -> Result<Linear> {
+    if bias {
+        linear(in_dim, out_dim, vb)
+    } else {
+        linear_no_bias(in_dim, out_dim, vb)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
     eps: f64,
@@ -97,7 +160,7 @@ pub struct F32RmsNorm {
 }
 
 impl F32RmsNorm {
-    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+    pub fn new(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
             w: vb.get((size,), "weight")?,
             eps,

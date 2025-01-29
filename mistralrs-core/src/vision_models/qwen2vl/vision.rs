@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
+use candle_nn::{
+    layer_norm, var_builder::ShardedVarBuilder, LayerNorm, Linear, Module, VarBuilder,
+};
 use mistralrs_quant::QuantMethod;
 
 use crate::{
@@ -21,7 +23,7 @@ struct PatchEmbed {
 
 // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L272
 impl PatchEmbed {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         if cfg.temporal_patch_size != 2 {
             candle_core::bail!("Only support temporal patch size of 2");
         }
@@ -63,7 +65,7 @@ struct VisionMlp {
 }
 
 impl VisionMlp {
-    fn new(dim: usize, hidden_dim: usize, act: Activation, vb: VarBuilder) -> Result<Self> {
+    fn new(dim: usize, hidden_dim: usize, act: Activation, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
             fc1: mistralrs_quant::linear(dim, hidden_dim, &None, vb.pp("fc1"))?,
             fc2: mistralrs_quant::linear(hidden_dim, dim, &None, vb.pp("fc2"))?,
@@ -101,7 +103,7 @@ struct VisionAttention {
 }
 
 impl VisionAttention {
-    fn new(dim: usize, num_heads: usize, vb: VarBuilder) -> Result<Self> {
+    fn new(dim: usize, num_heads: usize, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
             qkv: mistralrs_quant::linear(dim, dim * 3, &None, vb.pp("qkv"))?,
             proj: mistralrs_quant::linear(dim, dim, &None, vb.pp("proj"))?,
@@ -165,7 +167,7 @@ struct VisionBlock {
 }
 
 impl VisionBlock {
-    fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let norm1 = layer_norm(cfg.embed_dim, 1e-6, vb.pp("norm1"))?;
         let norm2 = layer_norm(cfg.embed_dim, 1e-6, vb.pp("norm2"))?;
 
@@ -265,7 +267,7 @@ pub struct Qwen2VLVisionModel {
 }
 
 impl Qwen2VLVisionModel {
-    pub fn new(cfg: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mut blocks = Vec::new();
         for i in 0..cfg.depth {
             blocks.push(VisionBlock::new(cfg, vb.pp(format!("blocks.{i}")))?);

@@ -4,8 +4,8 @@ use std::{ops::Mul, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{
-    conv2d_no_bias, embedding, layer_norm, Conv2d, Conv2dConfig, Embedding, LayerNorm,
-    LayerNormConfig, Module, VarBuilder,
+    conv2d_no_bias, embedding, layer_norm, var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig,
+    Embedding, LayerNorm, LayerNormConfig, Module, VarBuilder,
 };
 use mistralrs_quant::QuantMethod;
 

@@ -3,13 +3,16 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Device, IndexOp, Result, Tensor};
-use candle_nn::{embedding, Activation, Embedding, Module, VarBuilder};
-use mistralrs_quant::{linear_no_bias, QuantMethod, QuantMethodConfig, UnquantLinear};
+use candle_nn::{var_builder::ShardedVarBuilder, Activation, Embedding, Module, VarBuilder};
+use mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, QuantMethodConfig, ReplicatedLayer, RowParallelLayer,
+    UnquantLinear,
+};
 
 use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
+    layers::{embedding, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -28,24 +31,34 @@ struct MLlamaTextMlp {
 }
 
 impl MLlamaTextMlp {
-    fn new(cfg: &MLlamaTextConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &MLlamaTextConfig,
+        vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         Ok(Self {
-            gate_proj: linear_no_bias(
+            gate_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.intermediate_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("gate_proj"),
             )?,
-            up_proj: linear_no_bias(
+            up_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.intermediate_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("up_proj"),
             )?,
-            down_proj: linear_no_bias(
+            down_proj: RowParallelLayer::new(
                 cfg.intermediate_size,
                 cfg.hidden_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("down_proj"),
             )?,
             act: cfg.hidden_act,
@@ -88,32 +101,41 @@ impl MLlamaTextSelfAttention {
         cfg: &MLlamaTextConfig,
         vb: ShardedVarBuilder,
         rope: Arc<Llama3RotaryEmbedding>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
         Ok(Self {
-            q_proj: linear_no_bias(
+            q_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("q_proj"),
             )?,
-            k_proj: linear_no_bias(
+            k_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("k_proj"),
             )?,
-            v_proj: linear_no_bias(
+            v_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("v_proj"),
             )?,
-            o_proj: linear_no_bias(
+            o_proj: RowParallelLayer::new(
                 cfg.num_attention_heads * cfg.head_dim(),
                 cfg.hidden_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("o_proj"),
             )?,
             sdpa_params: SdpaParams {
@@ -215,8 +237,13 @@ impl MLlamaSelfAttentionDecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
+        let mlp = MLlamaTextMlp::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+            comm,
+        )?;
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -231,6 +258,7 @@ impl MLlamaSelfAttentionDecoderLayer {
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             rope,
+            comm,
         )?;
 
         Ok(Self {
@@ -284,30 +312,39 @@ impl MLlamaTextCrossAttention {
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         Ok(Self {
-            q_proj: linear_no_bias(
+            q_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("q_proj"),
             )?,
-            k_proj: linear_no_bias(
+            k_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("k_proj"),
             )?,
-            v_proj: linear_no_bias(
+            v_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("v_proj"),
             )?,
-            o_proj: linear_no_bias(
+            o_proj: RowParallelLayer::new(
                 cfg.num_attention_heads * cfg.head_dim(),
                 cfg.hidden_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("o_proj"),
             )?,
             q_norm: RmsNorm::new(
@@ -426,8 +463,13 @@ impl MLlamaCrossAttentionDecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
+        let mlp = MLlamaTextMlp::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+            comm,
+        )?;
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -443,6 +485,7 @@ impl MLlamaCrossAttentionDecoderLayer {
             mapper.set_device(layer_idx, vb.pp("cross_attn"), loading_isq),
             mapper,
             layer_idx,
+            comm,
         )?;
 
         Ok(Self {
@@ -513,6 +556,7 @@ impl MLlamaTextModel {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         if !matches!(attention_mechanism, AttentionImplementation::Eager) {
             candle_core::bail!("Expected eager attention implementation");
@@ -526,19 +570,22 @@ impl MLlamaTextModel {
         )?;
 
         let lm_head = if !cfg.tie_word_embeddings {
-            mistralrs_quant::linear_no_bias(
+            ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &None,
-                mapper.set_nm_device(vb.pp("lm_head"), false),
+                false,
+                &comm,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
-                    None,
-                ),
-            ))?)
+            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+                mapper.cast_nm_device(
+                    embed_tokens.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )?,
+                None,
+            ))?
         };
 
         let vb = vb.pp("model");
@@ -575,6 +622,7 @@ impl MLlamaTextModel {
                         &*mapper,
                         i,
                         false,
+                        &comm,
                     )?,
                 ))
             } else {
@@ -592,6 +640,7 @@ impl MLlamaTextModel {
                         &*mapper,
                         i,
                         normal_loading_metadata.loading_isq,
+                        &comm,
                     )?,
                 ))
             }

@@ -7,9 +7,11 @@ pub(crate) mod phi3_inputs_processor;
 use candle_core::{
     shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D,
 };
-use candle_nn::VarBuilder;
+use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
 use either::Either;
-use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use mistralrs_quant::{
+    QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer, UnquantLinear,
+};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
 use crate::{
@@ -18,8 +20,8 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding, RmsNorm,
-        Sdpa,
+        self, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding,
+        RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, NonZeroOp},
@@ -172,6 +174,7 @@ impl Attention {
         cfg: &Config,
         vb: ShardedVarBuilder,
         paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
@@ -337,7 +340,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, comm: &Arc<mistralrs_quant::Comm>) -> Result<Self> {
         let hidden_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
 
@@ -436,14 +439,20 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             paged_attn,
+            comm,
         )?;
-        let mlp = Mlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
+        let mlp = Mlp::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+            comm,
+        )?;
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -951,6 +960,7 @@ pub struct Model {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     sliding_window: Option<usize>,
     cfg: ModelConfigMetadata,
+    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Model {
@@ -960,11 +970,12 @@ impl Model {
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
 
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
@@ -1011,6 +1022,7 @@ impl Model {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
+                &comm,
             )?;
             layers.push(layer)
         }
@@ -1020,23 +1032,24 @@ impl Model {
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
-            mistralrs_quant::linear_no_bias(
+            ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &None,
+                false,
+                &comm,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-            ))?)
+            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+                mapper.cast_nm_device(
+                    embed_tokens.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )?,
+                None,
+            ))?
         };
+
         Ok(Self {
             vision_embed_tokens,
             layers,
@@ -1061,6 +1074,7 @@ impl Model {
                 k_head_dim: None,
                 v_head_dim: None,
             },
+            comm,
         })
     }
 
@@ -1275,6 +1289,7 @@ impl AnyMoeBaseModelMixin for Model {
                                 ..Default::default()
                             },
                             vb.pp(layer).pp(&mlp),
+                            &self.comm,
                         )?));
                     }
                     AnyMoeExpertType::LoraAdapter {
