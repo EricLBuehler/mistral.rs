@@ -294,7 +294,10 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-        let available_devices = device_map::get_all_similar_devices(device)?;
+        let base_dev_clone = device.clone();
+        let available_devices = std::thread::spawn(move || device_map::get_all_similar_devices(&base_dev_clone))
+            .join()
+            .unwrap()?;
         dbg!(&available_devices);
 
         // If auto, convert to Map
