@@ -458,7 +458,7 @@ impl Loader for NormalLoader {
             for (rank, device) in available_devices.iter().enumerate() {
                 let comm = Arc::new(mistralrs_quant::Comm::from_device(
                     id,
-                    device,
+                    &Device::new_cuda_with_stream(rank)?,
                     rank,
                     available_devices.len(),
                 )?);
