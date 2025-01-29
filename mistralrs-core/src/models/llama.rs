@@ -1,8 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use candle_nn::{embedding, var_builder::ShardedVarBuilder, Embedding, Module, VarBuilder};
+use mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, UnquantLinear,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
@@ -171,36 +174,45 @@ impl CausalSelfAttention {
     }
 
     fn load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
         rope: Arc<Llama3RotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-        let q_proj = mistralrs_quant::linear_no_bias(
+        let q_proj = ColumnParallelLayer::new(
             size_in,
             size_q,
             &cfg.quantization_config,
+            false,
+            comm,
             vb.pp("q_proj"),
         )?;
-        let k_proj = mistralrs_quant::linear_no_bias(
+        let k_proj = ColumnParallelLayer::new(
             size_in,
             size_kv,
             &cfg.quantization_config,
+            false,
+            comm,
             vb.pp("k_proj"),
         )?;
-        let v_proj = mistralrs_quant::linear_no_bias(
+        let v_proj = ColumnParallelLayer::new(
             size_in,
             size_kv,
             &cfg.quantization_config,
+            false,
+            comm,
             vb.pp("v_proj"),
         )?;
-        let o_proj = mistralrs_quant::linear_no_bias(
+        let o_proj = RowParallelLayer::new(
             size_q,
             size_in,
             &cfg.quantization_config,
+            false,
+            comm,
             vb.pp("o_proj"),
         )?;
         Ok(Self {
@@ -234,25 +246,35 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(
+        vb: ShardedVarBuilder,
+        cfg: &Config,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
-        let c_fc1 = mistralrs_quant::linear_no_bias(
+        let c_fc1 = ColumnParallelLayer::new(
             h_size,
             i_size,
             &cfg.quantization_config,
+            false,
+            comm,
             vb.pp("gate_proj"),
         )?;
-        let c_fc2 = mistralrs_quant::linear_no_bias(
+        let c_fc2 = ColumnParallelLayer::new(
             h_size,
             i_size,
             &cfg.quantization_config,
+            false,
+            comm,
             vb.pp("up_proj"),
         )?;
-        let c_proj = mistralrs_quant::linear_no_bias(
+        let c_proj = RowParallelLayer::new(
             i_size,
             h_size,
             &cfg.quantization_config,
+            false,
+            comm,
             vb.pp("down_proj"),
         )?;
         Ok(Self {
@@ -355,21 +377,27 @@ impl Block {
     }
 
     fn load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc<Llama3RotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             cfg,
             rope,
             paged_attn,
+            comm,
         )?;
-        let mlp = Mlp::load(mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq), cfg)?;
+        let mlp = Mlp::load(
+            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+            cfg,
+            comm,
+        )?;
         let rms_1 = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -398,15 +426,17 @@ pub struct Llama {
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
+    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Llama {
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let vb_lm_head = vb.pp("lm_head");
@@ -417,16 +447,18 @@ impl Llama {
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
+            comm,
         )
     }
 
     pub fn new_inner(
         cfg: &Config,
-        vb_m: VarBuilder,
-        vb_lm_head: VarBuilder,
+        vb_m: ShardedVarBuilder,
+        vb_lm_head: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
+        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
@@ -443,12 +475,14 @@ impl Llama {
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
-            mistralrs_quant::linear_no_bias(
+            ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &None,
+                false,
+                &comm,
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )?
+            )
         } else {
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
                 candle_nn::Linear::new(
@@ -504,6 +538,7 @@ impl Llama {
                         normal_loading_metadata.loading_isq,
                         rotary_emb,
                         paged_attn,
+                        &comm,
                     )
                     .expect("Failed to load block.")
                 })
@@ -530,6 +565,7 @@ impl Llama {
                 k_head_dim: None,
                 v_head_dim: None,
             },
+            comm,
         })
     }
 
@@ -738,12 +774,12 @@ impl AnyMoeBaseModelMixin for Llama {
     }
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<ShardedVarBuilder>,
         config: AnyMoeConfig,
         (prefix, mlp): (String, String),
         mut layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
-        gate_vb: Option<VarBuilder>,
+        gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
         let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
         if layers.is_empty() {
@@ -771,6 +807,7 @@ impl AnyMoeBaseModelMixin for Llama {
                                 hidden_size: self.blocks[layer].mlp.get_params()[0],
                                 ..Default::default()
                             },
+                            &self.comm,
                         )?));
                     }
                     AnyMoeExpertType::LoraAdapter {

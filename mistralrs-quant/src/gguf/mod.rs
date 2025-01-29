@@ -106,10 +106,6 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        self.b.as_mut()
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,
@@ -152,10 +148,6 @@ impl QuantMethod for GgufMatMul {
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
-    }
-
-    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        Ok(self.clone())
     }
 }
 

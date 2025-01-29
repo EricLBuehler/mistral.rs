@@ -82,7 +82,7 @@ pub(crate) struct MLlamaModel {
 impl MLlamaModel {
     pub(crate) fn new(
         cfg: &MLlamaConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,

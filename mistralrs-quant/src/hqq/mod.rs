@@ -587,10 +587,6 @@ impl QuantMethod for HqqLayer {
         (self.scales.dtype(), self.scales.device().clone())
     }
 
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        self.bias.as_mut()
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,
@@ -635,10 +631,6 @@ impl QuantMethod for HqqLayer {
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         // Use 1 because we quantize on the GPU
         Some(1.try_into().unwrap())
-    }
-
-    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        Ok(self.clone())
     }
 }
 

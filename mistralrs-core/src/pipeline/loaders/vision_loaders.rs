@@ -4,6 +4,7 @@ use std::{fmt::Debug, str::FromStr};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
+use candle_nn::var_builder::ShardedVarBuilder;
 use candle_nn::{Conv2dConfig, VarBuilder};
 
 #[cfg(feature = "pyo3_macros")]
@@ -70,7 +71,7 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
@@ -229,7 +230,7 @@ impl VisionModelLoader for Phi3VLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -497,7 +498,7 @@ impl VisionModelLoader for Idefics2Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -830,7 +831,7 @@ impl VisionModelLoader for LLaVANextLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -1083,7 +1084,7 @@ impl VisionModelLoader for LLaVALoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -1328,7 +1329,7 @@ impl VisionModelLoader for VLlamaLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -1712,7 +1713,7 @@ impl VisionModelLoader for Qwen2VLLoader {
         &self,
         config: &str,
         _use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -1995,7 +1996,7 @@ impl VisionModelLoader for Idefics3Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -2276,7 +2277,7 @@ impl VisionModelLoader for MiniCpmOLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {

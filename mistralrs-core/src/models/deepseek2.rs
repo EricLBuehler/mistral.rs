@@ -153,7 +153,7 @@ impl Attention {
     fn new(
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
@@ -382,7 +382,7 @@ struct Mlp {
 impl Mlp {
     fn new(
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         hidden_size: Option<usize>,
         intermediate_size: Option<usize>,
     ) -> Result<Self> {
@@ -436,7 +436,7 @@ struct MoeGate {
 }
 
 impl MoeGate {
-    fn new(cfg: &DeepSeekV2Config, vb: VarBuilder, n_routed_experts: usize) -> Result<Self> {
+    fn new(cfg: &DeepSeekV2Config, vb: ShardedVarBuilder, n_routed_experts: usize) -> Result<Self> {
         let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
         Ok(Self {
             weight,
@@ -515,7 +515,7 @@ struct Moe {
 impl Moe {
     fn new(
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
@@ -626,7 +626,7 @@ impl DecoderLayer {
     fn new(
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
@@ -724,7 +724,7 @@ pub struct DeepSeekV2 {
 impl DeepSeekV2 {
     pub fn new(
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,

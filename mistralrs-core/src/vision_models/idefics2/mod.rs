@@ -670,7 +670,7 @@ impl Mlp {
         intermediate_size: usize,
         output_size: usize,
         activation: Activation,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let gate_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?;
         let up_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?;
@@ -1005,7 +1005,7 @@ pub struct Idefics2 {
 impl Idefics2 {
     pub fn new(
         config: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1236,12 +1236,12 @@ impl AnyMoeBaseModelMixin for Idefics2 {
     }
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<ShardedVarBuilder>,
         config: AnyMoeConfig,
         (prefix, mlp): (String, String),
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
-        gate_vb: Option<VarBuilder>,
+        gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
         self.text_model.create_anymoe_layers(
             additional_vbs,

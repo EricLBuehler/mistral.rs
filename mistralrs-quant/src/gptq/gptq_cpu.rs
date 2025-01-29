@@ -87,7 +87,7 @@ pub fn gptq_linear(
     in_dim: usize,
     out_dim: usize,
     config: &QuantizedConfig,
-    vb: VarBuilder,
+    vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("qweight")

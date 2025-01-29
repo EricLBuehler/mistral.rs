@@ -39,7 +39,7 @@ pub struct Qwen2VLModel {
 impl Qwen2VLModel {
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,

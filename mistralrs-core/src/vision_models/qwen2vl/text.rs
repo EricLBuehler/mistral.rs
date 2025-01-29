@@ -218,7 +218,7 @@ impl DecoderLayer {
     fn new(
         rotary_emb: Arc<Qwen2VLRotaryEmbedding>,
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
@@ -286,7 +286,7 @@ pub struct Qwen2VLTextModel {
 impl Qwen2VLTextModel {
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,

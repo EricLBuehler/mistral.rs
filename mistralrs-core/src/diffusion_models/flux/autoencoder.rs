@@ -35,7 +35,7 @@ struct AttnBlock {
 }
 
 impl AttnBlock {
-    fn new(in_c: usize, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn new(in_c: usize, vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let q = conv2d(in_c, in_c, 1, Default::default(), vb.pp("q"))?;
         let k = conv2d(in_c, in_c, 1, Default::default(), vb.pp("k"))?;
         let v = conv2d(in_c, in_c, 1, Default::default(), vb.pp("v"))?;
@@ -78,7 +78,7 @@ struct ResnetBlock {
 }
 
 impl ResnetBlock {
-    fn new(in_c: usize, out_c: usize, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn new(in_c: usize, out_c: usize, vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()

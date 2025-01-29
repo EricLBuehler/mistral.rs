@@ -6,7 +6,7 @@ use crate::{
     Topology, TryIntoDType,
 };
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
-use candle_nn::VarBuilder;
+use candle_nn::{var_builder::ShardedVarBuilder, VarBuilder};
 use serde::Deserialize;
 use tracing::info;
 
@@ -201,9 +201,9 @@ pub trait DeviceMapper: Debug {
     fn set_device<'a>(
         &self,
         layer: usize,
-        varbuilder: VarBuilder<'a>,
+        varbuilder: ShardedVarBuilder<'a>,
         loading_isq: bool,
-    ) -> VarBuilder<'a>;
+    ) -> ShardedVarBuilder<'a>;
     /// If ISQ layer, then do not change the device (return None). *They will do it later in NormalModel::quantize*
     fn device_for(&self, layer: usize, loading_isq: bool) -> Option<&Device>;
     fn get_unique_devices(&self) -> Vec<Device>;
@@ -211,7 +211,11 @@ pub trait DeviceMapper: Debug {
     fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor>;
     /// Set non mapped layer device. This is for ISQ + device mapping support
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
-    fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a>;
+    fn set_nm_device<'a>(
+        &self,
+        varbuilder: ShardedVarBuilder<'a>,
+        loading_isq: bool,
+    ) -> ShardedVarBuilder<'a>;
     fn num_device_mapping_layers(&self) -> usize;
 
     // === IMMEDIATELY AFTER INIT ===
@@ -232,9 +236,9 @@ impl DeviceMapper for LayerDeviceMapper {
     fn set_device<'a>(
         &self,
         layer: usize,
-        varbuilder: VarBuilder<'a>,
+        varbuilder: ShardedVarBuilder<'a>,
         loading_isq: bool,
-    ) -> VarBuilder<'a> {
+    ) -> ShardedVarBuilder<'a> {
         if loading_isq {
             return varbuilder;
         }
@@ -261,7 +265,11 @@ impl DeviceMapper for LayerDeviceMapper {
             x.to_device(&self.nm_device)
         }
     }
-    fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
+    fn set_nm_device<'a>(
+        &self,
+        varbuilder: ShardedVarBuilder<'a>,
+        loading_isq: bool,
+    ) -> ShardedVarBuilder<'a> {
         if loading_isq {
             varbuilder
         } else {
@@ -290,9 +298,9 @@ impl DeviceMapper for DummyDeviceMapper {
     fn set_device<'a>(
         &self,
         _: usize,
-        varbuilder: VarBuilder<'a>,
+        varbuilder: ShardedVarBuilder<'a>,
         loading_isq: bool,
-    ) -> VarBuilder<'a> {
+    ) -> ShardedVarBuilder<'a> {
         if loading_isq {
             varbuilder.set_device(Device::Cpu)
         } else {
@@ -312,7 +320,11 @@ impl DeviceMapper for DummyDeviceMapper {
             x.to_device(&self.nm_device)
         }
     }
-    fn set_nm_device<'a>(&self, varbuilder: VarBuilder<'a>, loading_isq: bool) -> VarBuilder<'a> {
+    fn set_nm_device<'a>(
+        &self,
+        varbuilder: ShardedVarBuilder<'a>,
+        loading_isq: bool,
+    ) -> ShardedVarBuilder<'a> {
         if loading_isq {
             varbuilder.set_device(Device::Cpu)
         } else {

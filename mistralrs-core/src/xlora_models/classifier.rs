@@ -34,7 +34,7 @@ impl XLoraClassifier {
         config: XLoraConfig,
         n_layers: usize,
         n_classes: usize,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_quantized: bool,
     ) -> Result<Self> {
         if config.enable_softmax_topk {

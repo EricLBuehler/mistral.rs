@@ -86,7 +86,7 @@ struct MLlamaTextSelfAttention {
 impl MLlamaTextSelfAttention {
     fn new(
         cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         rope: Arc<Llama3RotaryEmbedding>,
     ) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
@@ -210,7 +210,7 @@ struct MLlamaSelfAttentionDecoderLayer {
 impl MLlamaSelfAttentionDecoderLayer {
     fn new(
         cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         rope: Arc<Llama3RotaryEmbedding>,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
@@ -281,7 +281,7 @@ struct MLlamaTextCrossAttention {
 impl MLlamaTextCrossAttention {
     fn new(
         cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
     ) -> Result<Self> {
@@ -422,7 +422,7 @@ struct MLlamaCrossAttentionDecoderLayer {
 impl MLlamaCrossAttentionDecoderLayer {
     fn new(
         cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
@@ -509,7 +509,7 @@ pub(super) struct MLlamaTextModel {
 impl MLlamaTextModel {
     pub(super) fn new(
         cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,

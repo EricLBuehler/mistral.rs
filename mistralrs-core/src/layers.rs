@@ -6,7 +6,7 @@ use candle_core::{
     quantized::{QMatMul, QTensor},
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
-use candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
+use candle_nn::{var_builder::ShardedVarBuilder, Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
 use float8::F8E4M3;
 use half::{bf16, f16};
 use mistralrs_quant::get_use_matmul_via_f16;
@@ -31,14 +31,14 @@ pub struct RmsNorm {
 }
 
 impl RmsNorm {
-    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+    pub fn new(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
         let w = inner.inner().weight().clone();
         Ok(Self { eps, weight: w })
     }
 
     /// Gemma uses weight + 1.0
-    pub fn new_gemma(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+    pub fn new_gemma(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
         let w = (inner.inner().weight().clone() + 1.0)?;
         Ok(Self { eps, weight: w })
@@ -1160,7 +1160,7 @@ impl Conv3dNoBias {
         out_channels: usize,
         kernel_sizes: [usize; 3],
         cfg: Conv3dConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let ws = vb.get(
             (

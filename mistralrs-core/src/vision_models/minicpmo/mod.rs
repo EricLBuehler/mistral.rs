@@ -37,7 +37,7 @@ pub struct MiniCpmOModel {
 impl MiniCpmOModel {
     pub fn new(
         cfg: &MiniCpmOConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,

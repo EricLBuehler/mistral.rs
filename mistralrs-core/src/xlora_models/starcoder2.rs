@@ -38,7 +38,7 @@ impl MLP {
     #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
@@ -129,7 +129,7 @@ impl Attention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
@@ -319,7 +319,7 @@ impl DecoderLayer {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
@@ -424,7 +424,7 @@ impl Model {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,

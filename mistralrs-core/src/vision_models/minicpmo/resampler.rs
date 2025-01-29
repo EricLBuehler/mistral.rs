@@ -83,7 +83,7 @@ impl Resampler {
         kv_dim: usize,
         _adaptive: bool,
         max_size: Option<(usize, usize)>,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let max_size = max_size.unwrap_or(DEFAULT_MAX_SIZE);
 

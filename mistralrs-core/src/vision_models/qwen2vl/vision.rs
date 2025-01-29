@@ -207,7 +207,7 @@ impl PatchMerger {
         dim: usize,
         context_dim: usize,
         spatial_merge_size: usize,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let hidden_size = context_dim * spatial_merge_size.pow(2);
         let mlp0 = candle_nn::linear(hidden_size, hidden_size, vb.pp("mlp.0"))?;

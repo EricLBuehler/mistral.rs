@@ -71,8 +71,8 @@ struct Adapter {
 }
 
 fn make_adapter(
-    a_vb: VarBuilder,
-    b_vb: VarBuilder,
+    a_vb: ShardedVarBuilder,
+    b_vb: ShardedVarBuilder,
     cfg: &LoraConfig,
     linear_cfg: &LoraLinearConfig,
 ) -> Result<Adapter> {
@@ -179,8 +179,8 @@ impl LinearLayerLike for Linear {
 pub fn linear(
     d1: usize,
     d2: usize,
-    base_vb: VarBuilder,
-    vb: VarBuilder,
+    base_vb: ShardedVarBuilder,
+    vb: ShardedVarBuilder,
     lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
@@ -231,8 +231,8 @@ pub fn linear(
 pub fn linear_no_bias(
     d1: usize,
     d2: usize,
-    base_vb: VarBuilder,
-    vb: VarBuilder,
+    base_vb: ShardedVarBuilder,
+    vb: ShardedVarBuilder,
     lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
     ord: &Ordering,
@@ -288,8 +288,8 @@ pub fn linear_b(
     in_dim: usize,
     out_dim: usize,
     bias: bool,
-    base_vb: VarBuilder,
-    vb: VarBuilder,
+    base_vb: ShardedVarBuilder,
+    vb: ShardedVarBuilder,
     lora_config: &[((String, String), LoraConfig)],
     count: &mut usize,
     ord: &Ordering,

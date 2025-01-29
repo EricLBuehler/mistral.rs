@@ -91,7 +91,7 @@ impl Attention {
     fn new(
         rotary_emb: Arc<PhiRotaryEmbedding>,
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         paged_attn: Option<PagedAttention>,
     ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
@@ -326,7 +326,7 @@ struct MoeMlp {
 }
 
 impl MoeMlp {
-    fn new(cfg: &Config, vb: VarBuilder, layer_device: Device) -> Result<Self> {
+    fn new(cfg: &Config, vb: ShardedVarBuilder, layer_device: Device) -> Result<Self> {
         let num_experts = cfg.num_local_experts;
         let gate = candle_nn::linear_no_bias(
             cfg.hidden_size,
@@ -471,7 +471,7 @@ impl DecoderLayer {
     fn new(
         rotary_emb: Arc<PhiRotaryEmbedding>,
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
@@ -557,7 +557,7 @@ pub struct Model {
 impl Model {
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,

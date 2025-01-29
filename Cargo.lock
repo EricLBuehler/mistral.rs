@@ -381,12 +381,13 @@ checksum = "325918d6fe32f23b19878fe4b34794ae41fc19ddbe53b10571a4874d44ffd39b"
 [[package]]
 name = "candle-core"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=6a06b89#6a06b893c247b0059531fcd6e214c30411590cdf"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=fb5cc8c#fb5cc8c0175bc2999ed9fb75b13886aade453dbe"
 dependencies = [
  "accelerate-src",
  "byteorder",
  "candle-kernels",
  "candle-metal-kernels",
+ "cudarc",
  "float8",
  "gemm",
  "half",
@@ -394,7 +395,6 @@ dependencies = [
  "libc",
  "memmap2",
  "metal",
- "mistralrs_cudarc_fork",
  "num-traits",
  "num_cpus",
  "rand",
@@ -409,7 +409,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=6a06b89#6a06b893c247b0059531fcd6e214c30411590cdf"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=fb5cc8c#fb5cc8c0175bc2999ed9fb75b13886aade453dbe"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -420,7 +420,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=6a06b89#6a06b893c247b0059531fcd6e214c30411590cdf"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=fb5cc8c#fb5cc8c0175bc2999ed9fb75b13886aade453dbe"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -453,7 +453,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=6a06b89#6a06b893c247b0059531fcd6e214c30411590cdf"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=fb5cc8c#fb5cc8c0175bc2999ed9fb75b13886aade453dbe"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -461,7 +461,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=6a06b89#6a06b893c247b0059531fcd6e214c30411590cdf"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=fb5cc8c#fb5cc8c0175bc2999ed9fb75b13886aade453dbe"
 dependencies = [
  "metal",
  "once_cell",
@@ -472,7 +472,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=6a06b89#6a06b893c247b0059531fcd6e214c30411590cdf"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=fb5cc8c#fb5cc8c0175bc2999ed9fb75b13886aade453dbe"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -806,6 +806,16 @@ checksum = "90eeab0aa92f3f9b4e87f258c72b139c207d251f9cbc1080a0086b86a8870dd3"
 dependencies = [
  "nix",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "cudarc"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b68d7c284d40d96a4251330ab583c2718b412f4fc53239d295b3a1f8735f426"
+dependencies = [
+ "half",
+ "libloading",
 ]
 
 [[package]]
@@ -1169,8 +1179,8 @@ version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a14d1c3d88fdab81b5886c34b2a424b3fba5123564ea415ff98b160cf44c432f"
 dependencies = [
+ "cudarc",
  "half",
- "mistralrs_cudarc_fork",
  "num-traits",
  "rand",
  "rand_distr",
@@ -2529,16 +2539,6 @@ version = "0.4.0"
 dependencies = [
  "candle-core",
  "image",
-]
-
-[[package]]
-name = "mistralrs_cudarc_fork"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c82ee900a0e7080a2ff91042d070b0112a3533b32ebc6d8faaba96ee4f598e8d"
-dependencies = [
- "half",
- "libloading",
 ]
 
 [[package]]

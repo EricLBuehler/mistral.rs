@@ -596,7 +596,12 @@ pub struct Flux {
 }
 
 impl Flux {
-    pub fn new(cfg: &Config, vb: VarBuilder, device: Device, offloaded: bool) -> Result<Self> {
+    pub fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        device: Device,
+        offloaded: bool,
+    ) -> Result<Self> {
         let img_in = candle_nn::linear(
             cfg.in_channels,
             HIDDEN_SIZE,

@@ -136,7 +136,7 @@ impl CausalSelfAttention {
 
     #[allow(clippy::too_many_arguments)]
     fn load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
@@ -256,7 +256,7 @@ impl Mlp {
 
     #[allow(clippy::too_many_arguments)]
     fn load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
@@ -352,7 +352,7 @@ impl Block {
 
     #[allow(clippy::too_many_arguments)]
     fn load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
@@ -562,7 +562,7 @@ impl XLoraLlama {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,

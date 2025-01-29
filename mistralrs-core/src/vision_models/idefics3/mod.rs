@@ -36,7 +36,7 @@ pub struct Idefics3Model {
 impl Idefics3Model {
     pub fn new(
         cfg: &Idefics3Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -272,12 +272,12 @@ impl AnyMoeBaseModelMixin for Idefics3Model {
     }
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<ShardedVarBuilder>,
         config: AnyMoeConfig,
         (prefix, mlp): (String, String),
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
-        gate_vb: Option<VarBuilder>,
+        gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
         self.text_model.create_anymoe_layers(
             additional_vbs,

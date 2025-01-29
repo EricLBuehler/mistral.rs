@@ -148,7 +148,11 @@ impl CausalSelfAttention {
         Ok(res)
     }
 
-    fn load(vb: VarBuilder, cfg: &Config, paged_attn: Option<PagedAttention>) -> Result<Self> {
+    fn load(
+        vb: ShardedVarBuilder,
+        cfg: &Config,
+        paged_attn: Option<PagedAttention>,
+    ) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
@@ -205,7 +209,7 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
         let c_fc1 = mistralrs_quant::linear_no_bias(
@@ -329,7 +333,7 @@ impl Block {
     }
 
     fn load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
@@ -396,7 +400,7 @@ impl Llama {
 
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -635,12 +639,12 @@ impl AnyMoeBaseModelMixin for Llama {
     }
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<ShardedVarBuilder>,
         config: AnyMoeConfig,
         (prefix, mlp): (String, String),
         mut layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
-        gate_vb: Option<VarBuilder>,
+        gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
         let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
         if layers.is_empty() {
