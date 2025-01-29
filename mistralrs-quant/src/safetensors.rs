@@ -1,6 +1,5 @@
 use candle_core::{DType, Device, Error, Result, Shape, Tensor, WithDType};
 use candle_nn::var_builder::{Backend, SimpleBackend, VarBuilderArgs};
-use candle_nn::{Init, VarMap};
 use float8::F8E4M3;
 use regex::Regex;
 use safetensors::slice::IndexOp;

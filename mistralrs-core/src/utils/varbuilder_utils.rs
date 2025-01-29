@@ -8,10 +8,6 @@ use std::{
 };
 
 use candle_core::{pickle::PthTensors, DType, Device, Result, Tensor};
-use candle_nn::{
-    var_builder::{SimpleBackend, VarBuilderArgs},
-    VarBuilder,
-};
 use mistralrs_quant::{safetensors::MmapedSafetensors, ShardedSafeTensors, ShardedVarBuilder};
 use regex::Regex;
 
@@ -78,7 +74,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
 ) -> Result<ShardedVarBuilder<'a>> {
-    {
+    if base_device.is_cuda() {
         return Ok(unsafe {
             ShardedSafeTensors::sharded(
                 &paths,
@@ -172,15 +168,15 @@ pub(crate) fn from_mmaped_safetensors<'a>(
         ws.extend(h.join().unwrap()?);
     }
 
-    todo!()
+    let backend = Box::new(ws);
 
-    // // TODO(EricLBuehler): separation of concerns.
-    // // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
-    // Ok(VarBuilder::from_tensors(
-    //     ws,
-    //     dtype.unwrap_or(DType::F16),
-    //     base_device,
-    // ))
+    // TODO(EricLBuehler): separation of concerns.
+    // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
+    Ok(ShardedSafeTensors::wrap(
+        backend,
+        dtype.unwrap_or(DType::F16),
+        base_device.clone(),
+    ))
 }
 
 pub(crate) fn load_preload_adapters<'a>(
@@ -189,34 +185,33 @@ pub(crate) fn load_preload_adapters<'a>(
     device: &Device,
     silent: bool,
 ) -> Result<Option<HashMap<String, (ShardedVarBuilder<'a>, LoraConfig)>>> {
-    todo!()
-    // if let Some(paths) = paths {
-    //     let mut map = HashMap::new();
-    //     for (name, (path, config)) in paths {
-    //         let loader = Common::new();
-    //         let loaded_tensors = loader.load_tensors_from_path(
-    //             path,
-    //             device,
-    //             vec![None],
-    //             Arc::new(|_| DeviceForLoadTensor::Base),
-    //             Some(dtype),
-    //             silent,
-    //             |_| true,
-    //             |_| false,
-    //         )?;
+    if let Some(paths) = paths {
+        let mut map = HashMap::new();
+        for (name, (path, config)) in paths {
+            let loader = Common::new();
+            let loaded_tensors = loader.load_tensors_from_path(
+                path,
+                device,
+                vec![None],
+                Arc::new(|_| DeviceForLoadTensor::Base),
+                Some(dtype),
+                silent,
+                |_| true,
+                |_| false,
+            )?;
 
-    //         map.insert(
-    //             name.clone(),
-    //             (
-    //                 VarBuilder::from_tensors(loaded_tensors, dtype, device),
-    //                 config.clone(),
-    //             ),
-    //         );
-    //     }
-    //     Ok(Some(map))
-    // } else {
-    //     Ok(None)
-    // }
+            let backend = Box::new(loaded_tensors);
+
+            // TODO(EricLBuehler): separation of concerns.
+            // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
+            let vb = ShardedSafeTensors::wrap(backend, dtype, device.clone());
+
+            map.insert(name.clone(), (vb, config.clone()));
+        }
+        Ok(Some(map))
+    } else {
+        Ok(None)
+    }
 }
 
 // Presently this logic only needs to diverge for X-LoRA support via `get_name_key_pairs()`
