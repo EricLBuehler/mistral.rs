@@ -23,8 +23,8 @@ mod ops {
     pub struct Comm(cudarc::nccl::Comm);
 
     impl Comm {
-        pub fn from_device(id: Id, rank: usize, world_size: usize) -> Result<Self> {
-            let device = CudaDevice::new(7).unwrap();
+        pub fn from_device(id: Id, dev: &Device, rank: usize, world_size: usize) -> Result<Self> {
+            let device = dev.as_cuda_device()?.cuda_device();
             dbg!(&device.name());
             let c = cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
                 .expect("Failed to create `Comm`");

@@ -304,7 +304,10 @@ impl Loader for NormalLoader {
             let handle = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
                 println!("B");
                 Ok(Arc::new(mistralrs_quant::Comm::from_device(
-                    id, 7, world_size,
+                    id,
+                    &Device::new_cuda(0)?,
+                    0,
+                    world_size,
                 )?))
             });
 
