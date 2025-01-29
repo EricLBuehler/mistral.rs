@@ -6,7 +6,7 @@ mod ops {
         backend::BackendStorage,
         cuda::cudarc::{self, nccl::Id},
         cuda_backend::WrapErr,
-        CpuStorage, CustomOp1, DType, Device, Layout, Result, Shape,
+        CpuStorage, CustomOp1, DType, Device, Layout, Result, Shape, Tensor,
     };
 
     #[derive(Debug)]
