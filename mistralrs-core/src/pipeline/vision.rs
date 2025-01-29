@@ -357,7 +357,7 @@ impl Loader for VisionLoader {
         };
 
         let id = mistralrs_quant::Id::new();
-        let comm = Arc::new(mistralrs_quant::Comm::from_device(id, device, 0, 1)?);
+        let comm = Arc::new(mistralrs_quant::Comm::from_device(id, 0, 1)?);
 
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(

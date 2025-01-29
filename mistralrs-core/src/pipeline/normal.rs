@@ -460,10 +460,9 @@ impl Loader for NormalLoader {
             for (rank, device) in available_devices.iter().enumerate() {
                 println!("A");
                 let comm = std::thread::spawn(move || -> Result<Arc<mistralrs_quant::Comm>> {
-                    let dev = Device::new_cuda_with_stream(7)?;
                     println!("B");
                     Ok(Arc::new(mistralrs_quant::Comm::from_device(
-                        id, &dev, rank, world_size,
+                        id, rank, world_size,
                     )?))
                 })
                 .join()
@@ -537,7 +536,7 @@ impl Loader for NormalLoader {
         } else {
             // Dummy comm
             let id = mistralrs_quant::Id::new();
-            let comm = Arc::new(mistralrs_quant::Comm::from_device(id, device, 0, 1)?);
+            let comm = Arc::new(mistralrs_quant::Comm::from_device(id, 0, 1)?);
 
             let model = match self.kind {
                 ModelKind::Normal => normal_model_loader!(
