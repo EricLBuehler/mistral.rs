@@ -305,8 +305,8 @@ impl Loader for NormalLoader {
                 println!("B");
                 Ok(Arc::new(mistralrs_quant::Comm::from_device(
                     id,
-                    &Device::new_cuda(0)?,
-                    0,
+                    &Device::new_cuda(3)?,
+                    3,
                     world_size,
                 )?))
             });
