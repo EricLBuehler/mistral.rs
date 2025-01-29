@@ -36,8 +36,6 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     );
     // Handle streaming requests
     if seq.get_mut_group().is_streaming {
-        let token_index = seq.get_toks().len();
-
         let mut tool_use_still_possible = false;
         let mut tool_use_is_done = false;
         if let Some(ref t) = seq.tools {
