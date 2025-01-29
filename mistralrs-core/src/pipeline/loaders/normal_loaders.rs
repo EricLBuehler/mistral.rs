@@ -442,9 +442,6 @@ impl NormalModelLoader for MistralLoader {
         attention_mechanism: AttentionImplementation,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(models::mistral::Model::new(
             &MistralBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -690,9 +687,6 @@ impl NormalModelLoader for GemmaLoader {
         attention_mechanism: AttentionImplementation,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(models::gemma::Model::new(
             &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -936,9 +930,6 @@ impl NormalModelLoader for LlamaLoader {
         attention_mechanism: AttentionImplementation,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(models::llama::Llama::new(
             &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -1173,9 +1164,6 @@ impl NormalModelLoader for MixtralLoader {
         attention_mechanism: AttentionImplementation,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(models::mixtral::Model::new(
             &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -1416,9 +1404,6 @@ impl NormalModelLoader for Phi2Loader {
         attention_mechanism: AttentionImplementation,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(models::phi2::Model::new(
             &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -1655,9 +1640,6 @@ impl NormalModelLoader for Phi3Loader {
         attention_mechanism: AttentionImplementation,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(models::phi3::Model::new(
             &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -1884,9 +1866,6 @@ impl NormalModelLoader for Qwen2Loader {
         attention_mechanism: AttentionImplementation,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(models::qwen2::Model::new(
             &Qwen2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -2127,9 +2106,6 @@ impl NormalModelLoader for Gemma2Loader {
         attention_mechanism: AttentionImplementation,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(models::gemma2::Model::new(
             &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -2370,9 +2346,6 @@ impl NormalModelLoader for Starcoder2Loader {
         attention_mechanism: AttentionImplementation,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(models::starcoder2::Model::new(
             &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -2615,9 +2588,6 @@ impl NormalModelLoader for Phi3_5MoELoader {
         attention_mechanism: AttentionImplementation,
         comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(models::phi3_5_moe::Model::new(
             &Phi3_5MoEBasicConfig::deserialize(config, use_flash_attn)?,
             vb,

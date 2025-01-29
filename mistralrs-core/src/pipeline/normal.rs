@@ -295,39 +295,6 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-        let comms = if device.is_cuda() {
-            let id = mistralrs_quant::Id::new();
-
-            #[cfg(feature = "cuda")]
-            let total_devices = candle_core::cuda::cudarc::driver::result::device::get_count()
-                .expect("Could not get count of cuda devices")
-                as usize;
-            #[cfg(not(feature = "cuda"))]
-            let total_devices = 0;
-
-            let world_size = total_devices;
-
-            // They each block on each other
-            // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
-            let comms = (0..world_size)
-                .into_par_iter()
-                .map(|rank| {
-                    mistralrs_quant::Comm::from_device(
-                        id,
-                        &Device::new_cuda(rank)?,
-                        rank,
-                        world_size,
-                    )
-                })
-                .collect::<candle_core::Result<Vec<_>>>()?;
-
-            comms.into_iter().map(Arc::new).collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-
-        dbg!(&comms);
-
         let available_devices = device_map::get_all_similar_devices(device)?;
 
         // If auto, convert to Map
@@ -505,6 +472,7 @@ impl Loader for NormalLoader {
 
             let mut parallel_models = Vec::new();
             for comm in comms.into_iter().map(Arc::new) {
+                dbg!(&comm);
                 // Redefine mapper
                 let mapper = DeviceMapSetting::dummy().into_mapper(
                     self.inner.get_total_device_mapping_num_layers(&config)?,
