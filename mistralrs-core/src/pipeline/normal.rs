@@ -299,7 +299,7 @@ impl Loader for NormalLoader {
 
             // NCCL case
             let id = mistralrs_quant::Id::new();
-            let world_size = 8; // TODO TODO TODO
+            let world_size = 3; // TODO TODO TODO
             println!("A");
 
             for i in 0..3 {
@@ -307,7 +307,7 @@ impl Loader for NormalLoader {
                     let comm = mistralrs_quant::Comm::from_device(
                         id,
                         &Device::new_cuda(i)?,
-                        3,
+                        i,
                         world_size,
                     )?;
 
