@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use candle_core::Result;
 
 use crate::{QuantMethod, QuantizedSerde};

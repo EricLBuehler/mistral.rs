@@ -8,7 +8,6 @@ use candle_core::{
 };
 use candle_nn::{
     Conv2d, Conv2dConfig, Embedding, GroupNorm, LayerNorm, LayerNormConfig, Linear, Module,
-    VarBuilder,
 };
 use float8::F8E4M3;
 use half::{bf16, f16};

@@ -106,10 +106,8 @@ impl QuantMethod for RowParallelLayer {
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        let mut xs = self
-            .weight
-            .forward(&a)?
-            .apply_op1_no_bwd(&self.all_reduce)?;
+        let mut xs = self.weight.forward(&a)?;
+        xs = self.all_reduce.apply(&xs)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
         }

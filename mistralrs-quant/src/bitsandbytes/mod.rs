@@ -4,15 +4,10 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{
-    quantized::{GgmlDType, QTensor},
-    Context, DType, Device, Result, Shape, Tensor, D,
-};
+use candle_core::{Context, DType, Device, Result, Shape, Tensor};
 use serde::Deserialize;
 
-use crate::{
-    GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, ShardedVarBuilder,
-};
+use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, ShardedVarBuilder};
 
 #[cfg(feature = "cuda")]
 mod ffi;
