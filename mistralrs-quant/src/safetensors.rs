@@ -452,9 +452,9 @@ impl<'a> Backend for ShardedSafeTensors<'a> {
                 let stop = (rank + 1) * block_size;
 
                 if dim == 0 {
-                    tensor.i((start..stop, ..))
+                    tensor.i((start..stop, ..))?.copy()
                 } else if dim == 1 {
-                    tensor.i((.., start..stop))
+                    tensor.i((.., start..stop))?.copy()
                 } else {
                     candle_core::bail!("Got sharded on dimensions != 0 or 1")
                 }
