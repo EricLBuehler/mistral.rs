@@ -822,7 +822,7 @@ impl Loader for NormalLoader {
                     model.config(),
                     &cache_config,
                     dtype,
-                    device,
+                    model.device(),
                     layer_devices.clone(),
                 )?;
                 cache_engines.push(cache_engine)
@@ -1068,13 +1068,13 @@ impl Pipeline for NormalPipeline {
                         .map(|(i, model)| {
                             let paged_attn_meta = paged_attn_meta
                                 .as_ref()
-                                .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1));
+                                .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1.clone()));
                             model.forward(
                                 &input_ids.to_device(model.device())?,
                                 &seqlen_offsets,
                                 context_lens.clone(),
                                 position_ids.clone(),
-                                paged_attn_meta,
+                                paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
                                 &flash_meta.to_device(model.device())?,
                             )
                         })
@@ -1106,13 +1106,13 @@ impl Pipeline for NormalPipeline {
                     .map(|(i, model)| {
                         let paged_attn_meta = paged_attn_meta
                             .as_ref()
-                            .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1));
+                            .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1.clone()));
                         model.forward(
                             &input_ids.to_device(model.device())?,
                             &seqlen_offsets,
                             context_lens.clone(),
                             position_ids.clone(),
-                            paged_attn_meta,
+                            paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
                             &flash_meta.to_device(model.device())?,
                         )
                     })

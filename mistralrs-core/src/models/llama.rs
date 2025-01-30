@@ -247,7 +247,7 @@ impl CausalSelfAttention {
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
             },
-            comm: comm.clone()
+            comm: comm.clone(),
         })
     }
 }
@@ -298,7 +298,7 @@ impl Mlp {
             c_fc2,
             c_proj,
             params: vec![h_size, i_size],
-            comm: comm.clone()
+            comm: comm.clone(),
         })
     }
 }
@@ -358,7 +358,7 @@ impl MlpLayer for Mlp {
             c_fc2: new_c_fc2,
             c_proj: new_c_proj,
             params: self.params.clone(),
-            comm: self.comm.clone()
+            comm: self.comm.clone(),
         }))
     }
 
