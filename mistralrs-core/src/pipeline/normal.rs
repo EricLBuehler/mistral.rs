@@ -804,11 +804,20 @@ impl Loader for NormalLoader {
                 dtype,
                 parallel_models[0].config(),
                 device,
-                &layer_devices,
+                &pipeline_mapper
+                    .get_unique_devices()
+                    .into_iter()
+                    .map(Some)
+                    .collect::<Vec<_>>(),
                 silent,
             )?;
             let mut cache_engines = Vec::new();
-            for model in &parallel_models {
+            for model in &mut parallel_models {
+                let mut layer_devices = Vec::new();
+                for layer in 0..self.inner.get_total_device_mapping_num_layers(&config)? {
+                    let device = model.get_layers().1.device_for(layer, false).cloned();
+                    layer_devices.push(device);
+                }
                 let cache_engine = CacheEngine::new(
                     model.config(),
                     &cache_config,
