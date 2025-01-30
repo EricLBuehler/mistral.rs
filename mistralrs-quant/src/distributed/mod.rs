@@ -84,7 +84,7 @@ mod ops {
                         Some((0, l)) if l == s.len() => s,
                         Some(_) | None => candle_core::bail!("input has to be contiguous"),
                     };
-                    let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
+                    let mut dst = unsafe { dev.alloc_zeros::<bf16>(elem_count) }.w()?;
                     self.comm
                         .0
                         .all_reduce(s, &mut dst, &ReduceOp::Sum)
@@ -97,7 +97,7 @@ mod ops {
                         Some((0, l)) if l == s.len() => s,
                         Some(_) | None => candle_core::bail!("input has to be contiguous"),
                     };
-                    let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+                    let mut dst = unsafe { dev.alloc_zeros::<f16>(elem_count) }.w()?;
                     self.comm
                         .0
                         .all_reduce(s, &mut dst, &ReduceOp::Sum)
@@ -110,7 +110,7 @@ mod ops {
                         Some((0, l)) if l == s.len() => s,
                         Some(_) | None => candle_core::bail!("input has to be contiguous"),
                     };
-                    let mut dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+                    let mut dst = unsafe { dev.alloc_zeros::<f32>(elem_count) }.w()?;
                     self.comm
                         .0
                         .all_reduce(s, &mut dst, &ReduceOp::Sum)
