@@ -564,8 +564,8 @@ impl Llama {
                 num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
                 num_attn_heads: cfg.num_attention_heads / comm.world_size(),
                 sliding_window: None,
-                k_head_dim: None,
-                v_head_dim: None,
+                k_head_dim: Some(cfg.hidden_size / cfg.num_key_value_heads),
+                v_head_dim: Some(cfg.hidden_size / cfg.num_key_value_heads),
             },
             comm,
         })
