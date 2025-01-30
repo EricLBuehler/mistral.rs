@@ -633,13 +633,22 @@ impl Llama {
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
                 flash_params,
             )?;
+            if self.comm.rank() == 0 {
+                dbg!(x.to_dtype(DType::F32)?.mean_all()?);
+            }
         }
         let x = x.to_device(&self.device)?;
         let mut x = self.ln_f.forward(&x)?;
+        if self.comm.rank() == 0 {
+            dbg!(x.to_dtype(DType::F32)?.mean_all()?);
+        }
         if let Some(t) = self.lm_head.quantized_act_type() {
             x = x.to_dtype(t)?;
         }
         let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
+        if self.comm.rank() == 0 {
+            dbg!(xs.to_dtype(DType::F32)?.mean_all()?);
+        }
         extract_logits(&xs, context_lens)
     }
 
