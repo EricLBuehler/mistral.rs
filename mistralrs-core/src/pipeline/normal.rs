@@ -757,7 +757,7 @@ impl Loader for NormalLoader {
 
                 model.quantize(
                     in_situ_quant,
-                    device.clone(),
+                    model.device().clone(),
                     self.config.topology.as_ref(),
                     silent,
                     imatrix_source,
