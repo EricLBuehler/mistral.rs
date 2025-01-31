@@ -86,7 +86,7 @@ impl CausalSelfAttention {
             //     "   x {}",
             //     x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
             // );
-            println!("Aa");
+            print!("Aa");
             std::io::stdout().flush().unwrap();
         }
         let original_dtype = x.dtype();
@@ -341,8 +341,6 @@ impl MlpLayer for Mlp {
         if let Some(t) = self.c_fc1.quantized_act_type() {
             x = x.to_dtype(t)?;
         }
-        let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
-            * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
         if self.comm.rank() == 0 {
             // println!(
             //     "   intermediate {}",
@@ -351,13 +349,23 @@ impl MlpLayer for Mlp {
             print!("Ma");
             std::io::stdout().flush().unwrap();
         }
+        let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
+            * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
+        if self.comm.rank() == 0 {
+            // println!(
+            //     "   intermediate {}",
+            //     x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
+            // );
+            print!("b");
+            std::io::stdout().flush().unwrap();
+        }
         let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
         if self.comm.rank() == 0 {
             // println!(
             //     "   res {}",
             //     res.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
             // );
-            print!("b");
+            print!("c");
             std::io::stdout().flush().unwrap();
         }
         if self.c_fc1.quantized_act_type().is_some() {
