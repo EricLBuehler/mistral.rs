@@ -464,6 +464,9 @@ impl Loader for NormalLoader {
                 .par_iter()
                 .enumerate()
                 .map(|(rank, device)| {
+                    use candle_core::cuda::cudarc::driver::result;
+                    unsafe { result::ctx::set_current(*device.as_cuda_device()?.cu_primary_ctx()) }
+                        .unwrap();
                     mistralrs_quant::Comm::from_device(
                         id,
                         &device,
