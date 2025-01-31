@@ -44,8 +44,7 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator,
-    IntoParallelRefMutIterator, ParallelIterator,
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -464,15 +463,15 @@ impl Loader for NormalLoader {
                 .par_iter()
                 .enumerate()
                 .map(|(rank, device)| {
-                    use candle_core::cuda::cudarc::driver::result;
-                    unsafe { result::ctx::set_current(*device.as_cuda_device()?.cu_primary_ctx()) }
+                    #[cfg(feature = "cuda")]
+                    {
+                        use candle_core::cuda::cudarc::driver::result;
+                        unsafe {
+                            result::ctx::set_current(*device.as_cuda_device()?.cu_primary_ctx())
+                        }
                         .unwrap();
-                    mistralrs_quant::Comm::from_device(
-                        id,
-                        &device,
-                        rank,
-                        world_size,
-                    )
+                    }
+                    mistralrs_quant::Comm::from_device(id, &device, rank, world_size)
                 })
                 .collect::<candle_core::Result<Vec<_>>>()?;
 
@@ -1108,6 +1107,16 @@ impl Pipeline for NormalPipeline {
                     .par_iter()
                     .enumerate()
                     .map(|(i, model)| {
+                        #[cfg(feature = "cuda")]
+                        {
+                            use candle_core::cuda::cudarc::driver::result;
+                            unsafe {
+                                result::ctx::set_current(
+                                    *model.device().as_cuda_device()?.cu_primary_ctx(),
+                                )
+                            }
+                            .unwrap();
+                        }
                         let paged_attn_meta = paged_attn_meta
                             .as_ref()
                             .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1.clone()));
