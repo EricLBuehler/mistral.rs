@@ -213,9 +213,9 @@ impl ColumnParallelLayer {
             ) && comm.world_size() != 1
             {
                 candle_core::bail!(
-                "GPTQ and BNB quantization types to not support tensor parallelism, but got a world size of {}",
-                comm.world_size()
-            );
+                    "GPTQ and BNB quantization types to not support tensor parallelism, but got a world size of {}",
+                    comm.world_size()
+                );
             }
 
             match quant_conf.quant_method {

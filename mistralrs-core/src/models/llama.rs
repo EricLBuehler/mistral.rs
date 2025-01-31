@@ -65,6 +65,7 @@ struct CausalSelfAttention {
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl CausalSelfAttention {
@@ -114,6 +115,14 @@ impl CausalSelfAttention {
 
         let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
+        if self.comm.rank() == 0 {
+            println!(
+                "   q {}, k {}, v {}",
+                q.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
+                k.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
+                v.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
+            );
+        }
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -160,6 +169,12 @@ impl CausalSelfAttention {
             }
         };
 
+        if self.comm.rank() == 0 {
+            println!(
+                "   y {}",
+                y.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
+            );
+        }
         if let Some(t) = self.q_proj.quantized_act_type() {
             y = y.to_dtype(t)?;
         }
@@ -171,6 +186,12 @@ impl CausalSelfAttention {
         let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
+        }
+        if self.comm.rank() == 0 {
+            println!(
+                "   res {}",
+                res.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
+            );
         }
         Ok(res)
     }
@@ -244,6 +265,7 @@ impl CausalSelfAttention {
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
             },
+            comm: comm.clone(),
         })
     }
 }
