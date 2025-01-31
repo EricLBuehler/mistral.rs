@@ -81,6 +81,12 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
+        if self.comm.rank() == 0 {
+            println!(
+                "   x {}",
+                x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
+            );
+        }
         let original_dtype = x.dtype();
         let mut x = x.clone();
         if let Some(t) = self.q_proj.quantized_act_type() {
