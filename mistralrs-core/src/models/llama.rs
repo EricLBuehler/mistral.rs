@@ -336,11 +336,6 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.c_fc1.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
         if self.comm.rank() == 0 {
             // println!(
             //     "   intermediate {}",
@@ -348,6 +343,11 @@ impl MlpLayer for Mlp {
             // );
             print!("Ma");
             std::io::stdout().flush().unwrap();
+        }
+        let original_dtype = x.dtype();
+        let mut x = x.clone();
+        if let Some(t) = self.c_fc1.quantized_act_type() {
+            x = x.to_dtype(t)?;
         }
         let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
             * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
@@ -419,6 +419,7 @@ struct Block {
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
     mlp: Box<dyn MlpLayer>,
+    comm: Arc<mistralrs_quant::Comm>
 }
 
 impl Block {
@@ -434,6 +435,10 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
+        if self.comm.rank() == 0 {
+            print!(";");
+            std::io::stdout().flush().unwrap();
+        }
         let x = (self.attn.forward(
             &x,
             attention_mask,
@@ -442,8 +447,16 @@ impl Block {
             metadata,
             flash_params,
         )? + residual)?;
+        if self.comm.rank() == 0 {
+            print!(";");
+            std::io::stdout().flush().unwrap();
+        }
         let residual = &x;
         let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        if self.comm.rank() == 0 {
+            print!(";");
+            std::io::stdout().flush().unwrap();
+        }
         Ok(x)
     }
 
@@ -484,6 +497,7 @@ impl Block {
             attn,
             rms_2,
             mlp: Box::new(mlp),
+            comm: comm.clone()
         })
     }
 }
