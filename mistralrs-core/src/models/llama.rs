@@ -251,8 +251,8 @@ impl CausalSelfAttention {
                 &o_proj.dequantize_w()?.to_dtype(DType::F32)?.mean_all()?
             );
         }
-        let num_attention_heads = cfg.num_attention_heads / comm.world_size();
-        let num_key_value_heads = (cfg.num_key_value_heads / comm.world_size()).max(1);
+        let num_attention_heads = cfg.num_attention_heads;// / comm.world_size();
+        let num_key_value_heads = (cfg.num_key_value_heads);// / comm.world_size()).max(1);
         Ok(Self {
             q_proj,
             k_proj,
