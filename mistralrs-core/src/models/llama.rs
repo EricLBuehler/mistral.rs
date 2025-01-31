@@ -121,14 +121,13 @@ impl CausalSelfAttention {
 
         let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
-        if self.comm.rank() == 0 {
-            println!(
-                "   q {}, k {}, v {}",
-                q.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
-                k.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
-                v.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            );
-        }
+        println!(
+            "   rank {} q {}, k {}, v {}",
+            self.comm.rank(),
+            q.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
+            k.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
+            v.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
+        );
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -175,12 +174,11 @@ impl CausalSelfAttention {
             }
         };
 
-        if self.comm.rank() == 0 {
-            println!(
-                "   y {}",
-                y.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            );
-        }
+        println!(
+            "   rank {} y {}",
+            self.comm.rank(),
+            y.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
+        );
         if let Some(t) = self.q_proj.quantized_act_type() {
             y = y.to_dtype(t)?;
         }
@@ -193,12 +191,11 @@ impl CausalSelfAttention {
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
-        if self.comm.rank() == 0 {
-            println!(
-                "   res {}",
-                res.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            );
-        }
+        println!(
+            "   rank {} res {}",
+            self.comm.rank(),
+            res.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
+        );
         Ok(res)
     }
 
@@ -322,7 +319,7 @@ impl Mlp {
             c_fc2,
             c_proj,
             params: vec![h_size, i_size],
-            comm: comm.clone()
+            comm: comm.clone(),
         })
     }
 }
@@ -388,7 +385,7 @@ impl MlpLayer for Mlp {
             c_fc2: new_c_fc2,
             c_proj: new_c_proj,
             params: self.params.clone(),
-            comm: self.comm.clone()
+            comm: self.comm.clone(),
         }))
     }
 
