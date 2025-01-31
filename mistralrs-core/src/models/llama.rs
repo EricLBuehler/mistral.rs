@@ -81,14 +81,6 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        if self.comm.rank() == 0 {
-            // println!(
-            //     "   x {}",
-            //     x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
-            // );
-            print!("Aa");
-            std::io::stdout().flush().unwrap();
-        }
         let original_dtype = x.dtype();
         let mut x = x.clone();
         if let Some(t) = self.q_proj.quantized_act_type() {
@@ -101,10 +93,6 @@ impl CausalSelfAttention {
             q = q.to_dtype(original_dtype)?;
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
-        }
-        if self.comm.rank() == 0 {
-            print!("b");
-            std::io::stdout().flush().unwrap();
         }
 
         let (q, k, v) = if seq_len != 1 {
@@ -127,16 +115,6 @@ impl CausalSelfAttention {
 
         let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
-        if self.comm.rank() == 0 {
-            // println!(
-            //     "   q {}, k {}, v {}",
-            //     q.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
-            //     k.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
-            //     v.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            // );
-            print!("c");
-            std::io::stdout().flush().unwrap();
-        }
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -183,14 +161,6 @@ impl CausalSelfAttention {
             }
         };
 
-        if self.comm.rank() == 0 {
-            // println!(
-            //     "   y {}",
-            //     y.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            // );
-            print!("d");
-            std::io::stdout().flush().unwrap();
-        }
         if let Some(t) = self.q_proj.quantized_act_type() {
             y = y.to_dtype(t)?;
         }
@@ -199,17 +169,13 @@ impl CausalSelfAttention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        println!("Attn Comm {} reached it", self.comm.rank());
         let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        println!("Attn Comm {} done!", self.comm.rank());
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
-        }
-        if self.comm.rank() == 0 {
-            // println!(
-            //     "   res {}",
-            //     res.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            // );
-            print!("e");
-            std::io::stdout().flush().unwrap();
         }
         Ok(res)
     }
@@ -336,14 +302,6 @@ impl AnyMoeTrainableLayer for Mlp {}
 
 impl MlpLayer for Mlp {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        if self.comm.rank() == 0 {
-            // println!(
-            //     "   intermediate {}",
-            //     x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            // );
-            print!("Ma");
-            std::io::stdout().flush().unwrap();
-        }
         let original_dtype = x.dtype();
         let mut x = x.clone();
         if let Some(t) = self.c_fc1.quantized_act_type() {
@@ -351,23 +309,11 @@ impl MlpLayer for Mlp {
         }
         let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
             * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
-        if self.comm.rank() == 0 {
-            // println!(
-            //     "   intermediate {}",
-            //     x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            // );
-            print!("b");
-            std::io::stdout().flush().unwrap();
-        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        println!("Mlp Comm {} reached it", self.comm.rank());
         let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
-        if self.comm.rank() == 0 {
-            // println!(
-            //     "   res {}",
-            //     res.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            // );
-            print!("c");
-            std::io::stdout().flush().unwrap();
-        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        println!("Mlp Comm {} done!", self.comm.rank());
         if self.c_fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
