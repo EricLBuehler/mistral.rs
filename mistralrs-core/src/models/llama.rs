@@ -7,7 +7,7 @@ use mistralrs_quant::{
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io::Write, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::{
@@ -65,7 +65,6 @@ struct CausalSelfAttention {
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
-    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl CausalSelfAttention {
@@ -169,11 +168,7 @@ impl CausalSelfAttention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        // std::thread::sleep(std::time::Duration::from_millis(100));
-        // println!("Attn Comm {} reached it", self.comm.rank());
         let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
-        // std::thread::sleep(std::time::Duration::from_millis(100));
-        // println!("Attn Comm {} done!", self.comm.rank());
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -242,7 +237,6 @@ impl CausalSelfAttention {
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
             },
-            comm: comm.clone(),
         })
     }
 }
@@ -253,7 +247,6 @@ struct Mlp {
     c_fc2: Arc<dyn QuantMethod>,
     c_proj: Arc<dyn QuantMethod>,
     params: Vec<usize>,
-    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Mlp {
@@ -293,7 +286,6 @@ impl Mlp {
             c_fc2,
             c_proj,
             params: vec![h_size, i_size],
-            comm: comm.clone(),
         })
     }
 }
@@ -309,11 +301,7 @@ impl MlpLayer for Mlp {
         }
         let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
             * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
-        // std::thread::sleep(std::time::Duration::from_millis(100));
-        // println!("Mlp Comm {} reached it", self.comm.rank());
         let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
-        // std::thread::sleep(std::time::Duration::from_millis(100));
-        // println!("Mlp Comm {} done!", self.comm.rank());
         if self.c_fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -351,7 +339,6 @@ impl MlpLayer for Mlp {
             c_fc2: new_c_fc2,
             c_proj: new_c_proj,
             params: self.params.clone(),
-            comm: self.comm.clone(),
         }))
     }
 
@@ -660,13 +647,7 @@ impl Llama {
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
                 flash_params,
             )?;
-            // if self.comm.rank() == 0 {
-            //     println!();
-            // }
         }
-        // if self.comm.rank() == 0 {
-        //     println!("\n\n\n");
-        // }
         let x = x.to_device(&self.device)?;
         let mut x = self.ln_f.forward(&x)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
