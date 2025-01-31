@@ -65,7 +65,6 @@ struct CausalSelfAttention {
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
-    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl CausalSelfAttention {
@@ -81,12 +80,6 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        if self.comm.rank() == 0 {
-            println!(
-                "   x {}",
-                x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
-            );
-        }
         let original_dtype = x.dtype();
         let mut x = x.clone();
         if let Some(t) = self.q_proj.quantized_act_type() {
@@ -121,13 +114,6 @@ impl CausalSelfAttention {
 
         let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
-        println!(
-            "   rank {} q {}, k {}, v {}",
-            self.comm.rank(),
-            q.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
-            k.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
-            v.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-        );
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -174,11 +160,6 @@ impl CausalSelfAttention {
             }
         };
 
-        println!(
-            "   rank {} y {}",
-            self.comm.rank(),
-            y.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-        );
         if let Some(t) = self.q_proj.quantized_act_type() {
             y = y.to_dtype(t)?;
         }
@@ -191,11 +172,6 @@ impl CausalSelfAttention {
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
-        println!(
-            "   rank {} res {}",
-            self.comm.rank(),
-            res.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-        );
         Ok(res)
     }
 
@@ -268,7 +244,6 @@ impl CausalSelfAttention {
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
                 sliding_window: None,
             },
-            comm: comm.clone(),
         })
     }
 }
@@ -279,7 +254,6 @@ struct Mlp {
     c_fc2: Arc<dyn QuantMethod>,
     c_proj: Arc<dyn QuantMethod>,
     params: Vec<usize>,
-    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Mlp {
@@ -319,7 +293,6 @@ impl Mlp {
             c_fc2,
             c_proj,
             params: vec![h_size, i_size],
-            comm: comm.clone(),
         })
     }
 }
@@ -335,19 +308,7 @@ impl MlpLayer for Mlp {
         }
         let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
             * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
-        if self.comm.rank() == 0 {
-            println!(
-                "   intermediate {}",
-                x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            );
-        }
         let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
-        if self.comm.rank() == 0 {
-            println!(
-                "   res {}",
-                res.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-            );
-        }
         if self.c_fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -385,7 +346,6 @@ impl MlpLayer for Mlp {
             c_fc2: new_c_fc2,
             c_proj: new_c_proj,
             params: self.params.clone(),
-            comm: self.comm.clone(),
         }))
     }
 
