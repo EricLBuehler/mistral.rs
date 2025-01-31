@@ -316,7 +316,7 @@ impl Mlp {
             c_fc2,
             c_proj,
             params: vec![h_size, i_size],
-            comm: comm.clone()
+            comm: comm.clone(),
         })
     }
 }
@@ -382,7 +382,7 @@ impl MlpLayer for Mlp {
             c_fc2: new_c_fc2,
             c_proj: new_c_proj,
             params: self.params.clone(),
-            comm: self.comm.clone()
+            comm: self.comm.clone(),
         }))
     }
 
@@ -648,6 +648,10 @@ impl Llama {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
+        use candle_core::cuda::cudarc::driver::result;
+        unsafe { result::ctx::set_current(*self.device.as_cuda_device()?.cu_primary_ctx()) }
+            .unwrap();
+
         let mut x = input_embeds;
         let cache = &mut self.kv_cache.normal().0;
         let mask = CausalMasker.make_causal_mask_matrix(
