@@ -634,6 +634,7 @@ impl Llama {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
+        println!("{input_ids}");
         self.forward_embeds(
             input_ids,
             self.wte.forward(input_ids)?,
