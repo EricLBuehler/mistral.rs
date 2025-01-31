@@ -54,6 +54,8 @@ mod ops {
         }
 
         pub fn apply(&self, xs: &Tensor) -> Result<Tensor> {
+            use candle_core::cuda::cudarc::driver::result;
+            unsafe { result::ctx::set_current(*self.comm.0.device().cu_primary_ctx()) }.unwrap();
             xs.apply_op1_no_bwd(self)
         }
     }
