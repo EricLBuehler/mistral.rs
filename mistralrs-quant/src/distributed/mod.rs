@@ -1,6 +1,10 @@
 #[cfg(feature = "cuda")]
 mod ops {
-    use std::{fmt::Debug, ops::Deref, sync::Arc};
+    use std::{
+        fmt::Debug,
+        ops::Deref,
+        sync::{Arc, Barrier},
+    };
 
     use candle_core::{
         backend::BackendStorage, cuda::cudarc, cuda_backend::WrapErr, CpuStorage, CustomOp1, DType,
@@ -18,16 +22,26 @@ mod ops {
     }
 
     #[derive(Debug)]
-    pub struct Comm(cudarc::nccl::Comm);
+    pub struct Comm {
+        comm: cudarc::nccl::Comm,
+        barrier: Arc<Barrier>,
+    }
 
     impl Comm {
-        pub fn from_device(id: Id, dev: &Device, rank: usize, world_size: usize) -> Result<Self> {
+        pub fn from_device(
+            id: Id,
+            dev: &Device,
+            rank: usize,
+            world_size: usize,
+            barrier: Arc<Barrier>,
+        ) -> Result<Self> {
             let device = dev.as_cuda_device()?.cuda_device();
-            Ok(Self(
-                cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
+            Ok(Self {
+                comm: cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
                     .map_err(|e| e.0)
                     .expect("Failed to create `Comm`, error code"),
-            ))
+                barrier,
+            })
         }
     }
 
@@ -39,7 +53,7 @@ mod ops {
         type Target = cudarc::nccl::Comm;
 
         fn deref(&self) -> &Self::Target {
-            &self.0
+            &self.comm
         }
     }
 
@@ -55,7 +69,8 @@ mod ops {
 
         pub fn apply(&self, xs: &Tensor) -> Result<Tensor> {
             use candle_core::cuda::cudarc::driver::result;
-            unsafe { result::ctx::set_current(*self.comm.0.device().cu_primary_ctx()) }.unwrap();
+            unsafe { result::ctx::set_current(*self.comm.comm.device().cu_primary_ctx()) }.unwrap();
+            self.comm.barrier.wait();
             xs.apply_op1_no_bwd(self)
         }
     }
@@ -88,7 +103,7 @@ mod ops {
                     };
                     let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
                     self.comm
-                        .0
+                        .comm
                         .all_reduce(s, &mut dst, &ReduceOp::Sum)
                         .map_err(candle_core::Error::debug)?;
                     candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
@@ -101,7 +116,7 @@ mod ops {
                     };
                     let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
                     self.comm
-                        .0
+                        .comm
                         .all_reduce(s, &mut dst, &ReduceOp::Sum)
                         .map_err(candle_core::Error::debug)?;
                     candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
@@ -114,7 +129,7 @@ mod ops {
                     };
                     let mut dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
                     self.comm
-                        .0
+                        .comm
                         .all_reduce(s, &mut dst, &ReduceOp::Sum)
                         .map_err(candle_core::Error::debug)?;
                     candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
@@ -128,7 +143,7 @@ mod ops {
 
 #[cfg(not(feature = "cuda"))]
 mod ops {
-    use std::sync::Arc;
+    use std::sync::{Arc, Barrier};
 
     use candle_core::{Device, Result, Tensor};
 
@@ -150,6 +165,7 @@ mod ops {
             _dev: &Device,
             _rank: usize,
             _world_size: usize,
+            _barrier: Arc<Barrier>,
         ) -> Result<Self> {
             Ok(Self)
         }

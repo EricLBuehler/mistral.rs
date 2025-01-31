@@ -53,7 +53,7 @@ use std::fs;
 use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Barrier, RwLock};
 use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
@@ -457,6 +457,8 @@ impl Loader for NormalLoader {
 
             info!("NCCL world size is {world_size}");
 
+            let barrier = Arc::new(Barrier::new(world_size));
+
             // They each block on each other
             // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
             let comms = available_devices
@@ -471,7 +473,13 @@ impl Loader for NormalLoader {
                         }
                         .unwrap();
                     }
-                    mistralrs_quant::Comm::from_device(id, &device, rank, world_size)
+                    mistralrs_quant::Comm::from_device(
+                        id,
+                        &device,
+                        rank,
+                        world_size,
+                        barrier.clone(),
+                    )
                 })
                 .collect::<candle_core::Result<Vec<_>>>()?;
 
@@ -581,7 +589,13 @@ impl Loader for NormalLoader {
         } else {
             // Dummy comm
             let id = mistralrs_quant::Id::new();
-            let comm = Arc::new(mistralrs_quant::Comm::from_device(id, device, 0, 1)?);
+            let comm = Arc::new(mistralrs_quant::Comm::from_device(
+                id,
+                device,
+                0,
+                1,
+                Arc::new(Barrier::new(1)),
+            )?);
 
             let model = match self.kind {
                 ModelKind::Normal => normal_model_loader!(

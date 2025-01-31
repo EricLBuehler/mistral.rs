@@ -169,11 +169,11 @@ impl CausalSelfAttention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        println!("Attn Comm {} reached it", self.comm.rank());
+        // std::thread::sleep(std::time::Duration::from_millis(100));
+        // println!("Attn Comm {} reached it", self.comm.rank());
         let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        println!("Attn Comm {} done!", self.comm.rank());
+        // std::thread::sleep(std::time::Duration::from_millis(100));
+        // println!("Attn Comm {} done!", self.comm.rank());
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -293,7 +293,7 @@ impl Mlp {
             c_fc2,
             c_proj,
             params: vec![h_size, i_size],
-            comm: comm.clone()
+            comm: comm.clone(),
         })
     }
 }
@@ -309,11 +309,11 @@ impl MlpLayer for Mlp {
         }
         let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
             * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        println!("Mlp Comm {} reached it", self.comm.rank());
+        // std::thread::sleep(std::time::Duration::from_millis(100));
+        // println!("Mlp Comm {} reached it", self.comm.rank());
         let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        println!("Mlp Comm {} done!", self.comm.rank());
+        // std::thread::sleep(std::time::Duration::from_millis(100));
+        // println!("Mlp Comm {} done!", self.comm.rank());
         if self.c_fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -351,7 +351,7 @@ impl MlpLayer for Mlp {
             c_fc2: new_c_fc2,
             c_proj: new_c_proj,
             params: self.params.clone(),
-            comm: self.comm.clone()
+            comm: self.comm.clone(),
         }))
     }
 
@@ -365,7 +365,7 @@ struct Block {
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
     mlp: Box<dyn MlpLayer>,
-    comm: Arc<mistralrs_quant::Comm>
+    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Block {
@@ -382,8 +382,8 @@ impl Block {
         let residual = x;
         let x = self.rms_1.forward(x)?;
         if self.comm.rank() == 0 {
-            print!(";");
-            std::io::stdout().flush().unwrap();
+            // print!(";");
+            // std::io::stdout().flush().unwrap();
         }
         let x = (self.attn.forward(
             &x,
@@ -394,14 +394,14 @@ impl Block {
             flash_params,
         )? + residual)?;
         if self.comm.rank() == 0 {
-            print!(";");
-            std::io::stdout().flush().unwrap();
+            // print!(";");
+            // std::io::stdout().flush().unwrap();
         }
         let residual = &x;
         let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
         if self.comm.rank() == 0 {
-            print!(";");
-            std::io::stdout().flush().unwrap();
+            // print!(";");
+            // std::io::stdout().flush().unwrap();
         }
         Ok(x)
     }
@@ -443,7 +443,7 @@ impl Block {
             attn,
             rms_2,
             mlp: Box::new(mlp),
-            comm: comm.clone()
+            comm: comm.clone(),
         })
     }
 }
@@ -660,13 +660,13 @@ impl Llama {
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
                 flash_params,
             )?;
-            if self.comm.rank() == 0 {
-                println!();
-            }
+            // if self.comm.rank() == 0 {
+            //     println!();
+            // }
         }
-        if self.comm.rank() == 0 {
-            println!("\n\n\n");
-        }
+        // if self.comm.rank() == 0 {
+        //     println!("\n\n\n");
+        // }
         let x = x.to_device(&self.device)?;
         let mut x = self.ln_f.forward(&x)?;
         if let Some(t) = self.lm_head.quantized_act_type() {
