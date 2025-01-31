@@ -213,7 +213,7 @@ impl CausalSelfAttention {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-        let q_proj = ColumnParallelLayer::new(
+        let q_proj = ReplicatedLayer::new(
             size_in,
             size_q,
             &cfg.quantization_config,
@@ -221,7 +221,7 @@ impl CausalSelfAttention {
             comm,
             vb.pp("q_proj"),
         )?;
-        let k_proj = ColumnParallelLayer::new(
+        let k_proj = ReplicatedLayer::new(
             size_in,
             size_kv,
             &cfg.quantization_config,
@@ -229,7 +229,7 @@ impl CausalSelfAttention {
             comm,
             vb.pp("k_proj"),
         )?;
-        let v_proj = ColumnParallelLayer::new(
+        let v_proj = ReplicatedLayer::new(
             size_in,
             size_kv,
             &cfg.quantization_config,
@@ -237,7 +237,7 @@ impl CausalSelfAttention {
             comm,
             vb.pp("v_proj"),
         )?;
-        let o_proj = RowParallelLayer::new(
+        let o_proj = ReplicatedLayer::new(
             size_q,
             size_in,
             &cfg.quantization_config,
@@ -293,7 +293,7 @@ impl Mlp {
     ) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
-        let c_fc1 = ColumnParallelLayer::new(
+        let c_fc1 = ReplicatedLayer::new(
             h_size,
             i_size,
             &cfg.quantization_config,
@@ -301,7 +301,7 @@ impl Mlp {
             comm,
             vb.pp("gate_proj"),
         )?;
-        let c_fc2 = ColumnParallelLayer::new(
+        let c_fc2 = ReplicatedLayer::new(
             h_size,
             i_size,
             &cfg.quantization_config,
@@ -309,7 +309,7 @@ impl Mlp {
             comm,
             vb.pp("up_proj"),
         )?;
-        let c_proj = RowParallelLayer::new(
+        let c_proj = ReplicatedLayer::new(
             i_size,
             h_size,
             &cfg.quantization_config,
