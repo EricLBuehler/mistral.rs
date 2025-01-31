@@ -169,10 +169,10 @@ impl CausalSelfAttention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_millis(100));
         println!("Attn Comm {} reached it", self.comm.rank());
         let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_millis(100));
         println!("Attn Comm {} done!", self.comm.rank());
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
@@ -309,10 +309,10 @@ impl MlpLayer for Mlp {
         }
         let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
             * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_millis(100));
         println!("Mlp Comm {} reached it", self.comm.rank());
         let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_millis(100));
         println!("Mlp Comm {} done!", self.comm.rank());
         if self.c_fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
