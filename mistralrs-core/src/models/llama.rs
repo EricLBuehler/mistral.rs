@@ -648,9 +648,10 @@ impl Llama {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        use candle_core::cuda::cudarc::driver::result;
-        unsafe { result::ctx::set_current(*self.device.as_cuda_device()?.cu_primary_ctx()) }
-            .unwrap();
+        // use candle_core::cuda::cudarc::driver::result;
+        // unsafe { result::ctx::set_current(*self.device.as_cuda_device()?.cu_primary_ctx()) }
+        //     .unwrap();
+        let dev = Device::new_cuda_with_stream(self.comm.rank())?;
 
         let mut x = input_embeds;
         let cache = &mut self.kv_cache.normal().0;
