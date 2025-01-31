@@ -181,7 +181,6 @@ impl CausalSelfAttention {
         rope: Arc<Llama3RotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
-        layer_idx: usize,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
@@ -218,12 +217,6 @@ impl CausalSelfAttention {
             comm,
             vb.pp("o_proj"),
         )?;
-        if layer_idx == 0 {
-            dbg!(
-                &q_proj.dequantize_w()?.to_dtype(DType::F32)?.mean_all()?,
-                &o_proj.dequantize_w()?.to_dtype(DType::F32)?.mean_all()?
-            );
-        }
         let num_attention_heads = cfg.num_attention_heads / comm.world_size();
         let num_key_value_heads = (cfg.num_key_value_heads / comm.world_size()).max(1);
         Ok(Self {
@@ -403,7 +396,6 @@ impl Block {
             rope,
             paged_attn,
             comm,
-            layer_idx,
         )?;
         let mlp = Mlp::load(
             mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
@@ -642,15 +634,6 @@ impl Llama {
                     .map(|(kv_cache, metadata)| (kv_cache[block_idx].clone(), *metadata)),
                 flash_params,
             )?;
-            if self.comm.rank() == 0 {
-                println!(
-                    "layer {block_idx}, {}",
-                    x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
-                );
-            }
-        }
-        if self.comm.rank() == 0 {
-            println!("\n\n");
         }
         let x = x.to_device(&self.device)?;
         let mut x = self.ln_f.forward(&x)?;
