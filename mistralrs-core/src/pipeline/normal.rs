@@ -465,7 +465,7 @@ impl Loader for NormalLoader {
                 .map(|rank| {
                     mistralrs_quant::Comm::from_device(
                         id,
-                        &Device::new_cuda(rank)?,
+                        &Device::new_cuda_with_stream(rank)?,
                         rank,
                         world_size,
                     )
