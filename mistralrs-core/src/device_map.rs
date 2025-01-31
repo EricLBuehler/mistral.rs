@@ -6,6 +6,7 @@ use crate::{
     Topology, TryIntoDType,
 };
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
+use itertools::Itertools;
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use tracing::info;
@@ -22,6 +23,8 @@ pub enum DeviceMapSetting {
     Map(DeviceMapMetadata),
     /// Automatic device mapping (recommended).
     Auto(AutoDeviceMapParams),
+    /// Dummy device mapping for a NCCL pipeline
+    Nccl { devices: Vec<Device> },
 }
 
 #[derive(Debug, Default, Deserialize, Clone)]
@@ -59,6 +62,20 @@ impl DeviceMapSetting {
         topology: Option<&Topology>,
     ) -> Result<Box<dyn DeviceMapper + Send + Sync>> {
         match self {
+            Self::Nccl { devices } => {
+                once_log_info(format!(
+                    "Loading model using a NCCL-parellized pipeline with the following devices: {}",
+                    devices
+                        .iter()
+                        .map(|dev| dev.device_pretty_repr())
+                        .join(", ")
+                ));
+                Ok(Box::new(NcclDeviceMapper {
+                    nm_device: devices[0].clone(),
+                    devices: devices.clone(),
+                }))
+            }
+
             Self::Map(DeviceMapMetadata {
                 device_layers,
                 host_layers,
@@ -342,6 +359,63 @@ impl DeviceMapper for DummyDeviceMapper {
     }
 }
 
+#[derive(Debug)]
+pub struct NcclDeviceMapper {
+    nm_device: Device,
+    devices: Vec<Device>,
+}
+
+impl DeviceMapper for NcclDeviceMapper {
+    fn map(&self, input: Tensor, _: usize) -> Result<Tensor> {
+        Ok(input)
+    }
+    fn set_device<'a>(
+        &self,
+        _: usize,
+        varbuilder: ShardedVarBuilder<'a>,
+        loading_isq: bool,
+    ) -> ShardedVarBuilder<'a> {
+        if loading_isq {
+            varbuilder.set_device(Device::Cpu)
+        } else {
+            varbuilder.set_device(self.nm_device.clone())
+        }
+    }
+    fn device_for(&self, _: usize, _loading_isq: bool) -> Option<&Device> {
+        Some(&self.nm_device)
+    }
+    fn get_unique_devices(&self) -> Vec<Device> {
+        self.devices.clone()
+    }
+    fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor> {
+        if loading_isq {
+            x.to_device(&Device::Cpu)
+        } else {
+            x.to_device(&self.nm_device)
+        }
+    }
+    fn set_nm_device<'a>(
+        &self,
+        varbuilder: ShardedVarBuilder<'a>,
+        loading_isq: bool,
+    ) -> ShardedVarBuilder<'a> {
+        if loading_isq {
+            varbuilder.set_device(Device::Cpu)
+        } else {
+            varbuilder.set_device(self.nm_device.clone())
+        }
+    }
+    fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
+        dtype
+            .try_into_dtype(&self.devices.iter().collect::<Vec<_>>())
+            .map_err(candle_core::Error::msg)
+    }
+    fn num_device_mapping_layers(&self) -> usize {
+        // Effectively one layer
+        1
+    }
+}
+
 /// Get all devices on the same device type but different ordinals
 pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
     let mut devices = Vec::new();
@@ -358,6 +432,7 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
                     ord += 1;
                     continue;
                 }
+                // Needs to be without a stream as PagedAttention doesn't like it otherwise.
                 if let Ok(dev) = Device::new_cuda(ord) {
                     devices.push(dev);
                     ord += 1;

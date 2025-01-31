@@ -35,8 +35,8 @@ use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors}
 use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    normal_model_loader, xlora_model_loader, DeviceMapSetting, PagedAttentionConfig, Pipeline,
+    Topology, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -484,7 +484,11 @@ impl Loader for NormalLoader {
                 .collect::<candle_core::Result<Vec<_>>>()?;
 
             let mut parallel_models = Vec::new();
-            for (comm, device) in comms.into_iter().map(Arc::new).zip(available_devices) {
+            for (comm, device) in comms
+                .into_iter()
+                .map(Arc::new)
+                .zip(available_devices.clone())
+            {
                 info!("Loading rank {}/{world_size}", comm.rank() + 1);
                 // Redefine mapper
                 let mapper = DeviceMapSetting::dummy().into_mapper(
@@ -549,36 +553,9 @@ impl Loader for NormalLoader {
                 parallel_models.push(model);
             }
 
-            // Redefine mappers to account for the different unique devices.
-            let n_layers = self.inner.get_total_device_mapping_num_layers(&config)?;
-            let mut device_layer_map_meta = Vec::new();
-            if n_layers % world_size == 0 {
-                for rank in 0..world_size {
-                    device_layer_map_meta.push(DeviceLayerMapMetadata {
-                        ordinal: rank,
-                        layers: n_layers / world_size,
-                    });
-                }
-            } else {
-                for rank in 0..world_size - 1 {
-                    device_layer_map_meta.push(DeviceLayerMapMetadata {
-                        ordinal: rank,
-                        layers: n_layers / world_size,
-                    });
-                }
-                // Get the remainder
-                device_layer_map_meta.push(DeviceLayerMapMetadata {
-                    ordinal: world_size - 1,
-                    layers: n_layers
-                        - device_layer_map_meta
-                            .iter()
-                            .map(|x| x.layers)
-                            .sum::<usize>(),
-                });
+            pipeline_mapper = DeviceMapSetting::Nccl {
+                devices: available_devices.clone(),
             }
-            pipeline_mapper = DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(
-                device_layer_map_meta,
-            ))
             .into_mapper(
                 self.inner.get_total_device_mapping_num_layers(&config)?,
                 &device,
