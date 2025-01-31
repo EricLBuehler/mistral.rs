@@ -213,7 +213,7 @@ impl CausalSelfAttention {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
         let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
-        let q_proj = ReplicatedLayer::new(
+        let q_proj = ColumnParallelLayer::new(
             size_in,
             size_q,
             &cfg.quantization_config,
@@ -221,7 +221,7 @@ impl CausalSelfAttention {
             comm,
             vb.pp("q_proj"),
         )?;
-        let k_proj = ReplicatedLayer::new(
+        let k_proj = ColumnParallelLayer::new(
             size_in,
             size_kv,
             &cfg.quantization_config,
@@ -229,7 +229,7 @@ impl CausalSelfAttention {
             comm,
             vb.pp("k_proj"),
         )?;
-        let v_proj = ReplicatedLayer::new(
+        let v_proj = ColumnParallelLayer::new(
             size_in,
             size_kv,
             &cfg.quantization_config,
@@ -237,7 +237,7 @@ impl CausalSelfAttention {
             comm,
             vb.pp("v_proj"),
         )?;
-        let o_proj = ReplicatedLayer::new(
+        let o_proj = RowParallelLayer::new(
             size_q,
             size_in,
             &cfg.quantization_config,
@@ -251,8 +251,8 @@ impl CausalSelfAttention {
                 &o_proj.dequantize_w()?.to_dtype(DType::F32)?.mean_all()?
             );
         }
-        let num_attention_heads = cfg.num_attention_heads;// / comm.world_size();
-        let num_key_value_heads = (cfg.num_key_value_heads);// / comm.world_size()).max(1);
+        let num_attention_heads = cfg.num_attention_heads / comm.world_size();
+        let num_key_value_heads = (cfg.num_key_value_heads / comm.world_size()).max(1);
         Ok(Self {
             q_proj,
             k_proj,
@@ -293,7 +293,7 @@ impl Mlp {
     ) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
-        let c_fc1 = ReplicatedLayer::new(
+        let c_fc1 = ColumnParallelLayer::new(
             h_size,
             i_size,
             &cfg.quantization_config,
@@ -301,7 +301,7 @@ impl Mlp {
             comm,
             vb.pp("gate_proj"),
         )?;
-        let c_fc2 = ReplicatedLayer::new(
+        let c_fc2 = ColumnParallelLayer::new(
             h_size,
             i_size,
             &cfg.quantization_config,
@@ -309,7 +309,7 @@ impl Mlp {
             comm,
             vb.pp("up_proj"),
         )?;
-        let c_proj = ReplicatedLayer::new(
+        let c_proj = RowParallelLayer::new(
             i_size,
             h_size,
             &cfg.quantization_config,
@@ -322,7 +322,7 @@ impl Mlp {
             c_fc2,
             c_proj,
             params: vec![h_size, i_size],
-            comm: comm.clone(),
+            comm: comm.clone()
         })
     }
 }
@@ -388,7 +388,7 @@ impl MlpLayer for Mlp {
             c_fc2: new_c_fc2,
             c_proj: new_c_proj,
             params: self.params.clone(),
-            comm: self.comm.clone(),
+            comm: self.comm.clone()
         }))
     }
 
@@ -612,8 +612,8 @@ impl Llama {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: (cfg.num_key_value_heads),// / comm.world_size()).max(1),
-                num_attn_heads: cfg.num_attention_heads,// / comm.world_size(),
+                num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
+                num_attn_heads: cfg.num_attention_heads / comm.world_size(),
                 sliding_window: None,
                 k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
                 v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
