@@ -296,8 +296,15 @@ impl Loader for NormalLoader {
 
         let available_devices = device_map::get_all_similar_devices(device)?;
 
-        // If auto, convert to Map
-        if let DeviceMapSetting::Auto(params) = mapper.clone() {
+        let use_nccl =
+            available_devices.iter().all(|dev| dev.is_cuda()) && available_devices.len() > 1;
+
+        // If auto, convert to Map if not using nccl
+        if use_nccl {
+            mapper = DeviceMapSetting::Nccl {
+                devices: available_devices.clone(),
+            };
+        } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 
@@ -388,7 +395,7 @@ impl Loader for NormalLoader {
             mapper = DeviceMapSetting::Map(new);
         }
 
-        let mut pipeline_mapper = mapper.into_mapper(
+        let pipeline_mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
             device,
             self.config.topology.as_ref(),
@@ -449,7 +456,7 @@ impl Loader for NormalLoader {
             AttentionImplementation::Eager
         };
 
-        let mut parallel_models = if device.is_cuda() && available_devices.len() > 1 {
+        let mut parallel_models = if use_nccl {
             // NCCL case
             let id = mistralrs_quant::Id::new();
 
@@ -552,15 +559,6 @@ impl Loader for NormalLoader {
 
                 parallel_models.push(model);
             }
-
-            pipeline_mapper = DeviceMapSetting::Nccl {
-                devices: available_devices.clone(),
-            }
-            .into_mapper(
-                self.inner.get_total_device_mapping_num_layers(&config)?,
-                &device,
-                None,
-            )?;
 
             parallel_models
         } else {
