@@ -44,7 +44,7 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
+    IndexedParallelIterator, IntoParallelRefIterator,
     IntoParallelRefMutIterator, ParallelIterator,
 };
 use regex_automata::meta::Regex;
@@ -460,12 +460,13 @@ impl Loader for NormalLoader {
 
             // They each block on each other
             // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
-            let comms = (0..world_size)
-                .into_par_iter()
-                .map(|rank| {
+            let comms = available_devices
+                .par_iter()
+                .enumerate()
+                .map(|(rank, device)| {
                     mistralrs_quant::Comm::from_device(
                         id,
-                        &Device::new_cuda_with_stream(rank)?,
+                        &device,
                         rank,
                         world_size,
                     )
