@@ -7,7 +7,7 @@ use mistralrs_quant::{
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, io::Write, sync::Arc};
 
 use crate::{
     amoe::{
@@ -87,6 +87,7 @@ impl CausalSelfAttention {
             //     x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?,
             // );
             println!("Aa");
+            std::io::stdout().flush().unwrap();
         }
         let original_dtype = x.dtype();
         let mut x = x.clone();
@@ -103,6 +104,7 @@ impl CausalSelfAttention {
         }
         if self.comm.rank() == 0 {
             print!("b");
+            std::io::stdout().flush().unwrap();
         }
 
         let (q, k, v) = if seq_len != 1 {
@@ -133,6 +135,7 @@ impl CausalSelfAttention {
             //     v.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
             // );
             print!("c");
+            std::io::stdout().flush().unwrap();
         }
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -186,6 +189,7 @@ impl CausalSelfAttention {
             //     y.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
             // );
             print!("d");
+            std::io::stdout().flush().unwrap();
         }
         if let Some(t) = self.q_proj.quantized_act_type() {
             y = y.to_dtype(t)?;
@@ -205,6 +209,7 @@ impl CausalSelfAttention {
             //     res.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
             // );
             print!("e");
+            std::io::stdout().flush().unwrap();
         }
         Ok(res)
     }
@@ -344,6 +349,7 @@ impl MlpLayer for Mlp {
             //     x.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
             // );
             print!("Ma");
+            std::io::stdout().flush().unwrap();
         }
         let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
         if self.comm.rank() == 0 {
@@ -352,6 +358,7 @@ impl MlpLayer for Mlp {
             //     res.to_dtype(DType::F32)?.mean_all()?.to_scalar::<f32>()?
             // );
             print!("b");
+            std::io::stdout().flush().unwrap();
         }
         if self.c_fc1.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
