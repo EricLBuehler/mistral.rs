@@ -662,52 +662,52 @@ pub trait BincountOp {
 }
 
 fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
-    let max_val = values.iter().max().copied().unwrap_or(0);
-    let result_len = (max_val + 1).max(minlength);
-    values.iter().fold(
-        // Start with a histogram vector of zeros.
-        vec![0u32; result_len as usize],
-        // For each value, update the histogram.
-        |mut histogram, &value| {
-            histogram[value as usize] += 1;
-            histogram
-        },
-    )
-
-    // use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-
-    // // Find the maximum value in `values` (or zero if empty)
-    // let max_val = values.par_iter().max().copied().unwrap_or(0);
-
-    // // The final size of the bin counts must be at least `minlength`
-    // // and large enough to include the largest value in `values`.
+    // let max_val = values.iter().max().copied().unwrap_or(0);
     // let result_len = (max_val + 1).max(minlength);
+    // values.iter().fold(
+    //     // Start with a histogram vector of zeros.
+    //     vec![0u32; result_len as usize],
+    //     // For each value, update the histogram.
+    //     |mut histogram, &value| {
+    //         histogram[value as usize] += 1;
+    //         histogram
+    //     },
+    // )
 
-    // // Each thread creates a local histogram (`fold`),
-    // // and then they are merged together (`reduce`).
-    // values
-    //     .par_iter()
-    //     .fold(
-    //         // Create a local histogram
-    //         || vec![0u32; result_len as usize],
-    //         // Update the local histogram
-    //         |mut local_counts, &val| {
-    //             local_counts[val as usize] += 1;
-    //             local_counts
-    //         },
-    //     )
-    //     // Merge histograms from all threads
-    //     .reduce(
-    //         // Identity (empty histogram)
-    //         || vec![0u32; result_len as usize],
-    //         // Combine two histograms
-    //         |mut global_counts, local_counts| {
-    //             for (g, l) in global_counts.iter_mut().zip(local_counts) {
-    //                 *g += l;
-    //             }
-    //             global_counts
-    //         },
-    //     )
+    use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
+    // Find the maximum value in `values` (or zero if empty)
+    let max_val = values.par_iter().max().copied().unwrap_or(0);
+
+    // The final size of the bin counts must be at least `minlength`
+    // and large enough to include the largest value in `values`.
+    let result_len = (max_val + 1).max(minlength);
+
+    // Each thread creates a local histogram (`fold`),
+    // and then they are merged together (`reduce`).
+    values
+        .par_iter()
+        .fold(
+            // Create a local histogram
+            || vec![0u32; result_len as usize],
+            // Update the local histogram
+            |mut local_counts, &val| {
+                local_counts[val as usize] += 1;
+                local_counts
+            },
+        )
+        // Merge histograms from all threads
+        .reduce(
+            // Identity (empty histogram)
+            || vec![0u32; result_len as usize],
+            // Combine two histograms
+            |mut global_counts, local_counts| {
+                for (g, l) in global_counts.iter_mut().zip(local_counts) {
+                    *g += l;
+                }
+                global_counts
+            },
+        )
 }
 
 impl BincountOp for Tensor {
