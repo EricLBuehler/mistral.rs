@@ -62,7 +62,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 pub struct NormalPipeline {
-    parallel_models: Vec<Box<dyn NormalModel + Send + Sync>>,
+    parallel_models: Vec<Arc<dyn NormalModel + Send + Sync>>,
     tokenizer: Arc<Tokenizer>,
     no_kv_cache: bool,
     chat_template: Arc<ChatTemplate>,
@@ -869,6 +869,11 @@ impl Loader for NormalLoader {
         let eos = calculate_eos_tokens(&chat_template, gen_conf, &tokenizer);
         let sliding_window = parallel_models[0].config().sliding_window;
         let model_metadata = Arc::new(parallel_models[0].config().clone());
+
+        let parallel_models = parallel_models
+            .into_iter()
+            .map(Arc::from)
+            .collect::<Vec<_>>();
         Ok(Arc::new(Mutex::new(NormalPipeline {
             parallel_models,
             tokenizer: tokenizer.into(),
@@ -936,7 +941,7 @@ impl IsqPipelineMixin for NormalPipeline {
         self.parallel_models
             .par_iter_mut()
             .map(|model| {
-                model.quantize(
+                Arc::get_mut(model).unwrap().quantize(
                     Some(dtype),
                     device.clone(),
                     self.topology.as_ref(),
@@ -1016,7 +1021,8 @@ impl AdapterActivationMixin for NormalPipeline {
             .parallel_models
             .par_iter_mut()
             .map(|model| {
-                model
+                Arc::get_mut(model)
+                    .unwrap()
                     .activate_adapters(adapter_names.clone())
                     .map_err(anyhow::Error::msg)
             })
@@ -1087,23 +1093,50 @@ impl Pipeline for NormalPipeline {
         let logits = objc::rc::autoreleasepool(|| -> candle_core::Result<Tensor> {
             match self.parallel_models[0].is_xlora() {
                 false => {
-                    let logits_vec = self
-                        .parallel_models
-                        .par_iter()
-                        .enumerate()
-                        .map(|(i, model)| {
-                            let paged_attn_meta = paged_attn_meta
-                                .as_ref()
-                                .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1.clone()));
+                    // No NCCL
+                    if self.parallel_models.len() == 1 {
+                        let paged_attn_meta = paged_attn_meta
+                            .as_ref()
+                            .map(|meta| (meta.0[0].get_kv_cache().clone(), meta.1.clone()));
+                        return self.parallel_models[0].forward(
+                            &input_ids,
+                            &seqlen_offsets,
+                            context_lens,
+                            position_ids,
+                            paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                            &flash_meta,
+                        );
+                    }
+
+                    let mut handles = Vec::new();
+                    for (rank, model) in self.parallel_models.iter().cloned().enumerate() {
+                        let paged_attn_meta = paged_attn_meta
+                            .as_ref()
+                            .map(|meta| (meta.0[rank].get_kv_cache().clone(), meta.1.clone()));
+                        let input_ids = input_ids.to_device(model.device())?;
+                        let seqlen_offsets = seqlen_offsets.clone();
+                        let context_lens = context_lens.clone();
+                        let position_ids = position_ids.clone();
+                        let flash_meta = flash_meta.to_device(model.device())?;
+
+                        handles.push(std::thread::spawn(move || {
                             model.forward(
-                                &input_ids.to_device(model.device())?,
+                                &input_ids,
                                 &seqlen_offsets,
-                                context_lens.clone(),
-                                position_ids.clone(),
+                                context_lens,
+                                position_ids,
                                 paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                                &flash_meta.to_device(model.device())?,
+                                &flash_meta,
                             )
-                        })
+                        }));
+                    }
+
+                    // Wait until all spawned threads are done
+                    while !handles.iter().all(|h| h.is_finished()) {}
+
+                    let logits_vec = handles
+                        .into_iter()
+                        .map(|handle| handle.join().unwrap())
                         .collect::<candle_core::Result<Vec<_>>>()?;
 
                     Ok(logits_vec[0].clone())
@@ -1125,11 +1158,33 @@ impl Pipeline for NormalPipeline {
         #[cfg(not(feature = "metal"))]
         let logits = match self.parallel_models[0].is_xlora() {
             false => {
-                let logits_vec = self
-                    .parallel_models
-                    .par_iter()
-                    .enumerate()
-                    .map(|(i, model)| {
+                // No NCCL
+                if self.parallel_models.len() == 1 {
+                    let paged_attn_meta = paged_attn_meta
+                        .as_ref()
+                        .map(|meta| (meta.0[0].get_kv_cache().clone(), meta.1.clone()));
+                    return self.parallel_models[0].forward(
+                        &input_ids,
+                        &seqlen_offsets,
+                        context_lens,
+                        position_ids,
+                        paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                        &flash_meta,
+                    );
+                }
+
+                let mut handles = Vec::new();
+                for (rank, model) in self.parallel_models.iter().cloned().enumerate() {
+                    let paged_attn_meta = paged_attn_meta
+                        .as_ref()
+                        .map(|meta| (meta.0[rank].get_kv_cache().clone(), meta.1.clone()));
+                    let input_ids = input_ids.to_device(model.device())?;
+                    let seqlen_offsets = seqlen_offsets.clone();
+                    let context_lens = context_lens.clone();
+                    let position_ids = position_ids.clone();
+                    let flash_meta = flash_meta.to_device(model.device())?;
+
+                    handles.push(std::thread::spawn(move || {
                         #[cfg(feature = "cuda")]
                         {
                             use candle_core::cuda::cudarc::driver::result;
@@ -1140,21 +1195,27 @@ impl Pipeline for NormalPipeline {
                             }
                             .unwrap();
                         }
-                        let paged_attn_meta = paged_attn_meta
-                            .as_ref()
-                            .map(|meta| (meta.0[i].get_kv_cache().clone(), meta.1.clone()));
+
                         model.forward(
-                            &input_ids.to_device(model.device())?,
+                            &input_ids,
                             &seqlen_offsets,
-                            context_lens.clone(),
-                            position_ids.clone(),
+                            context_lens,
+                            position_ids,
                             paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                            &flash_meta.to_device(model.device())?,
+                            &flash_meta,
                         )
-                    })
+                    }));
+                }
+
+                // Wait until all spawned threads are done
+                while !handles.iter().all(|h| h.is_finished()) {}
+
+                let logits_vec = handles
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap())
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
-                logits_vec[0].clone()
+                Ok(logits_vec[0].clone())
             }
             true => self.parallel_models[0].xlora_forward(
                 &input_ids,
@@ -1194,7 +1255,11 @@ impl AnyMoePipelineMixin for NormalPipeline {
     fn amoe_finish_training(&mut self, gate_model_id: Option<String>) -> candle_core::Result<()> {
         self.parallel_models
             .par_iter_mut()
-            .map(|model| model.finish_training(gate_model_id.clone()))
+            .map(|model| {
+                Arc::get_mut(model)
+                    .unwrap()
+                    .finish_training(gate_model_id.clone())
+            })
             .collect::<candle_core::Result<Vec<_>>>()?;
         Ok(())
     }
@@ -1213,7 +1278,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
     fn amoe_take_cached_gating_outputs(&mut self) -> Vec<Tensor> {
         self.parallel_models
             .par_iter_mut()
-            .flat_map(|model| model.take_cached_gating_outputs())
+            .flat_map(|model| Arc::get_mut(model).unwrap().take_cached_gating_outputs())
             .collect::<Vec<_>>()
     }
     fn amoe_create_layers(
@@ -1334,7 +1399,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
         self.parallel_models
             .iter_mut()
             .map(|model| {
-                model.create_anymoe_layers(
+                Arc::get_mut(model).unwrap().create_anymoe_layers(
                     vbs.clone(),
                     config.clone(),
                     (prefix.clone(), mlp.clone()),
