@@ -455,6 +455,69 @@ impl Mlp {
     }
 }
 
+struct Expert {
+    gate: Arc<dyn QuantMethod>,
+    up: Arc<dyn QuantMethod>,
+    down: Arc<dyn QuantMethod>,
+    act: Activation,
+}
+
+impl Expert {
+    fn new(
+        cfg: &DeepSeekV3Config,
+        vb: ShardedVarBuilder,
+        hidden_size: Option<usize>,
+        intermediate_size: Option<usize>,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
+        let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
+
+        Ok(Self {
+            gate: ReplicatedLayer::new(
+                hidden_size,
+                intermediate_size,
+                &cfg.quantization_config,
+                false,
+                comm,
+                vb.pp("gate_proj"),
+            )?,
+            up: ReplicatedLayer::new(
+                hidden_size,
+                intermediate_size,
+                &cfg.quantization_config,
+                false,
+                comm,
+                vb.pp("up_proj"),
+            )?,
+            down: ReplicatedLayer::new(
+                intermediate_size,
+                hidden_size,
+                &cfg.quantization_config,
+                false,
+                comm,
+                vb.pp("down_proj"),
+            )?,
+            act: cfg.hidden_act,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.gate.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let lhs = self.gate.forward(&xs)?.apply(&self.act)?;
+        let rhs = self.up.forward(&xs)?;
+        let mut res = self.down.forward(&(&lhs * &rhs)?)?;
+        if self.gate.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
+    }
+}
+
 struct MoeGate {
     weight: Tensor,
     cfg: DeepSeekV3Config,
@@ -587,7 +650,7 @@ impl MoeGate {
 }
 
 struct Moe {
-    experts: Vec<Option<Mlp>>,
+    experts: Vec<Option<Expert>>,
     shared_experts: Option<Mlp>,
     gate: MoeGate,
     all_reduce: SumAllReduce,
@@ -615,7 +678,7 @@ impl Moe {
         for i in 0..n_routed_experts {
             if i >= experts_start_idx && i < experts_end_idx {
                 let vb_e = vb.pp("experts").pp(i);
-                experts.push(Some(Mlp::new(
+                experts.push(Some(Expert::new(
                     cfg,
                     mapper.set_device(layer_idx, vb_e, loading_isq),
                     None,
@@ -659,8 +722,13 @@ impl Moe {
         let counts = topk_ids
             .flatten_all()?
             .bincount(self.experts.len() as u32)?;
-        for i in self.experts_start_idx..self.experts_end_idx {
-            if counts[i] == 0 {
+        for (i, count) in counts
+            .iter()
+            .enumerate()
+            .take(self.experts_end_idx)
+            .skip(self.experts_start_idx)
+        {
+            if *count == 0 {
                 continue;
             }
             let idx_top = topk_ids.eq(i as f64)?.nonzero()?.t()?;
