@@ -27,6 +27,7 @@ pub struct RowParallelLayer {
 }
 
 impl RowParallelLayer {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         in_dim: usize,
         out_dim: usize,
@@ -106,7 +107,7 @@ impl QuantMethod for RowParallelLayer {
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        let mut xs = self.weight.forward(&a)?;
+        let mut xs = self.weight.forward(a)?;
         xs = self.all_reduce.apply(&xs)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
@@ -193,6 +194,7 @@ pub struct ColumnParallelLayer {
 }
 
 impl ColumnParallelLayer {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         in_dim: usize,
         out_dim: usize,
@@ -230,14 +232,7 @@ impl ColumnParallelLayer {
                 }
                 QuantMethodType::Fp8 => {
                     // NOTE: no bias for fp8 as it might be parallelized
-                    blockwise_fp8_linear_b(
-                        in_dim,
-                        out_dim,
-                        quant_conf,
-                        false,
-                        shard.clone(),
-                        vb.clone(),
-                    )?
+                    blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, shard, vb.clone())?
                 }
                 QuantMethodType::Unreachable => unreachable!(),
             }
@@ -247,7 +242,7 @@ impl ColumnParallelLayer {
                 let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
                 Arc::new(layer) as Arc<dyn QuantMethod>
             } else {
-                let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard.clone())?;
+                let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
 
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
@@ -275,7 +270,7 @@ impl QuantMethod for ColumnParallelLayer {
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        let mut xs = self.weight.forward(&a)?;
+        let mut xs = self.weight.forward(a)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
         }
@@ -361,6 +356,7 @@ impl ReplicatedLayer {
         )?))
     }
 
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         in_dim: usize,
         out_dim: usize,

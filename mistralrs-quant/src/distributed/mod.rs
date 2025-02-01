@@ -150,6 +150,12 @@ mod ops {
     #[derive(Debug, Clone, Copy)]
     pub struct Id;
 
+    impl Default for Id {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl Id {
         pub fn new() -> Self {
             Self

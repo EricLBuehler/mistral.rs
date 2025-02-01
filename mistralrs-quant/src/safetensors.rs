@@ -324,7 +324,7 @@ impl Default for Shard {
 /// `get_sharded("tensor", 0, 0, 2)` means `tensor.i((..512))`
 /// `get_sharded("tensor", 0, 1, 2)` means `tensor.i((512..))`
 /// `get_sharded("tensor", 1, 0, 2)` means `tensor.i((.., ..512))`
-impl<'a> Backend for ShardedSafeTensors<'a> {
+impl Backend for ShardedSafeTensors<'_> {
     type Hints = Shard;
 
     fn get(

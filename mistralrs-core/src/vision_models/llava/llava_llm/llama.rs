@@ -105,7 +105,7 @@ impl CausalSelfAttention {
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
                     // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    let mut input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
                     // Sanity check.
                     assert!(attention_mask.is_some());
                     paged_attn.forward(
@@ -115,7 +115,7 @@ impl CausalSelfAttention {
                         attention_mask.clone().as_ref(),
                         None,
                         None,
-                        &mut input_metadata,
+                        &input_metadata,
                         &self.sdpa_params,
                         Some(flash_params),
                     )?

@@ -482,7 +482,7 @@ impl Loader for NormalLoader {
                     }
                     mistralrs_quant::Comm::from_device(
                         id,
-                        &device,
+                        device,
                         rank,
                         world_size,
                         barrier.clone(),
