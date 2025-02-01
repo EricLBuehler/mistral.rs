@@ -44,7 +44,8 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
+    IntoParallelRefMutIterator, ParallelIterator,
 };
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -505,85 +506,83 @@ impl Loader for NormalLoader {
 
             let sharded_vb = unsafe {
                 ShardedSafeTensors::sharded(
-                    &paths.get_weight_filenames().to_vec(),
+                    &paths.get_weight_filenames(),
                     dtype,
                     &load_device,
                     make_dummy_regexes,
                 )?
             };
 
-            let mut parallel_models = Vec::new();
-            for (comm, device) in comms
-                .into_iter()
+            comms
+                .into_par_iter()
                 .map(Arc::new)
                 .zip(available_devices.clone())
-            {
-                info!("Loading rank {}/{world_size}", comm.rank() + 1);
-                // Redefine mapper
-                let mapper = DeviceMapSetting::dummy().into_mapper(
-                    self.inner.get_total_device_mapping_num_layers(&config)?,
-                    &device,
-                    None,
-                )?;
+                .map(|(comm, device)| {
+                    info!("Loading rank {}/{world_size}", comm.rank() + 1);
+                    // Redefine mapper
+                    let mapper = DeviceMapSetting::dummy().into_mapper(
+                        self.inner.get_total_device_mapping_num_layers(&config)?,
+                        &device,
+                        None,
+                    )?;
 
-                let sharded_vb = if !loading_isq {
-                    sharded_vb.clone().set_device(device.clone())
-                } else {
-                    sharded_vb.clone()
-                };
+                    let sharded_vb = if !loading_isq {
+                        sharded_vb.clone().set_device(device.clone())
+                    } else {
+                        sharded_vb.clone()
+                    };
 
-                // Special case for normal models which support nccl so should be more optimially loaded.
-                let model = match self.kind {
-                    ModelKind::Normal => normal_model_loader_sharded!(
-                        sharded_vb,
-                        config,
-                        self.inner,
-                        self.config.use_flash_attn,
-                        mapper,
-                        loading_isq,
-                        device,
-                        attention_mechanism,
-                        comm
-                    ),
-                    ModelKind::Adapter {
-                        adapter: AdapterKind::XLora,
-                    } => xlora_model_loader!(
-                        paths,
-                        Some(dtype),
-                        &load_device,
-                        layer_devices.clone(),
-                        config,
-                        self.inner,
-                        self.config.use_flash_attn,
-                        silent,
-                        mapper,
-                        loading_isq,
-                        device,
-                        comm
-                    ),
-                    ModelKind::Adapter {
-                        adapter: AdapterKind::Lora,
-                    } => lora_model_loader!(
-                        paths,
-                        dtype,
-                        &load_device,
-                        layer_devices.clone(),
-                        config,
-                        self.inner,
-                        self.config.use_flash_attn,
-                        silent,
-                        mapper,
-                        loading_isq,
-                        device,
-                        comm
-                    ),
-                    _ => unreachable!(),
-                };
+                    // Special case for normal models which support nccl so should be more optimially loaded.
+                    let model = match self.kind {
+                        ModelKind::Normal => normal_model_loader_sharded!(
+                            sharded_vb,
+                            config,
+                            self.inner,
+                            self.config.use_flash_attn,
+                            mapper,
+                            loading_isq,
+                            device,
+                            attention_mechanism,
+                            comm
+                        ),
+                        ModelKind::Adapter {
+                            adapter: AdapterKind::XLora,
+                        } => xlora_model_loader!(
+                            paths,
+                            Some(dtype),
+                            &load_device,
+                            layer_devices.clone(),
+                            config,
+                            self.inner,
+                            self.config.use_flash_attn,
+                            silent,
+                            mapper,
+                            loading_isq,
+                            device,
+                            comm
+                        ),
+                        ModelKind::Adapter {
+                            adapter: AdapterKind::Lora,
+                        } => lora_model_loader!(
+                            paths,
+                            dtype,
+                            &load_device,
+                            layer_devices.clone(),
+                            config,
+                            self.inner,
+                            self.config.use_flash_attn,
+                            silent,
+                            mapper,
+                            loading_isq,
+                            device,
+                            comm
+                        ),
+                        _ => unreachable!(),
+                    };
 
-                parallel_models.push(model);
-            }
-
-            parallel_models
+                    Ok(model)
+                })
+                .collect::<Result<Vec<_>>>()?
         } else {
             // Dummy comm
             let id = mistralrs_quant::Id::new();
