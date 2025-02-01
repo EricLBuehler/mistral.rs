@@ -200,3 +200,4 @@ mod ops {
 }
 
 pub use ops::{AllReduce, Comm, Id};
+pub mod layers;

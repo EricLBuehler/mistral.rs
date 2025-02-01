@@ -27,7 +27,6 @@ mod gguf;
 mod gptq;
 mod hqq;
 mod imatrix;
-mod layers;
 pub mod safetensors;
 mod unquantized;
 mod utils;
@@ -36,7 +35,10 @@ use gptq::gptq_linear;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
-pub use distributed::{Comm, Id};
+pub use distributed::{
+    layers::{ColumnParallelLayer, ReplicatedLayer, RowParallelLayer},
+    Comm, Id,
+};
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;
@@ -45,8 +47,6 @@ pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::ImatrixLayerStats;
 pub use unquantized::UnquantLinear;
 pub use utils::UQFF_QUANT_TYPE_OFFSET;
-
-pub use layers::{ColumnParallelLayer, ReplicatedLayer, RowParallelLayer};
 
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Serialize};
