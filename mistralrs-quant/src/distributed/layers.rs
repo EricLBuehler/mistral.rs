@@ -23,7 +23,7 @@ fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
 pub struct RowParallelLayer {
     weight: Arc<dyn QuantMethod>,
     bias: Option<Tensor>,
-    all_reduce: distributed::AllReduce,
+    all_reduce: distributed::SumAllReduce,
 }
 
 impl RowParallelLayer {
@@ -93,7 +93,7 @@ impl RowParallelLayer {
         Ok(Arc::new(Self {
             weight,
             bias,
-            all_reduce: distributed::AllReduce::new(comm),
+            all_reduce: distributed::SumAllReduce::new(comm),
         }))
     }
 }

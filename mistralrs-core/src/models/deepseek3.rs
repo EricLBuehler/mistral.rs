@@ -2,11 +2,11 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    ShardedVarBuilder, SumAllReduce,
 };
 use serde::Deserialize;
 
@@ -587,9 +587,13 @@ impl MoeGate {
 }
 
 struct Moe {
-    experts: Vec<Mlp>,
+    experts: Vec<Option<Mlp>>,
     shared_experts: Option<Mlp>,
     gate: MoeGate,
+    all_reduce: SumAllReduce,
+    experts_start_idx: usize,
+    experts_end_idx: usize,
+    world_size: usize,
 }
 
 impl Moe {
@@ -605,15 +609,22 @@ impl Moe {
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let mut experts = Vec::with_capacity(n_routed_experts);
+        let n_local_experts = n_routed_experts / comm.world_size();
+        let experts_start_idx = comm.rank() * n_local_experts;
+        let experts_end_idx = experts_start_idx + n_local_experts;
         for i in 0..n_routed_experts {
-            let vb_e = vb.pp("experts").pp(i);
-            experts.push(Mlp::new(
-                cfg,
-                mapper.set_device(layer_idx, vb_e, loading_isq),
-                None,
-                Some(cfg.moe_intermediate_size),
-                comm,
-            )?);
+            if i >= experts_start_idx && i < experts_end_idx {
+                let vb_e = vb.pp("experts").pp(i);
+                experts.push(Some(Mlp::new(
+                    cfg,
+                    mapper.set_device(layer_idx, vb_e, loading_isq),
+                    None,
+                    Some(cfg.moe_intermediate_size),
+                    comm,
+                )?));
+            } else {
+                experts.push(None);
+            }
         }
         let shared_experts = if let Some(n_shared_experts) = n_shared_experts {
             let intermediate_size = cfg.moe_intermediate_size * n_shared_experts;
@@ -636,6 +647,10 @@ impl Moe {
             experts,
             shared_experts,
             gate,
+            all_reduce: SumAllReduce::new(comm),
+            experts_end_idx,
+            experts_start_idx,
+            world_size: comm.world_size(),
         })
     }
 
@@ -644,13 +659,17 @@ impl Moe {
         let counts = topk_ids
             .flatten_all()?
             .bincount(self.experts.len() as u32)?;
-        for (i, expert) in self.experts.iter().enumerate() {
+        for i in self.experts_start_idx..self.experts_end_idx {
             if counts[i] == 0 {
                 continue;
             }
             let idx_top = topk_ids.eq(i as f64)?.nonzero()?.t()?;
             let idx = &idx_top.i(0)?.contiguous()?;
             let top = &idx_top.i(1)?.contiguous()?;
+
+            let expert = self.experts[i]
+                .as_ref()
+                .context("Expert is not present for this rank.")?;
 
             y = y.index_add(
                 idx,
@@ -664,6 +683,10 @@ impl Moe {
                 )?,
                 0,
             )?;
+        }
+
+        if self.world_size > 1 {
+            y = self.all_reduce.apply(&y)?;
         }
 
         Ok(y)
@@ -1017,7 +1040,7 @@ impl IsqModel for DeepSeekV3 {
                     tensors.push((&mut mlp.down, Some(i)));
                 }
                 MoeOrMlp::Moe(moe) => {
-                    for mlp in &mut moe.experts {
+                    for mlp in moe.experts.iter_mut().filter_map(|e| e.as_mut()) {
                         tensors.push((&mut mlp.gate, Some(i)));
                         tensors.push((&mut mlp.up, Some(i)));
                         tensors.push((&mut mlp.down, Some(i)));
@@ -1049,7 +1072,7 @@ impl IsqModel for DeepSeekV3 {
                     tensors.push((&mut mlp.down, Some(i)));
                 }
                 MoeOrMlp::Moe(moe) => {
-                    for mlp in &mut moe.experts {
+                    for mlp in moe.experts.iter_mut().filter_map(|e| e.as_mut()) {
                         tensors.push((&mut mlp.gate, Some(i)));
                         tensors.push((&mut mlp.up, Some(i)));
                         tensors.push((&mut mlp.down, Some(i)));

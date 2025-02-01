@@ -58,11 +58,11 @@ mod ops {
     }
 
     #[derive(Clone, Debug)]
-    pub struct AllReduce {
+    pub struct SumAllReduce {
         comm: Arc<Comm>,
     }
 
-    impl AllReduce {
+    impl SumAllReduce {
         pub fn new(comm: &Arc<Comm>) -> Self {
             Self { comm: comm.clone() }
         }
@@ -75,13 +75,13 @@ mod ops {
         }
     }
 
-    impl CustomOp1 for AllReduce {
+    impl CustomOp1 for SumAllReduce {
         fn name(&self) -> &'static str {
-            "allreduce"
+            "SumAllReduce"
         }
 
         fn cpu_fwd(&self, _s: &CpuStorage, _l: &Layout) -> Result<(CpuStorage, Shape)> {
-            candle_core::bail!("AllReduce is never used on cpu")
+            candle_core::bail!("SumAllReduce is never used on cpu")
         }
 
         fn cuda_fwd(
@@ -186,9 +186,9 @@ mod ops {
     }
 
     #[derive(Clone, Debug)]
-    pub struct AllReduce;
+    pub struct SumAllReduce;
 
-    impl AllReduce {
+    impl SumAllReduce {
         pub fn new(_comm: &Arc<Comm>) -> Self {
             Self
         }
@@ -199,5 +199,5 @@ mod ops {
     }
 }
 
-pub use ops::{AllReduce, Comm, Id};
+pub use ops::{Comm, Id, SumAllReduce};
 pub mod layers;
