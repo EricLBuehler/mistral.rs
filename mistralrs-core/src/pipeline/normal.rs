@@ -693,12 +693,12 @@ impl Loader for NormalLoader {
                     .par_iter()
                     .map(|model| {
                         model.forward(
-                            &inputs.input,
+                            &inputs.input.to_device(model.device())?,
                             &inputs.positions,
                             inputs.context_lens.clone(),
                             inputs.position_ids.clone(),
                             None,
-                            &inputs.flash_meta,
+                            &inputs.flash_meta.to_device(model.device())?,
                         )
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
@@ -768,7 +768,7 @@ impl Loader for NormalLoader {
         } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
             let world_size = parallel_models.len();
             for (rank, model) in parallel_models.iter_mut().enumerate() {
-                info!("Applying ISQ to rank {}/{world_size}", rank + 1);
+                info!("Loading UFF for rank {}/{world_size}", rank + 1);
 
                 model.load_from_artifacts(
                     device.clone(),
