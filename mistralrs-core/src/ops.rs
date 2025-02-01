@@ -2,7 +2,6 @@ use candle_core::{
     backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
     Result, Shape, Tensor, WithDType, D,
 };
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use std::{
     fmt::Display,
@@ -674,6 +673,8 @@ fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
             histogram
         },
     )
+
+    // use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
     // // Find the maximum value in `values` (or zero if empty)
     // let max_val = values.par_iter().max().copied().unwrap_or(0);
