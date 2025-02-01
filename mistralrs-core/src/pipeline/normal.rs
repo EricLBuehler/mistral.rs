@@ -1098,48 +1098,49 @@ impl Pipeline for NormalPipeline {
                         let paged_attn_meta = paged_attn_meta
                             .as_ref()
                             .map(|meta| (meta.0[0].get_kv_cache().clone(), meta.1.clone()));
-                        return self.parallel_models[0].forward(
+
+                        self.parallel_models[0].forward(
                             &input_ids,
                             &seqlen_offsets,
                             context_lens,
                             position_ids,
                             paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
                             &flash_meta,
-                        );
+                        )
+                    } else {
+                        let mut handles = Vec::new();
+                        for (rank, model) in self.parallel_models.iter().cloned().enumerate() {
+                            let paged_attn_meta = paged_attn_meta
+                                .as_ref()
+                                .map(|meta| (meta.0[rank].get_kv_cache().clone(), meta.1.clone()));
+                            let input_ids = input_ids.to_device(model.device())?;
+                            let seqlen_offsets = seqlen_offsets.clone();
+                            let context_lens = context_lens.clone();
+                            let position_ids = position_ids.clone();
+                            let flash_meta = flash_meta.to_device(model.device())?;
+
+                            handles.push(std::thread::spawn(move || {
+                                model.forward(
+                                    &input_ids,
+                                    &seqlen_offsets,
+                                    context_lens,
+                                    position_ids,
+                                    paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                                    &flash_meta,
+                                )
+                            }));
+                        }
+
+                        // Wait until all spawned threads are done
+                        while !handles.iter().all(|h| h.is_finished()) {}
+
+                        let logits_vec = handles
+                            .into_iter()
+                            .map(|handle| handle.join().unwrap())
+                            .collect::<candle_core::Result<Vec<_>>>()?;
+
+                        Ok(logits_vec[0].clone())
                     }
-
-                    let mut handles = Vec::new();
-                    for (rank, model) in self.parallel_models.iter().cloned().enumerate() {
-                        let paged_attn_meta = paged_attn_meta
-                            .as_ref()
-                            .map(|meta| (meta.0[rank].get_kv_cache().clone(), meta.1.clone()));
-                        let input_ids = input_ids.to_device(model.device())?;
-                        let seqlen_offsets = seqlen_offsets.clone();
-                        let context_lens = context_lens.clone();
-                        let position_ids = position_ids.clone();
-                        let flash_meta = flash_meta.to_device(model.device())?;
-
-                        handles.push(std::thread::spawn(move || {
-                            model.forward(
-                                &input_ids,
-                                &seqlen_offsets,
-                                context_lens,
-                                position_ids,
-                                paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                                &flash_meta,
-                            )
-                        }));
-                    }
-
-                    // Wait until all spawned threads are done
-                    while !handles.iter().all(|h| h.is_finished()) {}
-
-                    let logits_vec = handles
-                        .into_iter()
-                        .map(|handle| handle.join().unwrap())
-                        .collect::<candle_core::Result<Vec<_>>>()?;
-
-                    Ok(logits_vec[0].clone())
                 }
                 true => self.parallel_models[0].xlora_forward(
                     &input_ids,
@@ -1163,59 +1164,59 @@ impl Pipeline for NormalPipeline {
                     let paged_attn_meta = paged_attn_meta
                         .as_ref()
                         .map(|meta| (meta.0[0].get_kv_cache().clone(), meta.1.clone()));
-                    return self.parallel_models[0].forward(
+                    self.parallel_models[0].forward(
                         &input_ids,
                         &seqlen_offsets,
                         context_lens,
                         position_ids,
                         paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
                         &flash_meta,
-                    );
-                }
+                    )
+                } else {
+                    let mut handles = Vec::new();
+                    for (rank, model) in self.parallel_models.iter().cloned().enumerate() {
+                        let paged_attn_meta = paged_attn_meta
+                            .as_ref()
+                            .map(|meta| (meta.0[rank].get_kv_cache().clone(), meta.1.clone()));
+                        let input_ids = input_ids.to_device(model.device())?;
+                        let seqlen_offsets = seqlen_offsets.clone();
+                        let context_lens = context_lens.clone();
+                        let position_ids = position_ids.clone();
+                        let flash_meta = flash_meta.to_device(model.device())?;
 
-                let mut handles = Vec::new();
-                for (rank, model) in self.parallel_models.iter().cloned().enumerate() {
-                    let paged_attn_meta = paged_attn_meta
-                        .as_ref()
-                        .map(|meta| (meta.0[rank].get_kv_cache().clone(), meta.1.clone()));
-                    let input_ids = input_ids.to_device(model.device())?;
-                    let seqlen_offsets = seqlen_offsets.clone();
-                    let context_lens = context_lens.clone();
-                    let position_ids = position_ids.clone();
-                    let flash_meta = flash_meta.to_device(model.device())?;
-
-                    handles.push(std::thread::spawn(move || {
-                        #[cfg(feature = "cuda")]
-                        {
-                            use candle_core::cuda::cudarc::driver::result;
-                            unsafe {
-                                result::ctx::set_current(
-                                    *model.device().as_cuda_device()?.cu_primary_ctx(),
-                                )
+                        handles.push(std::thread::spawn(move || {
+                            #[cfg(feature = "cuda")]
+                            {
+                                use candle_core::cuda::cudarc::driver::result;
+                                unsafe {
+                                    result::ctx::set_current(
+                                        *model.device().as_cuda_device()?.cu_primary_ctx(),
+                                    )
+                                }
+                                .unwrap();
                             }
-                            .unwrap();
-                        }
 
-                        model.forward(
-                            &input_ids,
-                            &seqlen_offsets,
-                            context_lens,
-                            position_ids,
-                            paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                            &flash_meta,
-                        )
-                    }));
+                            model.forward(
+                                &input_ids,
+                                &seqlen_offsets,
+                                context_lens,
+                                position_ids,
+                                paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                                &flash_meta,
+                            )
+                        }));
+                    }
+
+                    // Wait until all spawned threads are done
+                    while !handles.iter().all(|h| h.is_finished()) {}
+
+                    let logits_vec = handles
+                        .into_iter()
+                        .map(|handle| handle.join().unwrap())
+                        .collect::<candle_core::Result<Vec<_>>>()?;
+
+                    logits_vec[0].clone()
                 }
-
-                // Wait until all spawned threads are done
-                while !handles.iter().all(|h| h.is_finished()) {}
-
-                let logits_vec = handles
-                    .into_iter()
-                    .map(|handle| handle.join().unwrap())
-                    .collect::<candle_core::Result<Vec<_>>>()?;
-
-                Ok(logits_vec[0].clone())
             }
             true => self.parallel_models[0].xlora_forward(
                 &input_ids,
