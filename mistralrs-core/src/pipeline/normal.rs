@@ -35,13 +35,13 @@ use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors}
 use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapSetting, PagedAttentionConfig, Pipeline,
-    Topology, TryIntoDType,
+    normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
+use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
@@ -490,6 +490,28 @@ impl Loader for NormalLoader {
                 })
                 .collect::<candle_core::Result<Vec<_>>>()?;
 
+            let make_dummy_regexes = if loading_isq && self.config.from_uqff.is_some() {
+                // Dummy weights for the layers which will be overwritten...
+                Some(std::sync::Arc::new(
+                    if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
+                        self.inner.isq_layer_regexes_moqe(&config)?
+                    } else {
+                        self.inner.isq_layer_regexes(&config)?
+                    },
+                ))
+            } else {
+                None
+            };
+
+            let sharded_vb = unsafe {
+                ShardedSafeTensors::sharded(
+                    &paths.get_weight_filenames().to_vec(),
+                    dtype,
+                    &load_device,
+                    make_dummy_regexes,
+                )?
+            };
+
             let mut parallel_models = Vec::new();
             for (comm, device) in comms
                 .into_iter()
@@ -504,22 +526,23 @@ impl Loader for NormalLoader {
                     None,
                 )?;
 
+                let sharded_vb = if !loading_isq {
+                    sharded_vb.clone().set_device(device.clone())
+                } else {
+                    sharded_vb.clone()
+                };
+
+                // Special case for normal models which support nccl so should be more optimially loaded.
                 let model = match self.kind {
-                    ModelKind::Normal => normal_model_loader!(
-                        paths,
-                        Some(dtype),
-                        &load_device,
-                        layer_devices.clone(),
+                    ModelKind::Normal => normal_model_loader_sharded!(
+                        sharded_vb,
                         config,
                         self.inner,
                         self.config.use_flash_attn,
-                        silent,
                         mapper,
                         loading_isq,
-                        self.config.from_uqff.is_some(),
                         device,
                         attention_mechanism,
-                        matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                         comm
                     ),
                     ModelKind::Adapter {
