@@ -865,8 +865,8 @@ impl DeepSeekV2 {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: cfg.num_attention_heads,
-                num_attn_heads: cfg.num_attention_heads,
+                num_kv_heads: (cfg.num_attention_heads / comm.world_size()).max(1),
+                num_attn_heads: (cfg.num_attention_heads / comm.world_size()).max(1),
                 sliding_window: None,
                 k_head_dim: cfg.q_head_dim(),
                 v_head_dim: if matches!(
