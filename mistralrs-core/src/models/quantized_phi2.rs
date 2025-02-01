@@ -6,6 +6,7 @@ use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm};
+use indicatif::MultiProgress;
 use mistralrs_quant::GgufMatMul;
 use mistralrs_quant::QuantMethod;
 use mistralrs_quant::QuantMethodConfig;
@@ -256,7 +257,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
         let mut layers = Vec::with_capacity(block_count);
         let head_dim = embedding_length / head_count;
 
-        for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
+        for layer_idx in NiceProgressBar::<_, 'b'>(
+            0..block_count,
+            "Loading repeating layers",
+            &MultiProgress::new(),
+        ) {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
 

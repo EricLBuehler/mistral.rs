@@ -466,9 +466,11 @@ impl Model {
             );
         }
 
-        for layer_idx in
-            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
-        {
+        for layer_idx in NiceProgressBar::<_, 'b'>(
+            0..cfg.num_hidden_layers,
+            "Loading repeating layers",
+            &normal_loading_metadata.multi_progress,
+        ) {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);

@@ -23,6 +23,7 @@ use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
+use indicatif::MultiProgress;
 use mistralrs_quant::ShardedVarBuilder;
 use tqdm::Iter;
 use tracing::info;
@@ -263,7 +264,11 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         let mut layers = Vec::with_capacity(block_count);
 
         let mut count = 0;
-        for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
+        for layer_idx in NiceProgressBar::<_, 'b'>(
+            0..block_count,
+            "Loading repeating layers",
+            &MultiProgress::new(),
+        ) {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let ffn_up = ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?;

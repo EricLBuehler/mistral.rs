@@ -513,37 +513,40 @@ impl Llama {
                 )?),
             );
         }
-        let blocks: Vec<_> =
-            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
-                .into_iter()
-                .map(|i| {
-                    let device = mapper
-                        .device_for(i, false)
-                        .unwrap_or(&normal_loading_metadata.real_device);
-                    let rotary_emb = ropes
-                        .get(&device.location())
-                        .expect("No RoPE for device location!")
-                        .clone();
-                    let paged_attn = match &attention_mechanism {
-                        AttentionImplementation::Eager => None,
-                        AttentionImplementation::PagedAttention => Some(
-                            PagedAttention::new(head_dim, device, None)
-                                .expect("Failed to create PagedAttention"),
-                        ),
-                    };
-                    Block::load(
-                        vb_m.pp(format!("layers.{i}")),
-                        cfg,
-                        &*mapper,
-                        i,
-                        normal_loading_metadata.loading_isq,
-                        rotary_emb,
-                        paged_attn,
-                        &comm,
-                    )
-                    .expect("Failed to load block.")
-                })
-                .collect();
+        let blocks: Vec<_> = NiceProgressBar::<_, 'b'>(
+            0..cfg.num_hidden_layers,
+            "Loading repeating layers",
+            &normal_loading_metadata.multi_progress,
+        )
+        .into_iter()
+        .map(|i| {
+            let device = mapper
+                .device_for(i, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => Some(
+                    PagedAttention::new(head_dim, device, None)
+                        .expect("Failed to create PagedAttention"),
+                ),
+            };
+            Block::load(
+                vb_m.pp(format!("layers.{i}")),
+                cfg,
+                &*mapper,
+                i,
+                normal_loading_metadata.loading_isq,
+                rotary_emb,
+                paged_attn,
+                &comm,
+            )
+            .expect("Failed to load block.")
+        })
+        .collect();
 
         Ok(Self {
             wte,

@@ -23,6 +23,7 @@ use crate::{
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
+use indicatif::MultiProgress;
 use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
@@ -84,6 +85,8 @@ pub struct NormalLoadingMetadata {
     pub loading_isq: bool,
     // Device mapping target device (the one that is not the cpu)
     pub real_device: Device,
+    // MultiProgress support for parallelized loading
+    pub multi_progress: Arc<MultiProgress>,
 }
 
 pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {

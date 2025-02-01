@@ -41,6 +41,7 @@ use crate::{
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
@@ -457,6 +458,8 @@ impl Loader for NormalLoader {
             AttentionImplementation::Eager
         };
 
+        let multi_progress = Arc::new(MultiProgress::new());
+
         let mut parallel_models = if use_nccl {
             // NCCL case
             let id = mistralrs_quant::Id::new();
@@ -543,7 +546,8 @@ impl Loader for NormalLoader {
                             loading_isq,
                             device,
                             attention_mechanism,
-                            comm
+                            comm,
+                            multi_progress.clone(),
                         ),
                         ModelKind::Adapter {
                             adapter: AdapterKind::XLora,
@@ -559,7 +563,8 @@ impl Loader for NormalLoader {
                             mapper,
                             loading_isq,
                             device,
-                            comm
+                            comm,
+                            multi_progress.clone(),
                         ),
                         ModelKind::Adapter {
                             adapter: AdapterKind::Lora,
@@ -575,7 +580,8 @@ impl Loader for NormalLoader {
                             mapper,
                             loading_isq,
                             device,
-                            comm
+                            comm,
+                            multi_progress.clone(),
                         ),
                         _ => unreachable!(),
                     };
@@ -610,7 +616,8 @@ impl Loader for NormalLoader {
                     device.clone(),
                     attention_mechanism,
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
-                    comm
+                    comm,
+                    multi_progress.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::XLora,
@@ -626,7 +633,8 @@ impl Loader for NormalLoader {
                     mapper,
                     loading_isq,
                     device.clone(),
-                    comm
+                    comm,
+                    multi_progress.clone(),
                 ),
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
@@ -642,7 +650,8 @@ impl Loader for NormalLoader {
                     mapper,
                     loading_isq,
                     device.clone(),
-                    comm
+                    comm,
+                    multi_progress.clone(),
                 ),
                 _ => unreachable!(),
             };

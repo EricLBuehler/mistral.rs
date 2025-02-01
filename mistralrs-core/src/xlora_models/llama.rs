@@ -620,32 +620,35 @@ impl XLoraLlama {
                 )?),
             );
         }
-        let mut blocks: Vec<_> =
-            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
-                .into_iter()
-                .map(|i| {
-                    let device = mapper
-                        .device_for(i, false)
-                        .unwrap_or(&normal_loading_metadata.real_device);
-                    let rotary_emb = ropes
-                        .get(&device.location())
-                        .expect("No RoPE for device location!")
-                        .clone();
-                    Block::load(
-                        vb.pp(format!("model.layers.{i}")),
-                        cfg,
-                        lora_config,
-                        &mut count,
-                        &xlora_ordering,
-                        &*mapper,
-                        i,
-                        normal_loading_metadata.loading_isq,
-                        rotary_emb,
-                        preload_adapters,
-                    )
-                    .expect("Failed to load block.")
-                })
-                .collect();
+        let mut blocks: Vec<_> = NiceProgressBar::<_, 'b'>(
+            0..cfg.num_hidden_layers,
+            "Loading repeating layers",
+            &normal_loading_metadata.multi_progress,
+        )
+        .into_iter()
+        .map(|i| {
+            let device = mapper
+                .device_for(i, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
+            Block::load(
+                vb.pp(format!("model.layers.{i}")),
+                cfg,
+                lora_config,
+                &mut count,
+                &xlora_ordering,
+                &*mapper,
+                i,
+                normal_loading_metadata.loading_isq,
+                rotary_emb,
+                preload_adapters,
+            )
+            .expect("Failed to load block.")
+        })
+        .collect();
         if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");

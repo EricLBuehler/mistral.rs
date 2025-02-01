@@ -34,6 +34,7 @@ use crate::{
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
@@ -365,6 +366,7 @@ impl Loader for VisionLoader {
             Arc::new(Barrier::new(1)),
         )?);
 
+        let multi_progress = Arc::new(MultiProgress::new());
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
@@ -380,7 +382,8 @@ impl Loader for VisionLoader {
                 self.config.from_uqff.is_some(),
                 device.clone(),
                 attention_mechanism,
-                comm
+                comm,
+                multi_progress,
             ),
             _ => unreachable!(),
         };

@@ -453,42 +453,45 @@ impl Llama {
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
-        let blocks: Vec<_> =
-            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
-                .into_iter()
-                .map(|i| {
-                    let vb_m = vb.pp(format!("model.layers.{i}"));
-                    let device = mapper
-                        .device_for(i, false)
-                        .unwrap_or(&normal_loading_metadata.real_device);
-                    let rope_parameters = OrdinaryRoPE::create_parameters(
-                        head_dim,
-                        cfg.max_position_embeddings,
-                        cfg.rope_theta,
-                        vb_m.dtype(),
-                        device,
-                    )
-                    .unwrap();
-                    let paged_attn = match &attention_mechanism {
-                        AttentionImplementation::Eager => None,
-                        AttentionImplementation::PagedAttention => Some(
-                            PagedAttention::new(head_dim, device, None)
-                                .expect("Failed to create PagedAttention"),
-                        ),
-                    };
-                    Block::load(
-                        vb_m,
-                        cfg,
-                        &*mapper,
-                        i,
-                        normal_loading_metadata.loading_isq,
-                        paged_attn,
-                        rope_parameters,
-                        &comm,
-                    )
-                    .expect("Failed to load block.")
-                })
-                .collect();
+        let blocks: Vec<_> = NiceProgressBar::<_, 'b'>(
+            0..cfg.num_hidden_layers,
+            "Loading repeating layers",
+            &normal_loading_metadata.multi_progress,
+        )
+        .into_iter()
+        .map(|i| {
+            let vb_m = vb.pp(format!("model.layers.{i}"));
+            let device = mapper
+                .device_for(i, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rope_parameters = OrdinaryRoPE::create_parameters(
+                head_dim,
+                cfg.max_position_embeddings,
+                cfg.rope_theta,
+                vb_m.dtype(),
+                device,
+            )
+            .unwrap();
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => Some(
+                    PagedAttention::new(head_dim, device, None)
+                        .expect("Failed to create PagedAttention"),
+                ),
+            };
+            Block::load(
+                vb_m,
+                cfg,
+                &*mapper,
+                i,
+                normal_loading_metadata.loading_isq,
+                paged_attn,
+                rope_parameters,
+                &comm,
+            )
+            .expect("Failed to load block.")
+        })
+        .collect();
 
         Ok(Self {
             wte,
