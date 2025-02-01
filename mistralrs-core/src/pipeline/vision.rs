@@ -522,6 +522,7 @@ impl Loader for VisionLoader {
                     processor_filename: paths.get_processor_config(),
                     preprocessor_filename: paths.get_preprocessor_config(),
                 },
+                Arc::new(MultiProgress::new()),
             )?;
         } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
             model.load_from_artifacts(
@@ -639,6 +640,7 @@ impl IsqPipelineMixin for VisionPipeline {
                     processor_filename: &self.processor_filename,
                     preprocessor_filename: &self.preprocessor_filename,
                 },
+                Arc::new(MultiProgress::new()),
             )
             .map_err(anyhow::Error::msg)
     }

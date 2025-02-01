@@ -28,7 +28,7 @@ pub struct NiceProgressBar<'a, T: ExactSizeIterator, const COLOR: char = 'b'>(
     pub &'a MultiProgress,
 );
 
-impl<'a, T: ExactSizeIterator, const COLOR: char> IntoIterator for NiceProgressBar<'a, T, COLOR> {
+impl<T: ExactSizeIterator, const COLOR: char> IntoIterator for NiceProgressBar<'_, T, COLOR> {
     type IntoIter = ProgressBarIter<T>;
     type Item = T::Item;
 

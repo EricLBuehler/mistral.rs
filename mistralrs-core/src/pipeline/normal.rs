@@ -509,19 +509,19 @@ impl Loader for NormalLoader {
 
             let sharded_vb = unsafe {
                 ShardedSafeTensors::sharded(
-                    &paths.get_weight_filenames(),
+                    paths.get_weight_filenames(),
                     dtype,
                     &load_device,
                     make_dummy_regexes,
                 )?
             };
 
+            info!("Loading all ranks.");
             comms
                 .into_par_iter()
                 .map(Arc::new)
                 .zip(available_devices.clone())
                 .map(|(comm, device)| {
-                    info!("Loading rank {}/{world_size}", comm.rank() + 1);
                     // Redefine mapper
                     let mapper = DeviceMapSetting::dummy().into_mapper(
                         self.inner.get_total_device_mapping_num_layers(&config)?,
@@ -774,28 +774,33 @@ impl Loader for NormalLoader {
                 (None, true) => Some(ImatrixDataSource::Collected),
                 (Some(_), true) => unreachable!(),
             };
-            let world_size = parallel_models.len();
-            for (rank, model) in parallel_models.iter_mut().enumerate() {
-                info!("Applying ISQ for rank {}/{world_size}", rank + 1);
 
-                model.quantize(
-                    in_situ_quant,
-                    model.device().clone(),
-                    self.config.topology.as_ref(),
-                    silent,
-                    imatrix_source,
-                    self.config.organization,
-                    self.config.write_uqff.as_ref(),
-                    UqffFullSer {
-                        tokenizer: &tokenizer,
-                        template_filename: paths.get_template_filename(),
-                        generation_config: paths.get_gen_conf_filename(),
-                        config: config.clone(),
-                        processor_filename: &None,
-                        preprocessor_filename: &None,
-                    },
-                )?;
-            }
+            info!("Applying ISQ to all ranks.");
+
+            let multi_progress = Arc::new(MultiProgress::new());
+            parallel_models
+                .par_iter_mut()
+                .map(|model| {
+                    model.quantize(
+                        in_situ_quant,
+                        model.device().clone(),
+                        self.config.topology.as_ref(),
+                        silent,
+                        imatrix_source,
+                        self.config.organization,
+                        self.config.write_uqff.as_ref(),
+                        UqffFullSer {
+                            tokenizer: &tokenizer,
+                            template_filename: paths.get_template_filename(),
+                            generation_config: paths.get_gen_conf_filename(),
+                            config: config.clone(),
+                            processor_filename: &None,
+                            preprocessor_filename: &None,
+                        },
+                        multi_progress.clone(),
+                    )
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?;
         } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
             let world_size = parallel_models.len();
             for (rank, model) in parallel_models.iter_mut().enumerate() {
@@ -927,32 +932,30 @@ impl PreProcessingMixin for NormalPipeline {
 impl IsqPipelineMixin for NormalPipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> Result<()> {
         let device = self.device().clone();
-        let _ = self
-            .parallel_models
+        let multi_progress = Arc::new(MultiProgress::new());
+        self.parallel_models
             .par_iter_mut()
             .map(|model| {
-                model
-                    .quantize(
-                        Some(dtype),
-                        device.clone(),
-                        self.topology.as_ref(),
-                        self.silent,
-                        self.imatrix.as_ref().map(ImatrixDataSource::File),
-                        self.organization,
-                        None,
-                        UqffFullSer {
-                            tokenizer: &self.tokenizer,
-                            template_filename: &self.template_filename,
-                            generation_config: self.generation_config.as_ref(),
-                            config: self.config.clone(),
-                            processor_filename: &None,
-                            preprocessor_filename: &None,
-                        },
-                    )
-                    .map_err(anyhow::Error::msg)
+                model.quantize(
+                    Some(dtype),
+                    device.clone(),
+                    self.topology.as_ref(),
+                    self.silent,
+                    self.imatrix.as_ref().map(ImatrixDataSource::File),
+                    self.organization,
+                    None,
+                    UqffFullSer {
+                        tokenizer: &self.tokenizer,
+                        template_filename: &self.template_filename,
+                        generation_config: self.generation_config.as_ref(),
+                        config: self.config.clone(),
+                        processor_filename: &None,
+                        preprocessor_filename: &None,
+                    },
+                    multi_progress.clone(),
+                )
             })
-            .collect::<Result<Vec<_>>>()?;
-
+            .collect::<candle_core::Result<Vec<_>>>()?;
         Ok(())
     }
 }
