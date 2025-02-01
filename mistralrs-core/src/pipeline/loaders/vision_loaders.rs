@@ -468,8 +468,8 @@ impl DeviceMappedModelLoader for Phi3VLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.head_dim()),
-            v_head_dim: Some(cfg.head_dim()),
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))
@@ -804,8 +804,8 @@ impl DeviceMappedModelLoader for Idefics2Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1059,8 +1059,8 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1306,8 +1306,8 @@ impl DeviceMappedModelLoader for LLaVALoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1687,8 +1687,8 @@ impl DeviceMappedModelLoader for VLlamaLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1976,8 +1976,8 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -2260,8 +2260,8 @@ impl DeviceMappedModelLoader for Idefics3Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -2536,8 +2536,8 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))

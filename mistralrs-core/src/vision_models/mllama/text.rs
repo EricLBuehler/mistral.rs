@@ -145,8 +145,8 @@ impl MLlamaTextSelfAttention {
                 sliding_window: None,
             },
             rope,
-            num_heads: cfg.num_attention_heads,
-            num_kv_heads: cfg.num_key_value_heads,
+            num_heads: cfg.num_attention_heads / comm.world_size(),
+            num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
             head_dim,
         })
     }
@@ -356,8 +356,8 @@ impl MLlamaTextCrossAttention {
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("k_norm"), false),
             )?,
-            num_heads: cfg.num_attention_heads,
-            num_kv_heads: cfg.num_key_value_heads,
+            num_heads: cfg.num_attention_heads / comm.world_size(),
+            num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
             head_dim: cfg.head_dim(),
             sdpa_params: SdpaParams {
                 n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
@@ -654,11 +654,11 @@ impl MLlamaTextModel {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: cfg.num_key_value_heads,
-                num_attn_heads: cfg.num_attention_heads,
+                num_attn_heads: cfg.num_attention_heads / comm.world_size(),
+                num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
                 sliding_window: None,
-                k_head_dim: None,
-                v_head_dim: None,
+                k_head_dim: cfg.head_dim(),
+                v_head_dim: cfg.head_dim(),
             },
             cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,

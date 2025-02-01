@@ -217,21 +217,19 @@ impl CausalSelfAttention {
             comm,
             vb.pp("o_proj"),
         )?;
-        let num_attention_heads = cfg.num_attention_heads / comm.world_size();
-        let num_key_value_heads = (cfg.num_key_value_heads / comm.world_size()).max(1);
         Ok(Self {
             q_proj,
             k_proj,
             v_proj,
             o_proj,
-            num_attention_heads,
-            num_key_value_heads,
+            num_attention_heads: cfg.num_attention_heads / comm.world_size(),
+            num_key_value_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
             head_dim: cfg.hidden_size / cfg.num_attention_heads,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: num_attention_heads / num_key_value_heads,
+                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
@@ -352,7 +350,6 @@ struct Block {
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
     mlp: Box<dyn MlpLayer>,
-    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Block {
@@ -368,10 +365,6 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        if self.comm.rank() == 0 {
-            // print!(";");
-            // std::io::stdout().flush().unwrap();
-        }
         let x = (self.attn.forward(
             &x,
             attention_mask,
@@ -380,16 +373,8 @@ impl Block {
             metadata,
             flash_params,
         )? + residual)?;
-        if self.comm.rank() == 0 {
-            // print!(";");
-            // std::io::stdout().flush().unwrap();
-        }
         let residual = &x;
         let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
-        if self.comm.rank() == 0 {
-            // print!(";");
-            // std::io::stdout().flush().unwrap();
-        }
         Ok(x)
     }
 
@@ -430,7 +415,6 @@ impl Block {
             attn,
             rms_2,
             mlp: Box::new(mlp),
-            comm: comm.clone(),
         })
     }
 }
@@ -578,8 +562,8 @@ impl Llama {
                 num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
                 num_attn_heads: cfg.num_attention_heads / comm.world_size(),
                 sliding_window: None,
-                k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-                v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+                k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             },
             comm,
         })

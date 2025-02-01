@@ -611,8 +611,8 @@ impl DeviceMappedModelLoader for MistralLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.head_dim()),
-            v_head_dim: Some(cfg.head_dim()),
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))
@@ -860,8 +860,8 @@ impl DeviceMappedModelLoader for GemmaLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.head_dim),
-            v_head_dim: Some(cfg.head_dim),
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
         };
 
         Ok(Box::new(cfg))
@@ -1098,8 +1098,8 @@ impl DeviceMappedModelLoader for LlamaLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1337,8 +1337,8 @@ impl DeviceMappedModelLoader for MixtralLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1567,8 +1567,8 @@ impl DeviceMappedModelLoader for Phi2Loader {
             num_kv_heads: cfg.num_key_value_heads(),
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.head_dim()),
-            v_head_dim: Some(cfg.head_dim()),
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))
@@ -1802,8 +1802,8 @@ impl DeviceMappedModelLoader for Phi3Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.head_dim()),
-            v_head_dim: Some(cfg.head_dim()),
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))
@@ -2026,8 +2026,8 @@ impl DeviceMappedModelLoader for Qwen2Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: Some(cfg.sliding_window),
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -2279,8 +2279,8 @@ impl DeviceMappedModelLoader for Gemma2Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: Some(cfg.sliding_window),
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -2511,8 +2511,8 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -2774,8 +2774,8 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.head_dim()),
-            v_head_dim: Some(cfg.head_dim()),
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))
@@ -3108,8 +3108,8 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
             num_kv_heads: cfg.num_attention_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.qk_rope_head_dim + cfg.qk_nope_head_dim),
-            v_head_dim: Some(cfg.v_head_dim),
+            k_head_dim: cfg.qk_rope_head_dim + cfg.qk_nope_head_dim,
+            v_head_dim: cfg.v_head_dim,
         };
 
         Ok(Box::new(cfg))
@@ -3442,8 +3442,8 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
             num_kv_heads: cfg.num_attention_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.qk_rope_head_dim + cfg.qk_nope_head_dim),
-            v_head_dim: Some(cfg.v_head_dim),
+            k_head_dim: cfg.qk_rope_head_dim + cfg.qk_nope_head_dim,
+            v_head_dim: cfg.v_head_dim,
         };
 
         Ok(Box::new(cfg))

@@ -150,6 +150,7 @@ struct Attention {
     q_head_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+    num_attention_heads: usize,
 }
 
 impl Attention {
@@ -240,6 +241,7 @@ impl Attention {
             cfg: cfg.clone(),
             q_head_dim,
             paged_attn,
+            num_attention_heads: cfg.num_attention_heads / comm.world_size(),
             sdpa_params: SdpaParams {
                 n_kv_groups: 1,
                 use_flash_attn: cfg.use_flash_attn,
@@ -263,7 +265,7 @@ impl Attention {
 
         let mut q = self.q.forward(xs)?;
         q = q
-            .reshape((bs, seq_len, self.cfg.num_attention_heads, self.q_head_dim))?
+            .reshape((bs, seq_len, self.num_attention_heads, self.q_head_dim))?
             .transpose(1, 2)?;
         let q_split = q.split(
             &[self.cfg.qk_nope_head_dim, self.cfg.qk_rope_head_dim],
@@ -289,7 +291,7 @@ impl Attention {
             .reshape((
                 bs,
                 seq_len,
-                self.cfg.num_attention_heads,
+                self.num_attention_heads,
                 self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
             ))?
             .transpose(1, 2)?;
@@ -301,7 +303,7 @@ impl Attention {
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
 
         let mut q = Tensor::zeros(
-            (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
+            (bs, self.num_attention_heads, seq_len, self.q_head_dim),
             q_pe.dtype(),
             q_pe.device(),
         )?;
@@ -309,7 +311,7 @@ impl Attention {
         q = q.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
 
         let mut k = Tensor::zeros(
-            (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
+            (bs, self.num_attention_heads, seq_len, self.q_head_dim),
             k_pe.dtype(),
             k_pe.device(),
         )?;
@@ -861,14 +863,15 @@ impl DeepSeekV2 {
                 num_kv_heads: cfg.num_attention_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
-                k_head_dim: Some(cfg.q_head_dim()),
-                v_head_dim: Some(
-                    if matches!(attention_mechanism, AttentionImplementation::PagedAttention) {
-                        cfg.q_head_dim()
-                    } else {
-                        cfg.v_head_dim
-                    },
-                ),
+                k_head_dim: cfg.q_head_dim(),
+                v_head_dim: if matches!(
+                    attention_mechanism,
+                    AttentionImplementation::PagedAttention
+                ) {
+                    cfg.q_head_dim()
+                } else {
+                    cfg.v_head_dim
+                },
             },
             mapper,
         })
