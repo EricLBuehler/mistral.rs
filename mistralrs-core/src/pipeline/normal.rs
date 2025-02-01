@@ -1171,7 +1171,7 @@ impl Pipeline for NormalPipeline {
                         position_ids,
                         paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
                         &flash_meta,
-                    )
+                    )?
                 } else {
                     let mut handles = Vec::new();
                     for (rank, model) in self.parallel_models.iter().cloned().enumerate() {
