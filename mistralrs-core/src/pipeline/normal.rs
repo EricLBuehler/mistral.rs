@@ -470,12 +470,11 @@ impl Loader for NormalLoader {
                     )
                 })
                 .unwrap_or(1);
-            let devices_per_pipeline_parallel = available_devices.len() / pipeline_parallel_size;
 
-            let world_size = pipeline_parallel_size;
+            let world_size = available_devices.len() / pipeline_parallel_size;
 
             info!("Tensor parallel world size is {world_size}");
-            info!("Pipeline parallelism size is {devices_per_pipeline_parallel}");
+            info!("Pipeline parallelism size is {pipeline_parallel_size}");
 
             let ids = (0..pipeline_parallel_size)
                 .map(|_| mistralrs_quant::Id::new())
@@ -535,7 +534,7 @@ impl Loader for NormalLoader {
 
             // row major: number of ranks x pipeline parallel
             // Also corresponds to the device for that comm for the
-            let comms = (0..devices_per_pipeline_parallel)
+            let comms = (0..world_size)
                 .map(|pipeline_parallel_i| {
                     comms_all
                         .iter()
