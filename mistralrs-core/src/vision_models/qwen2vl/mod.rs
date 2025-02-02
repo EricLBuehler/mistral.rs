@@ -42,7 +42,6 @@ impl Qwen2VLModel {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         if cfg.use_sliding_window {
             // TODO!
@@ -60,7 +59,6 @@ impl Qwen2VLModel {
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?;
         Ok(Self {
             text,

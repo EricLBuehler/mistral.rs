@@ -97,7 +97,6 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     #[allow(clippy::too_many_arguments)]
     fn load_xlora(
@@ -110,7 +109,6 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self, config: &str) -> Result<bool>;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
@@ -295,7 +293,6 @@ impl NormalModelLoader for AutoLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Self::get_loader(config)?.load(
             config,
@@ -303,7 +300,6 @@ impl NormalModelLoader for AutoLoader {
             vb,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )
     }
     fn load_xlora(
@@ -316,7 +312,6 @@ impl NormalModelLoader for AutoLoader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Self::get_loader(config)?.load_xlora(
             config,
@@ -327,7 +322,6 @@ impl NormalModelLoader for AutoLoader {
             xlora_ordering,
             normal_loading_metadata,
             preload_adapters,
-            comm,
         )
     }
     fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
@@ -443,7 +437,6 @@ impl NormalModelLoader for MistralLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::mistral::Model::new(
             &MistralBasicConfig::deserialize(config, use_flash_attn)?,
@@ -451,7 +444,6 @@ impl NormalModelLoader for MistralLoader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -464,11 +456,7 @@ impl NormalModelLoader for MistralLoader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(xlora_models::XLoraMistral::new(
             &MistralBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -688,7 +676,6 @@ impl NormalModelLoader for GemmaLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::gemma::Model::new(
             &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
@@ -696,7 +683,6 @@ impl NormalModelLoader for GemmaLoader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -709,11 +695,7 @@ impl NormalModelLoader for GemmaLoader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(xlora_models::XLoraGemma::new(
             &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -931,7 +913,6 @@ impl NormalModelLoader for LlamaLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::llama::Llama::new(
             &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
@@ -939,7 +920,6 @@ impl NormalModelLoader for LlamaLoader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -952,11 +932,7 @@ impl NormalModelLoader for LlamaLoader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(xlora_models::XLoraLlama::new(
             &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -1165,7 +1141,6 @@ impl NormalModelLoader for MixtralLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::mixtral::Model::new(
             &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
@@ -1173,7 +1148,6 @@ impl NormalModelLoader for MixtralLoader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -1186,11 +1160,7 @@ impl NormalModelLoader for MixtralLoader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(xlora_models::XLoraMixtral::new(
             &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -1405,7 +1375,6 @@ impl NormalModelLoader for Phi2Loader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::phi2::Model::new(
             &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
@@ -1413,7 +1382,6 @@ impl NormalModelLoader for Phi2Loader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -1426,11 +1394,7 @@ impl NormalModelLoader for Phi2Loader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(xlora_models::XLoraPhi2::new(
             &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -1641,7 +1605,6 @@ impl NormalModelLoader for Phi3Loader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::phi3::Model::new(
             &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
@@ -1649,7 +1612,6 @@ impl NormalModelLoader for Phi3Loader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -1662,11 +1624,7 @@ impl NormalModelLoader for Phi3Loader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(xlora_models::XLoraPhi3::new(
             &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -1867,7 +1825,6 @@ impl NormalModelLoader for Qwen2Loader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::qwen2::Model::new(
             &Qwen2BasicConfig::deserialize(config, use_flash_attn)?,
@@ -1875,7 +1832,6 @@ impl NormalModelLoader for Qwen2Loader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -1888,11 +1844,7 @@ impl NormalModelLoader for Qwen2Loader {
         _xlora_ordering: Ordering,
         _normal_loading_metadata: NormalLoadingMetadata,
         _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         todo!()
     }
     fn is_gptx(&self, _: &str) -> Result<bool> {
@@ -2107,7 +2059,6 @@ impl NormalModelLoader for Gemma2Loader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::gemma2::Model::new(
             &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
@@ -2115,7 +2066,6 @@ impl NormalModelLoader for Gemma2Loader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -2128,11 +2078,7 @@ impl NormalModelLoader for Gemma2Loader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(xlora_models::XLoraGemma2::new(
             &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -2347,7 +2293,6 @@ impl NormalModelLoader for Starcoder2Loader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::starcoder2::Model::new(
             &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
@@ -2355,7 +2300,6 @@ impl NormalModelLoader for Starcoder2Loader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -2368,11 +2312,7 @@ impl NormalModelLoader for Starcoder2Loader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(xlora_models::XLoraStarcoder2::new(
             &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -2589,7 +2529,6 @@ impl NormalModelLoader for Phi3_5MoELoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(models::phi3_5_moe::Model::new(
             &Phi3_5MoEBasicConfig::deserialize(config, use_flash_attn)?,
@@ -2597,7 +2536,6 @@ impl NormalModelLoader for Phi3_5MoELoader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -2610,11 +2548,7 @@ impl NormalModelLoader for Phi3_5MoELoader {
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         Ok(Box::new(xlora_models::XLoraPhi3::new(
             &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
             vb,
@@ -2798,7 +2732,6 @@ impl NormalModelLoader for DeepSeekV2Loader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         let mut cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         cfg.use_flash_attn = use_flash_attn;
@@ -2808,7 +2741,6 @@ impl NormalModelLoader for DeepSeekV2Loader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -2821,11 +2753,7 @@ impl NormalModelLoader for DeepSeekV2Loader {
         _xlora_ordering: Ordering,
         _normal_loading_metadata: NormalLoadingMetadata,
         _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         todo!()
     }
     fn is_gptx(&self, _: &str) -> Result<bool> {
@@ -3132,7 +3060,6 @@ impl NormalModelLoader for DeepSeekV3Loader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         let mut cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
         cfg.use_flash_attn = use_flash_attn;
@@ -3142,7 +3069,6 @@ impl NormalModelLoader for DeepSeekV3Loader {
             self.is_gptx(config)?,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn load_xlora(
@@ -3155,11 +3081,7 @@ impl NormalModelLoader for DeepSeekV3Loader {
         _xlora_ordering: Ordering,
         _normal_loading_metadata: NormalLoadingMetadata,
         _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        if comm.world_size() != 1 {
-            anyhow::bail!("Adapter models do not support nccl.");
-        }
         todo!()
     }
     fn is_gptx(&self, _: &str) -> Result<bool> {

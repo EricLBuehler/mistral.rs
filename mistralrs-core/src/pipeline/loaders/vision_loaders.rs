@@ -74,7 +74,6 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
@@ -234,7 +233,6 @@ impl VisionModelLoader for Phi3VLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: Phi3Config = serde_json::from_str(config)?;
         config.use_flash_attn = use_flash_attn;
@@ -244,7 +242,6 @@ impl VisionModelLoader for Phi3VLoader {
             self.is_gptx(),
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -504,7 +501,6 @@ impl VisionModelLoader for Idefics2Loader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: Idefics2Config = serde_json::from_str(config)?;
         config.text_config.use_flash_attn = use_flash_attn;
@@ -514,7 +510,6 @@ impl VisionModelLoader for Idefics2Loader {
             self.is_gptx(),
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -839,7 +834,6 @@ impl VisionModelLoader for LLaVANextLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: LLaVAConfig = serde_json::from_str(config)?;
         config.use_flash_attn = use_flash_attn;
@@ -849,7 +843,6 @@ impl VisionModelLoader for LLaVANextLoader {
             self.is_gptx(),
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -1094,7 +1087,6 @@ impl VisionModelLoader for LLaVALoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: LLaVAConfig = serde_json::from_str(config)?;
         config.use_flash_attn = use_flash_attn;
@@ -1104,7 +1096,6 @@ impl VisionModelLoader for LLaVALoader {
             self.is_gptx(),
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -1341,7 +1332,6 @@ impl VisionModelLoader for VLlamaLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: MLlamaConfig = serde_json::from_str(config)?;
         config.text_config.use_flash_attn = use_flash_attn;
@@ -1351,7 +1341,6 @@ impl VisionModelLoader for VLlamaLoader {
             self.is_gptx(),
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -1727,7 +1716,6 @@ impl VisionModelLoader for Qwen2VLLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let config: Qwen2VLConfig = serde_json::from_str(config)?;
         Ok(Box::new(Qwen2VLModel::new(
@@ -1736,7 +1724,6 @@ impl VisionModelLoader for Qwen2VLLoader {
             self.is_gptx(),
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -2012,7 +1999,6 @@ impl VisionModelLoader for Idefics3Loader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: Idefics3Config = serde_json::from_str(config)?;
         config.text_config.use_flash_attn = use_flash_attn;
@@ -2022,7 +2008,6 @@ impl VisionModelLoader for Idefics3Loader {
             self.is_gptx(),
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn is_gptx(&self) -> bool {
@@ -2295,7 +2280,6 @@ impl VisionModelLoader for MiniCpmOLoader {
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
         let mut config: MiniCpmOConfig = serde_json::from_str(config)?;
         config.text_config.use_flash_attn = use_flash_attn;
@@ -2305,7 +2289,6 @@ impl VisionModelLoader for MiniCpmOLoader {
             self.is_gptx(),
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?))
     }
     fn is_gptx(&self) -> bool {

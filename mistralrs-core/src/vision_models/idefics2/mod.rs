@@ -6,7 +6,7 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
-use std::{any::Any, ops::Mul, sync::Arc};
+use std::{any::Any, ops::Mul};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
@@ -1010,7 +1010,6 @@ impl Idefics2 {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let text_model = Mistral::new_inner(
@@ -1020,7 +1019,6 @@ impl Idefics2 {
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?;
         let vision_model = VisionTransformer::new(
             &config.vision_config,

@@ -414,7 +414,6 @@ pub struct Model {
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
-    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Model {
@@ -424,7 +423,6 @@ impl Model {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let vb_lm_head = vb.pp("lm_head");
@@ -435,7 +433,6 @@ impl Model {
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )
     }
 
@@ -446,7 +443,6 @@ impl Model {
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
         let embed_tokens = layers::embedding(
@@ -478,6 +474,7 @@ impl Model {
                     Some(PagedAttention::new(head_dim, device, None)?)
                 }
             };
+            let comm = mapper.get_comm_for(layer_idx)?;
             let layer = DecoderLayer::new(
                 cfg,
                 vb_l.pp(layer_idx),
@@ -509,18 +506,18 @@ impl Model {
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
             max_seq_len: cfg.max_position_embeddings,
-            mapper,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_attn_heads: cfg.num_attention_heads / comm.world_size(),
-                num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
+                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
+                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
+                    .max(1),
                 sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.head_dim(),
                 v_head_dim: cfg.head_dim(),
             },
-            comm,
+            mapper,
         })
     }
 
@@ -758,7 +755,7 @@ impl AnyMoeBaseModelMixin for Model {
                                 ..Default::default()
                             },
                             vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
-                            &self.comm,
+                            &self.mapper.get_comm_for(layer)?,
                         )?));
                     }
                     AnyMoeExpertType::LoraAdapter {

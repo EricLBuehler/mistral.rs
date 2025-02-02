@@ -404,7 +404,6 @@ pub struct Llama {
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
-    comm: Arc<mistralrs_quant::Comm>,
 }
 
 impl Llama {
@@ -433,7 +432,6 @@ impl Llama {
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
         let wte = embedding(
@@ -479,6 +477,7 @@ impl Llama {
                         .expect("Failed to create PagedAttention"),
                 ),
             };
+            let comm = mapper.get_comm_for(i).unwrap();
             Block::load(
                 vb_m,
                 cfg,
@@ -503,18 +502,18 @@ impl Llama {
                 false,
             )),
             device: normal_loading_metadata.real_device,
-            mapper,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_attn_heads: cfg.num_attention_heads / comm.world_size(),
-                num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
+                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
+                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
+                    .max(1),
                 sliding_window: None,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             },
-            comm,
+            mapper,
         })
     }
 }
@@ -707,7 +706,7 @@ impl AnyMoeBaseModelMixin for Llama {
                                 hidden_size: self.blocks[layer].mlp.get_params()[0],
                                 ..Default::default()
                             },
-                            &self.comm,
+                            &self.mapper.get_comm_for(layer)?,
                         )?));
                     }
                     AnyMoeExpertType::LoraAdapter {

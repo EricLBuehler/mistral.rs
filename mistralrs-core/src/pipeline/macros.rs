@@ -391,7 +391,6 @@ macro_rules! normal_model_loader {
         $real_device:expr,
         $attention_mechanism:expr,
         $is_moqe:expr,
-        $comm:expr,
         $multi_progress:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
@@ -430,7 +429,6 @@ macro_rules! normal_model_loader {
                 multi_progress: $multi_progress,
             },
             $attention_mechanism,
-            $comm,
         )?
     }};
 }
@@ -447,7 +445,6 @@ macro_rules! normal_model_loader_sharded {
         $loading_isq:expr,
         $real_device:expr,
         $attention_mechanism:expr,
-        $comm:expr,
         $multi_progress:expr,
     ) => {{
         $loader.load(
@@ -461,7 +458,6 @@ macro_rules! normal_model_loader_sharded {
                 multi_progress: $multi_progress,
             },
             $attention_mechanism,
-            $comm,
         )?
     }};
 }
@@ -483,7 +479,6 @@ macro_rules! vision_normal_model_loader {
         $loading_uqff:expr,
         $real_device:expr,
         $attention_mechanism:expr,
-        $comm:expr,
         $multi_progress:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
@@ -518,7 +513,6 @@ macro_rules! vision_normal_model_loader {
                 multi_progress: $multi_progress,
             },
             $attention_mechanism,
-            $comm,
         )?
     }};
 }
@@ -538,7 +532,6 @@ macro_rules! xlora_model_loader {
         $mapper:expr,
         $loading_isq:expr,
         $real_device:expr,
-        $comm:expr,
         $multi_progress:expr,
     ) => {{
         let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
@@ -581,7 +574,6 @@ macro_rules! xlora_model_loader {
                 multi_progress: $multi_progress,
             },
             &None,
-            $comm,
         )?
     }};
 }
@@ -601,7 +593,6 @@ macro_rules! lora_model_loader {
         $mapper:expr,
         $loading_isq:expr,
         $real_device:expr,
-        $comm:expr,
         $multi_progress:expr,
     ) => {{
         let safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
@@ -648,7 +639,6 @@ macro_rules! lora_model_loader {
                 $device,
                 $silent,
             )?,
-            $comm,
         )?
     }};
 }

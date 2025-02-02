@@ -173,7 +173,6 @@ impl Attention {
                     lora_rank,
                     &cfg.quantization_config,
                     cfg.attention_bias,
-                    comm,
                     mapper.set_device(layer_idx, vb.pp("q_a_proj"), loading_isq),
                 )?;
                 let norm = RmsNorm::new(
@@ -206,7 +205,6 @@ impl Attention {
             cfg.kv_lora_rank + cfg.qk_rope_head_dim,
             &cfg.quantization_config,
             cfg.attention_bias,
-            comm,
             mapper.set_device(layer_idx, vb.pp("kv_a_proj_with_mqa"), loading_isq),
         )?;
         let kv_a_layernorm = RmsNorm::new(
@@ -464,7 +462,6 @@ impl Expert {
         vb: ShardedVarBuilder,
         hidden_size: Option<usize>,
         intermediate_size: Option<usize>,
-        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
         let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
@@ -475,7 +472,6 @@ impl Expert {
                 intermediate_size,
                 &cfg.quantization_config,
                 false,
-                comm,
                 vb.pp("gate_proj"),
             )?,
             up: ReplicatedLayer::new(
@@ -483,7 +479,6 @@ impl Expert {
                 intermediate_size,
                 &cfg.quantization_config,
                 false,
-                comm,
                 vb.pp("up_proj"),
             )?,
             down: ReplicatedLayer::new(
@@ -491,7 +486,6 @@ impl Expert {
                 hidden_size,
                 &cfg.quantization_config,
                 false,
-                comm,
                 vb.pp("down_proj"),
             )?,
             act: cfg.hidden_act,
@@ -626,7 +620,6 @@ impl Moe {
                     mapper.set_device(layer_idx, vb_e, loading_isq),
                     None,
                     Some(cfg.moe_intermediate_size),
-                    comm,
                 )?));
             } else {
                 experts.push(None);
@@ -851,7 +844,6 @@ impl DeepSeekV2 {
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
 
@@ -868,7 +860,6 @@ impl DeepSeekV2 {
                 cfg.vocab_size,
                 &None,
                 false,
-                &comm,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
@@ -928,6 +919,7 @@ impl DeepSeekV2 {
                         .expect("Failed to create PagedAttention"),
                 ),
             };
+            let comm = mapper.get_comm_for(layer_idx)?;
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -956,8 +948,10 @@ impl DeepSeekV2 {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: (cfg.num_attention_heads / comm.world_size()).max(1),
-                num_attn_heads: (cfg.num_attention_heads / comm.world_size()).max(1),
+                num_kv_heads: (cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size())
+                    .max(1),
+                num_attn_heads: (cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size())
+                    .max(1),
                 sliding_window: None,
                 k_head_dim: cfg.q_head_dim(),
                 v_head_dim: if matches!(

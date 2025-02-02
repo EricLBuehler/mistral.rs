@@ -44,7 +44,7 @@ use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::{Arc, Barrier, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
@@ -357,15 +357,6 @@ impl Loader for VisionLoader {
             AttentionImplementation::Eager
         };
 
-        let id = mistralrs_quant::Id::new();
-        let comm = Arc::new(mistralrs_quant::Comm::from_device(
-            id,
-            device,
-            0,
-            1,
-            Arc::new(Barrier::new(1)),
-        )?);
-
         let multi_progress = Arc::new(MultiProgress::new());
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
@@ -382,7 +373,6 @@ impl Loader for VisionLoader {
                 self.config.from_uqff.is_some(),
                 device.clone(),
                 attention_mechanism,
-                comm,
                 multi_progress,
             ),
             _ => unreachable!(),

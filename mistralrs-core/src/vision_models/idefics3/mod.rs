@@ -4,7 +4,7 @@ mod config;
 mod inputs_processor;
 mod vision;
 
-use std::{any::Any, sync::Arc};
+use std::any::Any;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 pub use config::Idefics3Config;
@@ -40,7 +40,6 @@ impl Idefics3Model {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
         let connector = Idefics3Connector::new(
@@ -62,7 +61,6 @@ impl Idefics3Model {
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
-            comm,
         )?;
         Ok(Self {
             text_model,

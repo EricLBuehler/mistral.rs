@@ -461,38 +461,89 @@ impl Loader for NormalLoader {
         let multi_progress = Arc::new(MultiProgress::new());
 
         let mut parallel_models = if use_nccl {
-            // NCCL case
-            let id = mistralrs_quant::Id::new();
+            // NCCL case!
 
-            let world_size = available_devices.len();
-
-            info!("NCCL world size is {world_size}");
-
-            let barrier = Arc::new(Barrier::new(world_size));
-
-            // They each block on each other
-            // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
-            let comms = available_devices
-                .par_iter()
-                .enumerate()
-                .map(|(rank, device)| {
-                    #[cfg(feature = "cuda")]
-                    {
-                        use candle_core::cuda::cudarc::driver::result;
-                        unsafe {
-                            result::ctx::set_current(*device.as_cuda_device()?.cu_primary_ctx())
-                        }
-                        .unwrap();
-                    }
-                    mistralrs_quant::Comm::from_device(
-                        id,
-                        device,
-                        rank,
-                        world_size,
-                        barrier.clone(),
+            let pipeline_parallel_size = std::env::var("MISTRALRS_PIPELINE_PARALLEL")
+                .map(|ref x| {
+                    usize::from_str(x).expect(
+                        "Invalid MISTRALRS_PIPELINE_PARALLEL setting (could not parse as integer)",
                     )
                 })
-                .collect::<candle_core::Result<Vec<_>>>()?;
+                .unwrap_or(0);
+            let devices_per_pipeline_parallel = available_devices.len() / pipeline_parallel_size;
+
+            let world_size = pipeline_parallel_size;
+
+            info!("Tensor parallel world size is {world_size}");
+            info!("Pipeline parallelism size is {devices_per_pipeline_parallel}");
+
+            let ids = (0..pipeline_parallel_size)
+                .into_iter()
+                .map(|_| mistralrs_quant::Id::new())
+                .collect::<Vec<_>>();
+
+            if available_devices.len() % ids.len() != 0 {
+                anyhow::bail!(
+                    "Pipeline parallel size {} must divide the number of available devices {}",
+                    pipeline_parallel_size,
+                    available_devices.len()
+                );
+            }
+
+            let split_available_devices = available_devices
+                .chunks(available_devices.len() / pipeline_parallel_size)
+                .collect::<Vec<_>>();
+
+            // Transpose
+            let mut comms_all = Vec::new();
+            for (pipeline_parallel_i, devices_per_pipeline_parallel) in
+                split_available_devices.iter().enumerate()
+            {
+                // Each pipeline parallel gets its own barrier
+                let barrier = Arc::new(Barrier::new(world_size));
+
+                // They each block on each other
+                // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
+                let comms = devices_per_pipeline_parallel
+                    .par_iter()
+                    .enumerate()
+                    .map(|(rank, device)| {
+                        #[cfg(feature = "cuda")]
+                        {
+                            use candle_core::cuda::cudarc::driver::result;
+                            unsafe {
+                                result::ctx::set_current(*device.as_cuda_device()?.cu_primary_ctx())
+                            }
+                            .unwrap();
+                        }
+                        mistralrs_quant::Comm::from_device(
+                            ids[pipeline_parallel_i],
+                            device,
+                            rank,
+                            world_size,
+                            barrier.clone(),
+                        )
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()?;
+                comms_all.push(
+                    comms
+                        .into_iter()
+                        .map(Arc::new)
+                        .zip(devices_per_pipeline_parallel.to_vec())
+                        .collect::<Vec<_>>(),
+                );
+            }
+
+            // row major: number of ranks x pipeline parallel
+            // Also corresponds to the device for that comm for the
+            let comms = (0..devices_per_pipeline_parallel)
+                .map(|pipeline_parallel_i| {
+                    comms_all
+                        .iter()
+                        .map(|comms_for_rank| comms_for_rank[pipeline_parallel_i].clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
 
             let make_dummy_regexes = if loading_isq && self.config.from_uqff.is_some() {
                 // Dummy weights for the layers which will be overwritten...
@@ -519,11 +570,15 @@ impl Loader for NormalLoader {
             info!("Loading all ranks.");
             comms
                 .into_par_iter()
-                .map(Arc::new)
-                .zip(available_devices.clone())
-                .map(|(comm, device)| {
-                    // Redefine mapper
-                    let mapper = DeviceMapSetting::dummy().into_mapper(
+                .map(|comm_per_pipeline_parallel| {
+                    let real_device = comm_per_pipeline_parallel[0].1.clone();
+
+                    // The mapper is specific to this pipeline
+                    let mapper = DeviceMapSetting::NcclPipelineParallel {
+                        devices_and_comms: comm_per_pipeline_parallel.clone(),
+                        nm_device: real_device.clone(),
+                    }
+                    .into_mapper(
                         self.inner.get_total_device_mapping_num_layers(&config)?,
                         &device,
                         None,
@@ -544,9 +599,8 @@ impl Loader for NormalLoader {
                             self.config.use_flash_attn,
                             mapper,
                             loading_isq,
-                            device,
+                            real_device,
                             attention_mechanism,
-                            comm,
                             multi_progress.clone(),
                         ),
                         ModelKind::Adapter {
@@ -562,8 +616,7 @@ impl Loader for NormalLoader {
                             silent,
                             mapper,
                             loading_isq,
-                            device,
-                            comm,
+                            real_device,
                             multi_progress.clone(),
                         ),
                         ModelKind::Adapter {
@@ -579,8 +632,7 @@ impl Loader for NormalLoader {
                             silent,
                             mapper,
                             loading_isq,
-                            device,
-                            comm,
+                            real_device,
                             multi_progress.clone(),
                         ),
                         _ => unreachable!(),
@@ -590,16 +642,6 @@ impl Loader for NormalLoader {
                 })
                 .collect::<Result<Vec<_>>>()?
         } else {
-            // Dummy comm
-            let id = mistralrs_quant::Id::new();
-            let comm = Arc::new(mistralrs_quant::Comm::from_device(
-                id,
-                device,
-                0,
-                1,
-                Arc::new(Barrier::new(1)),
-            )?);
-
             let model = match self.kind {
                 ModelKind::Normal => normal_model_loader!(
                     paths,
@@ -616,7 +658,6 @@ impl Loader for NormalLoader {
                     device.clone(),
                     attention_mechanism,
                     matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
-                    comm,
                     multi_progress.clone(),
                 ),
                 ModelKind::Adapter {
@@ -633,7 +674,6 @@ impl Loader for NormalLoader {
                     mapper,
                     loading_isq,
                     device.clone(),
-                    comm,
                     multi_progress.clone(),
                 ),
                 ModelKind::Adapter {
@@ -650,7 +690,6 @@ impl Loader for NormalLoader {
                     mapper,
                     loading_isq,
                     device.clone(),
-                    comm,
                     multi_progress.clone(),
                 ),
                 _ => unreachable!(),

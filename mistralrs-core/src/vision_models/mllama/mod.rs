@@ -86,7 +86,6 @@ impl MLlamaModel {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let real_dev = normal_loading_metadata.real_device.clone();
         Ok(Self {
@@ -101,7 +100,6 @@ impl MLlamaModel {
                 is_gptx,
                 normal_loading_metadata,
                 attention_mechanism,
-                comm,
             )?,
             multi_modal_projector: linear(
                 cfg.vision_config.vision_output_dim,

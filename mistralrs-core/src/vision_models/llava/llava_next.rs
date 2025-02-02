@@ -4,7 +4,6 @@
     clippy::too_many_arguments
 )]
 use std::any::Any;
-use std::sync::Arc;
 
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Activation, Linear};
@@ -133,7 +132,6 @@ impl Model {
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
-        comm: Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let device = normal_loading_metadata.real_device.clone();
         let dtype = vb.dtype();
@@ -159,7 +157,6 @@ impl Model {
                     is_gptx,
                     normal_loading_metadata,
                     attention_mechanism,
-                    comm,
                 )?;
                 Box::new(llama)
             }
@@ -171,7 +168,6 @@ impl Model {
                     is_gptx,
                     normal_loading_metadata,
                     attention_mechanism,
-                    comm,
                 )?;
                 Box::new(mistral)
             }

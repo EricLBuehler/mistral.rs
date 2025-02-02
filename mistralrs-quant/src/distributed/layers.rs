@@ -362,7 +362,6 @@ impl ReplicatedLayer {
         out_dim: usize,
         config: &Option<QuantizedConfig>,
         bias: bool,
-        _comm: &Arc<crate::Comm>,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         let layer = if let Some(quant_conf) = &config {
