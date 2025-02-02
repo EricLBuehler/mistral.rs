@@ -469,7 +469,7 @@ impl Loader for NormalLoader {
                         "Invalid MISTRALRS_PIPELINE_PARALLEL setting (could not parse as integer)",
                     )
                 })
-                .unwrap_or(0);
+                .unwrap_or(1);
             let devices_per_pipeline_parallel = available_devices.len() / pipeline_parallel_size;
 
             let world_size = pipeline_parallel_size;
