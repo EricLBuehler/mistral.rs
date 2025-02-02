@@ -478,7 +478,6 @@ impl Loader for NormalLoader {
             info!("Pipeline parallelism size is {devices_per_pipeline_parallel}");
 
             let ids = (0..pipeline_parallel_size)
-                .into_iter()
                 .map(|_| mistralrs_quant::Id::new())
                 .collect::<Vec<_>>();
 
@@ -571,12 +570,12 @@ impl Loader for NormalLoader {
             comms
                 .into_par_iter()
                 .map(|comm_per_pipeline_parallel| {
-                    let real_device = comm_per_pipeline_parallel[0].1.clone();
+                    let device = comm_per_pipeline_parallel[0].1.clone();
 
                     // The mapper is specific to this pipeline
                     let mapper = DeviceMapSetting::NcclPipelineParallel {
                         devices_and_comms: comm_per_pipeline_parallel.clone(),
-                        nm_device: real_device.clone(),
+                        nm_device: device.clone(),
                     }
                     .into_mapper(
                         self.inner.get_total_device_mapping_num_layers(&config)?,
@@ -599,7 +598,7 @@ impl Loader for NormalLoader {
                             self.config.use_flash_attn,
                             mapper,
                             loading_isq,
-                            real_device,
+                            device,
                             attention_mechanism,
                             multi_progress.clone(),
                         ),
@@ -616,7 +615,7 @@ impl Loader for NormalLoader {
                             silent,
                             mapper,
                             loading_isq,
-                            real_device,
+                            device,
                             multi_progress.clone(),
                         ),
                         ModelKind::Adapter {
@@ -632,7 +631,7 @@ impl Loader for NormalLoader {
                             silent,
                             mapper,
                             loading_isq,
-                            real_device,
+                            device,
                             multi_progress.clone(),
                         ),
                         _ => unreachable!(),
