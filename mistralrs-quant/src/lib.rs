@@ -32,7 +32,7 @@ mod unquantized;
 mod utils;
 
 use gptq::gptq_linear;
-pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
+pub use safetensors::{ModelWeightSource, Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use distributed::{

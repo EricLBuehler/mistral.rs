@@ -3,7 +3,7 @@ use std::{cmp::Ordering, fs::File, sync::Arc};
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Module;
 use hf_hub::api::sync::{Api, ApiError};
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{ModelWeightSource, ShardedVarBuilder};
 use tokenizers::Tokenizer;
 use tracing::info;
 
@@ -101,7 +101,10 @@ fn get_t5_model(
             .iter()
             .map(|f| repo.get(f))
             .collect::<std::result::Result<Vec<_>, ApiError>>()
-            .map_err(candle_core::Error::msg)?,
+            .map_err(candle_core::Error::msg)?
+            .into_iter()
+            .map(ModelWeightSource::PathBuf)
+            .collect(),
         vec![],
         Some(dtype),
         device,
@@ -129,7 +132,7 @@ fn get_clip_model_and_tokenizer(
 
     let model_file = repo.get("model.safetensors")?;
     let vb = from_mmaped_safetensors(
-        vec![model_file],
+        vec![ModelWeightSource::PathBuf(model_file)],
         vec![],
         None,
         device,

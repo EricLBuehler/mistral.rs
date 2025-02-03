@@ -120,11 +120,11 @@ impl FromStr for IsqOrganization {
 
 pub struct UqffFullSer<'a> {
     pub tokenizer: &'a Tokenizer,
-    pub template_filename: &'a Option<PathBuf>,
-    pub generation_config: Option<&'a PathBuf>,
+    pub chat_template: &'a Option<String>,
+    pub generation_config: Option<&'a String>,
     pub config: String,
-    pub processor_filename: &'a Option<PathBuf>,
-    pub preprocessor_filename: &'a Option<PathBuf>,
+    pub processor_config: &'a Option<String>,
+    pub preprocessor_config: &'a Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -546,11 +546,11 @@ pub trait IsqModel {
 
                 let UqffFullSer {
                     tokenizer,
-                    template_filename,
+                    chat_template,
                     generation_config,
                     config,
-                    processor_filename,
-                    preprocessor_filename,
+                    processor_config,
+                    preprocessor_config,
                 } = full_ser;
 
                 info!("Serializing configuration to `{}`.", config_out.display());
@@ -562,15 +562,13 @@ pub trait IsqModel {
                 serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
                     .map_err(candle_core::Error::msg)?;
 
-                if let Some(template_filename) = template_filename {
+                if let Some(chat_template) = chat_template {
                     info!(
                         "Serializing tokenizer config to `{}`.",
                         tokenizer_cfg_out.display()
                     );
 
-                    let template =
-                        std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&tokenizer_cfg_out, template)
+                    std::fs::write(tokenizer_cfg_out, chat_template)
                         .map_err(candle_core::Error::msg)?;
                 }
 
@@ -580,29 +578,28 @@ pub trait IsqModel {
                         gen_cfg_out.display()
                     );
 
-                    let cfg = std::fs::read(generation_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&gen_cfg_out, generation_config)
+                        .map_err(candle_core::Error::msg)?;
                 }
 
-                if let Some(processor_config) = processor_filename {
+                if let Some(processor_config) = processor_config {
                     info!(
                         "Serializing processor config to `{}`.",
                         processor_out.display()
                     );
 
-                    let cfg = std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&processor_out, processor_config)
+                        .map_err(candle_core::Error::msg)?;
                 }
 
-                if let Some(preprocessor_config) = preprocessor_filename {
+                if let Some(preprocessor_config) = preprocessor_config {
                     info!(
                         "Serializing preprocessor config to `{}`.",
                         preprocessor_out.display()
                     );
 
-                    let cfg =
-                        std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&preprocessor_out, preprocessor_config)
+                        .map_err(candle_core::Error::msg)?;
                 }
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();

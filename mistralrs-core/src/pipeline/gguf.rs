@@ -2,7 +2,7 @@ use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
+    CacheManager, GeneralMetadata, Loader, ModelKind, ModelSource, PrettyName, QuantizationKind,
     TokenSource, XLoraPaths,
 };
 use super::{
@@ -31,7 +31,7 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths, PagedAttentionConfig,
+    get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelSource, PagedAttentionConfig,
     Pipeline, Topology, TryIntoDType,
 };
 use crate::{
@@ -47,10 +47,9 @@ use anyhow::{bail, Result};
 use candle_core::{Device, Tensor};
 use either::Either;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use mistralrs_quant::IsqType;
+use mistralrs_quant::{IsqType, ModelWeightSource};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
-use std::fs;
 use std::num::{NonZero, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -265,8 +264,8 @@ impl Loader for GGUFLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
-            LocalModelPaths,
+        let paths: anyhow::Result<Box<dyn ModelSource>> = get_paths_gguf!(
+            LocalModelSource,
             &token_source,
             revision,
             self,
@@ -288,7 +287,7 @@ impl Loader for GGUFLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &Box<dyn ModelSource>,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -312,8 +311,14 @@ impl Loader for GGUFLoader {
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
         let mut readers = Vec::new();
-        for filename in paths.get_weight_filenames() {
-            readers.push(std::fs::File::open(filename)?);
+        for filename in paths.get_weights() {
+            let src_file = match filename {
+                ModelWeightSource::PathBuf(p) => p,
+                ModelWeightSource::SafeTensorsData(_) => {
+                    anyhow::bail!("GGUF model should not be a SafeTensorsData")
+                }
+            };
+            readers.push(std::fs::File::open(src_file)?);
         }
         let mut readers = readers.iter_mut().collect::<Vec<_>>();
 
@@ -379,11 +384,11 @@ impl Loader for GGUFLoader {
             bos,
             eos,
             unk,
-        } = if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
+        } = if paths.get_tokenizer().is_empty() {
             convert_gguf_to_hf_tokenizer(&model)?
         } else {
             GgufTokenizerConversion {
-                tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
+                tokenizer: get_tokenizer(paths.get_tokenizer(), None)?,
                 bos: None,
                 eos: None,
                 unk: None,
@@ -392,7 +397,7 @@ impl Loader for GGUFLoader {
 
         // Only load gguf chat template if there is nothing else
         let gguf_chat_template =
-            if paths.get_template_filename().is_none() && self.chat_template.is_none() {
+            if paths.get_chat_template().is_none() && self.chat_template.is_none() {
                 get_gguf_chat_template(&model)?
             } else {
                 None
@@ -482,8 +487,8 @@ impl Loader for GGUFLoader {
             (None, None)
         };
 
-        let gen_conf: Option<GenerationConfig> = paths.get_gen_conf_filename().map(|f| {
-            serde_json::from_str(&fs::read_to_string(f).unwrap())
+        let gen_conf: Option<GenerationConfig> = paths.get_generation_config().map(|c| {
+            serde_json::from_str(&c)
                 .expect("bos_token_id/eos_token_id missing in generation_config.json")
         });
         let mut chat_template = get_chat_template(
@@ -491,7 +496,7 @@ impl Loader for GGUFLoader {
             &paths
                 .get_chat_template_json()
                 .as_ref()
-                .map(|x| x.to_string_lossy().to_string())
+                .map(|x| x.clone())
                 .clone(),
             &self.chat_template,
             gguf_chat_template,

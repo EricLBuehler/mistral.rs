@@ -4,7 +4,7 @@ use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
-    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin,
+    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelSource, PreProcessingMixin,
     Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader,
     VisionPromptPrefixer, XLoraPaths,
 };
@@ -17,7 +17,7 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_tok_env;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
-use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
+use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelSource};
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
@@ -35,7 +35,7 @@ use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
-use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
+use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, ModelWeightSource, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -64,11 +64,11 @@ pub struct VisionPipeline {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
 
     // For full UQFF serialization
-    template_filename: Option<PathBuf>,
-    generation_config: Option<PathBuf>,
-    config: String,
-    processor_filename: Option<PathBuf>,
-    preprocessor_filename: Option<PathBuf>,
+    chat_template_ser: Option<String>,
+    generation_config_ser: Option<String>,
+    config_ser: String,
+    processor_config_ser: Option<String>,
+    preprocessor_config_ser: Option<String>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -164,8 +164,8 @@ impl Loader for VisionLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
-            LocalModelPaths,
+        let paths: anyhow::Result<Box<dyn ModelSource>> = get_paths!(
+            LocalModelSource,
             &token_source,
             revision.clone(),
             self,
@@ -196,7 +196,7 @@ impl Loader for VisionLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &Box<dyn ModelSource>,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -204,7 +204,7 @@ impl Loader for VisionLoader {
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let config = std::fs::read_to_string(paths.get_config_filename())?;
+        let config = paths.get_config().clone();
 
         if !self.inner.supports_paged_attention() {
             paged_attn_config = None;
@@ -399,13 +399,10 @@ impl Loader for VisionLoader {
             self.config.max_edge,
         ); //There are always some repos that don't properly handle config position, for example... LLaVA
 
-        let tokenizer = get_tokenizer(
-            paths.get_tokenizer_filename(),
-            Some(processor.get_special_tokens()),
-        )?;
+        let tokenizer = get_tokenizer(paths.get_tokenizer(), Some(processor.get_special_tokens()))?;
 
-        let gen_conf: Option<GenerationConfig> = paths.get_gen_conf_filename().map(|f| {
-            serde_json::from_str(&fs::read_to_string(f).unwrap())
+        let gen_conf: Option<GenerationConfig> = paths.get_generation_config().map(|c| {
+            serde_json::from_str(&c)
                 .expect("bos_token_id/eos_token_id missing in generation_config.json")
         });
         let chat_template = get_chat_template(
@@ -413,7 +410,7 @@ impl Loader for VisionLoader {
             &paths
                 .get_chat_template_json()
                 .as_ref()
-                .map(|x| x.to_string_lossy().to_string())
+                .map(|x| x.clone())
                 .clone(),
             &self.chat_template,
             None,
@@ -506,11 +503,11 @@ impl Loader for VisionLoader {
                 self.config.write_uqff.as_ref(),
                 UqffFullSer {
                     tokenizer: &tokenizer,
-                    template_filename: paths.get_template_filename(),
-                    generation_config: paths.get_gen_conf_filename(),
+                    chat_template: paths.get_chat_template(),
+                    generation_config: paths.get_generation_config(),
                     config: config.clone(),
-                    processor_filename: paths.get_processor_config(),
-                    preprocessor_filename: paths.get_preprocessor_config(),
+                    processor_config: paths.get_processor_config(),
+                    preprocessor_config: paths.get_preprocessor_config(),
                 },
                 Arc::new(MultiProgress::new()),
             )?;
@@ -580,11 +577,11 @@ impl Loader for VisionLoader {
             preprocessor_config: Arc::new(preprocessor_config),
             topology: self.config.topology.clone(),
             silent,
-            template_filename: paths.get_template_filename().clone(),
-            generation_config: paths.get_gen_conf_filename().cloned(),
-            config,
-            processor_filename: paths.get_processor_config().clone(),
-            preprocessor_filename: paths.get_preprocessor_config().clone(),
+            chat_template_ser: paths.get_chat_template().clone(),
+            generation_config_ser: paths.get_generation_config().cloned(),
+            config_ser: config,
+            processor_config_ser: paths.get_processor_config().clone(),
+            preprocessor_config_ser: paths.get_preprocessor_config().clone(),
             mapper: pipeline_mapper,
         })))
     }
@@ -624,11 +621,11 @@ impl IsqPipelineMixin for VisionPipeline {
                 None,
                 UqffFullSer {
                     tokenizer: &self.tokenizer,
-                    template_filename: &self.template_filename,
-                    generation_config: self.generation_config.as_ref(),
-                    config: self.config.clone(),
-                    processor_filename: &self.processor_filename,
-                    preprocessor_filename: &self.preprocessor_filename,
+                    chat_template: &self.chat_template_ser,
+                    generation_config: self.generation_config_ser.as_ref(),
+                    config: self.config_ser.clone(),
+                    processor_config: &self.processor_config_ser,
+                    preprocessor_config: &self.preprocessor_config_ser,
                 },
                 Arc::new(MultiProgress::new()),
             )
@@ -838,7 +835,9 @@ impl AnyMoePipelineMixin for VisionPipeline {
 
             let mut filenames = vec![];
             for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
-                filenames.push(api_get_file!(api, &rfilename, model_id));
+                filenames.push(ModelWeightSource::PathBuf(api_get_file!(
+                    api, &rfilename, model_id
+                )));
             }
 
             let regex = regex.clone();
@@ -889,7 +888,9 @@ impl AnyMoePipelineMixin for VisionPipeline {
 
             let mut gate_filenames = vec![];
             for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
-                gate_filenames.push(api_get_file!(api, &rfilename, model_id));
+                gate_filenames.push(ModelWeightSource::PathBuf(api_get_file!(
+                    api, &rfilename, model_id
+                )));
             }
             assert_eq!(
                 gate_filenames.len(),
@@ -908,10 +909,7 @@ impl AnyMoePipelineMixin for VisionPipeline {
                 |_| true,
                 Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
-            info!(
-                "Loaded gating layers from `{}`",
-                gate_filenames[0].display()
-            );
+            info!("Loaded gating layers from",);
             Some(vb)
         } else {
             None

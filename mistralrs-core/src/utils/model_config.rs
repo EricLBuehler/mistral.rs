@@ -3,15 +3,15 @@ use super::varbuilder_utils::{
 };
 use anyhow::Result;
 use candle_core::{quantized::ggml_file, DType};
-use mistralrs_quant::ShardedVarBuilder;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use mistralrs_quant::{ModelWeightSource, ShardedVarBuilder};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     device_map::DeviceMapper,
     gguf::Content,
     lora::{LoraConfig, Ordering},
     paged_attention::AttentionImplementation,
-    pipeline::ModelPaths,
+    pipeline::ModelSource,
     xlora_models::XLoraConfig,
 };
 
@@ -43,7 +43,7 @@ impl<'a> Adapter<'a> {
     // NOTE: Due to reference usage persisting in returned struct, additional lifetime annotations were required.
     #[allow(clippy::borrowed_box)]
     pub fn try_new<'b: 'a>(
-        paths: &'b Box<dyn ModelPaths>,
+        paths: &'b Box<dyn ModelSource>,
         device: &'b candle_core::Device,
         silent: bool,
         is_xlora: bool,
@@ -51,17 +51,28 @@ impl<'a> Adapter<'a> {
         let lora_config = paths.get_adapter_configs().as_ref().unwrap();
         let ordering = paths.get_ordering().as_ref().unwrap();
         let preload_adapters = load_preload_adapters(
-            paths.get_lora_preload_adapter_info(),
+            &paths.get_lora_preload_adapter_info().as_ref().map(|x| {
+                x.into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k.to_string(),
+                            (ModelWeightSource::PathBuf(v.0.to_owned()), v.1.clone()),
+                        )
+                    })
+                    .collect()
+            }),
             candle_core::DType::F32,
             device,
             silent,
         )?;
 
         // X-LoRA support:
-        let mut xlora_paths: Vec<PathBuf> = vec![];
+        let mut xlora_paths: Vec<ModelWeightSource> = vec![];
         let mut xlora_config: Option<XLoraConfig> = None;
         if is_xlora {
-            xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
+            xlora_paths = vec![ModelWeightSource::PathBuf(
+                paths.get_classifier_path().as_ref().unwrap().to_path_buf(),
+            )];
             xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
         }
 
@@ -74,7 +85,7 @@ impl<'a> Adapter<'a> {
                 .as_ref()
                 .unwrap()
                 .iter()
-                .map(|(_, x)| (*x).to_owned())
+                .map(|(_, x)| ModelWeightSource::PathBuf(x.to_owned()))
                 .collect::<Vec<_>>(),
             Some(candle_core::DType::F32),
             device,

@@ -2,7 +2,7 @@ use super::cache_manager::FullCacheManager;
 use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
+    CacheManager, GeneralMetadata, Loader, ModelKind, ModelSource, QuantizationKind, TokenSource,
     XLoraPaths,
 };
 use super::{
@@ -15,7 +15,7 @@ use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::get_chat_template;
 use crate::pipeline::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use crate::pipeline::sampling::sample_and_add_toks;
-use crate::pipeline::{ChatTemplate, LocalModelPaths};
+use crate::pipeline::{ChatTemplate, LocalModelSource};
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
@@ -34,7 +34,7 @@ use anyhow::Result;
 use candle_core::quantized::ggml_file;
 use candle_core::{Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use mistralrs_quant::IsqType;
+use mistralrs_quant::{IsqType, ModelWeightSource};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
@@ -239,7 +239,7 @@ impl Loader for GGMLLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &Box<dyn ModelSource>,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -278,9 +278,15 @@ impl Loader for GGMLLoader {
             device.device_pretty_repr()
         );
 
-        let mut file = std::fs::File::open(paths.get_weight_filenames().first().unwrap())?;
-        let model = ggml_file::Content::read(&mut file, device)
-            .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
+        let src_file = match paths.get_weights().first().unwrap() {
+            ModelWeightSource::PathBuf(p) => p,
+            ModelWeightSource::SafeTensorsData(_) => {
+                anyhow::bail!("GGML model should not be a SafeTensorsData")
+            }
+        };
+        let mut file = std::fs::File::open(src_file)?;
+        let model =
+            ggml_file::Content::read(&mut file, device).map_err(|e| e.with_path(src_file))?;
 
         info!("Model config: {:?}", model.hparams);
 
@@ -337,9 +343,9 @@ impl Loader for GGMLLoader {
             _ => unreachable!(),
         };
 
-        let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
-        let gen_conf: Option<GenerationConfig> = paths.get_gen_conf_filename().map(|f| {
-            serde_json::from_str(&fs::read_to_string(f).unwrap())
+        let tokenizer = get_tokenizer(paths.get_tokenizer(), None)?;
+        let gen_conf: Option<GenerationConfig> = paths.get_generation_config().map(|c| {
+            serde_json::from_str(&c)
                 .expect("bos_token_id/eos_token_id missing in generation_config.json")
         });
         let chat_template = get_chat_template(
@@ -347,7 +353,7 @@ impl Loader for GGMLLoader {
             &paths
                 .get_chat_template_json()
                 .as_ref()
-                .map(|x| x.to_string_lossy().to_string())
+                .map(|x| x.clone())
                 .clone(),
             &self.chat_template,
             None,
@@ -406,8 +412,8 @@ impl Loader for GGMLLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
-            LocalModelPaths,
+        let paths: anyhow::Result<Box<dyn ModelSource>> = get_paths!(
+            LocalModelSource,
             &token_source,
             revision,
             self,

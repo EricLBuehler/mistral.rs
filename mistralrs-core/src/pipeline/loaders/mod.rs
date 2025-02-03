@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use as_any::AsAny;
 use candle_core::{DType, Device};
 use itertools::Itertools;
-use mistralrs_quant::IsqType;
+use mistralrs_quant::{IsqType, ModelWeightSource};
 use tokio::sync::Mutex;
 
 pub use normal_loaders::{
@@ -30,8 +30,8 @@ pub use vision_loaders::{
 };
 
 pub use diffusion_loaders::{
-    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DiffusionModelPaths,
-    DiffusionModelPathsInner, FluxLoader,
+    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DiffusionModelSource,
+    DiffusionModelSourceInner, FluxLoader,
 };
 
 use crate::{
@@ -47,26 +47,26 @@ use crate::{
 
 use super::Pipeline;
 
-/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
-/// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
-pub trait ModelPaths: AsAny + Debug + Send + Sync {
+/// `ModelSource` abstracts the mechanism to get all necessary files for running a model. For
+/// example `LocalModelSource` implements `ModelSource` when all files are in the local file system.
+pub trait ModelSource: AsAny + Debug + Send + Sync {
     /// Model weights files (multiple files supported).
-    fn get_weight_filenames(&self) -> &[PathBuf];
+    fn get_weights(&self) -> &[ModelWeightSource];
 
     /// Retrieve the [`PretrainedConfig`] file.
     ///
     /// [`PretrainedConfig`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
-    fn get_config_filename(&self) -> &PathBuf;
+    fn get_config(&self) -> &String;
 
     /// A serialised [`tokenizers.Tokenizer`] HuggingFace object.
     ///
     /// [`tokenizers.Tokenizer`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
-    fn get_tokenizer_filename(&self) -> &PathBuf;
+    fn get_tokenizer(&self) -> &String;
 
-    /// File where the content is expected to deserialize to [`ChatTemplate`].
+    /// Tokenizer config file where the content is expected to deserialize to [`ChatTemplate`].
     ///
     /// [`ChatTemplate`]: crate::ChatTemplate
-    fn get_template_filename(&self) -> &Option<PathBuf>;
+    fn get_chat_template(&self) -> &Option<String>;
 
     /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
@@ -84,85 +84,85 @@ pub trait ModelPaths: AsAny + Debug + Send + Sync {
     fn get_ordering(&self) -> &Option<Ordering>;
 
     /// Filepath for general model configuration.
-    fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
+    fn get_generation_config(&self) -> Option<&String>;
 
     /// Information for preloading LoRA adapters (adapter name, the weight file, and the config).
     fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
 
     /// Get the preprocessor config (for the vision models). This is used to pre process images.
-    fn get_preprocessor_config(&self) -> &Option<PathBuf>;
+    fn get_preprocessor_config(&self) -> &Option<String>;
 
     /// Get the processor config (for the vision models). This is primarily used for the chat template.
-    fn get_processor_config(&self) -> &Option<PathBuf>;
+    fn get_processor_config(&self) -> &Option<String>;
 
     /// Get the explicit chat template. If specified, this overwrites anything in the tokenizer_config.json
-    fn get_chat_template_json(&self) -> &Option<PathBuf>;
+    fn get_chat_template_json(&self) -> &Option<String>;
 }
 
 #[derive(Clone, Debug)]
 /// All local paths and metadata necessary to load a model.
-pub struct LocalModelPaths<P: Debug> {
-    pub tokenizer_filename: P,
-    pub config_filename: P,
-    pub template_filename: Option<P>,
-    pub filenames: Vec<P>,
+pub struct LocalModelSource<P: Debug> {
+    pub tokenizer: String,
+    pub config: String,
+    pub chat_template: Option<String>,
+    pub filenames: Vec<ModelWeightSource>,
     pub xlora_adapter_filenames: Option<Vec<(String, P)>>,
     pub xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
     pub classifier_path: Option<P>,
     pub classifier_config: Option<XLoraConfig>,
     pub xlora_ordering: Option<Ordering>,
-    pub gen_conf: Option<P>,
+    pub generation_config: Option<String>,
     pub lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
-    pub preprocessor_config: Option<P>,
-    pub processor_config: Option<P>,
-    pub chat_template_json_filename: Option<P>,
+    pub preprocessor_config: Option<String>,
+    pub processor_config: Option<String>,
+    pub chat_template_json: Option<String>,
 }
 
-impl<P: Debug> LocalModelPaths<P> {
+impl<P: Debug> LocalModelSource<P> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        tokenizer_filename: P,
-        config_filename: P,
-        template_filename: P,
-        filenames: Vec<P>,
+        tokenizer: String,
+        config: String,
+        chat_template: String,
+        filenames: Vec<ModelWeightSource>,
         xlora_adapter_filenames: Option<Vec<(String, P)>>,
         xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
         classifier_path: Option<P>,
         classifier_config: Option<XLoraConfig>,
         xlora_ordering: Option<Ordering>,
-        gen_conf: Option<P>,
+        generation_config: Option<String>,
         lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
-        preprocessor_config: Option<P>,
-        processor_config: Option<P>,
-        chat_template_json_filename: Option<P>,
+        preprocessor_config: Option<String>,
+        processor_config: Option<String>,
+        chat_template_json: Option<String>,
     ) -> Self {
         Self {
-            tokenizer_filename,
-            config_filename,
-            template_filename: Some(template_filename),
+            tokenizer,
+            config,
+            chat_template: Some(chat_template),
             filenames,
             xlora_adapter_filenames,
             xlora_adapter_configs,
             classifier_path,
             classifier_config,
             xlora_ordering,
-            gen_conf,
+            generation_config,
             lora_preload_adapter_info,
             preprocessor_config,
             processor_config,
-            chat_template_json_filename,
+            chat_template_json,
         }
     }
 }
 
-impl ModelPaths for LocalModelPaths<PathBuf> {
-    fn get_config_filename(&self) -> &PathBuf {
-        &self.config_filename
+impl ModelSource for LocalModelSource<PathBuf> {
+    fn get_config(&self) -> &String {
+        &self.config
     }
-    fn get_tokenizer_filename(&self) -> &PathBuf {
-        &self.tokenizer_filename
+    fn get_tokenizer(&self) -> &String {
+        &self.tokenizer
     }
-    fn get_weight_filenames(&self) -> &[PathBuf] {
+    fn get_weights(&self) -> &[ModelWeightSource] {
         &self.filenames
     }
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
@@ -180,23 +180,23 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
     fn get_ordering(&self) -> &Option<Ordering> {
         &self.xlora_ordering
     }
-    fn get_template_filename(&self) -> &Option<PathBuf> {
-        &self.template_filename
+    fn get_chat_template(&self) -> &Option<String> {
+        &self.chat_template
     }
-    fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
-        self.gen_conf.as_ref()
+    fn get_generation_config(&self) -> Option<&String> {
+        self.generation_config.as_ref()
     }
     fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>> {
         &self.lora_preload_adapter_info
     }
-    fn get_preprocessor_config(&self) -> &Option<PathBuf> {
+    fn get_preprocessor_config(&self) -> &Option<String> {
         &self.preprocessor_config
     }
-    fn get_processor_config(&self) -> &Option<PathBuf> {
+    fn get_processor_config(&self) -> &Option<String> {
         &self.processor_config
     }
-    fn get_chat_template_json(&self) -> &Option<PathBuf> {
-        &self.chat_template_json_filename
+    fn get_chat_template_json(&self) -> &Option<String> {
+        &self.chat_template_json
     }
 }
 
@@ -798,7 +798,7 @@ pub trait Loader: Send + Sync {
     )]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &Box<dyn ModelSource>,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,

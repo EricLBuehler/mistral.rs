@@ -5,7 +5,7 @@ use regex::Regex;
 use safetensors::tensor as st;
 use safetensors::tensor::SafeTensors;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
@@ -128,11 +128,22 @@ fn convert(
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum ModelWeightSource {
+    PathBuf(PathBuf),
+    SafeTensorsData(&'static [u8]),
+}
+
 #[derive(yoke::Yokeable)]
 struct SafeTensors_<'a>(SafeTensors<'a>);
 
+enum SafeTensorsData {
+    Mmaped(yoke::Yoke<SafeTensors_<'static>, memmap2::Mmap>),
+    Data(SafeTensors<'static>),
+}
+
 pub struct MmapedSafetensors {
-    safetensors: Vec<yoke::Yoke<SafeTensors_<'static>, memmap2::Mmap>>,
+    safetensors: Vec<SafeTensorsData>,
     routing: Option<HashMap<String, usize>>,
 }
 
@@ -142,20 +153,30 @@ impl MmapedSafetensors {
     /// # Safety
     ///
     /// The unsafe is inherited from [`memmap2::MmapOptions`].
-    pub unsafe fn new<P: AsRef<Path>>(p: P) -> Result<Self> {
-        let p = p.as_ref();
-        let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
-        let file = memmap2::MmapOptions::new()
-            .map(&file)
-            .map_err(|e| Error::from(e).with_path(p))?;
-        let safetensors = yoke::Yoke::<SafeTensors_<'static>, memmap2::Mmap>::try_attach_to_cart(
-            file,
-            |data: &[u8]| {
-                let st = safetensors::SafeTensors::deserialize(data)
+    pub unsafe fn new(src: &ModelWeightSource) -> Result<Self> {
+        let safetensors = match src {
+            ModelWeightSource::PathBuf(p) => {
+                let p: &Path = p.as_ref();
+                let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
+                let file = memmap2::MmapOptions::new()
+                    .map(&file)
                     .map_err(|e| Error::from(e).with_path(p))?;
-                Ok::<_, Error>(SafeTensors_(st))
-            },
-        )?;
+                let data = yoke::Yoke::<SafeTensors_<'static>, memmap2::Mmap>::try_attach_to_cart(
+                    file,
+                    |data: &[u8]| {
+                        let st = safetensors::SafeTensors::deserialize(data)
+                            .map_err(|e| Error::from(e).with_path(p))?;
+                        Ok::<_, Error>(SafeTensors_(st))
+                    },
+                )?;
+                SafeTensorsData::Mmaped(data)
+            }
+            ModelWeightSource::SafeTensorsData(data) => {
+                let data =
+                    safetensors::SafeTensors::deserialize(data).map_err(|e| Error::from(e))?;
+                SafeTensorsData::Data(data)
+            }
+        };
         Ok(Self {
             safetensors: vec![safetensors],
             routing: None,
@@ -169,27 +190,40 @@ impl MmapedSafetensors {
     /// # Safety
     ///
     /// The unsafe is inherited from [`memmap2::MmapOptions`].
-    pub unsafe fn multi<P: AsRef<Path>>(paths: &[P]) -> Result<Self> {
+    pub unsafe fn multi(sources: &[ModelWeightSource]) -> Result<Self> {
         let mut routing = HashMap::new();
         let mut safetensors = vec![];
-        for (index, p) in paths.iter().enumerate() {
-            let p = p.as_ref();
-            let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
-            let file = memmap2::MmapOptions::new()
-                .map(&file)
-                .map_err(|e| Error::from(e).with_path(p))?;
-            let data = yoke::Yoke::<SafeTensors_<'static>, memmap2::Mmap>::try_attach_to_cart(
-                file,
-                |data: &[u8]| {
-                    let st = safetensors::SafeTensors::deserialize(data)
+        for (index, src) in sources.iter().enumerate() {
+            match src {
+                ModelWeightSource::PathBuf(p) => {
+                    let p: &Path = p.as_ref();
+                    let file = std::fs::File::open(p).map_err(|e| Error::from(e).with_path(p))?;
+                    let file = memmap2::MmapOptions::new()
+                        .map(&file)
                         .map_err(|e| Error::from(e).with_path(p))?;
-                    Ok::<_, Error>(SafeTensors_(st))
-                },
-            )?;
-            for k in data.get().0.names() {
-                routing.insert(k.to_string(), index);
+                    let data =
+                        yoke::Yoke::<SafeTensors_<'static>, memmap2::Mmap>::try_attach_to_cart(
+                            file,
+                            |data: &[u8]| {
+                                let st = safetensors::SafeTensors::deserialize(data)
+                                    .map_err(|e| Error::from(e).with_path(p))?;
+                                Ok::<_, Error>(SafeTensors_(st))
+                            },
+                        )?;
+                    for k in data.get().0.names() {
+                        routing.insert(k.to_string(), index);
+                    }
+                    safetensors.push(SafeTensorsData::Mmaped(data))
+                }
+                ModelWeightSource::SafeTensorsData(data) => {
+                    let data =
+                        safetensors::SafeTensors::deserialize(data).map_err(|e| Error::from(e))?;
+                    for k in data.names() {
+                        routing.insert(k.to_string(), index);
+                    }
+                    safetensors.push(SafeTensorsData::Data(data))
+                }
             }
-            safetensors.push(data)
         }
         Ok(Self {
             safetensors,
@@ -204,7 +238,11 @@ impl MmapedSafetensors {
     pub fn tensors(&self) -> Vec<(String, st::TensorView<'_>)> {
         let mut tensors = vec![];
         for safetensors in self.safetensors.iter() {
-            tensors.push(safetensors.get().0.tensors())
+            let tensors_vec = match safetensors {
+                SafeTensorsData::Data(data) => data.tensors(),
+                SafeTensorsData::Mmaped(data) => data.get().0.tensors(),
+            };
+            tensors.push(tensors_vec)
         }
         tensors.into_iter().flatten().collect()
     }
@@ -222,7 +260,11 @@ impl MmapedSafetensors {
                 *index
             }
         };
-        Ok(self.safetensors[index].get().0.tensor(name)?)
+        let view = match &self.safetensors[index] {
+            SafeTensorsData::Data(data) => data.tensor(name)?,
+            SafeTensorsData::Mmaped(data) => data.get().0.tensor(name)?,
+        };
+        Ok(view)
     }
 }
 
@@ -273,13 +315,13 @@ impl<'a> ShardedSafeTensors<'a> {
     /// # Safety
     ///
     /// The unsafe is inherited from [`memmap2::MmapOptions`].
-    pub unsafe fn sharded<P: AsRef<std::path::Path>>(
-        paths: &[P],
+    pub unsafe fn sharded(
+        sources: &[ModelWeightSource],
         dtype: DType,
         dev: &Device,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
     ) -> Result<ShardedVarBuilder<'a>> {
-        let tensors = MmapedSafetensors::multi(paths)?;
+        let tensors = MmapedSafetensors::multi(sources)?;
         let backend = ShardedSafeTensors::Sharded {
             b: tensors,
             make_dummy_regexes,
