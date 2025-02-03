@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/xlora_models/phi2.rs`."><title>phi2.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/xlora_models/</div>phi2.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/xlora_models/phi2.rs`."><title>phi2.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/xlora_models/</div>phi2.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -861,7 +861,9 @@
 <a href="#860" id="860">860</a>
 <a href="#861" id="861">861</a>
 <a href="#862" id="862">862</a>
-<a href="#863" id="863">863</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#863" id="863">863</a>
+<a href="#864" id="864">864</a>
+<a href="#865" id="865">865</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -883,14 +885,14 @@
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
 </span><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{embedding, layer_norm, Embedding, LayerNorm, VarBuilder};
-<span class="kw">use </span>mistralrs_quant::QuantMethod;
+<span class="kw">use </span>candle_nn::{Embedding, LayerNorm};
+<span class="kw">use </span>mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::CausalMasker,
+    layers::{embedding, layer_norm, CausalMasker},
     models::phi2::Config,
     pipeline::{extract_logits, NormalModel},
 };
@@ -909,14 +911,14 @@
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (ShardedVarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>fc1 = linear(
             cfg.hidden_size,
@@ -998,7 +1000,7 @@
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
@@ -1006,7 +1008,7 @@
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc&lt;RotaryEmbedding&gt;,
-        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (ShardedVarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>num_heads = cfg.num_attention_heads;
         <span class="kw">let </span>num_kv_heads = cfg.num_key_value_heads();
@@ -1184,7 +1186,7 @@
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
         ord: <span class="kw-2">&amp;</span>Ordering,
@@ -1192,7 +1194,7 @@
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc&lt;RotaryEmbedding&gt;,
-        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (ShardedVarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>self_attn = Attention::new(
             cfg,
@@ -1278,13 +1280,13 @@
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (ShardedVarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>quant_cfg) = <span class="kw-2">&amp;</span>cfg.quantization_config {
             <span class="macro">tracing::info!</span>(
@@ -1327,9 +1329,11 @@
             );
         }
         <span class="kw">let </span><span class="kw-2">mut </span>count = <span class="number">0</span>;
-        <span class="kw">for </span>layer_idx <span class="kw">in
-            </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
-        {
+        <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(
+            <span class="number">0</span>..cfg.num_hidden_layers,
+            <span class="string">"Loading repeating layers"</span>,
+            <span class="kw-2">&amp;</span>normal_loading_metadata.multi_progress,
+        ) {
             <span class="kw">let </span>device = mapper
                 .device_for(layer_idx, <span class="bool-val">false</span>)
                 .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
@@ -1406,8 +1410,8 @@
                 num_kv_heads: cfg.num_key_value_heads(),
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: <span class="prelude-val">None</span>,
-                k_head_dim: <span class="prelude-val">None</span>,
-                v_head_dim: <span class="prelude-val">None</span>,
+                k_head_dim: cfg.head_dim(),
+                v_head_dim: cfg.head_dim(),
             },
         })
     }
@@ -1612,7 +1616,7 @@
         _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         _context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
-        _metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        _metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
         _flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()

@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/xlora_models/llama.rs`."><title>llama.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/xlora_models/</div>llama.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/xlora_models/llama.rs`."><title>llama.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/xlora_models/</div>llama.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -870,7 +870,10 @@
 <a href="#869" id="869">869</a>
 <a href="#870" id="870">870</a>
 <a href="#871" id="871">871</a>
-<a href="#872" id="872">872</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#872" id="872">872</a>
+<a href="#873" id="873">873</a>
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use crate</span>::{
     amoe::AnyMoeBaseModelMixin,
@@ -885,15 +888,15 @@
     utils::progress::NiceProgressBar,
 };
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{embedding, Embedding, Module, VarBuilder};
-<span class="kw">use </span>mistralrs_quant::QuantMethod;
+<span class="kw">use </span>candle_nn::{Embedding, Module};
+<span class="kw">use </span>mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 <span class="kw">use </span>tqdm::Iter;
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
+    layers::{embedding, CausalMasker, RmsNorm},
     models::llama::Config,
     pipeline::{<span class="self">self</span>, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
 };
@@ -1008,7 +1011,7 @@
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: <span class="kw-2">&amp;</span>Config,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
@@ -1017,7 +1020,7 @@
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc&lt;Llama3RotaryEmbedding&gt;,
-        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (ShardedVarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>size_in = cfg.hidden_size;
         <span class="kw">let </span>size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
@@ -1128,7 +1131,7 @@
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: <span class="kw-2">&amp;</span>Config,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
@@ -1136,7 +1139,7 @@
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (ShardedVarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>h_size = cfg.hidden_size;
         <span class="kw">let </span>i_size = cfg.intermediate_size;
@@ -1224,7 +1227,7 @@
 
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">fn </span>load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: <span class="kw-2">&amp;</span>Config,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         count: <span class="kw-2">&amp;mut </span>usize,
@@ -1233,7 +1236,7 @@
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc&lt;Llama3RotaryEmbedding&gt;,
-        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (ShardedVarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>attn = CausalSelfAttention::load(
             vb.pp(<span class="string">"self_attn"</span>),
@@ -1434,13 +1437,13 @@
     <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: <span class="kw-2">&amp;</span>[((String, String), LoraConfig)],
         xlora_config: <span class="prelude-ty">Option</span>&lt;XLoraConfig&gt;,
         xlora_ordering: Ordering,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (VarBuilder, LoraConfig)&gt;&gt;,
+        preload_adapters: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (ShardedVarBuilder, LoraConfig)&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>quant_cfg) = <span class="kw-2">&amp;</span>cfg.quantization_config {
             <span class="macro">tracing::info!</span>(
@@ -1492,32 +1495,35 @@
                 )<span class="question-mark">?</span>),
             );
         }
-        <span class="kw">let </span><span class="kw-2">mut </span>blocks: Vec&lt;<span class="kw">_</span>&gt; =
-            NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
-                .into_iter()
-                .map(|i| {
-                    <span class="kw">let </span>device = mapper
-                        .device_for(i, <span class="bool-val">false</span>)
-                        .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
-                    <span class="kw">let </span>rotary_emb = ropes
-                        .get(<span class="kw-2">&amp;</span>device.location())
-                        .expect(<span class="string">"No RoPE for device location!"</span>)
-                        .clone();
-                    Block::load(
-                        vb.pp(<span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>)),
-                        cfg,
-                        lora_config,
-                        <span class="kw-2">&amp;mut </span>count,
-                        <span class="kw-2">&amp;</span>xlora_ordering,
-                        <span class="kw-2">&amp;*</span>mapper,
-                        i,
-                        normal_loading_metadata.loading_isq,
-                        rotary_emb,
-                        preload_adapters,
-                    )
-                    .expect(<span class="string">"Failed to load block."</span>)
-                })
-                .collect();
+        <span class="kw">let </span><span class="kw-2">mut </span>blocks: Vec&lt;<span class="kw">_</span>&gt; = NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(
+            <span class="number">0</span>..cfg.num_hidden_layers,
+            <span class="string">"Loading repeating layers"</span>,
+            <span class="kw-2">&amp;</span>normal_loading_metadata.multi_progress,
+        )
+        .into_iter()
+        .map(|i| {
+            <span class="kw">let </span>device = mapper
+                .device_for(i, <span class="bool-val">false</span>)
+                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+            <span class="kw">let </span>rotary_emb = ropes
+                .get(<span class="kw-2">&amp;</span>device.location())
+                .expect(<span class="string">"No RoPE for device location!"</span>)
+                .clone();
+            Block::load(
+                vb.pp(<span class="macro">format!</span>(<span class="string">"model.layers.{i}"</span>)),
+                cfg,
+                lora_config,
+                <span class="kw-2">&amp;mut </span>count,
+                <span class="kw-2">&amp;</span>xlora_ordering,
+                <span class="kw-2">&amp;*</span>mapper,
+                i,
+                normal_loading_metadata.loading_isq,
+                rotary_emb,
+                preload_adapters,
+            )
+            .expect(<span class="string">"Failed to load block."</span>)
+        })
+        .collect();
         <span class="kw">if </span>xlora_config.is_none() &amp;&amp; preload_adapters.is_none() {
             <span class="comment">// We are now a LoRA model so we must merge the weights
             </span><span class="macro">info!</span>(<span class="string">"Merging LoRA adapters."</span>);
@@ -1566,8 +1572,8 @@
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: <span class="prelude-val">None</span>,
-                k_head_dim: <span class="prelude-val">None</span>,
-                v_head_dim: <span class="prelude-val">None</span>,
+                k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             },
         })
     }
@@ -1627,7 +1633,7 @@
         _seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         _context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
-        _metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        _metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
         _flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">unreachable!</span>()

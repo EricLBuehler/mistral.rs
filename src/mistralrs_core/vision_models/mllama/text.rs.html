@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/mllama/text.rs`."><title>text.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../../static.files/storage-59e33391.js"></script><script defer src="../../../../static.files/src-script-56102188.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/mllama/</div>text.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/mllama/text.rs`."><title>text.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../../static.files/storage-59e33391.js"></script><script defer src="../../../../static.files/src-script-56102188.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/mllama/</div>text.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -773,18 +773,68 @@
 <a href="#772" id="772">772</a>
 <a href="#773" id="773">773</a>
 <a href="#774" id="774">774</a>
-<a href="#775" id="775">775</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a>
+<a href="#807" id="807">807</a>
+<a href="#808" id="808">808</a>
+<a href="#809" id="809">809</a>
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use </span>candle_core::{Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{embedding, Activation, Embedding, Module, VarBuilder};
-<span class="kw">use </span>mistralrs_quant::{linear_no_bias, QuantMethod, QuantMethodConfig, UnquantLinear};
+<span class="kw">use </span>candle_nn::{Activation, Embedding, Module};
+<span class="kw">use </span>mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+};
 
 <span class="kw">use crate</span>::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
+    layers::{embedding, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -803,24 +853,34 @@
 }
 
 <span class="kw">impl </span>MLlamaTextMlp {
-    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>MLlamaTextConfig, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(
+        cfg: <span class="kw-2">&amp;</span>MLlamaTextConfig,
+        vb: ShardedVarBuilder,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            gate_proj: linear_no_bias(
+            gate_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.intermediate_size,
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"gate_proj"</span>),
             )<span class="question-mark">?</span>,
-            up_proj: linear_no_bias(
+            up_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.intermediate_size,
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"up_proj"</span>),
             )<span class="question-mark">?</span>,
-            down_proj: linear_no_bias(
+            down_proj: RowParallelLayer::new(
                 cfg.intermediate_size,
                 cfg.hidden_size,
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"down_proj"</span>),
             )<span class="question-mark">?</span>,
             act: cfg.hidden_act,
@@ -861,34 +921,43 @@
 <span class="kw">impl </span>MLlamaTextSelfAttention {
     <span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         rope: Arc&lt;Llama3RotaryEmbedding&gt;,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            q_proj: linear_no_bias(
+            q_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * cfg.head_dim(),
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"q_proj"</span>),
             )<span class="question-mark">?</span>,
-            k_proj: linear_no_bias(
+            k_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"k_proj"</span>),
             )<span class="question-mark">?</span>,
-            v_proj: linear_no_bias(
+            v_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"v_proj"</span>),
             )<span class="question-mark">?</span>,
-            o_proj: linear_no_bias(
+            o_proj: RowParallelLayer::new(
                 cfg.num_attention_heads * cfg.head_dim(),
                 cfg.hidden_size,
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"o_proj"</span>),
             )<span class="question-mark">?</span>,
             sdpa_params: SdpaParams {
@@ -899,8 +968,8 @@
                 sliding_window: <span class="prelude-val">None</span>,
             },
             rope,
-            num_heads: cfg.num_attention_heads,
-            num_kv_heads: cfg.num_key_value_heads,
+            num_heads: cfg.num_attention_heads / comm.world_size(),
+            num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(<span class="number">1</span>),
             head_dim,
         })
     }
@@ -985,13 +1054,18 @@
 <span class="kw">impl </span>MLlamaSelfAttentionDecoderLayer {
     <span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         rope: Arc&lt;Llama3RotaryEmbedding&gt;,
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq))<span class="question-mark">?</span>;
+        <span class="kw">let </span>mlp = MLlamaTextMlp::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq),
+            comm,
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -1006,6 +1080,7 @@
             cfg,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"self_attn"</span>), loading_isq),
             rope,
+            comm,
         )<span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -1056,33 +1131,42 @@
 <span class="kw">impl </span>MLlamaTextCrossAttention {
     <span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            q_proj: linear_no_bias(
+            q_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * cfg.head_dim(),
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"q_proj"</span>),
             )<span class="question-mark">?</span>,
-            k_proj: linear_no_bias(
+            k_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"k_proj"</span>),
             )<span class="question-mark">?</span>,
-            v_proj: linear_no_bias(
+            v_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"v_proj"</span>),
             )<span class="question-mark">?</span>,
-            o_proj: linear_no_bias(
+            o_proj: RowParallelLayer::new(
                 cfg.num_attention_heads * cfg.head_dim(),
                 cfg.hidden_size,
                 <span class="kw-2">&amp;</span>cfg.quantization_config,
+                <span class="bool-val">false</span>,
+                comm,
                 vb.pp(<span class="string">"o_proj"</span>),
             )<span class="question-mark">?</span>,
             q_norm: RmsNorm::new(
@@ -1095,8 +1179,8 @@
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp(<span class="string">"k_norm"</span>), <span class="bool-val">false</span>),
             )<span class="question-mark">?</span>,
-            num_heads: cfg.num_attention_heads,
-            num_kv_heads: cfg.num_key_value_heads,
+            num_heads: cfg.num_attention_heads / comm.world_size(),
+            num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(<span class="number">1</span>),
             head_dim: cfg.head_dim(),
             sdpa_params: SdpaParams {
                 n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
@@ -1197,12 +1281,17 @@
 <span class="kw">impl </span>MLlamaCrossAttentionDecoderLayer {
     <span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq))<span class="question-mark">?</span>;
+        <span class="kw">let </span>mlp = MLlamaTextMlp::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq),
+            comm,
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -1218,6 +1307,7 @@
             mapper.set_device(layer_idx, vb.pp(<span class="string">"cross_attn"</span>), loading_isq),
             mapper,
             layer_idx,
+            comm,
         )<span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -1284,7 +1374,7 @@
 <span class="kw">impl </span>MLlamaTextModel {
     <span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>new(
         cfg: <span class="kw-2">&amp;</span>MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1301,20 +1391,22 @@
         )<span class="question-mark">?</span>;
 
         <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-            mistralrs_quant::linear_no_bias(
+            ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
-                mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), <span class="bool-val">false</span>),
+                <span class="bool-val">false</span>,
+                mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
             )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(embed_tokens.embeddings(), <span class="bool-val">false</span>)<span class="question-mark">?</span>,
-                    <span class="prelude-val">None</span>,
-                ),
-            ))<span class="question-mark">?</span>)
-        };
+            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+                mapper.cast_nm_device(
+                    embed_tokens.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )<span class="question-mark">?</span>,
+                <span class="prelude-val">None</span>,
+            ))<span class="question-mark">?
+        </span>};
 
         <span class="kw">let </span>vb = vb.pp(<span class="string">"model"</span>);
 
@@ -1342,6 +1434,7 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+            <span class="kw">let </span>comm = mapper.get_comm_for(i)<span class="question-mark">?</span>;
             <span class="kw">if </span>cfg.cross_attention_layers.contains(<span class="kw-2">&amp;</span>i) {
                 layers.push(MLlamaDecoderLayer::CrossAttn(
                     MLlamaCrossAttentionDecoderLayer::new(
@@ -1350,6 +1443,7 @@
                         <span class="kw-2">&amp;*</span>mapper,
                         i,
                         <span class="bool-val">false</span>,
+                        <span class="kw-2">&amp;</span>comm,
                     )<span class="question-mark">?</span>,
                 ))
             } <span class="kw">else </span>{
@@ -1367,6 +1461,7 @@
                         <span class="kw-2">&amp;*</span>mapper,
                         i,
                         normal_loading_metadata.loading_isq,
+                        <span class="kw-2">&amp;</span>comm,
                     )<span class="question-mark">?</span>,
                 ))
             }
@@ -1381,11 +1476,12 @@
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: cfg.num_key_value_heads,
-                num_attn_heads: cfg.num_attention_heads,
+                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>.world_size(),
+                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>.world_size())
+                    .max(<span class="number">1</span>),
                 sliding_window: <span class="prelude-val">None</span>,
-                k_head_dim: <span class="prelude-val">None</span>,
-                v_head_dim: <span class="prelude-val">None</span>,
+                k_head_dim: cfg.head_dim(),
+                v_head_dim: cfg.head_dim(),
             },
             cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,

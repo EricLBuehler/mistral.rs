@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/layers.rs`."><title>layers.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../static.files/storage-59e33391.js"></script><script defer src="../../static.files/src-script-56102188.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/</div>layers.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/layers.rs`."><title>layers.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../static.files/storage-59e33391.js"></script><script defer src="../../static.files/src-script-56102188.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/</div>layers.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -1304,7 +1304,102 @@
 <a href="#1303" id="1303">1303</a>
 <a href="#1304" id="1304">1304</a>
 <a href="#1305" id="1305">1305</a>
-<a href="#1306" id="1306">1306</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1306" id="1306">1306</a>
+<a href="#1307" id="1307">1307</a>
+<a href="#1308" id="1308">1308</a>
+<a href="#1309" id="1309">1309</a>
+<a href="#1310" id="1310">1310</a>
+<a href="#1311" id="1311">1311</a>
+<a href="#1312" id="1312">1312</a>
+<a href="#1313" id="1313">1313</a>
+<a href="#1314" id="1314">1314</a>
+<a href="#1315" id="1315">1315</a>
+<a href="#1316" id="1316">1316</a>
+<a href="#1317" id="1317">1317</a>
+<a href="#1318" id="1318">1318</a>
+<a href="#1319" id="1319">1319</a>
+<a href="#1320" id="1320">1320</a>
+<a href="#1321" id="1321">1321</a>
+<a href="#1322" id="1322">1322</a>
+<a href="#1323" id="1323">1323</a>
+<a href="#1324" id="1324">1324</a>
+<a href="#1325" id="1325">1325</a>
+<a href="#1326" id="1326">1326</a>
+<a href="#1327" id="1327">1327</a>
+<a href="#1328" id="1328">1328</a>
+<a href="#1329" id="1329">1329</a>
+<a href="#1330" id="1330">1330</a>
+<a href="#1331" id="1331">1331</a>
+<a href="#1332" id="1332">1332</a>
+<a href="#1333" id="1333">1333</a>
+<a href="#1334" id="1334">1334</a>
+<a href="#1335" id="1335">1335</a>
+<a href="#1336" id="1336">1336</a>
+<a href="#1337" id="1337">1337</a>
+<a href="#1338" id="1338">1338</a>
+<a href="#1339" id="1339">1339</a>
+<a href="#1340" id="1340">1340</a>
+<a href="#1341" id="1341">1341</a>
+<a href="#1342" id="1342">1342</a>
+<a href="#1343" id="1343">1343</a>
+<a href="#1344" id="1344">1344</a>
+<a href="#1345" id="1345">1345</a>
+<a href="#1346" id="1346">1346</a>
+<a href="#1347" id="1347">1347</a>
+<a href="#1348" id="1348">1348</a>
+<a href="#1349" id="1349">1349</a>
+<a href="#1350" id="1350">1350</a>
+<a href="#1351" id="1351">1351</a>
+<a href="#1352" id="1352">1352</a>
+<a href="#1353" id="1353">1353</a>
+<a href="#1354" id="1354">1354</a>
+<a href="#1355" id="1355">1355</a>
+<a href="#1356" id="1356">1356</a>
+<a href="#1357" id="1357">1357</a>
+<a href="#1358" id="1358">1358</a>
+<a href="#1359" id="1359">1359</a>
+<a href="#1360" id="1360">1360</a>
+<a href="#1361" id="1361">1361</a>
+<a href="#1362" id="1362">1362</a>
+<a href="#1363" id="1363">1363</a>
+<a href="#1364" id="1364">1364</a>
+<a href="#1365" id="1365">1365</a>
+<a href="#1366" id="1366">1366</a>
+<a href="#1367" id="1367">1367</a>
+<a href="#1368" id="1368">1368</a>
+<a href="#1369" id="1369">1369</a>
+<a href="#1370" id="1370">1370</a>
+<a href="#1371" id="1371">1371</a>
+<a href="#1372" id="1372">1372</a>
+<a href="#1373" id="1373">1373</a>
+<a href="#1374" id="1374">1374</a>
+<a href="#1375" id="1375">1375</a>
+<a href="#1376" id="1376">1376</a>
+<a href="#1377" id="1377">1377</a>
+<a href="#1378" id="1378">1378</a>
+<a href="#1379" id="1379">1379</a>
+<a href="#1380" id="1380">1380</a>
+<a href="#1381" id="1381">1381</a>
+<a href="#1382" id="1382">1382</a>
+<a href="#1383" id="1383">1383</a>
+<a href="#1384" id="1384">1384</a>
+<a href="#1385" id="1385">1385</a>
+<a href="#1386" id="1386">1386</a>
+<a href="#1387" id="1387">1387</a>
+<a href="#1388" id="1388">1388</a>
+<a href="#1389" id="1389">1389</a>
+<a href="#1390" id="1390">1390</a>
+<a href="#1391" id="1391">1391</a>
+<a href="#1392" id="1392">1392</a>
+<a href="#1393" id="1393">1393</a>
+<a href="#1394" id="1394">1394</a>
+<a href="#1395" id="1395">1395</a>
+<a href="#1396" id="1396">1396</a>
+<a href="#1397" id="1397">1397</a>
+<a href="#1398" id="1398">1398</a>
+<a href="#1399" id="1399">1399</a>
+<a href="#1400" id="1400">1400</a>
+<a href="#1401" id="1401">1401</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
@@ -1312,10 +1407,12 @@
     quantized::{QMatMul, QTensor},
     Context, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D,
 };
-<span class="kw">use </span>candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
+<span class="kw">use </span>candle_nn::{
+    Conv2d, Conv2dConfig, Embedding, GroupNorm, LayerNorm, LayerNormConfig, Linear, Module,
+};
 <span class="kw">use </span>float8::F8E4M3;
 <span class="kw">use </span>half::{bf16, f16};
-<span class="kw">use </span>mistralrs_quant::get_use_matmul_via_f16;
+<span class="kw">use </span>mistralrs_quant::{get_use_matmul_via_f16, ShardedVarBuilder};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="kw">pub use </span><span class="kw">crate</span>::attention::Sdpa;
@@ -1330,6 +1427,100 @@
 
 <span class="kw">pub use </span>mistralrs_quant::MatMul;
 
+<span class="kw">pub fn </span>embedding(in_size: usize, out_size: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;Embedding&gt; {
+    <span class="kw">let </span>embeddings = vb.get_with_hints((in_size, out_size), <span class="string">"weight"</span>, Default::default())<span class="question-mark">?</span>;
+    <span class="prelude-val">Ok</span>(Embedding::new(embeddings, out_size))
+}
+
+<span class="kw">pub fn </span>layer_norm&lt;C: Into&lt;LayerNormConfig&gt;&gt;(
+    size: usize,
+    config: C,
+    vb: ShardedVarBuilder,
+) -&gt; <span class="prelude-ty">Result</span>&lt;LayerNorm&gt; {
+    <span class="kw">let </span>config = config.into();
+    <span class="kw">let </span>weight = vb.get(size, <span class="string">"weight"</span>)<span class="question-mark">?</span>;
+    <span class="kw">if </span>config.affine {
+        <span class="kw">let </span>bias = vb.get(size, <span class="string">"bias"</span>)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(LayerNorm::new(weight, bias, config.eps))
+    } <span class="kw">else </span>{
+        <span class="prelude-val">Ok</span>(LayerNorm::new_no_bias(weight, config.eps))
+    }
+}
+
+<span class="kw">pub fn </span>group_norm(
+    num_groups: usize,
+    num_channels: usize,
+    eps: f64,
+    vb: ShardedVarBuilder,
+) -&gt; <span class="prelude-ty">Result</span>&lt;GroupNorm&gt; {
+    <span class="kw">let </span>weight = vb.get(num_channels, <span class="string">"weight"</span>)<span class="question-mark">?</span>;
+    <span class="kw">let </span>bias = vb.get(num_channels, <span class="string">"bias"</span>)<span class="question-mark">?</span>;
+    GroupNorm::new(weight, bias, num_channels, num_groups, eps)
+}
+
+<span class="kw">pub fn </span>conv2d(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv2dConfig,
+    vb: ShardedVarBuilder,
+) -&gt; <span class="prelude-ty">Result</span>&lt;Conv2d&gt; {
+    <span class="kw">let </span>ws = vb.get(
+        (
+            out_channels,
+            in_channels / cfg.groups,
+            kernel_size,
+            kernel_size,
+        ),
+        <span class="string">"weight"</span>,
+    )<span class="question-mark">?</span>;
+    <span class="kw">let </span>bs = vb.get(out_channels, <span class="string">"bias"</span>)<span class="question-mark">?</span>;
+    <span class="prelude-val">Ok</span>(Conv2d::new(ws, <span class="prelude-val">Some</span>(bs), cfg))
+}
+
+<span class="kw">pub fn </span>conv2d_no_bias(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv2dConfig,
+    vb: ShardedVarBuilder,
+) -&gt; <span class="prelude-ty">Result</span>&lt;Conv2d&gt; {
+    <span class="kw">let </span>ws = vb.get(
+        (
+            out_channels,
+            in_channels / cfg.groups,
+            kernel_size,
+            kernel_size,
+        ),
+        <span class="string">"weight"</span>,
+    )<span class="question-mark">?</span>;
+    <span class="prelude-val">Ok</span>(Conv2d::new(ws, <span class="prelude-val">None</span>, cfg))
+}
+
+<span class="kw">pub fn </span>linear(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;Linear&gt; {
+    <span class="kw">let </span>ws = vb.get((out_dim, in_dim), <span class="string">"weight"</span>)<span class="question-mark">?</span>;
+    <span class="kw">let </span>bs = vb.get(out_dim, <span class="string">"bias"</span>)<span class="question-mark">?</span>;
+    <span class="prelude-val">Ok</span>(Linear::new(ws, <span class="prelude-val">Some</span>(bs)))
+}
+
+<span class="kw">pub fn </span>linear_no_bias(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;Linear&gt; {
+    <span class="kw">let </span>ws = vb.get((out_dim, in_dim), <span class="string">"weight"</span>)<span class="question-mark">?</span>;
+    <span class="prelude-val">Ok</span>(Linear::new(ws, <span class="prelude-val">None</span>))
+}
+
+<span class="kw">pub fn </span>linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: ShardedVarBuilder,
+) -&gt; <span class="prelude-ty">Result</span>&lt;Linear&gt; {
+    <span class="kw">if </span>bias {
+        linear(in_dim, out_dim, vb)
+    } <span class="kw">else </span>{
+        linear_no_bias(in_dim, out_dim, vb)
+    }
+}
+
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>RmsNorm {
     eps: f64,
@@ -1337,16 +1528,15 @@
 }
 
 <span class="kw">impl </span>RmsNorm {
-    <span class="kw">pub fn </span>new(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
-        <span class="kw">let </span>w = inner.inner().weight().clone();
+    <span class="kw">pub fn </span>new(size: usize, eps: f64, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>w = vb.get(size, <span class="string">"weight"</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ eps, weight: w })
     }
 
     <span class="doccomment">/// Gemma uses weight + 1.0
-    </span><span class="kw">pub fn </span>new_gemma(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>inner = candle_nn::rms_norm_non_quant(size, eps, vb)<span class="question-mark">?</span>;
-        <span class="kw">let </span>w = (inner.inner().weight().clone() + <span class="number">1.0</span>)<span class="question-mark">?</span>;
+    </span><span class="kw">pub fn </span>new_gemma(size: usize, eps: f64, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>w = vb.get(size, <span class="string">"weight"</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span>w = (w + <span class="number">1.0</span>)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ eps, weight: w })
     }
 
@@ -1380,7 +1570,7 @@
 }
 
 <span class="kw">impl </span>F32RmsNorm {
-    <span class="kw">pub fn </span>new(size: usize, eps: f64, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new(size: usize, eps: f64, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             w: vb.get((size,), <span class="string">"weight"</span>)<span class="question-mark">?</span>,
             eps,
@@ -2466,7 +2656,7 @@
         out_channels: usize,
         kernel_sizes: [usize; <span class="number">3</span>],
         cfg: Conv3dConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>ws = vb.get(
             (

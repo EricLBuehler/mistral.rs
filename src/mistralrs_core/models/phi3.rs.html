@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/models/phi3.rs`."><title>phi3.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/models/</div>phi3.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/models/phi3.rs`."><title>phi3.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/models/</div>phi3.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -815,13 +815,15 @@
 <a href="#814" id="814">814</a>
 <a href="#815" id="815">815</a>
 <a href="#816" id="816">816</a>
-<a href="#817" id="817">817</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>candle_nn::VarBuilder;
-<span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+<span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder};
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use crate</span>::{
@@ -833,8 +835,8 @@
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding,
-        RmsNorm, Sdpa,
+        embedding, Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig,
+        PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -907,7 +909,7 @@
     <span class="kw">fn </span>new(
         rotary_emb: Arc&lt;PhiRotaryEmbedding&gt;,
         cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>num_heads = cfg.num_attention_heads;
@@ -915,7 +917,8 @@
         <span class="kw">let </span>head_dim = cfg.head_dim();
         <span class="kw">let </span>op_size = num_heads * head_dim + <span class="number">2 </span>* num_kv_heads * head_dim;
 
-        <span class="kw">let </span>qkv_proj = mistralrs_quant::linear_no_bias(
+        <span class="comment">// No TP here.
+        </span><span class="kw">let </span>qkv_proj = mistralrs_quant::linear_no_bias(
             cfg.hidden_size,
             op_size,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
@@ -956,7 +959,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         position_ids: <span class="kw-2">&amp;</span>[usize],
         kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
-        metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
@@ -1017,7 +1020,7 @@
                 <span class="prelude-val">None </span>=&gt; {
                     <span class="comment">// If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
                     // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    </span><span class="kw">let </span><span class="kw-2">mut </span>input_metadata = PagedAttentionInputMetadata::dummy(q.device())<span class="question-mark">?</span>;
+                    </span><span class="kw">let </span>input_metadata = PagedAttentionInputMetadata::dummy(q.device())<span class="question-mark">?</span>;
                     <span class="comment">// Sanity check.
                     </span><span class="macro">assert!</span>(attention_mask.is_some());
                     paged_attn.forward(
@@ -1027,7 +1030,7 @@
                         attention_mask,
                         <span class="prelude-val">None</span>,
                         <span class="prelude-val">None</span>,
-                        <span class="kw-2">&amp;mut </span>input_metadata,
+                        <span class="kw-2">&amp;</span>input_metadata,
                         <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
                         <span class="prelude-val">Some</span>(flash_params),
                     )<span class="question-mark">?
@@ -1074,11 +1077,12 @@
 }
 
 <span class="kw">impl </span>Mlp {
-    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>hidden_size = cfg.hidden_size;
         <span class="kw">let </span>i_size = cfg.intermediate_size;
 
-        <span class="kw">let </span>gate_up_proj = mistralrs_quant::linear_no_bias(
+        <span class="comment">// No TP here.
+        </span><span class="kw">let </span>gate_up_proj = mistralrs_quant::linear_no_bias(
             hidden_size,
             <span class="number">2 </span>* i_size,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
@@ -1168,7 +1172,7 @@
     <span class="kw">fn </span>new(
         rotary_emb: Arc&lt;PhiRotaryEmbedding&gt;,
         cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
@@ -1207,7 +1211,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         position_ids: <span class="kw-2">&amp;</span>[usize],
         kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
-        metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>residual = xs;
@@ -1246,7 +1250,7 @@
 <span class="kw">impl </span>Model {
     <span class="kw">pub fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1261,7 +1265,7 @@
         <span class="kw">let </span>mapper = normal_loading_metadata.mapper;
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
 
-        <span class="kw">let </span>embed_tokens = candle_nn::embedding(
+        <span class="kw">let </span>embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp(<span class="string">"embed_tokens"</span>), <span class="bool-val">false</span>),
@@ -1278,9 +1282,11 @@
         }
         <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
-        <span class="kw">for </span>layer_idx <span class="kw">in
-            </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
-        {
+        <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(
+            <span class="number">0</span>..cfg.num_hidden_layers,
+            <span class="string">"Loading repeating layers"</span>,
+            <span class="kw-2">&amp;</span>normal_loading_metadata.multi_progress,
+        ) {
             <span class="kw">let </span>device = mapper
                 .device_for(layer_idx, <span class="bool-val">false</span>)
                 .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
@@ -1311,23 +1317,22 @@
             mapper.set_nm_device(vb_m.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-            mistralrs_quant::linear_no_bias(
+            ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                <span class="bool-val">false</span>,
                 mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
             )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )<span class="question-mark">?</span>,
-                    <span class="prelude-val">None</span>,
-                ),
-            ))<span class="question-mark">?</span>)
-        };
+            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+                mapper.cast_nm_device(
+                    embed_tokens.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )<span class="question-mark">?</span>,
+                <span class="prelude-val">None</span>,
+            ))<span class="question-mark">?
+        </span>};
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
             layers,
@@ -1339,18 +1344,19 @@
                 cfg.max_position_embeddings,
             )),
             max_seq_len: cfg.max_position_embeddings,
-            mapper,
             sliding_window: cfg.sliding_window,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: cfg.num_key_value_heads,
-                num_attn_heads: cfg.num_attention_heads,
+                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>.world_size(),
+                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>.world_size())
+                    .max(<span class="number">1</span>),
                 sliding_window: cfg.sliding_window,
-                k_head_dim: <span class="prelude-val">None</span>,
-                v_head_dim: <span class="prelude-val">None</span>,
+                k_head_dim: cfg.head_dim(),
+                v_head_dim: cfg.head_dim(),
             },
+            mapper,
         })
     }
 
@@ -1360,7 +1366,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         position_ids: <span class="kw-2">&amp;</span>[usize],
         context_lens: Vec&lt;(usize, usize)&gt;,
-        <span class="kw-2">mut </span>metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
@@ -1395,8 +1401,8 @@
                 position_ids,
                 <span class="kw-2">&amp;mut </span>cache[i],
                 metadata
-                    .as_mut()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), <span class="kw-2">&amp;mut **</span>metadata)),
+                    .as_ref()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), <span class="kw-2">*</span>metadata)),
                 flash_params,
             )<span class="question-mark">?
         </span>}
@@ -1474,7 +1480,7 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         context_lens: Vec&lt;(usize, usize)&gt;,
         position_ids: Vec&lt;usize&gt;,
-        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;mut </span>PagedAttentionInputMetadata)&gt;,
+        metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="self">self</span>.forward(
@@ -1538,12 +1544,12 @@
     }
     <span class="kw">fn </span>create_anymoe_layers(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-        additional_vbs: Vec&lt;VarBuilder&gt;,
+        additional_vbs: Vec&lt;ShardedVarBuilder&gt;,
         config: AnyMoeConfig,
         (prefix, mlp): (String, String),
         <span class="kw-2">mut </span>layers: Vec&lt;usize&gt;,
         expert_type: AnyMoeExpertType,
-        gate_vb: <span class="prelude-ty">Option</span>&lt;VarBuilder&gt;,
+        gate_vb: <span class="prelude-ty">Option</span>&lt;ShardedVarBuilder&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>experts: Vec&lt;Vec&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt;&gt; = Vec::new();
         <span class="kw">if </span>layers.is_empty() {

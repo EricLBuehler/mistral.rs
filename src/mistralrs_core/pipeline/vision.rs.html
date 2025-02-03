@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/vision.rs`."><title>vision.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>vision.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/vision.rs`."><title>vision.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>vision.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -913,7 +913,18 @@
 <a href="#912" id="912">912</a>
 <a href="#913" id="913">913</a>
 <a href="#914" id="914">914</a>
-<a href="#915" id="915">915</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#915" id="915">915</a>
+<a href="#916" id="916">916</a>
+<a href="#917" id="917">917</a>
+<a href="#918" id="918">918</a>
+<a href="#919" id="919">919</a>
+<a href="#920" id="920">920</a>
+<a href="#921" id="921">921</a>
+<a href="#922" id="922">922</a>
+<a href="#923" id="923">923</a>
+<a href="#924" id="924">924</a>
+<a href="#925" id="925">925</a>
+<a href="#926" id="926">926</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -949,6 +960,7 @@
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+<span class="kw">use </span>indicatif::MultiProgress;
 <span class="kw">use </span>mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>regex_automata::meta::Regex;
@@ -1271,6 +1283,7 @@
             AttentionImplementation::Eager
         };
 
+        <span class="kw">let </span>multi_progress = Arc::new(MultiProgress::new());
         <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
             ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader!</span>(
                 paths,
@@ -1285,7 +1298,8 @@
                 loading_isq,
                 <span class="self">self</span>.config.from_uqff.is_some(),
                 device.clone(),
-                attention_mechanism
+                attention_mechanism,
+                multi_progress,
             ),
             <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
         };
@@ -1424,6 +1438,7 @@
                     processor_filename: paths.get_processor_config(),
                     preprocessor_filename: paths.get_preprocessor_config(),
                 },
+                Arc::new(MultiProgress::new()),
             )<span class="question-mark">?</span>;
         } <span class="kw">else if let </span><span class="prelude-val">Some</span>(from_uqff) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
             model.load_from_artifacts(
@@ -1482,7 +1497,7 @@
                 </span>activation_dtype: dtype,
                 sliding_window,
                 cache_config,
-                cache_engine,
+                cache_engines: cache_engine.map(|x| <span class="macro">vec!</span>[x]),
                 prompt_chunksize: <span class="self">self</span>.config.prompt_chunksize,
                 model_metadata: <span class="prelude-val">Some</span>(model_metadata),
             }),
@@ -1541,6 +1556,7 @@
                     processor_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.processor_filename,
                     preprocessor_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.preprocessor_filename,
                 },
+                Arc::new(MultiProgress::new()),
             )
             .map_err(anyhow::Error::msg)
     }
@@ -1626,14 +1642,20 @@
             position_ids,
             pixel_values,
             model_specific_args,
-            <span class="kw-2">mut </span>paged_attn_meta,
+            paged_attn_meta,
             flash_meta,
         } = <span class="kw-2">*</span>inputs.downcast::&lt;ModelInputs&gt;().expect(<span class="string">"Downcast failed."</span>);
-        <span class="kw">let </span>paged_attn_meta = <span class="kw">match </span>(
-            <span class="self">self</span>.get_metadata().cache_engine.as_ref(),
-            <span class="kw-2">&amp;mut </span>paged_attn_meta,
-        ) {
-            (<span class="prelude-val">Some</span>(engine), <span class="prelude-val">Some</span>(meta)) =&gt; <span class="prelude-val">Some</span>((engine.get_kv_cache().clone(), meta)),
+        <span class="kw">let </span>metadata = <span class="self">self</span>.get_metadata();
+        <span class="macro">assert_eq!</span>(
+            metadata
+                .cache_engines
+                .as_ref()
+                .map(|x| x.len())
+                .unwrap_or(<span class="number">1</span>),
+            <span class="number">1
+        </span>);
+        <span class="kw">let </span>paged_attn_meta = <span class="kw">match </span>(<span class="kw-2">&amp;</span>metadata.cache_engines, <span class="kw-2">&amp;</span>paged_attn_meta) {
+            (<span class="prelude-val">Some</span>(engine), <span class="prelude-val">Some</span>(meta)) =&gt; <span class="prelude-val">Some</span>((engine[<span class="number">0</span>].get_kv_cache().clone(), meta)),
             (<span class="prelude-val">Some</span>(<span class="kw">_</span>), <span class="prelude-val">None</span>) =&gt; {
                 <span class="comment">// This can happen if Rust-side user code is wrong
                 </span><span class="macro">candle_core::bail!</span>(<span class="string">"Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention."</span>)

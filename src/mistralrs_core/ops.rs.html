@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/ops.rs`."><title>ops.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../static.files/storage-59e33391.js"></script><script defer src="../../static.files/src-script-56102188.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/</div>ops.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/ops.rs`."><title>ops.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../static.files/storage-59e33391.js"></script><script defer src="../../static.files/src-script-56102188.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/</div>ops.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -964,11 +964,30 @@
 <a href="#963" id="963">963</a>
 <a href="#964" id="964">964</a>
 <a href="#965" id="965">965</a>
-<a href="#966" id="966">966</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
+<a href="#975" id="975">975</a>
+<a href="#976" id="976">976</a>
+<a href="#977" id="977">977</a>
+<a href="#978" id="978">978</a>
+<a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a>
+<a href="#983" id="983">983</a>
+<a href="#984" id="984">984</a>
+<a href="#985" id="985">985</a>
+<a href="#986" id="986">986</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
     backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
     <span class="prelude-ty">Result</span>, Shape, Tensor, WithDType, D,
 };
-<span class="kw">use </span>rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 <span class="kw">use </span>std::{
     fmt::Display,
@@ -1629,36 +1648,57 @@
 }
 
 <span class="kw">fn </span>bincount(values: <span class="kw-2">&amp;</span>[u32], minlength: u32) -&gt; Vec&lt;u32&gt; {
-    <span class="comment">// Find the maximum value in `values` (or zero if empty)
-    </span><span class="kw">let </span>max_val = values.par_iter().max().copied().unwrap_or(<span class="number">0</span>);
+    <span class="comment">// let max_val = values.iter().max().copied().unwrap_or(0);
+    // let result_len = (max_val + 1).max(minlength);
+    // values.iter().fold(
+    //     // Start with a histogram vector of zeros.
+    //     vec![0u32; result_len as usize],
+    //     // For each value, update the histogram.
+    //     |mut histogram, &amp;value| {
+    //         histogram[value as usize] += 1;
+    //         histogram
+    //     },
+    // )
 
-    <span class="comment">// The final size of the bin counts must be at least `minlength`
-    // and large enough to include the largest value in `values`.
-    </span><span class="kw">let </span>result_len = (max_val + <span class="number">1</span>).max(minlength);
+    </span><span class="kw">use </span>rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-    <span class="comment">// Each thread creates a local histogram (`fold`),
-    // and then they are merged together (`reduce`).
+    <span class="comment">// Early return if there are no values.
+    </span><span class="kw">if </span>values.is_empty() {
+        <span class="kw">return </span><span class="macro">vec!</span>[<span class="number">0u32</span>; minlength <span class="kw">as </span>usize];
+    }
+
+    <span class="comment">// Compute the maximum value in parallel.
+    // SAFETY: we know `values` is nonempty.
+    </span><span class="kw">let </span>max_val = <span class="kw-2">*</span>values.par_iter().max().unwrap();
+
+    <span class="comment">// The histogram length must cover all observed values as well as `minlength`.
+    </span><span class="kw">let </span>result_len = (max_val + <span class="number">1</span>).max(minlength) <span class="kw">as </span>usize;
+
+    <span class="comment">// Build per-thread histograms in parallel.
+    // We use unsafe indexing to eliminate bounds checks in the inner loop.
     </span>values
         .par_iter()
         .fold(
-            <span class="comment">// Create a local histogram
-            </span>|| <span class="macro">vec!</span>[<span class="number">0u32</span>; result_len <span class="kw">as </span>usize],
-            <span class="comment">// Update the local histogram
-            </span>|<span class="kw-2">mut </span>local_counts, <span class="kw-2">&amp;</span>val| {
-                local_counts[val <span class="kw">as </span>usize] += <span class="number">1</span>;
-                local_counts
+            || <span class="macro">vec!</span>[<span class="number">0u32</span>; result_len],
+            |<span class="kw-2">mut </span>local_hist, <span class="kw-2">&amp;</span>v| {
+                <span class="comment">// SAFETY: v is guaranteed to be &lt;= max_val, so it is in bounds.
+                </span><span class="kw">unsafe </span>{
+                    <span class="kw-2">*</span>local_hist.get_unchecked_mut(v <span class="kw">as </span>usize) += <span class="number">1</span>;
+                }
+                local_hist
             },
         )
-        <span class="comment">// Merge histograms from all threads
+        <span class="comment">// Merge the per-thread histograms in parallel.
         </span>.reduce(
-            <span class="comment">// Identity (empty histogram)
-            </span>|| <span class="macro">vec!</span>[<span class="number">0u32</span>; result_len <span class="kw">as </span>usize],
-            <span class="comment">// Combine two histograms
-            </span>|<span class="kw-2">mut </span>global_counts, local_counts| {
-                <span class="kw">for </span>(g, l) <span class="kw">in </span>global_counts.iter_mut().zip(local_counts) {
-                    <span class="kw-2">*</span>g += l;
+            || <span class="macro">vec!</span>[<span class="number">0u32</span>; result_len],
+            |<span class="kw-2">mut </span>global_hist, local_hist| {
+                <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..result_len {
+                    <span class="comment">// SAFETY: we know local histogram is at least result_len, as is global_hist
+                    </span><span class="kw">unsafe </span>{
+                        <span class="kw-2">*</span>global_hist.get_unchecked_mut(i) += local_hist.get_unchecked(i);
+                    }
                 }
-                global_counts
+                global_hist
             },
         )
 }

@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/qwen2vl/vision.rs`."><title>vision.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../../static.files/storage-59e33391.js"></script><script defer src="../../../../static.files/src-script-56102188.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/qwen2vl/</div>vision.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/qwen2vl/vision.rs`."><title>vision.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../../static.files/storage-59e33391.js"></script><script defer src="../../../../static.files/src-script-56102188.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/qwen2vl/</div>vision.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -382,11 +382,11 @@
 <a href="#381" id="381">381</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>candle_nn::{layer_norm, LayerNorm, Linear, Module, VarBuilder};
-<span class="kw">use </span>mistralrs_quant::QuantMethod;
+<span class="kw">use </span>candle_nn::{LayerNorm, Linear, Module};
+<span class="kw">use </span>mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 <span class="kw">use crate</span>::{
-    layers::{Activation, Conv3dConfig, Conv3dNoBias, MatMul},
+    layers::{<span class="self">self</span>, layer_norm, Activation, Conv3dConfig, Conv3dNoBias, MatMul},
     ops::RepeatInterleaveOp,
 };
 
@@ -402,7 +402,7 @@
 
 <span class="comment">// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L272
 </span><span class="kw">impl </span>PatchEmbed {
-    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>VisionConfig, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>VisionConfig, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">if </span>cfg.temporal_patch_size != <span class="number">2 </span>{
             <span class="macro">candle_core::bail!</span>(<span class="string">"Only support temporal patch size of 2"</span>);
         }
@@ -444,7 +444,7 @@
 }
 
 <span class="kw">impl </span>VisionMlp {
-    <span class="kw">fn </span>new(dim: usize, hidden_dim: usize, act: Activation, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(dim: usize, hidden_dim: usize, act: Activation, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             fc1: mistralrs_quant::linear(dim, hidden_dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"fc1"</span>))<span class="question-mark">?</span>,
             fc2: mistralrs_quant::linear(hidden_dim, dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"fc2"</span>))<span class="question-mark">?</span>,
@@ -482,7 +482,7 @@
 }
 
 <span class="kw">impl </span>VisionAttention {
-    <span class="kw">fn </span>new(dim: usize, num_heads: usize, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(dim: usize, num_heads: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             qkv: mistralrs_quant::linear(dim, dim * <span class="number">3</span>, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"qkv"</span>))<span class="question-mark">?</span>,
             proj: mistralrs_quant::linear(dim, dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"proj"</span>))<span class="question-mark">?</span>,
@@ -546,7 +546,7 @@
 }
 
 <span class="kw">impl </span>VisionBlock {
-    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>VisionConfig, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>VisionConfig, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>norm1 = layer_norm(cfg.embed_dim, <span class="number">1e-6</span>, vb.pp(<span class="string">"norm1"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>norm2 = layer_norm(cfg.embed_dim, <span class="number">1e-6</span>, vb.pp(<span class="string">"norm2"</span>))<span class="question-mark">?</span>;
 
@@ -588,11 +588,11 @@
         dim: usize,
         context_dim: usize,
         spatial_merge_size: usize,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>hidden_size = context_dim * spatial_merge_size.pow(<span class="number">2</span>);
-        <span class="kw">let </span>mlp0 = candle_nn::linear(hidden_size, hidden_size, vb.pp(<span class="string">"mlp.0"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>mlp2 = candle_nn::linear(hidden_size, dim, vb.pp(<span class="string">"mlp.2"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>mlp0 = layers::linear(hidden_size, hidden_size, vb.pp(<span class="string">"mlp.0"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>mlp2 = layers::linear(hidden_size, dim, vb.pp(<span class="string">"mlp.2"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             ln_q: layer_norm(context_dim, <span class="number">1e-6</span>, vb.pp(<span class="string">"ln_q"</span>))<span class="question-mark">?</span>,
             mlp0,
@@ -646,7 +646,7 @@
 }
 
 <span class="kw">impl </span>Qwen2VLVisionModel {
-    <span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>VisionConfig, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>VisionConfig, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>blocks = Vec::new();
         <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..cfg.depth {
             blocks.push(VisionBlock::new(cfg, vb.pp(<span class="macro">format!</span>(<span class="string">"blocks.{i}"</span>)))<span class="question-mark">?</span>);

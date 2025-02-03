@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/qwen2vl/text.rs`."><title>text.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../../static.files/storage-59e33391.js"></script><script defer src="../../../../static.files/src-script-56102188.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/qwen2vl/</div>text.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/vision_models/qwen2vl/text.rs`."><title>text.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../../static.files/storage-59e33391.js"></script><script defer src="../../../../static.files/src-script-56102188.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/vision_models/qwen2vl/</div>text.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -471,16 +471,48 @@
 <a href="#470" id="470">470</a>
 <a href="#471" id="471">471</a>
 <a href="#472" id="472">472</a>
-<a href="#473" id="473">473</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
+<a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a>
+<a href="#491" id="491">491</a>
+<a href="#492" id="492">492</a>
+<a href="#493" id="493">493</a>
+<a href="#494" id="494">494</a>
+<a href="#495" id="495">495</a>
+<a href="#496" id="496">496</a>
+<a href="#497" id="497">497</a>
+<a href="#498" id="498">498</a>
+<a href="#499" id="499">499</a>
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{Embedding, Module, VarBuilder};
-<span class="kw">use </span>mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
+<span class="kw">use </span>candle_nn::{Embedding, Module};
+<span class="kw">use </span>mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+};
 
 <span class="kw">use crate</span>::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{Activation, F32RmsNorm, Qwen2VLRotaryEmbedding, Sdpa},
+    layers::{<span class="self">self</span>, Activation, F32RmsNorm, Qwen2VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         extract_logits, text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
@@ -499,25 +531,31 @@
 }
 
 <span class="kw">impl </span>Mlp {
-    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: ShardedVarBuilder, comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>hidden_sz = cfg.hidden_size;
         <span class="kw">let </span>intermediate_sz = cfg.intermediate_size;
-        <span class="kw">let </span>gate_proj = mistralrs_quant::linear_no_bias(
+        <span class="kw">let </span>gate_proj = ColumnParallelLayer::new(
             hidden_sz,
             intermediate_sz,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
+            <span class="bool-val">false</span>,
+            comm,
             vb.pp(<span class="string">"gate_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>up_proj = mistralrs_quant::linear_no_bias(
+        <span class="kw">let </span>up_proj = ColumnParallelLayer::new(
             hidden_sz,
             intermediate_sz,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
+            <span class="bool-val">false</span>,
+            comm,
             vb.pp(<span class="string">"up_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>down_proj = mistralrs_quant::linear_no_bias(
+        <span class="kw">let </span>down_proj = RowParallelLayer::new(
             intermediate_sz,
             hidden_sz,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
+            <span class="bool-val">false</span>,
+            comm,
             vb.pp(<span class="string">"down_proj"</span>),
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -555,33 +593,46 @@
 }
 
 <span class="kw">impl </span>Attention {
-    <span class="kw">fn </span>new(rotary_emb: Arc&lt;Qwen2VLRotaryEmbedding&gt;, cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(
+        rotary_emb: Arc&lt;Qwen2VLRotaryEmbedding&gt;,
+        cfg: <span class="kw-2">&amp;</span>Config,
+        vb: ShardedVarBuilder,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>hidden_sz = cfg.hidden_size;
         <span class="kw">let </span>num_heads = cfg.num_attention_heads;
         <span class="kw">let </span>num_kv_heads = cfg.num_key_value_heads;
         <span class="kw">let </span>head_dim = hidden_sz / num_heads;
-        <span class="kw">let </span>q_proj = mistralrs_quant::linear(
+        <span class="kw">let </span>q_proj = ColumnParallelLayer::new(
             hidden_sz,
             num_heads * head_dim,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
+            <span class="bool-val">true</span>,
+            comm,
             vb.pp(<span class="string">"q_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>k_proj = mistralrs_quant::linear(
+        <span class="kw">let </span>k_proj = ColumnParallelLayer::new(
             hidden_sz,
             num_kv_heads * head_dim,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
+            <span class="bool-val">true</span>,
+            comm,
             vb.pp(<span class="string">"k_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>v_proj = mistralrs_quant::linear(
+        <span class="kw">let </span>v_proj = ColumnParallelLayer::new(
             hidden_sz,
             num_kv_heads * head_dim,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
+            <span class="bool-val">true</span>,
+            comm,
             vb.pp(<span class="string">"v_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>o_proj = mistralrs_quant::linear_no_bias(
+        <span class="kw">let </span>o_proj = RowParallelLayer::new(
             num_heads * head_dim,
             hidden_sz,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
+            <span class="bool-val">false</span>,
+            comm,
             vb.pp(<span class="string">"o_proj"</span>),
         )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
@@ -589,8 +640,8 @@
             k_proj,
             v_proj,
             o_proj,
-            num_heads,
-            num_kv_heads,
+            num_heads: num_heads / comm.world_size(),
+            num_kv_heads: (num_kv_heads / comm.world_size()).max(<span class="number">1</span>),
             head_dim,
             rotary_emb,
             sdpa_params: SdpaParams {
@@ -691,17 +742,23 @@
     <span class="kw">fn </span>new(
         rotary_emb: Arc&lt;Qwen2VLRotaryEmbedding&gt;,
         cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>self_attn = Attention::new(
             rotary_emb,
             cfg,
             mapper.set_device(layer_idx, vb.pp(<span class="string">"self_attn"</span>), loading_isq),
+            comm,
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>mlp = Mlp::new(cfg, mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq))<span class="question-mark">?</span>;
+        <span class="kw">let </span>mlp = Mlp::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq),
+            comm,
+        )<span class="question-mark">?</span>;
         <span class="kw">let </span>input_layernorm = F32RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -759,7 +816,7 @@
 <span class="kw">impl </span>Qwen2VLTextModel {
     <span class="kw">pub fn </span>new(
         cfg: <span class="kw-2">&amp;</span>Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -770,7 +827,7 @@
         <span class="kw">let </span>mapper = normal_loading_metadata.mapper;
         <span class="kw">let </span>vb_m = vb.pp(<span class="string">"model"</span>);
 
-        <span class="kw">let </span>embed_tokens = candle_nn::embedding(
+        <span class="kw">let </span>embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp(<span class="string">"embed_tokens"</span>), <span class="bool-val">false</span>),
@@ -795,9 +852,11 @@
         }
 
         <span class="kw">let </span>vb_l = vb_m.pp(<span class="string">"layers"</span>);
-        <span class="kw">for </span>layer_idx <span class="kw">in
-            </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(<span class="number">0</span>..cfg.num_hidden_layers, <span class="string">"Loading repeating layers"</span>)
-        {
+        <span class="kw">for </span>layer_idx <span class="kw">in </span>NiceProgressBar::&lt;<span class="kw">_</span>, <span class="string">'b'</span>&gt;(
+            <span class="number">0</span>..cfg.num_hidden_layers,
+            <span class="string">"Loading repeating layers"</span>,
+            <span class="kw-2">&amp;</span>normal_loading_metadata.multi_progress,
+        ) {
             <span class="kw">let </span>device = mapper
                 .device_for(layer_idx, <span class="bool-val">false</span>)
                 .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
@@ -805,6 +864,7 @@
                 .get(<span class="kw-2">&amp;</span>device.location())
                 .expect(<span class="string">"No RoPE for device location!"</span>)
                 .clone();
+            <span class="kw">let </span>comm = mapper.get_comm_for(layer_idx)<span class="question-mark">?</span>;
             <span class="kw">let </span>layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -812,6 +872,7 @@
                 <span class="kw-2">&amp;*</span>mapper,
                 layer_idx,
                 normal_loading_metadata.loading_isq,
+                <span class="kw-2">&amp;</span>comm,
             )<span class="question-mark">?</span>;
             layers.push(layer)
         }
@@ -821,24 +882,22 @@
             mapper.set_nm_device(vb_m.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-            mistralrs_quant::linear_no_bias(
+            ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                <span class="bool-val">false</span>,
                 mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
             )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )<span class="question-mark">?</span>,
-                    <span class="prelude-val">None</span>,
-                ),
-            ))<span class="question-mark">?</span>)
-        };
-
+            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+                mapper.cast_nm_device(
+                    embed_tokens.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )<span class="question-mark">?</span>,
+                <span class="prelude-val">None</span>,
+            ))<span class="question-mark">?
+        </span>};
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
             norm,
@@ -849,19 +908,20 @@
                 cfg.max_position_embeddings,
             )),
             max_seq_len: cfg.max_position_embeddings,
-            mapper,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: cfg.num_key_value_heads,
-                num_attn_heads: cfg.num_attention_heads,
+                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>.world_size(),
+                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>.world_size())
+                    .max(<span class="number">1</span>),
                 sliding_window: cfg.sliding_window,
-                k_head_dim: <span class="prelude-val">None</span>,
-                v_head_dim: <span class="prelude-val">None</span>,
+                k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             },
             device: normal_loading_metadata.real_device.clone(),
             dtype: vb.dtype(),
+            mapper,
         })
     }
 

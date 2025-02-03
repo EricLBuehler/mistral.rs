@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/macros.rs`."><title>macros.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>macros.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/macros.rs`."><title>macros.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>macros.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -605,7 +605,44 @@
 <a href="#604" id="604">604</a>
 <a href="#605" id="605">605</a>
 <a href="#606" id="606">606</a>
-<a href="#607" id="607">607</a></pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a>
+<a href="#613" id="613">613</a>
+<a href="#614" id="614">614</a>
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a>
+<a href="#623" id="623">623</a>
+<a href="#624" id="624">624</a>
+<a href="#625" id="625">625</a>
+<a href="#626" id="626">626</a>
+<a href="#627" id="627">627</a>
+<a href="#628" id="628">628</a>
+<a href="#629" id="629">629</a>
+<a href="#630" id="630">630</a>
+<a href="#631" id="631">631</a>
+<a href="#632" id="632">632</a>
+<a href="#633" id="633">633</a>
+<a href="#634" id="634">634</a>
+<a href="#635" id="635">635</a>
+<a href="#636" id="636">636</a>
+<a href="#637" id="637">637</a>
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a></pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> api_dir_list {
     (<span class="macro-nonterminal">$api</span>:expr, <span class="macro-nonterminal">$model_id</span>:expr) =&gt; {
@@ -997,7 +1034,8 @@
         <span class="macro-nonterminal">$loading_uqff</span>:expr,
         <span class="macro-nonterminal">$real_device</span>:expr,
         <span class="macro-nonterminal">$attention_mechanism</span>:expr,
-        <span class="macro-nonterminal">$is_moqe</span>:expr
+        <span class="macro-nonterminal">$is_moqe</span>:expr,
+        <span class="macro-nonterminal">$multi_progress</span>:expr,
     ) =&gt; {{
         <span class="kw">let </span>regexes = <span class="kw">if </span><span class="macro-nonterminal">$loading_isq </span>&amp;&amp; <span class="macro-nonterminal">$loading_uqff </span>{
             <span class="comment">// Dummy weights for the layers which will be overwritten...
@@ -1032,6 +1070,36 @@
                 mapper: <span class="macro-nonterminal">$mapper</span>,
                 loading_isq: <span class="macro-nonterminal">$loading_isq</span>,
                 real_device: <span class="macro-nonterminal">$real_device</span>,
+                multi_progress: <span class="macro-nonterminal">$multi_progress</span>,
+            },
+            <span class="macro-nonterminal">$attention_mechanism</span>,
+        )<span class="question-mark">?
+    </span>}};
+}
+
+<span class="attr">#[doc(hidden)]
+#[macro_export]
+</span><span class="macro">macro_rules!</span> normal_model_loader_sharded {
+    (
+        <span class="macro-nonterminal">$vb</span>:expr,
+        <span class="macro-nonterminal">$config</span>:expr,
+        <span class="macro-nonterminal">$loader</span>:expr,
+        <span class="macro-nonterminal">$use_flash_attn</span>:expr,
+        <span class="macro-nonterminal">$mapper</span>:expr,
+        <span class="macro-nonterminal">$loading_isq</span>:expr,
+        <span class="macro-nonterminal">$real_device</span>:expr,
+        <span class="macro-nonterminal">$attention_mechanism</span>:expr,
+        <span class="macro-nonterminal">$multi_progress</span>:expr,
+    ) =&gt; {{
+        <span class="macro-nonterminal">$loader</span>.load(
+            <span class="kw-2">&amp;</span><span class="macro-nonterminal">$config</span>,
+            <span class="macro-nonterminal">$use_flash_attn</span>,
+            <span class="macro-nonterminal">$vb</span>,
+            <span class="macro-nonterminal">$crate::pipeline::NormalLoadingMetadata </span>{
+                mapper: <span class="macro-nonterminal">$mapper</span>,
+                loading_isq: <span class="macro-nonterminal">$loading_isq</span>,
+                real_device: <span class="macro-nonterminal">$real_device</span>,
+                multi_progress: <span class="macro-nonterminal">$multi_progress</span>,
             },
             <span class="macro-nonterminal">$attention_mechanism</span>,
         )<span class="question-mark">?
@@ -1054,7 +1122,8 @@
         <span class="macro-nonterminal">$loading_isq</span>:expr,
         <span class="macro-nonterminal">$loading_uqff</span>:expr,
         <span class="macro-nonterminal">$real_device</span>:expr,
-        <span class="macro-nonterminal">$attention_mechanism</span>:expr
+        <span class="macro-nonterminal">$attention_mechanism</span>:expr,
+        <span class="macro-nonterminal">$multi_progress</span>:expr,
     ) =&gt; {{
         <span class="kw">let </span>regexes = <span class="kw">if </span><span class="macro-nonterminal">$loading_isq </span>&amp;&amp; <span class="macro-nonterminal">$loading_uqff </span>{
             <span class="comment">// Dummy weights for the layers which will be overwritten...
@@ -1085,6 +1154,7 @@
                 mapper: <span class="macro-nonterminal">$mapper</span>,
                 loading_isq: <span class="macro-nonterminal">$loading_isq</span>,
                 real_device: <span class="macro-nonterminal">$real_device</span>,
+                multi_progress: <span class="macro-nonterminal">$multi_progress</span>,
             },
             <span class="macro-nonterminal">$attention_mechanism</span>,
         )<span class="question-mark">?
@@ -1105,7 +1175,8 @@
         <span class="macro-nonterminal">$silent</span>:expr,
         <span class="macro-nonterminal">$mapper</span>:expr,
         <span class="macro-nonterminal">$loading_isq</span>:expr,
-        <span class="macro-nonterminal">$real_device</span>:expr
+        <span class="macro-nonterminal">$real_device</span>:expr,
+        <span class="macro-nonterminal">$multi_progress</span>:expr,
     ) =&gt; {{
         <span class="kw">let </span><span class="kw-2">mut </span>safetensors_paths = <span class="macro-nonterminal">$paths</span>.get_weight_filenames().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         safetensors_paths.push(<span class="macro-nonterminal">$paths</span>.get_classifier_path().as_ref().unwrap());
@@ -1144,6 +1215,7 @@
                 mapper: <span class="macro-nonterminal">$mapper</span>,
                 loading_isq: <span class="macro-nonterminal">$loading_isq</span>,
                 real_device: <span class="macro-nonterminal">$real_device</span>,
+                multi_progress: <span class="macro-nonterminal">$multi_progress</span>,
             },
             <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
         )<span class="question-mark">?
@@ -1164,7 +1236,8 @@
         <span class="macro-nonterminal">$silent</span>:expr,
         <span class="macro-nonterminal">$mapper</span>:expr,
         <span class="macro-nonterminal">$loading_isq</span>:expr,
-        <span class="macro-nonterminal">$real_device</span>:expr
+        <span class="macro-nonterminal">$real_device</span>:expr,
+        <span class="macro-nonterminal">$multi_progress</span>:expr,
     ) =&gt; {{
         <span class="kw">let </span>safetensors_paths = <span class="macro-nonterminal">$paths</span>.get_weight_filenames().iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="kw">let </span>get_device_for_tensor =
@@ -1202,6 +1275,7 @@
                 mapper: <span class="macro-nonterminal">$mapper</span>,
                 loading_isq: <span class="macro-nonterminal">$loading_isq</span>,
                 real_device: <span class="macro-nonterminal">$real_device</span>,
+                multi_progress: <span class="macro-nonterminal">$multi_progress</span>,
             },
             <span class="kw-2">&amp;</span><span class="macro-nonterminal">$crate::utils::varbuilder_utils::load_preload_adapters</span>(
                 <span class="macro-nonterminal">$paths</span>.get_lora_preload_adapter_info(),

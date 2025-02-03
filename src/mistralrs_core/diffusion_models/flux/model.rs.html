@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/diffusion_models/flux/model.rs`."><title>model.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0 (9fc6b4312 2025-01-07)" data-channel="1.84.0" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../../static.files/storage-59e33391.js"></script><script defer src="../../../../static.files/src-script-56102188.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/diffusion_models/flux/</div>model.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/diffusion_models/flux/model.rs`."><title>model.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../../static.files/storage-59e33391.js"></script><script defer src="../../../../static.files/src-script-56102188.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/diffusion_models/flux/</div>model.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -720,13 +720,25 @@
 <a href="#719" id="719">719</a>
 <a href="#720" id="720">720</a>
 <a href="#721" id="721">721</a>
-<a href="#722" id="722">722</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#722" id="722">722</a>
+<a href="#723" id="723">723</a>
+<a href="#724" id="724">724</a>
+<a href="#725" id="725">725</a>
+<a href="#726" id="726">726</a>
+<a href="#727" id="727">727</a>
+<a href="#728" id="728">728</a>
+<a href="#729" id="729">729</a>
+<a href="#730" id="730">730</a>
+<a href="#731" id="731">731</a>
+<a href="#732" id="732">732</a>
+<a href="#733" id="733">733</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
-<span class="kw">use </span>candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm, VarBuilder};
+<span class="kw">use </span>candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm};
+<span class="kw">use </span>mistralrs_quant::ShardedVarBuilder;
 <span class="kw">use </span>serde::Deserialize;
 
-<span class="kw">use </span><span class="kw">crate</span>::layers::MatMul;
+<span class="kw">use </span><span class="kw">crate</span>::layers::{<span class="self">self</span>, MatMul};
 
 <span class="kw">const </span>MLP_RATIO: f64 = <span class="number">4.</span>;
 <span class="kw">const </span>HIDDEN_SIZE: usize = <span class="number">3072</span>;
@@ -744,7 +756,7 @@
     <span class="kw">pub </span>guidance_embeds: bool,
 }
 
-<span class="kw">fn </span>layer_norm(dim: usize, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;LayerNorm&gt; {
+<span class="kw">fn </span>layer_norm(dim: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;LayerNorm&gt; {
     <span class="kw">let </span>ws = Tensor::ones(dim, vb.dtype(), vb.device())<span class="question-mark">?</span>;
     <span class="prelude-val">Ok</span>(LayerNorm::new_no_bias(ws, <span class="number">1e-6</span>))
 }
@@ -865,9 +877,9 @@
 }
 
 <span class="kw">impl </span>MlpEmbedder {
-    <span class="kw">fn </span>new(in_sz: usize, h_sz: usize, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>in_layer = candle_nn::linear(in_sz, h_sz, vb.pp(<span class="string">"in_layer"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>out_layer = candle_nn::linear(h_sz, h_sz, vb.pp(<span class="string">"out_layer"</span>))<span class="question-mark">?</span>;
+    <span class="kw">fn </span>new(in_sz: usize, h_sz: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>in_layer = layers::linear(in_sz, h_sz, vb.pp(<span class="string">"in_layer"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>out_layer = layers::linear(h_sz, h_sz, vb.pp(<span class="string">"out_layer"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             in_layer,
             out_layer,
@@ -888,7 +900,7 @@
 }
 
 <span class="kw">impl </span>QkNorm {
-    <span class="kw">fn </span>new(dim: usize, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(dim: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>query_norm = vb.get(dim, <span class="string">"query_norm.scale"</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>query_norm = RmsNorm::&lt;RmsNormNonQuantized&gt;::new(query_norm, <span class="number">1e-6</span>);
         <span class="kw">let </span>key_norm = vb.get(dim, <span class="string">"key_norm.scale"</span>)<span class="question-mark">?</span>;
@@ -923,8 +935,8 @@
 }
 
 <span class="kw">impl </span>Modulation1 {
-    <span class="kw">fn </span>new(dim: usize, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>lin = candle_nn::linear(dim, <span class="number">3 </span>* dim, vb.pp(<span class="string">"lin"</span>))<span class="question-mark">?</span>;
+    <span class="kw">fn </span>new(dim: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>lin = layers::linear(dim, <span class="number">3 </span>* dim, vb.pp(<span class="string">"lin"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ lin })
     }
 
@@ -951,8 +963,8 @@
 }
 
 <span class="kw">impl </span>Modulation2 {
-    <span class="kw">fn </span>new(dim: usize, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>lin = candle_nn::linear(dim, <span class="number">6 </span>* dim, vb.pp(<span class="string">"lin"</span>))<span class="question-mark">?</span>;
+    <span class="kw">fn </span>new(dim: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>lin = layers::linear(dim, <span class="number">6 </span>* dim, vb.pp(<span class="string">"lin"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ lin })
     }
 
@@ -988,11 +1000,16 @@
 }
 
 <span class="kw">impl </span>SelfAttention {
-    <span class="kw">fn </span>new(dim: usize, num_attention_heads: usize, qkv_bias: bool, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(
+        dim: usize,
+        num_attention_heads: usize,
+        qkv_bias: bool,
+        vb: ShardedVarBuilder,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>head_dim = dim / num_attention_heads;
-        <span class="kw">let </span>qkv = candle_nn::linear_b(dim, dim * <span class="number">3</span>, qkv_bias, vb.pp(<span class="string">"qkv"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>qkv = layers::linear_b(dim, dim * <span class="number">3</span>, qkv_bias, vb.pp(<span class="string">"qkv"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>norm = QkNorm::new(head_dim, vb.pp(<span class="string">"norm"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>proj = candle_nn::linear(dim, dim, vb.pp(<span class="string">"proj"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>proj = layers::linear(dim, dim, vb.pp(<span class="string">"proj"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             qkv,
             norm,
@@ -1049,9 +1066,9 @@
 }
 
 <span class="kw">impl </span>Mlp {
-    <span class="kw">fn </span>new(in_sz: usize, mlp_sz: usize, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>lin1 = candle_nn::linear(in_sz, mlp_sz, vb.pp(<span class="string">"0"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>lin2 = candle_nn::linear(mlp_sz, in_sz, vb.pp(<span class="string">"2"</span>))<span class="question-mark">?</span>;
+    <span class="kw">fn </span>new(in_sz: usize, mlp_sz: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>lin1 = layers::linear(in_sz, mlp_sz, vb.pp(<span class="string">"0"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>lin2 = layers::linear(mlp_sz, in_sz, vb.pp(<span class="string">"2"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ lin1, lin2 })
     }
 
@@ -1089,7 +1106,7 @@
 }
 
 <span class="kw">impl </span>DoubleStreamBlock {
-    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>h_sz = HIDDEN_SIZE;
         <span class="kw">let </span>mlp_sz = (h_sz <span class="kw">as </span>f64 * MLP_RATIO) <span class="kw">as </span>usize;
         <span class="kw">let </span>img_mod = Modulation2::new(h_sz, vb.pp(<span class="string">"img_mod"</span>))<span class="question-mark">?</span>;
@@ -1202,12 +1219,12 @@
 }
 
 <span class="kw">impl </span>SingleStreamBlock {
-    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>h_sz = HIDDEN_SIZE;
         <span class="kw">let </span>mlp_sz = (h_sz <span class="kw">as </span>f64 * MLP_RATIO) <span class="kw">as </span>usize;
         <span class="kw">let </span>head_dim = h_sz / cfg.num_attention_heads;
-        <span class="kw">let </span>linear1 = candle_nn::linear(h_sz, h_sz * <span class="number">3 </span>+ mlp_sz, vb.pp(<span class="string">"linear1"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>linear2 = candle_nn::linear(h_sz + mlp_sz, h_sz, vb.pp(<span class="string">"linear2"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>linear1 = layers::linear(h_sz, h_sz * <span class="number">3 </span>+ mlp_sz, vb.pp(<span class="string">"linear1"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>linear2 = layers::linear(h_sz + mlp_sz, h_sz, vb.pp(<span class="string">"linear2"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>norm = QkNorm::new(head_dim, vb.pp(<span class="string">"norm"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>pre_norm = layer_norm(h_sz, vb.pp(<span class="string">"pre_norm"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>modulation = Modulation1::new(h_sz, vb.pp(<span class="string">"modulation"</span>))<span class="question-mark">?</span>;
@@ -1280,10 +1297,10 @@
 }
 
 <span class="kw">impl </span>LastLayer {
-    <span class="kw">fn </span>new(h_sz: usize, p_sz: usize, out_c: usize, vb: VarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(h_sz: usize, p_sz: usize, out_c: usize, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>norm_final = layer_norm(h_sz, vb.pp(<span class="string">"norm_final"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>linear = candle_nn::linear(h_sz, p_sz * p_sz * out_c, vb.pp(<span class="string">"linear"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>ada_ln_modulation = candle_nn::linear(h_sz, <span class="number">2 </span>* h_sz, vb.pp(<span class="string">"adaLN_modulation.1"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>linear = layers::linear(h_sz, p_sz * p_sz * out_c, vb.pp(<span class="string">"linear"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>ada_ln_modulation = layers::linear(h_sz, <span class="number">2 </span>* h_sz, vb.pp(<span class="string">"adaLN_modulation.1"</span>))<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             norm_final,
             linear,
@@ -1318,13 +1335,18 @@
 }
 
 <span class="kw">impl </span>Flux {
-    <span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>Config, vb: VarBuilder, device: Device, offloaded: bool) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>img_in = candle_nn::linear(
+    <span class="kw">pub fn </span>new(
+        cfg: <span class="kw-2">&amp;</span>Config,
+        vb: ShardedVarBuilder,
+        device: Device,
+        offloaded: bool,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="kw">let </span>img_in = layers::linear(
             cfg.in_channels,
             HIDDEN_SIZE,
             vb.pp(<span class="string">"img_in"</span>).set_device(device.clone()),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>txt_in = candle_nn::linear(
+        <span class="kw">let </span>txt_in = layers::linear(
             cfg.joint_attention_dim,
             HIDDEN_SIZE,
             vb.pp(<span class="string">"txt_in"</span>).set_device(device.clone()),
