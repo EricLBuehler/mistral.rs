@@ -298,8 +298,9 @@ impl Loader for NormalLoader {
 
         let available_devices = device_map::get_all_similar_devices(device)?;
 
-        let use_nccl =
-            available_devices.iter().all(|dev| dev.is_cuda()) && available_devices.len() > 1;
+        let use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
+            && available_devices.len() > 1
+            && std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1");
 
         // If auto, convert to Map if not using nccl
         if use_nccl {
@@ -470,6 +471,10 @@ impl Loader for NormalLoader {
                     )
                 })
                 .unwrap_or(1);
+
+            if pipeline_parallel_size == 0 {
+                anyhow::bail!("MISTRALRS_PIPELINE_PARALLEL must be nonzero")
+            }
 
             let world_size = available_devices.len() / pipeline_parallel_size;
 
