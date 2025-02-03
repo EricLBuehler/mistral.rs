@@ -1691,17 +1691,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112fa2f6ad4ab815b9e1b938b4b1e437032d055e2f92ed10fd6ab2e62d02c6b6"
 dependencies = [
  "dirs",
- "futures",
+ "http",
  "indicatif",
  "log",
- "num_cpus",
  "rand",
  "reqwest",
  "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.11",
- "tokio",
+ "ureq",
 ]
 
 [[package]]
@@ -4055,6 +4054,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "socks"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0c3dbbd9ae980613c6dd8e28a9407b50509d3803b57624d5dfe8315218cd58b"
+dependencies = [
+ "byteorder",
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "sparsevec"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4737,6 +4747,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "socks",
  "url",
  "webpki-roots",
 ]
