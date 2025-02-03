@@ -170,7 +170,7 @@ impl VisionModelBuilder {
             prompt_chunksize: self.prompt_chunksize,
             topology: self.topology,
             write_uqff: self.write_uqff,
-            from_uqff: self.from_uqff,
+            from_uqff: self.from_uqff.map(ModelWeightSource::PathBuf),
             max_edge: self.max_edge,
             calibration_file: self.calibration_file,
         };

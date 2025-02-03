@@ -36,7 +36,7 @@ impl XLoraModelBuilder {
             topology: self.text_model.topology,
             organization: self.text_model.organization,
             write_uqff: self.text_model.write_uqff,
-            from_uqff: self.text_model.from_uqff,
+            from_uqff: self.text_model.from_uqff.map(ModelWeightSource::PathBuf),
             imatrix: None,
             calibration_file: None,
         };

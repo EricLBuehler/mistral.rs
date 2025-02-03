@@ -3,6 +3,8 @@ use std::{
     num::NonZeroUsize,
 };
 
+use mistralrs_quant::ModelWeightSource;
+
 use crate::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
@@ -214,7 +216,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(ModelWeightSource::PathBuf),
                 imatrix,
                 calibration_file,
             },
@@ -244,7 +246,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(ModelWeightSource::PathBuf),
                 imatrix: None,
                 calibration_file: None,
             },
@@ -282,7 +284,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(ModelWeightSource::PathBuf),
                 imatrix: None,
                 calibration_file: None,
             },
@@ -489,7 +491,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(ModelWeightSource::PathBuf),
                 max_edge,
                 calibration_file,
             },

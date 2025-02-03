@@ -13,8 +13,8 @@ use candle_core::{quantized, Context, Device, Tensor};
 use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use mistralrs_quant::{
-    FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType,
-    UnquantLinear,
+    safetensors::MmapedSafetensors, FP8Linear, GgufMatMul, HqqLayer, IsqType, ModelWeightSource,
+    QuantMethod, QuantizedSerde, QuantizedSerdeType, UnquantLinear,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
@@ -613,7 +613,7 @@ pub trait IsqModel {
         device: Device,
         topology: Option<&Topology>,
         silent: bool,
-        artifacts: &PathBuf,
+        artifacts: &ModelWeightSource,
     ) -> candle_core::Result<()> {
         let (tensors, mapper) = self.get_layers();
         let total_tensors = tensors.len();
@@ -648,7 +648,7 @@ pub trait IsqModel {
             devices.push(device);
         }
 
-        let artifacts = unsafe { candle_core::safetensors::MmapedSafetensors::new(artifacts)? };
+        let artifacts = unsafe { MmapedSafetensors::new(artifacts)? };
 
         let artifact_isqs = artifacts
             .tensors()

@@ -254,7 +254,7 @@ impl TextModelBuilder {
             topology: self.topology,
             organization: self.organization,
             write_uqff: self.write_uqff,
-            from_uqff: self.from_uqff,
+            from_uqff: self.from_uqff.map(ModelWeightSource::PathBuf),
             imatrix: self.imatrix,
             calibration_file: self.calibration_file,
         };

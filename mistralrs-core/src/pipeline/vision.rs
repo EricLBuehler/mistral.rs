@@ -35,6 +35,7 @@ use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
+use mistralrs_quant::safetensors::MmapedSafetensors;
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, ModelWeightSource, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
@@ -83,7 +84,7 @@ pub struct VisionLoader {
     xlora_order: Option<Ordering>,
     token_source: RwLock<Option<TokenSource>>,
     revision: RwLock<Option<String>>,
-    from_uqff: RwLock<Option<PathBuf>>,
+    from_uqff: RwLock<Option<ModelWeightSource>>,
 }
 
 #[derive(Default)]
@@ -103,7 +104,7 @@ pub struct VisionSpecificConfig {
     pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
-    pub from_uqff: Option<PathBuf>,
+    pub from_uqff: Option<ModelWeightSource>,
     pub max_edge: Option<u32>,
     pub calibration_file: Option<PathBuf>,
 }
@@ -175,7 +176,17 @@ impl Loader for VisionLoader {
             self.config.from_uqff.is_some()
         );
         if let Some(from_uqff) = self.config.from_uqff.clone() {
-            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
+            match from_uqff {
+                ModelWeightSource::PathBuf(from_uqff) => {
+                    *self.from_uqff.write().unwrap() = Some(ModelWeightSource::PathBuf(
+                        get_uqff_paths!(&from_uqff, self, silent),
+                    ));
+                }
+                ModelWeightSource::SafeTensorsData(data) => {
+                    *self.from_uqff.write().unwrap() =
+                        Some(ModelWeightSource::SafeTensorsData(data));
+                }
+            }
         }
         *self
             .token_source
@@ -221,9 +232,7 @@ impl Loader for VisionLoader {
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(serialized) = &*self.from_uqff.read().unwrap() {
                     let weight_pack_factor = {
-                        let ser_artifacts = unsafe {
-                            candle_core::safetensors::MmapedSafetensors::new(serialized)?
-                        };
+                        let ser_artifacts = unsafe { MmapedSafetensors::new(serialized)? };
                         let mut total_pack_factors = 0;
                         let total_tensors = ser_artifacts.tensors().len();
                         for (_, artifact) in ser_artifacts.tensors() {
