@@ -108,6 +108,8 @@ pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
 pub use utils::{paged_attn_supported, using_flash_attn};
+pub use xlora_models::XLoraConfig;
+pub use lora::LoraConfig;
 
 // re-export llguidance for easier LlguidanceGrammar construction
 pub use llguidance;
