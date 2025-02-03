@@ -247,13 +247,15 @@ trait LoadTensors {
             for (load_name, key_name) in iter.into_iter().with_progress(is_silent) {
                 if !make_dummy_predicate(&load_name) {
                     let dev = match get_device_for_tensor(load_name.clone()) {
-                        DeviceForLoadTensor::Base => base_device,
-                        DeviceForLoadTensor::Idx(i) => {
-                            layer_devices[i].as_ref().unwrap_or(base_device)
-                        }
+                        DeviceForLoadTensor::Base => base_device.clone(),
+                        DeviceForLoadTensor::Idx(i) => layer_devices
+                            .get(i)
+                            .cloned()
+                            .unwrap_or(Some(base_device.clone()))
+                            .unwrap_or(base_device.clone()),
                     };
                     // If making a dummy, don't add the tensor. `mistralrs_quant` handles this!
-                    let tensor = tensors.load_name(&load_name, dev, dtype)?;
+                    let tensor = tensors.load_name(&load_name, &dev, dtype)?;
 
                     loaded_tensors.insert(key_name, tensor);
                 }
