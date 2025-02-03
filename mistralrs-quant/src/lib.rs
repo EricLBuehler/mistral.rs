@@ -245,6 +245,7 @@ pub enum IsqType {
     // HQQ2,
     // HQQ1,
     F8E4M3,
+    Iq4Xs,
 }
 
 impl IsqType {
@@ -288,6 +289,10 @@ impl IsqType {
             Self::Q8K => {
                 (dtype.size_in_bytes() * GgmlDType::Q8K.block_size()) / GgmlDType::Q8K.type_size()
             }
+            Self::Iq4Xs => {
+                (dtype.size_in_bytes() * GgmlDType::Iq4Xs.block_size())
+                    / GgmlDType::Iq4Xs.type_size()
+            }
             // Estimates
             Self::HQQ4 => 4,
             Self::HQQ8 => 2,
@@ -313,6 +318,7 @@ impl TryFrom<IsqType> for GgmlDType {
             IsqType::Q8K => Self::Q8K,
             IsqType::Q8_0 => Self::Q8_0,
             IsqType::Q8_1 => Self::Q8_1,
+            IsqType::Iq4Xs => Self::Iq4Xs,
             _ => candle_core::bail!("Expected valid GGML ISQ type."),
         };
         #[cfg(feature = "cuda")]
@@ -329,8 +335,9 @@ impl TryFrom<IsqType> for GgmlDType {
                     | GgmlDType::Q4K
                     | GgmlDType::Q5K
                     | GgmlDType::Q6K
+                    | GgmlDType::Iq4Xs,
             ) {
-                candle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`")
+                candle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `IQ4XS`")
             }
         }
         Ok(tp)
@@ -354,6 +361,7 @@ impl TryFrom<GgmlDType> for IsqType {
             GgmlDType::Q8_0 => Ok(Self::Q8_0),
             GgmlDType::Q8_1 => Ok(Self::Q8_1),
             GgmlDType::Q8K => Ok(Self::Q8K),
+            GgmlDType::Iq4Xs => Ok(Self::Iq4Xs),
             GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 => {
                 candle_core::bail!("Expected valid GGML ISQ type.")
             }

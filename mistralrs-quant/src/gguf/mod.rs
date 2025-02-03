@@ -212,6 +212,7 @@ impl QuantizedSerde for GgufMatMul {
                     GgmlDType::Q5K => 13,
                     GgmlDType::Q6K => 14,
                     GgmlDType::Q8K => 15,
+                    GgmlDType::Iq4Xs => 23,
                     // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
                     GgmlDType::BF16 => 30,
                 };
