@@ -240,7 +240,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     .expect("The image token <image> should be present in the text.")
                     .to_string();
                 for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
-                    sample.push_str(&format!("{image_prompt_string}{}", split_sample[i]));
+                    sample.push_str(&format!("{image_prompt_string}{}", split_sample[i + 1]));
                 }
 
                 seq.set_initial_prompt(sample.clone());
