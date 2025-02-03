@@ -6,8 +6,8 @@ use std::{
 };
 
 use candle_core::{safetensors, DType, Device, Result, Tensor, Var, D};
-use candle_nn::{linear, Linear, ModuleT, VarBuilder, VarMap};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{Linear, ModuleT, VarMap};
+use mistralrs_quant::{QuantMethod, ShardedSafeTensors, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 
 mod inputs;
@@ -16,6 +16,7 @@ pub use inputs::{AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingRes
 use tracing::info;
 
 use crate::{
+    layers::linear,
     ops::{TopKLastDimOp, TopKOutput},
     serde_default_fn,
 };
@@ -71,12 +72,12 @@ pub trait AnyMoeBaseModelMixin {
     #[allow(clippy::too_many_arguments)]
     fn create_anymoe_layers(
         &mut self,
-        _additional_vbs: Vec<VarBuilder>,
+        _additional_vbs: Vec<ShardedVarBuilder>,
         _config: AnyMoeConfig,
         (_prefix, _mlp): (String, String),
         _layers: Vec<usize>,
         _expert_type: AnyMoeExpertType,
-        _gate_vb: Option<VarBuilder>,
+        _gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
         candle_core::bail!("Model does not support AnyMoE layers");
     }
@@ -189,13 +190,13 @@ impl MoeMlp {
         dtype: DType,
         dev: &Device,
         layer: usize,
-        gate_vb: Option<&VarBuilder>,
+        gate_vb: Option<&ShardedVarBuilder>,
     ) -> Result<Self> {
         let n_experts = experts.len();
         let var_map = VarMap::new();
 
         let inference = gate_vb.is_some();
-        let empty_map = VarBuilder::from_varmap(&var_map, dtype, dev);
+        let empty_map = ShardedSafeTensors::wrap(Box::new(var_map.clone()), dtype, dev.clone());
         let vb = gate_vb.unwrap_or(&empty_map);
         let vb = vb
             .pp("moe_gate")

@@ -26,6 +26,10 @@ float8.workspace = true
 once_cell.workspace = true
 metal = { workspace = true, optional = true }
 thiserror = "1"
+yoke = "0.7.5"
+memmap2 = "0.9.5"
+safetensors.workspace = true
+regex.workspace = true
 
 [features]
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]

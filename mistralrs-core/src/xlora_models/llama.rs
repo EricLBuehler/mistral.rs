@@ -13,15 +13,15 @@ use crate::{
     utils::progress::NiceProgressBar,
 };
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{Embedding, Module};
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
 
 use crate::{
     device_map::DeviceMapper,
-    layers::{CausalMasker, RmsNorm},
+    layers::{embedding, CausalMasker, RmsNorm},
     models::llama::Config,
     pipeline::{self, extract_logits, LayerCaches, NormalLoadingMetadata, NormalModel},
 };
@@ -136,7 +136,7 @@ impl CausalSelfAttention {
 
     #[allow(clippy::too_many_arguments)]
     fn load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
@@ -145,7 +145,7 @@ impl CausalSelfAttention {
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc<Llama3RotaryEmbedding>,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let size_in = cfg.hidden_size;
         let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
@@ -256,7 +256,7 @@ impl Mlp {
 
     #[allow(clippy::too_many_arguments)]
     fn load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
@@ -264,7 +264,7 @@ impl Mlp {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let h_size = cfg.hidden_size;
         let i_size = cfg.intermediate_size;
@@ -352,7 +352,7 @@ impl Block {
 
     #[allow(clippy::too_many_arguments)]
     fn load(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
@@ -361,7 +361,7 @@ impl Block {
         layer_idx: usize,
         loading_isq: bool,
         rope: Arc<Llama3RotaryEmbedding>,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let attn = CausalSelfAttention::load(
             vb.pp("self_attn"),
@@ -562,13 +562,13 @@ impl XLoraLlama {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
@@ -620,32 +620,35 @@ impl XLoraLlama {
                 )?),
             );
         }
-        let mut blocks: Vec<_> =
-            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
-                .into_iter()
-                .map(|i| {
-                    let device = mapper
-                        .device_for(i, false)
-                        .unwrap_or(&normal_loading_metadata.real_device);
-                    let rotary_emb = ropes
-                        .get(&device.location())
-                        .expect("No RoPE for device location!")
-                        .clone();
-                    Block::load(
-                        vb.pp(format!("model.layers.{i}")),
-                        cfg,
-                        lora_config,
-                        &mut count,
-                        &xlora_ordering,
-                        &*mapper,
-                        i,
-                        normal_loading_metadata.loading_isq,
-                        rotary_emb,
-                        preload_adapters,
-                    )
-                    .expect("Failed to load block.")
-                })
-                .collect();
+        let mut blocks: Vec<_> = NiceProgressBar::<_, 'b'>(
+            0..cfg.num_hidden_layers,
+            "Loading repeating layers",
+            &normal_loading_metadata.multi_progress,
+        )
+        .into_iter()
+        .map(|i| {
+            let device = mapper
+                .device_for(i, false)
+                .unwrap_or(&normal_loading_metadata.real_device);
+            let rotary_emb = ropes
+                .get(&device.location())
+                .expect("No RoPE for device location!")
+                .clone();
+            Block::load(
+                vb.pp(format!("model.layers.{i}")),
+                cfg,
+                lora_config,
+                &mut count,
+                &xlora_ordering,
+                &*mapper,
+                i,
+                normal_loading_metadata.loading_isq,
+                rotary_emb,
+                preload_adapters,
+            )
+            .expect("Failed to load block.")
+        })
+        .collect();
         if xlora_config.is_none() && preload_adapters.is_none() {
             // We are now a LoRA model so we must merge the weights
             info!("Merging LoRA adapters.");
@@ -694,8 +697,8 @@ impl XLoraLlama {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
-                k_head_dim: None,
-                v_head_dim: None,
+                k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+                v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             },
         })
     }
@@ -755,7 +758,7 @@ impl NormalModel for XLoraLlama {
         _seqlen_offsets: &[usize],
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()

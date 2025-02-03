@@ -41,6 +41,7 @@ impl PagedAttentionConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum AttentionImplementation {
     Eager,
     PagedAttention,

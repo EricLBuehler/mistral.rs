@@ -112,6 +112,7 @@ Mistral.rs supports several model categories:
 - Apple silicon support: ARM NEON, Accelerate, Metal
 - Accelerated CPU inference with MKL, AVX support
 - CUDA support with FlashAttention and cuDNN.
+- Automatic tensor-parallelism support with NCCL: [distributed documentation](docs/DISTRIBUTED.md)
 
 **Quantization**:
 - [Details](docs/QUANTS.md)

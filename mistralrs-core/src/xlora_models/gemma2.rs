@@ -3,8 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::VarBuilder;
-use mistralrs_quant::QuantMethod;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use tqdm::Iter;
 use tracing::info;
 
@@ -12,7 +11,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{self, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
     lora::{linear_b, linear_no_bias, LinearLayerLike, LoraConfig},
     models::gemma2::Config,
     paged_attention::ModelConfigMetadata,
@@ -40,14 +39,14 @@ impl MLP {
     #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let intermediate_sz = cfg.intermediate_size;
@@ -151,14 +150,14 @@ impl Attention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
         let num_heads = cfg.num_attention_heads;
@@ -355,14 +354,14 @@ impl DecoderLayer {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         count: &mut usize,
         ord: &Ordering,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
@@ -482,13 +481,13 @@ impl Model {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
@@ -500,7 +499,7 @@ impl Model {
         let mapper = normal_loading_metadata.mapper;
 
         let vb_m = vb.pp("model");
-        let embed_tokens = candle_nn::embedding(
+        let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
@@ -525,9 +524,11 @@ impl Model {
             );
         }
         let mut count = 0;
-        for layer_idx in
-            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
-        {
+        for layer_idx in NiceProgressBar::<_, 'b'>(
+            0..cfg.num_hidden_layers,
+            "Loading repeating layers",
+            &normal_loading_metadata.multi_progress,
+        ) {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -621,8 +622,8 @@ impl Model {
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
                 sliding_window: None,
-                k_head_dim: None,
-                v_head_dim: None,
+                k_head_dim: cfg.head_dim,
+                v_head_dim: cfg.head_dim,
             },
         })
     }
@@ -861,7 +862,7 @@ impl NormalModel for Model {
         _seqlen_offsets: &[usize],
         _context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         unreachable!()

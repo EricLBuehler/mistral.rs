@@ -3,8 +3,7 @@
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::VarBuilder;
-use mistralrs_quant::QuantMethod;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use text::Qwen2VLTextModel;
 use vision::Qwen2VLVisionModel;
 
@@ -39,7 +38,7 @@ pub struct Qwen2VLModel {
 impl Qwen2VLModel {
     pub fn new(
         cfg: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -426,7 +425,7 @@ impl VisionModel for Qwen2VLModel {
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let Qwen2VLVisionSpecificArgs {

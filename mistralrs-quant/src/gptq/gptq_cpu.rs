@@ -1,6 +1,8 @@
-use crate::{DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde};
+use crate::{
+    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
+    ShardedVarBuilder,
+};
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::VarBuilder;
 use std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
@@ -48,10 +50,6 @@ impl QuantMethod for GptqLayer {
         todo!()
     }
 
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        todo!()
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         _dtype: Option<IsqType>,
@@ -64,10 +62,6 @@ impl QuantMethod for GptqLayer {
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         todo!()
-    }
-
-    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        Ok(self.clone())
     }
 }
 
@@ -87,7 +81,7 @@ pub fn gptq_linear(
     in_dim: usize,
     out_dim: usize,
     config: &QuantizedConfig,
-    vb: VarBuilder,
+    vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("qweight")

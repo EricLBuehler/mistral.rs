@@ -34,6 +34,7 @@ use crate::{
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
@@ -356,6 +357,7 @@ impl Loader for VisionLoader {
             AttentionImplementation::Eager
         };
 
+        let multi_progress = Arc::new(MultiProgress::new());
         let mut model = match self.kind {
             ModelKind::Normal => vision_normal_model_loader!(
                 paths,
@@ -370,7 +372,8 @@ impl Loader for VisionLoader {
                 loading_isq,
                 self.config.from_uqff.is_some(),
                 device.clone(),
-                attention_mechanism
+                attention_mechanism,
+                multi_progress,
             ),
             _ => unreachable!(),
         };
@@ -509,6 +512,7 @@ impl Loader for VisionLoader {
                     processor_filename: paths.get_processor_config(),
                     preprocessor_filename: paths.get_preprocessor_config(),
                 },
+                Arc::new(MultiProgress::new()),
             )?;
         } else if let Some(from_uqff) = &*self.from_uqff.read().unwrap() {
             model.load_from_artifacts(
@@ -567,7 +571,7 @@ impl Loader for VisionLoader {
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,
-                cache_engine,
+                cache_engines: cache_engine.map(|x| vec![x]),
                 prompt_chunksize: self.config.prompt_chunksize,
                 model_metadata: Some(model_metadata),
             }),
@@ -626,6 +630,7 @@ impl IsqPipelineMixin for VisionPipeline {
                     processor_filename: &self.processor_filename,
                     preprocessor_filename: &self.preprocessor_filename,
                 },
+                Arc::new(MultiProgress::new()),
             )
             .map_err(anyhow::Error::msg)
     }
@@ -711,14 +716,20 @@ impl Pipeline for VisionPipeline {
             position_ids,
             pixel_values,
             model_specific_args,
-            mut paged_attn_meta,
+            paged_attn_meta,
             flash_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
-        let paged_attn_meta = match (
-            self.get_metadata().cache_engine.as_ref(),
-            &mut paged_attn_meta,
-        ) {
-            (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
+        let metadata = self.get_metadata();
+        assert_eq!(
+            metadata
+                .cache_engines
+                .as_ref()
+                .map(|x| x.len())
+                .unwrap_or(1),
+            1
+        );
+        let paged_attn_meta = match (&metadata.cache_engines, &paged_attn_meta) {
+            (Some(engine), Some(meta)) => Some((engine[0].get_kv_cache().clone(), meta)),
             (Some(_), None) => {
                 // This can happen if Rust-side user code is wrong
                 candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")

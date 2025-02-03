@@ -3,10 +3,14 @@
 use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm, LayerNorm, Linear, VarBuilder};
-use mistralrs_quant::MatMul;
+use candle_nn::{LayerNorm, Linear};
+use mistralrs_quant::{MatMul, ShardedVarBuilder};
 
-use crate::{layers::GetFloatInfo, layers_masker::masked_fill, utils::unvarbuilder::UnVarBuilder};
+use crate::{
+    layers::{self, layer_norm, GetFloatInfo},
+    layers_masker::masked_fill,
+    utils::unvarbuilder::UnVarBuilder,
+};
 
 const DEFAULT_MAX_SIZE: (usize, usize) = (70, 70);
 
@@ -83,17 +87,13 @@ impl Resampler {
         kv_dim: usize,
         _adaptive: bool,
         max_size: Option<(usize, usize)>,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let max_size = max_size.unwrap_or(DEFAULT_MAX_SIZE);
 
         let query = vb.get((num_queries, embed_dim), "query")?;
         let kv_proj = if kv_dim != embed_dim {
-            Some(candle_nn::linear_no_bias(
-                kv_dim,
-                embed_dim,
-                vb.pp("kv_proj"),
-            )?)
+            Some(layers::linear_no_bias(kv_dim, embed_dim, vb.pp("kv_proj"))?)
         } else {
             None
         };
@@ -245,7 +245,7 @@ struct MultiheadAttention {
 }
 
 impl MultiheadAttention {
-    fn new(embed_dim: usize, num_heads: usize, vb: VarBuilder) -> Result<Self> {
+    fn new(embed_dim: usize, num_heads: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let in_proj_bias = vb.get(embed_dim * 3, "in_proj_bias")?;
         let in_proj_weight = vb.get((embed_dim * 3, embed_dim), "in_proj_weight")?;
         let q_proj = Linear::new(
@@ -260,7 +260,7 @@ impl MultiheadAttention {
             in_proj_weight.i(embed_dim * 2..embed_dim * 3)?,
             Some(in_proj_bias.i(embed_dim * 2..embed_dim * 3)?),
         );
-        let out_proj = candle_nn::linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
+        let out_proj = layers::linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
         Ok(Self {
             q_proj,
             k_proj,

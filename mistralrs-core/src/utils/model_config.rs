@@ -3,7 +3,7 @@ use super::varbuilder_utils::{
 };
 use anyhow::Result;
 use candle_core::{quantized::ggml_file, DType};
-use candle_nn::VarBuilder;
+use mistralrs_quant::ShardedVarBuilder;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::{
@@ -31,9 +31,9 @@ pub struct Device<'a> {
 pub struct Adapter<'a> {
     pub xlora_config: Option<XLoraConfig>,
     pub lora_config: &'a [((String, String), LoraConfig)],
-    pub vb: VarBuilder<'a>,
+    pub vb: ShardedVarBuilder<'a>,
     pub ordering: &'a Ordering,
-    pub preload_adapters: Option<HashMap<String, (VarBuilder<'a>, LoraConfig)>>,
+    pub preload_adapters: Option<HashMap<String, (ShardedVarBuilder<'a>, LoraConfig)>>,
 }
 
 impl<'a> Adapter<'a> {
@@ -182,10 +182,10 @@ pub trait FromAdapterGGML {
         ct: ggml_file::Content,
         gqa: usize,
         lora_config: &[((String, String), LoraConfig)],
-        vb: &VarBuilder,
+        vb: &ShardedVarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         dtype: DType,
     ) -> Result<Self, candle_core::Error>
     where
@@ -197,11 +197,11 @@ pub trait FromAdapterGGUF {
         ct: Content<'_, R>,
         device: &candle_core::Device,
         lora_config: &[((String, String), LoraConfig)],
-        vb: &VarBuilder,
+        vb: &ShardedVarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
         mapper: Box<dyn DeviceMapper + Send + Sync>,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
         dtype: DType,
     ) -> Result<Self, candle_core::Error>
     where

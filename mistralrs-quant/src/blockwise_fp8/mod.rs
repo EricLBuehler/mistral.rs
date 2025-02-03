@@ -4,7 +4,7 @@ use std::{
 };
 
 use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_nn::{Linear, Module};
 
 mod ops;
 
@@ -12,7 +12,7 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     DummyLayer, FP8Linear, GgufMatMul, HqqAxis, HqqBits, HqqConfig, HqqLayer, IsqType, QuantMethod,
-    QuantMethodConfig, QuantizedConfig, QuantizedSerde, UnquantLinear,
+    QuantMethodConfig, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 #[derive(Debug)]
@@ -79,10 +79,6 @@ impl QuantMethod for BlockwiseFP8Linear {
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
         (DType::F8E4M3, self.weight.device().clone())
-    }
-
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        None
     }
 
     fn apply_isq(
@@ -215,10 +211,6 @@ impl QuantMethod for BlockwiseFP8Linear {
             | IsqType::HQQ8 => None,
         }
     }
-
-    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        Ok(self.clone())
-    }
 }
 
 // Serialization structure:
@@ -257,7 +249,8 @@ pub fn blockwise_fp8_linear_b(
     out_dim: usize,
     config: &QuantizedConfig,
     bias: bool,
-    vb: VarBuilder,
+    hints: Shard,
+    vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
@@ -272,19 +265,14 @@ pub fn blockwise_fp8_linear_b(
     if weight_block_size.len() != 2 {
         candle_core::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
     }
-    let weight = vb.get_with_hints_dtype(
-        (out_dim, in_dim),
-        "weight",
-        Default::default(),
-        DType::F8E4M3,
-    )?;
+    let weight = vb.get_with_hints_dtype((out_dim, in_dim), "weight", hints, DType::F8E4M3)?;
     let weight_scale_inv = vb.get_with_hints_dtype(
         (
             out_dim.div_ceil(weight_block_size[0]),
             in_dim.div_ceil(weight_block_size[1]),
         ),
         "weight_scale_inv",
-        Default::default(),
+        hints,
         DType::F32,
     )?;
     let bias = if bias {

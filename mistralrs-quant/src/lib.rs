@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use blockwise_fp8::blockwise_fp8_linear_b;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
@@ -19,28 +20,35 @@ mod metal_kernels;
 mod bitsandbytes;
 mod blockwise_fp8;
 mod cublaslt;
+mod distributed;
 mod dummy;
 mod fp8;
 mod gguf;
 mod gptq;
 mod hqq;
 mod imatrix;
+pub mod safetensors;
 mod unquantized;
 mod utils;
 
+use gptq::gptq_linear;
+pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
+
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
-use blockwise_fp8::blockwise_fp8_linear_b;
+pub use distributed::{
+    layers::{ColumnParallelLayer, ReplicatedLayer, RowParallelLayer},
+    Comm, Id, SumAllReduce,
+};
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;
-use gptq::gptq_linear;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::ImatrixLayerStats;
 pub use unquantized::UnquantLinear;
 pub use utils::UQFF_QUANT_TYPE_OFFSET;
 
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_nn::{Linear, Module};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -84,7 +92,7 @@ pub struct QuantizedConfig {
 }
 
 impl QuantizedConfig {
-    pub fn get_bits_name(&self, _vb: &VarBuilder) -> String {
+    pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
         match self.bits {
             Some(bits) => format!("{bits} bits"),
             None => {
@@ -403,6 +411,10 @@ pub trait QuantizedSerde {
     {
         candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
     }
+    /// NOT meant for external calling
+    fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<[u8]>> {
+        candle_core::bail!("`QuantizedSerde::serialize_with_bias` is not supported.")
+    }
 }
 
 /// Quantized method for a quantized matmul.
@@ -452,12 +464,6 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>>;
 
-    /// Convert to an equivalent gguf quantization, if applicable.
-    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>>;
-
-    /// If the quant is backed by a qmatmul.
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
-
     fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
@@ -485,12 +491,14 @@ pub fn linear_no_bias(
     in_dim: usize,
     out_dim: usize,
     config: &Option<QuantizedConfig>,
-    vb: VarBuilder,
+    vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantMethodType::Fp8 => blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, vb)?,
+            QuantMethodType::Fp8 => {
+                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
+            }
             QuantMethodType::Bitsandbytes => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
@@ -502,9 +510,11 @@ pub fn linear_no_bias(
             let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
-            let layer = candle_nn::linear_no_bias(in_dim, out_dim, vb)?;
+            let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
 
-            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, None),
+            ))?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
@@ -515,12 +525,14 @@ pub fn linear(
     in_dim: usize,
     out_dim: usize,
     config: &Option<QuantizedConfig>,
-    vb: VarBuilder,
+    vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantMethodType::Fp8 => blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, vb)?,
+            QuantMethodType::Fp8 => {
+                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
+            }
             QuantMethodType::Bitsandbytes => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
             }
@@ -532,9 +544,12 @@ pub fn linear(
             let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
-            let layer = candle_nn::linear(in_dim, out_dim, vb)?;
+            let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+            let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
-            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, Some(bias)),
+            ))?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
@@ -546,7 +561,7 @@ pub fn linear_b(
     out_dim: usize,
     bias: bool,
     config: &Option<QuantizedConfig>,
-    vb: VarBuilder,
+    vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     if bias {
         linear(in_dim, out_dim, config, vb)

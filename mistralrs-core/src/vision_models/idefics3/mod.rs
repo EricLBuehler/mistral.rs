@@ -7,9 +7,9 @@ mod vision;
 use std::any::Any;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::VarBuilder;
 pub use config::Idefics3Config;
 pub use inputs_processor::Idefics3Processor;
+use mistralrs_quant::ShardedVarBuilder;
 use vision::{Idefics3Connector, Idefics3VisionTransformer};
 
 use crate::{
@@ -36,7 +36,7 @@ pub struct Idefics3Model {
 impl Idefics3Model {
     pub fn new(
         cfg: &Idefics3Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -119,7 +119,7 @@ impl Idefics3Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
@@ -272,12 +272,12 @@ impl AnyMoeBaseModelMixin for Idefics3Model {
     }
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<ShardedVarBuilder>,
         config: AnyMoeConfig,
         (prefix, mlp): (String, String),
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
-        gate_vb: Option<VarBuilder>,
+        gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
         self.text_model.create_anymoe_layers(
             additional_vbs,
@@ -302,7 +302,7 @@ impl VisionModel for Idefics3Model {
         context_lens: Vec<(usize, usize)>,
         _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         let pixel_attention_mask: Option<Tensor> = *model_specific_args

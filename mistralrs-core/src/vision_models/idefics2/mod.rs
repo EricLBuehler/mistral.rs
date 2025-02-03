@@ -3,17 +3,18 @@
 pub(crate) mod idefics2_input_processor;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    conv2d, embedding, layer_norm, linear, linear_no_bias, Conv2d, Conv2dConfig, Embedding,
-    LayerNorm, Module, VarBuilder,
-};
+use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
+use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use std::{any::Any, ops::Mul};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    layers::{repeat_kv, Activation, CausalMasker, MatMul, QLinear, RmsNorm},
+    layers::{
+        conv2d, embedding, layer_norm, linear, linear_no_bias, repeat_kv, Activation, CausalMasker,
+        MatMul, QLinear, RmsNorm,
+    },
     models::mistral::Model as Mistral,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -249,7 +250,7 @@ fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Te
 }
 
 impl VisionEmbeddings {
-    fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_config = Conv2dConfig {
             stride: config.patch_size,
             ..Default::default()
@@ -379,7 +380,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(config: VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let embed_dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let head_dim = embed_dim / num_heads;
@@ -473,7 +474,7 @@ struct VisionMLP {
 }
 
 impl VisionMLP {
-    fn new(config: VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let fc1 = linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
         let fc2 = linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
@@ -516,7 +517,7 @@ struct EncoderLayer {
 }
 
 impl EncoderLayer {
-    fn new(config: VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mlp = VisionMLP::new(config.clone(), vb.pp("mlp"))?;
         let attn = Attention::new(config.clone(), vb.pp("self_attn"))?;
         let layer_norm_1 = layer_norm(
@@ -556,7 +557,7 @@ struct Encoder {
 }
 
 impl Encoder {
-    fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mut layers = Vec::new();
         let vb_l = vb.pp("layers");
         for i in 0..config.num_hidden_layers {
@@ -582,7 +583,7 @@ struct VisionTransformer {
 }
 
 impl VisionTransformer {
-    fn new(config: &VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let embeddings = VisionEmbeddings::new(config, vb.pp("embeddings"))?;
         let post_layernorm = layer_norm(
             config.hidden_size,
@@ -670,7 +671,7 @@ impl Mlp {
         intermediate_size: usize,
         output_size: usize,
         activation: Activation,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let gate_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("gate_proj"))?;
         let up_proj = linear_no_bias(hidden_size, intermediate_size, vb.pp("up_proj"))?;
@@ -723,7 +724,7 @@ struct PerceiverAttention {
 }
 
 impl PerceiverAttention {
-    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let hidden_size = config.text_config.hidden_size;
         let num_heads = config.perceiver_config.resampler_n_heads;
         let head_dim = config.perceiver_config.resampler_head_dim;
@@ -832,7 +833,7 @@ struct PerceiverLayer {
 }
 
 impl PerceiverLayer {
-    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let hidden_size = config.text_config.hidden_size;
         let mlp_act = config.perceiver_config.hidden_act;
         let rms_eps = config.text_config.rms_norm_eps;
@@ -881,7 +882,7 @@ struct PerceiverResampler {
 }
 
 impl PerceiverResampler {
-    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let n_latents = config.perceiver_config.resampler_n_latents;
         let hidden_size = config.text_config.hidden_size;
         let depth = config.perceiver_config.resampler_depth;
@@ -957,7 +958,7 @@ struct Connector {
 }
 
 impl Connector {
-    fn new(config: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let modality_projection = Mlp::new(
             config.vision_config.hidden_size,
             config.text_config.intermediate_size,
@@ -1005,7 +1006,7 @@ pub struct Idefics2 {
 impl Idefics2 {
     pub fn new(
         config: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1085,7 +1086,7 @@ impl Idefics2 {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         pixel_attention_mask: Option<Tensor>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let input_embeds = if let Some(pixel_values) = pixel_values {
@@ -1236,12 +1237,12 @@ impl AnyMoeBaseModelMixin for Idefics2 {
     }
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<ShardedVarBuilder>,
         config: AnyMoeConfig,
         (prefix, mlp): (String, String),
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
-        gate_vb: Option<VarBuilder>,
+        gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
         self.text_model.create_anymoe_layers(
             additional_vbs,
@@ -1266,7 +1267,7 @@ impl VisionModel for Idefics2 {
         context_lens: Vec<(usize, usize)>,
         _: Vec<usize>, // Ignore, it is for phi3
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         let pixel_attention_mask: Option<Tensor> = *model_specific_args

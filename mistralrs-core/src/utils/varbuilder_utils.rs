@@ -8,13 +8,9 @@ use std::{
 };
 
 use candle_core::{pickle::PthTensors, DType, Device, Result, Tensor};
-use candle_nn::{
-    var_builder::{SimpleBackend, VarBuilderArgs},
-    VarBuilder,
-};
+use mistralrs_quant::{safetensors::MmapedSafetensors, ShardedSafeTensors, ShardedVarBuilder};
 use regex::Regex;
 
-use super::safetensors::MmapedSafetensors;
 use crate::lora::LoraConfig;
 use crate::utils::progress::IterWithProgress;
 use derive_new::new;
@@ -77,7 +73,18 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     make_dummy_regexes: Option<Arc<Vec<Regex>>>,
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
-) -> Result<VarBuilderArgs<'a, Box<dyn SimpleBackend>>> {
+) -> Result<ShardedVarBuilder<'a>> {
+    if base_device.is_cuda() {
+        return Ok(unsafe {
+            ShardedSafeTensors::sharded(
+                &paths,
+                dtype.unwrap_or(DType::F16),
+                base_device,
+                make_dummy_regexes,
+            )?
+        });
+    }
+
     #[allow(clippy::type_complexity)]
     let mut handles: Vec<JoinHandle<Result<HashMap<String, Tensor>>>> = Vec::new();
 
@@ -161,12 +168,14 @@ pub(crate) fn from_mmaped_safetensors<'a>(
         ws.extend(h.join().unwrap()?);
     }
 
+    let backend = Box::new(ws);
+
     // TODO(EricLBuehler): separation of concerns.
     // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
-    Ok(VarBuilder::from_tensors(
-        ws,
+    Ok(ShardedSafeTensors::wrap(
+        backend,
         dtype.unwrap_or(DType::F16),
-        base_device,
+        base_device.clone(),
     ))
 }
 
@@ -175,7 +184,7 @@ pub(crate) fn load_preload_adapters<'a>(
     dtype: DType,
     device: &Device,
     silent: bool,
-) -> Result<Option<HashMap<String, (VarBuilder<'a>, LoraConfig)>>> {
+) -> Result<Option<HashMap<String, (ShardedVarBuilder<'a>, LoraConfig)>>> {
     if let Some(paths) = paths {
         let mut map = HashMap::new();
         for (name, (path, config)) in paths {
@@ -191,13 +200,13 @@ pub(crate) fn load_preload_adapters<'a>(
                 |_| false,
             )?;
 
-            map.insert(
-                name.clone(),
-                (
-                    VarBuilder::from_tensors(loaded_tensors, dtype, device),
-                    config.clone(),
-                ),
-            );
+            let backend = Box::new(loaded_tensors);
+
+            // TODO(EricLBuehler): separation of concerns.
+            // This is to have WNA16 for GPTQ which is required. No bf16 for GPTQ
+            let vb = ShardedSafeTensors::wrap(backend, dtype, device.clone());
+
+            map.insert(name.clone(), (vb, config.clone()));
         }
         Ok(Some(map))
     } else {
@@ -231,7 +240,7 @@ trait LoadTensors {
             "pth" | "pt" | "bin" => Box::new(PickleBackend(
                 candle_core::pickle::PthTensors::new(path, None)?
             )),
-            other => candle_core::bail!("Unexpected extension `{other}`, this should have been handles by `get_model_paths`."),
+            other => candle_core::bail!("Unexpected extension `{other}`, this should have been handled by `get_model_paths`."),
         };
 
         // Extracts the tensor name and processes it, filtering tensors and deriving the key name:

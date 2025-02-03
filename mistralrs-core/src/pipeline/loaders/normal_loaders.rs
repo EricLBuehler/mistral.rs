@@ -22,9 +22,9 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use candle_nn::VarBuilder;
 
-use mistralrs_quant::QuantizedConfig;
+use indicatif::MultiProgress;
+use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -46,7 +46,7 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     #[allow(clippy::too_many_arguments)]
@@ -85,6 +85,8 @@ pub struct NormalLoadingMetadata {
     pub loading_isq: bool,
     // Device mapping target device (the one that is not the cpu)
     pub real_device: Device,
+    // MultiProgress support for parallelized loading
+    pub multi_progress: Arc<MultiProgress>,
 }
 
 pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
@@ -92,7 +94,7 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
@@ -101,12 +103,12 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self, config: &str) -> Result<bool>;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
@@ -288,7 +290,7 @@ impl NormalModelLoader for AutoLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -304,12 +306,12 @@ impl NormalModelLoader for AutoLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Self::get_loader(config)?.load_xlora(
             config,
@@ -432,7 +434,7 @@ impl NormalModelLoader for MistralLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -448,12 +450,12 @@ impl NormalModelLoader for MistralLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraMistral::new(
             &MistralBasicConfig::deserialize(config, use_flash_attn)?,
@@ -600,8 +602,8 @@ impl DeviceMappedModelLoader for MistralLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.head_dim()),
-            v_head_dim: Some(cfg.head_dim()),
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))
@@ -671,7 +673,7 @@ impl NormalModelLoader for GemmaLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -687,12 +689,12 @@ impl NormalModelLoader for GemmaLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraGemma::new(
             &GemmaBasicConfig::deserialize(config, use_flash_attn)?,
@@ -843,8 +845,8 @@ impl DeviceMappedModelLoader for GemmaLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.head_dim),
-            v_head_dim: Some(cfg.head_dim),
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
         };
 
         Ok(Box::new(cfg))
@@ -908,7 +910,7 @@ impl NormalModelLoader for LlamaLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -924,12 +926,12 @@ impl NormalModelLoader for LlamaLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraLlama::new(
             &LlamaBasicConfig::deserialize(config, use_flash_attn)?,
@@ -1075,8 +1077,8 @@ impl DeviceMappedModelLoader for LlamaLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1136,7 +1138,7 @@ impl NormalModelLoader for MixtralLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -1152,12 +1154,12 @@ impl NormalModelLoader for MixtralLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraMixtral::new(
             &MixtralBasicConfig::deserialize(config, use_flash_attn)?,
@@ -1308,8 +1310,8 @@ impl DeviceMappedModelLoader for MixtralLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1370,7 +1372,7 @@ impl NormalModelLoader for Phi2Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -1386,12 +1388,12 @@ impl NormalModelLoader for Phi2Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraPhi2::new(
             &Phi2BasicConfig::deserialize(config, use_flash_attn)?,
@@ -1532,8 +1534,8 @@ impl DeviceMappedModelLoader for Phi2Loader {
             num_kv_heads: cfg.num_key_value_heads(),
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.head_dim()),
-            v_head_dim: Some(cfg.head_dim()),
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))
@@ -1600,7 +1602,7 @@ impl NormalModelLoader for Phi3Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -1616,12 +1618,12 @@ impl NormalModelLoader for Phi3Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraPhi3::new(
             &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
@@ -1761,8 +1763,8 @@ impl DeviceMappedModelLoader for Phi3Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.head_dim()),
-            v_head_dim: Some(cfg.head_dim()),
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))
@@ -1820,7 +1822,7 @@ impl NormalModelLoader for Qwen2Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -1836,12 +1838,12 @@ impl NormalModelLoader for Qwen2Loader {
         &self,
         _config: &str,
         _use_flash_attn: bool,
-        _vb: VarBuilder,
+        _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
         _xlora_ordering: Ordering,
         _normal_loading_metadata: NormalLoadingMetadata,
-        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         todo!()
     }
@@ -1979,8 +1981,8 @@ impl DeviceMappedModelLoader for Qwen2Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: Some(cfg.sliding_window),
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -2054,7 +2056,7 @@ impl NormalModelLoader for Gemma2Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -2070,12 +2072,12 @@ impl NormalModelLoader for Gemma2Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraGemma2::new(
             &Gemma2BasicConfig::deserialize(config, use_flash_attn)?,
@@ -2226,8 +2228,8 @@ impl DeviceMappedModelLoader for Gemma2Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: Some(cfg.sliding_window),
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -2288,7 +2290,7 @@ impl NormalModelLoader for Starcoder2Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -2304,12 +2306,12 @@ impl NormalModelLoader for Starcoder2Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraStarcoder2::new(
             &Starcoder2BasicConfig::deserialize(config, use_flash_attn)?,
@@ -2452,8 +2454,8 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -2524,7 +2526,7 @@ impl NormalModelLoader for Phi3_5MoELoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -2540,12 +2542,12 @@ impl NormalModelLoader for Phi3_5MoELoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
         xlora_ordering: Ordering,
         normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Ok(Box::new(xlora_models::XLoraPhi3::new(
             &Phi3BasicConfig::deserialize(config, use_flash_attn)?,
@@ -2709,8 +2711,8 @@ impl DeviceMappedModelLoader for Phi3_5MoELoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.head_dim()),
-            v_head_dim: Some(cfg.head_dim()),
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))
@@ -2727,7 +2729,7 @@ impl NormalModelLoader for DeepSeekV2Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -2745,12 +2747,12 @@ impl NormalModelLoader for DeepSeekV2Loader {
         &self,
         _config: &str,
         _use_flash_attn: bool,
-        _vb: VarBuilder,
+        _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
         _xlora_ordering: Ordering,
         _normal_loading_metadata: NormalLoadingMetadata,
-        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         todo!()
     }
@@ -3037,8 +3039,8 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
             num_kv_heads: cfg.num_attention_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.qk_rope_head_dim + cfg.qk_nope_head_dim),
-            v_head_dim: Some(cfg.v_head_dim),
+            k_head_dim: cfg.qk_rope_head_dim + cfg.qk_nope_head_dim,
+            v_head_dim: cfg.v_head_dim,
         };
 
         Ok(Box::new(cfg))
@@ -3055,7 +3057,7 @@ impl NormalModelLoader for DeepSeekV3Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
@@ -3073,12 +3075,12 @@ impl NormalModelLoader for DeepSeekV3Loader {
         &self,
         _config: &str,
         _use_flash_attn: bool,
-        _vb: VarBuilder,
+        _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
         _xlora_ordering: Ordering,
         _normal_loading_metadata: NormalLoadingMetadata,
-        _preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         todo!()
     }
@@ -3365,8 +3367,8 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
             num_kv_heads: cfg.num_attention_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.qk_rope_head_dim + cfg.qk_nope_head_dim),
-            v_head_dim: Some(cfg.v_head_dim),
+            k_head_dim: cfg.qk_rope_head_dim + cfg.qk_nope_head_dim,
+            v_head_dim: cfg.v_head_dim,
         };
 
         Ok(Box::new(cfg))

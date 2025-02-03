@@ -16,7 +16,7 @@ pub(crate) trait LLaVALLM: IsqModel + NormalModel + Sync + Send {
         input_embed: Tensor, // we don't want to clone, so we pass it in
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor>;
 }
