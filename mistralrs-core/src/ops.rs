@@ -2,7 +2,6 @@ use candle_core::{
     backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
     Result, Shape, Tensor, WithDType, D,
 };
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use std::{
     fmt::Display,
@@ -663,36 +662,57 @@ pub trait BincountOp {
 }
 
 fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
-    // Find the maximum value in `values` (or zero if empty)
-    let max_val = values.par_iter().max().copied().unwrap_or(0);
+    // let max_val = values.iter().max().copied().unwrap_or(0);
+    // let result_len = (max_val + 1).max(minlength);
+    // values.iter().fold(
+    //     // Start with a histogram vector of zeros.
+    //     vec![0u32; result_len as usize],
+    //     // For each value, update the histogram.
+    //     |mut histogram, &value| {
+    //         histogram[value as usize] += 1;
+    //         histogram
+    //     },
+    // )
 
-    // The final size of the bin counts must be at least `minlength`
-    // and large enough to include the largest value in `values`.
-    let result_len = (max_val + 1).max(minlength);
+    use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
-    // Each thread creates a local histogram (`fold`),
-    // and then they are merged together (`reduce`).
+    // Early return if there are no values.
+    if values.is_empty() {
+        return vec![0u32; minlength as usize];
+    }
+
+    // Compute the maximum value in parallel.
+    // SAFETY: we know `values` is nonempty.
+    let max_val = *values.par_iter().max().unwrap();
+
+    // The histogram length must cover all observed values as well as `minlength`.
+    let result_len = (max_val + 1).max(minlength) as usize;
+
+    // Build per-thread histograms in parallel.
+    // We use unsafe indexing to eliminate bounds checks in the inner loop.
     values
         .par_iter()
         .fold(
-            // Create a local histogram
-            || vec![0u32; result_len as usize],
-            // Update the local histogram
-            |mut local_counts, &val| {
-                local_counts[val as usize] += 1;
-                local_counts
+            || vec![0u32; result_len],
+            |mut local_hist, &v| {
+                // SAFETY: v is guaranteed to be <= max_val, so it is in bounds.
+                unsafe {
+                    *local_hist.get_unchecked_mut(v as usize) += 1;
+                }
+                local_hist
             },
         )
-        // Merge histograms from all threads
+        // Merge the per-thread histograms in parallel.
         .reduce(
-            // Identity (empty histogram)
-            || vec![0u32; result_len as usize],
-            // Combine two histograms
-            |mut global_counts, local_counts| {
-                for (g, l) in global_counts.iter_mut().zip(local_counts) {
-                    *g += l;
+            || vec![0u32; result_len],
+            |mut global_hist, local_hist| {
+                for i in 0..result_len {
+                    // SAFETY: we know local histogram is at least result_len, as is global_hist
+                    unsafe {
+                        *global_hist.get_unchecked_mut(i) += local_hist.get_unchecked(i);
+                    }
                 }
-                global_counts
+                global_hist
             },
         )
 }

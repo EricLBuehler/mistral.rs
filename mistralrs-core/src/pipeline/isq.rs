@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::Result;
 use candle_core::{quantized, Context, Device, Tensor};
-use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use mistralrs_quant::{
     FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType,
@@ -125,6 +125,7 @@ pub struct UqffFullSer<'a> {
     pub preprocessor_filename: &'a Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum ImatrixDataSource<'a> {
     File(&'a PathBuf),
     Collected,
@@ -250,6 +251,7 @@ pub trait IsqModel {
         organization: IsqOrganization,
         write_artifacts: Option<&PathBuf>,
         full_ser: UqffFullSer<'_>,
+        multi_progress: Arc<MultiProgress>,
     ) -> candle_core::Result<()> {
         {
             let imatrix_to_weight = match imatrix_source {
@@ -341,6 +343,7 @@ pub trait IsqModel {
                     .unwrap()
                     .progress_chars("#>-"),
             );
+            multi_progress.add(bar.clone());
 
             let layers = topology.map(|x| {
                 x.0.iter()

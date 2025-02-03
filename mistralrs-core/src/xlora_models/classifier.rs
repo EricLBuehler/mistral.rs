@@ -1,8 +1,7 @@
+use crate::layers::{linear, linear_no_bias};
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{
-    activation, linear, linear_no_bias, ops::softmax_last_dim, Dropout, Linear, Module, ModuleT,
-    VarBuilder,
-};
+use candle_nn::{activation, ops::softmax_last_dim, Dropout, Linear, Module, ModuleT};
+use mistralrs_quant::ShardedVarBuilder;
 
 use crate::ops::{TopKLastDimOp, TopKOutput};
 
@@ -34,7 +33,7 @@ impl XLoraClassifier {
         config: XLoraConfig,
         n_layers: usize,
         n_classes: usize,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_quantized: bool,
     ) -> Result<Self> {
         if config.enable_softmax_topk {

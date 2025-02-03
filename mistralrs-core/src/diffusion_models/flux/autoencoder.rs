@@ -1,10 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{Result, Tensor, D};
-use candle_nn::{conv2d, group_norm, Conv2d, GroupNorm, VarBuilder};
+use candle_nn::{Conv2d, GroupNorm};
+use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
-use crate::layers::MatMul;
+use crate::layers::{conv2d, group_norm, MatMul};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -35,7 +36,7 @@ struct AttnBlock {
 }
 
 impl AttnBlock {
-    fn new(in_c: usize, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn new(in_c: usize, vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let q = conv2d(in_c, in_c, 1, Default::default(), vb.pp("q"))?;
         let k = conv2d(in_c, in_c, 1, Default::default(), vb.pp("k"))?;
         let v = conv2d(in_c, in_c, 1, Default::default(), vb.pp("v"))?;
@@ -78,7 +79,7 @@ struct ResnetBlock {
 }
 
 impl ResnetBlock {
-    fn new(in_c: usize, out_c: usize, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn new(in_c: usize, out_c: usize, vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
@@ -130,7 +131,7 @@ struct Downsample {
 }
 
 impl Downsample {
-    fn new(in_c: usize, vb: VarBuilder) -> Result<Self> {
+    fn new(in_c: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             stride: 2,
             ..Default::default()
@@ -154,7 +155,7 @@ struct Upsample {
 }
 
 impl Upsample {
-    fn new(in_c: usize, vb: VarBuilder) -> Result<Self> {
+    fn new(in_c: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
@@ -189,7 +190,7 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
@@ -285,7 +286,7 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_cfg = candle_nn::Conv2dConfig {
             padding: 1,
             ..Default::default()
@@ -388,7 +389,7 @@ pub struct AutoEncoder {
 }
 
 impl AutoEncoder {
-    pub fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let encoder = Encoder::new(cfg, vb.pp("encoder"))?;
         let decoder = Decoder::new(cfg, vb.pp("decoder"))?;
         let reg = DiagonalGaussian::new(true, 1)?;

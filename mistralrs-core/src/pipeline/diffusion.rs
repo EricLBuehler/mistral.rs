@@ -18,6 +18,7 @@ use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use image::{DynamicImage, RgbImage};
+use indicatif::MultiProgress;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -199,6 +200,7 @@ impl Loader for DiffusionLoader {
                         mapper,
                         loading_isq: false,
                         real_device: device.clone(),
+                        multi_progress: Arc::new(MultiProgress::new()),
                     },
                     attention_mechanism,
                     silent,
@@ -223,7 +225,7 @@ impl Loader for DiffusionLoader {
                 activation_dtype: dtype,
                 sliding_window: None,
                 cache_config: None,
-                cache_engine: None,
+                cache_engines: None,
                 prompt_chunksize: None,
                 model_metadata: None,
             }),

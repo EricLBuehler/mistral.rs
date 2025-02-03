@@ -4,7 +4,8 @@ use std::{fmt::Debug, str::FromStr};
 
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use candle_nn::{Conv2dConfig, VarBuilder};
+use candle_nn::Conv2dConfig;
+use mistralrs_quant::ShardedVarBuilder;
 
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
@@ -52,7 +53,7 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor>;
     fn device(&self) -> &Device;
@@ -70,7 +71,7 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
@@ -229,7 +230,7 @@ impl VisionModelLoader for Phi3VLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -464,8 +465,8 @@ impl DeviceMappedModelLoader for Phi3VLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.head_dim()),
-            v_head_dim: Some(cfg.head_dim()),
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))
@@ -497,7 +498,7 @@ impl VisionModelLoader for Idefics2Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -798,8 +799,8 @@ impl DeviceMappedModelLoader for Idefics2Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -830,7 +831,7 @@ impl VisionModelLoader for LLaVANextLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -1051,8 +1052,8 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1083,7 +1084,7 @@ impl VisionModelLoader for LLaVALoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -1296,8 +1297,8 @@ impl DeviceMappedModelLoader for LLaVALoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1328,7 +1329,7 @@ impl VisionModelLoader for VLlamaLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -1675,8 +1676,8 @@ impl DeviceMappedModelLoader for VLlamaLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1712,7 +1713,7 @@ impl VisionModelLoader for Qwen2VLLoader {
         &self,
         config: &str,
         _use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -1962,8 +1963,8 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: cfg.sliding_window,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -1995,7 +1996,7 @@ impl VisionModelLoader for Idefics3Loader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -2244,8 +2245,8 @@ impl DeviceMappedModelLoader for Idefics3Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))
@@ -2276,7 +2277,7 @@ impl VisionModelLoader for MiniCpmOLoader {
         &self,
         config: &str,
         use_flash_attn: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
@@ -2518,8 +2519,8 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None,
-            k_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
-            v_head_dim: Some(cfg.hidden_size / cfg.num_attention_heads),
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))

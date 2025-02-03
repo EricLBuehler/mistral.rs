@@ -147,10 +147,6 @@ impl QuantMethod for FP8Linear {
         (DType::F8E4M3, self.lin.weight().device().clone())
     }
 
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        None
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         _dtype: Option<IsqType>,
@@ -179,10 +175,6 @@ impl QuantMethod for FP8Linear {
             | IsqType::HQQ4
             | IsqType::HQQ8 => None,
         }
-    }
-
-    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        Ok(self.clone())
     }
 }
 

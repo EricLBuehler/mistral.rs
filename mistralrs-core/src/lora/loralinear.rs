@@ -1,9 +1,9 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
 use candle_core::{bail, DType, Module, Result, Tensor};
-use candle_nn::{Linear, VarBuilder};
+use candle_nn::Linear;
 use either::Either;
-use mistralrs_quant::{QuantMethod, QuantMethodConfig, UnquantLinear};
+use mistralrs_quant::{QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear};
 
 use crate::layers::MatMul;
 
@@ -27,9 +27,9 @@ impl LoraLinear {
         old: &dyn LinearLayerLike,
         linear_config: &LoraLinearConfig,
         config: &[((String, String), LoraConfig)],
-        vb: &VarBuilder,
+        vb: &ShardedVarBuilder,
         layer_n: usize,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Self> {
         let mut a_adapters = Vec::with_capacity(config.len());
         let mut b_adapters = Vec::with_capacity(config.len());

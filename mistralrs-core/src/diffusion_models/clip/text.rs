@@ -3,9 +3,10 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn as nn;
 use candle_nn::Module;
+use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 
-use crate::layers::MatMul;
+use crate::layers::{self, MatMul};
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub enum Activation {
@@ -47,10 +48,10 @@ struct ClipTextEmbeddings {
 }
 
 impl ClipTextEmbeddings {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+    fn new(vs: ShardedVarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let token_embedding =
-            candle_nn::embedding(c.vocab_size, c.projection_dim, vs.pp("token_embedding"))?;
-        let position_embedding: nn::Embedding = candle_nn::embedding(
+            layers::embedding(c.vocab_size, c.projection_dim, vs.pp("token_embedding"))?;
+        let position_embedding: nn::Embedding = layers::embedding(
             c.max_position_embeddings,
             c.projection_dim,
             vs.pp("position_embedding"),
@@ -87,13 +88,13 @@ struct ClipAttention {
 }
 
 impl ClipAttention {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+    fn new(vs: ShardedVarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let projection_dim = c.projection_dim;
         let num_attention_heads = c.num_attention_heads;
-        let k_proj = candle_nn::linear(projection_dim, projection_dim, vs.pp("k_proj"))?;
-        let v_proj = candle_nn::linear(projection_dim, projection_dim, vs.pp("v_proj"))?;
-        let q_proj = candle_nn::linear(projection_dim, projection_dim, vs.pp("q_proj"))?;
-        let out_proj = candle_nn::linear(projection_dim, projection_dim, vs.pp("out_proj"))?;
+        let k_proj = layers::linear(projection_dim, projection_dim, vs.pp("k_proj"))?;
+        let v_proj = layers::linear(projection_dim, projection_dim, vs.pp("v_proj"))?;
+        let q_proj = layers::linear(projection_dim, projection_dim, vs.pp("q_proj"))?;
+        let out_proj = layers::linear(projection_dim, projection_dim, vs.pp("out_proj"))?;
         let head_dim = projection_dim / num_attention_heads;
         let scale = (head_dim as f64).powf(-0.5);
 
@@ -166,9 +167,9 @@ struct ClipMlp {
 }
 
 impl ClipMlp {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
-        let fc1 = candle_nn::linear(c.projection_dim, c.intermediate_size, vs.pp("fc1"))?;
-        let fc2 = candle_nn::linear(c.intermediate_size, c.projection_dim, vs.pp("fc2"))?;
+    fn new(vs: ShardedVarBuilder, c: &ClipTextConfig) -> Result<Self> {
+        let fc1 = layers::linear(c.projection_dim, c.intermediate_size, vs.pp("fc1"))?;
+        let fc2 = layers::linear(c.intermediate_size, c.projection_dim, vs.pp("fc2"))?;
 
         Ok(ClipMlp {
             fc1,
@@ -194,11 +195,11 @@ struct ClipEncoderLayer {
 }
 
 impl ClipEncoderLayer {
-    fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+    fn new(vs: ShardedVarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let self_attn = ClipAttention::new(vs.pp("self_attn"), c)?;
-        let layer_norm1 = candle_nn::layer_norm(c.projection_dim, 1e-5, vs.pp("layer_norm1"))?;
+        let layer_norm1 = layers::layer_norm(c.projection_dim, 1e-5, vs.pp("layer_norm1"))?;
         let mlp = ClipMlp::new(vs.pp("mlp"), c)?;
-        let layer_norm2 = candle_nn::layer_norm(c.projection_dim, 1e-5, vs.pp("layer_norm2"))?;
+        let layer_norm2 = layers::layer_norm(c.projection_dim, 1e-5, vs.pp("layer_norm2"))?;
 
         Ok(ClipEncoderLayer {
             self_attn,
@@ -227,7 +228,7 @@ pub struct ClipEncoder {
 }
 
 impl ClipEncoder {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+    pub fn new(vs: ShardedVarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let vs = vs.pp("layers");
         let mut layers: Vec<ClipEncoderLayer> = Vec::new();
         for index in 0..c.num_hidden_layers {
@@ -255,11 +256,11 @@ pub struct ClipTextTransformer {
 }
 
 impl ClipTextTransformer {
-    pub fn new(vs: candle_nn::VarBuilder, c: &ClipTextConfig) -> Result<Self> {
+    pub fn new(vs: ShardedVarBuilder, c: &ClipTextConfig) -> Result<Self> {
         let embeddings = ClipTextEmbeddings::new(vs.pp("embeddings"), c)?;
         let encoder = ClipEncoder::new(vs.pp("encoder"), c)?;
         let final_layer_norm =
-            candle_nn::layer_norm(c.projection_dim, 1e-5, vs.pp("final_layer_norm"))?;
+            layers::layer_norm(c.projection_dim, 1e-5, vs.pp("final_layer_norm"))?;
         Ok(ClipTextTransformer {
             embeddings,
             encoder,

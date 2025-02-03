@@ -9,6 +9,7 @@ use super::llava_llm::{LLaVALLM, Llama, Mistral};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::amoe::MlpLayer;
 use crate::device_map::DeviceMapper;
+use crate::layers;
 use crate::ops::NonZeroOp;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
@@ -22,7 +23,8 @@ use crate::vision_models::llava::config::Config;
 use crate::AnyMoeConfig;
 use crate::AnyMoeExpertType;
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
-use candle_nn::{linear, Activation, Linear, VarBuilder};
+use candle_nn::{Activation, Linear};
+use mistralrs_quant::ShardedVarBuilder;
 
 pub(crate) struct LLaVAVisionSpecificArgs; // only a dumb struct to satisfy the trait
 
@@ -33,8 +35,8 @@ pub struct MMProjector {
 }
 
 impl MMProjector {
-    pub fn new(vb: &VarBuilder, config: &Config, device: &Device) -> Result<Self> {
-        let linear_1 = linear(
+    pub fn new(vb: &ShardedVarBuilder, config: &Config, device: &Device) -> Result<Self> {
+        let linear_1 = layers::linear(
             config.vision_config.hidden_size,
             config.text_config.hidden_size,
             vb.pp("multi_modal_projector.linear_1")
@@ -49,7 +51,7 @@ impl MMProjector {
                 );
             }
         };
-        let linear_2 = linear(
+        let linear_2 = layers::linear(
             config.text_config.hidden_size,
             config.text_config.hidden_size,
             vb.pp("multi_modal_projector.linear_2")
@@ -78,7 +80,7 @@ pub struct ClipVisionTower {
 
 impl ClipVisionTower {
     pub fn new(
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         select_layer: isize,
         select_feature_method: &str,
         config: &ClipConfig,
@@ -120,7 +122,7 @@ pub struct Model {
 impl Model {
     pub fn new(
         config: &Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -226,7 +228,7 @@ impl Model {
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
@@ -298,7 +300,7 @@ impl VisionModel for Model {
         context_lens: Vec<(usize, usize)>,
         position_ids: Vec<usize>,
         _model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
         self.forward_inputs(
@@ -352,12 +354,12 @@ impl AnyMoeBaseModelMixin for Model {
     }
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<VarBuilder>,
+        additional_vbs: Vec<ShardedVarBuilder>,
         config: AnyMoeConfig,
         (prefix, mlp): (String, String),
         layers: Vec<usize>,
         expert_type: AnyMoeExpertType,
-        gate_vb: Option<VarBuilder>,
+        gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
         self.llm.create_anymoe_layers(
             additional_vbs,

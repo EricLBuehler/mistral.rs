@@ -1,12 +1,10 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    conv2d, embedding, layer_norm, Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module,
-    VarBuilder,
-};
+use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module};
+use mistralrs_quant::ShardedVarBuilder;
 use std::ops::Mul;
 
 use crate::{
-    layers::{Activation, CausalMasker, MatMul},
+    layers::{self, conv2d, embedding, layer_norm, Activation, CausalMasker, MatMul},
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -17,11 +15,11 @@ pub(crate) struct Idefics3SimpleMLP {
 }
 
 impl Idefics3SimpleMLP {
-    pub fn new(cfg: &Idefics3Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Idefics3Config, vb: ShardedVarBuilder) -> Result<Self> {
         let in_dim = cfg.vision_config.hidden_size * cfg.scale_factor.pow(2);
         let out_dim = cfg.text_config.hidden_size;
         Ok(Self {
-            proj: candle_nn::linear_no_bias(in_dim, out_dim, vb.pp("proj"))?,
+            proj: layers::linear_no_bias(in_dim, out_dim, vb.pp("proj"))?,
         })
     }
 
@@ -36,7 +34,7 @@ pub struct Idefics3Connector {
 }
 
 impl Idefics3Connector {
-    pub fn new(cfg: &Idefics3Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Idefics3Config, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
             scale_factor: cfg.scale_factor,
             modality_projection: Idefics3SimpleMLP::new(cfg, vb.pp("modality_projection"))?,
@@ -109,7 +107,7 @@ fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Te
 }
 
 impl VisionEmbeddings {
-    fn new(config: &Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_config = Conv2dConfig {
             stride: config.patch_size,
             ..Default::default()
@@ -239,16 +237,16 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(config: Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let embed_dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let head_dim = embed_dim / num_heads;
         let scale = 1.0 / (head_dim as f64).sqrt();
 
-        let q_proj = candle_nn::linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
-        let k_proj = candle_nn::linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
-        let v_proj = candle_nn::linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
-        let o_proj = candle_nn::linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
+        let q_proj = layers::linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
+        let k_proj = layers::linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
+        let v_proj = layers::linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
+        let o_proj = layers::linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
 
         Ok(Self {
             embed_dim,
@@ -316,9 +314,9 @@ struct VisionMLP {
 }
 
 impl VisionMLP {
-    fn new(config: Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
-        let fc1 = candle_nn::linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
-        let fc2 = candle_nn::linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
+    fn new(config: Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        let fc1 = layers::linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
+        let fc2 = layers::linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
             activation: config.hidden_act,
             fc1,
@@ -350,7 +348,7 @@ struct EncoderLayer {
 }
 
 impl EncoderLayer {
-    fn new(config: Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mlp = VisionMLP::new(config.clone(), vb.pp("mlp"))?;
         let attn = Attention::new(config.clone(), vb.pp("self_attn"))?;
         let layer_norm_1 = layer_norm(
@@ -390,7 +388,7 @@ struct Encoder {
 }
 
 impl Encoder {
-    fn new(config: &Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mut layers = Vec::new();
         let vb_l = vb.pp("layers");
         for i in 0..config.num_hidden_layers {
@@ -416,7 +414,7 @@ pub struct Idefics3VisionTransformer {
 }
 
 impl Idefics3VisionTransformer {
-    pub fn new(config: &Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
+    pub fn new(config: &Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let embeddings = VisionEmbeddings::new(config, vb.pp("embeddings"))?;
         let post_layernorm = layer_norm(
             config.hidden_size,

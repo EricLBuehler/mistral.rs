@@ -4,11 +4,12 @@
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, VarBuilder};
+use candle_nn::{Activation, Embedding, Linear};
+use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::layers::{clamp_for_f16, MatMul};
+use crate::layers::{clamp_for_f16, embedding, linear_no_bias, MatMul};
 
 fn default_relative_attention_max_distance() -> usize {
     128
@@ -137,7 +138,7 @@ struct T5LayerNorm {
 }
 
 impl T5LayerNorm {
-    fn load(h: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+    fn load(h: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         let weight = vb.get(h, "weight")?;
         Ok(Self {
             weight,
@@ -167,7 +168,7 @@ struct T5DenseActDense {
 }
 
 impl T5DenseActDense {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let wi = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi"))?;
         let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
         Ok(Self {
@@ -196,7 +197,7 @@ struct T5DenseGatedActDense {
 }
 
 impl T5DenseGatedActDense {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let wi_0 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_0"))?;
         let wi_1 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_1"))?;
         let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
@@ -227,7 +228,7 @@ struct T5LayerFF {
 }
 
 impl T5LayerFF {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
         let (dense_act, gated_dense_act) = if cfg.feed_forward_proj.gated {
@@ -312,7 +313,7 @@ impl T5Attention {
     fn load(
         has_relative_attention_bias: bool,
         decoder: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
     ) -> Result<Self> {
         let inner_dim = cfg.num_heads * cfg.d_kv;
@@ -466,7 +467,7 @@ struct T5LayerSelfAttention {
 }
 
 impl T5LayerSelfAttention {
-    fn load(h: bool, d: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(h: bool, d: bool, vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let self_attention = T5Attention::load(h, d, vb.pp("SelfAttention"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
@@ -537,7 +538,7 @@ struct T5LayerCrossAttention {
 }
 
 impl T5LayerCrossAttention {
-    fn load(decoder: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(decoder: bool, vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let cross_attention = T5Attention::load(false, decoder, vb.pp("EncDecAttention"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
@@ -615,7 +616,7 @@ impl T5Block {
     fn load(
         has_relative_attention_bias: bool,
         decoder: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
     ) -> Result<Self> {
         let vb = vb.pp("layer");
@@ -697,7 +698,7 @@ struct T5Stack {
 impl T5Stack {
     fn load(
         decoder: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         shared: &Arc<Embedding>,
         cfg: &Config,
         device: &Device,
@@ -751,7 +752,12 @@ pub struct T5EncoderModel {
 }
 
 impl T5EncoderModel {
-    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device, offloaded: bool) -> Result<Self> {
+    pub fn load(
+        vb: ShardedVarBuilder,
+        cfg: &Config,
+        device: &Device,
+        offloaded: bool,
+    ) -> Result<Self> {
         let shared_vb = if vb.contains_tensor("shared.weight") {
             vb.pp("shared")
         } else if vb.contains_tensor("decoder.embed_tokens") {

@@ -35,7 +35,7 @@ impl PagedAttention {
         _attention_mask: Option<&Tensor>,
         _key_cache: Option<Tensor>,
         _value_cache: Option<Tensor>,
-        _input_metadata: &mut PagedAttentionInputMetadata,
+        _input_metadata: &PagedAttentionInputMetadata,
         _sdpa_params: &SdpaParams,
         _flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {

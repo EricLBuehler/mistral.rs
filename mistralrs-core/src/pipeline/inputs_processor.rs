@@ -124,6 +124,17 @@ pub mod text_models_inputs_processor {
         pub cumulative_seqlens_k: Tensor,
     }
 
+    impl FlashParams {
+        pub fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
+            Ok(Self {
+                max_k: self.max_k,
+                max_q: self.max_q,
+                cumulative_seqlens_k: self.cumulative_seqlens_k.to_device(device)?,
+                cumulative_seqlens_q: self.cumulative_seqlens_q.to_device(device)?,
+            })
+        }
+    }
+
     pub struct InputMetadata {
         pub input: Tensor,
         pub positions: Vec<usize>,

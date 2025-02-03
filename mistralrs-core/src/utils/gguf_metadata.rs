@@ -60,6 +60,12 @@ impl ModelConfigLike for ContentConfig {
     fn num_layers(&self) -> usize {
         self.num_layers
     }
+    fn k_head_dim(&self) -> usize {
+        self.hidden_size / self.num_attn_heads
+    }
+    fn v_head_dim(&self) -> usize {
+        self.hidden_size / self.num_attn_heads
+    }
 }
 
 pub struct ContentMetadata<'a> {

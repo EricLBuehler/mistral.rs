@@ -3,15 +3,12 @@
 use std::{ops::Mul, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{
-    conv2d_no_bias, embedding, layer_norm, Conv2d, Conv2dConfig, Embedding, LayerNorm,
-    LayerNormConfig, Module, VarBuilder,
-};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, LayerNormConfig, Module};
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
     attention::SdpaParams,
-    layers::{GetFloatInfo, Sdpa},
+    layers::{conv2d_no_bias, embedding, layer_norm, GetFloatInfo, Sdpa},
     pipeline::IsqModel,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -28,7 +25,7 @@ struct MLlamaPrecomputedPositionEmbedding {
 }
 
 impl MLlamaPrecomputedPositionEmbedding {
-    fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &MLlamaVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let num_patches = (cfg.image_size / cfg.patch_size).pow(2) + 1;
         Ok(Self {
             gate: vb.get((1,), "gate")?,
@@ -88,7 +85,7 @@ struct MLlamaPrecomputedAspectRatioEmbedding {
 }
 
 impl MLlamaPrecomputedAspectRatioEmbedding {
-    fn new<const GATED: bool>(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new<const GATED: bool>(cfg: &MLlamaVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
             embedding: embedding(
                 cfg.max_aspect_ratio_id() + 1,
@@ -139,7 +136,7 @@ struct MLlamaVisionAttention {
 }
 
 impl MLlamaVisionAttention {
-    fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &MLlamaVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         Ok(Self {
             q_proj: mistralrs_quant::linear_no_bias(
@@ -240,7 +237,7 @@ struct MLlamaMlp {
 }
 
 impl MLlamaMlp {
-    fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &MLlamaVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
             act: cfg.hidden_act,
             fc1: mistralrs_quant::linear(
@@ -287,7 +284,7 @@ struct MLlamaVisionEncoderLayer {
 impl MLlamaVisionEncoderLayer {
     fn new<const GATED: bool>(
         cfg: &MLlamaVisionConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         real_dev: &Device,
     ) -> Result<Self> {
         let self_attn = MLlamaVisionAttention::new(cfg, vb.pp("self_attn"))?;
@@ -360,7 +357,7 @@ impl MLlamaVisionEncoder {
     fn new<const GATED: bool>(
         cfg: &MLlamaVisionConfig,
         num_layers: usize,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         real_dev: &Device,
     ) -> Result<Self> {
         let mut layers = Vec::with_capacity(num_layers);
@@ -469,7 +466,11 @@ pub(super) struct MLlamaVisionModel {
 }
 
 impl MLlamaVisionModel {
-    pub(super) fn new(cfg: &MLlamaVisionConfig, vb: VarBuilder, real_dev: &Device) -> Result<Self> {
+    pub(super) fn new(
+        cfg: &MLlamaVisionConfig,
+        vb: ShardedVarBuilder,
+        real_dev: &Device,
+    ) -> Result<Self> {
         let patch_embedding = conv2d_no_bias(
             cfg.num_channels,
             cfg.hidden_size,

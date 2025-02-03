@@ -1,14 +1,12 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    conv2d, embedding, layer_norm, linear, Conv2d, Conv2dConfig, Embedding, LayerNorm, Module,
-    VarBuilder,
-};
+use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
+use mistralrs_quant::ShardedVarBuilder;
 use std::ops::Mul;
 
 use crate::{
-    layers::{Activation, CausalMasker, MatMul, QLinear},
+    layers::{conv2d, embedding, layer_norm, linear, Activation, CausalMasker, MatMul, QLinear},
     serde_default_fn,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -84,7 +82,7 @@ fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Te
 }
 
 impl VisionEmbeddings {
-    fn new(config: &SiglipVisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &SiglipVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_config = Conv2dConfig {
             stride: config.patch_size,
             ..Default::default()
@@ -224,7 +222,7 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(config: SiglipVisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: SiglipVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let embed_dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let head_dim = embed_dim / num_heads;
@@ -318,7 +316,7 @@ struct VisionMLP {
 }
 
 impl VisionMLP {
-    fn new(config: SiglipVisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: SiglipVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let fc1 = linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
         let fc2 = linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
@@ -361,7 +359,7 @@ struct EncoderLayer {
 }
 
 impl EncoderLayer {
-    fn new(config: SiglipVisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: SiglipVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mlp = VisionMLP::new(config.clone(), vb.pp("mlp"))?;
         let attn = Attention::new(config.clone(), vb.pp("self_attn"))?;
         let layer_norm_1 = layer_norm(
@@ -401,7 +399,7 @@ struct Encoder {
 }
 
 impl Encoder {
-    fn new(config: &SiglipVisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &SiglipVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mut layers = Vec::new();
         let vb_l = vb.pp("layers");
         for i in 0..config.num_hidden_layers {
@@ -427,7 +425,7 @@ pub struct SiglipVisionTransformer {
 }
 
 impl SiglipVisionTransformer {
-    pub fn new(config: &SiglipVisionConfig, vb: VarBuilder) -> Result<Self> {
+    pub fn new(config: &SiglipVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let embeddings = VisionEmbeddings::new(config, vb.pp("embeddings"))?;
         let post_layernorm = layer_norm(
             config.hidden_size,
