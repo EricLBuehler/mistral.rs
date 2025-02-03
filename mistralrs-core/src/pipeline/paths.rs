@@ -402,7 +402,7 @@ pub(crate) fn get_chat_template(
     let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
         .get_processor_config()
         .as_ref()
-        .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+        .map(|f| serde_json::from_str(&f).unwrap());
     if let Some(processor_conf) = processor_conf {
         if processor_conf.chat_template.is_some() {
             template.chat_template = processor_conf
