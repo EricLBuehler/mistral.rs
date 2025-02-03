@@ -41,7 +41,6 @@ use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
-use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -387,19 +386,16 @@ impl Loader for VisionLoader {
             _ => unreachable!(),
         };
         let preprocessor_config: PreProcessorConfig = serde_json::from_str(
-            &fs::read_to_string(
-                paths
-                    .get_preprocessor_config()
-                    .as_ref()
-                    .expect("Need preprocessor config"),
-            )
-            .unwrap(),
+            paths
+                .get_preprocessor_config()
+                .as_ref()
+                .expect("Need preprocessor config"),
         )
         .unwrap();
         let processor_config: Option<ProcessorConfig> = paths
             .get_processor_config()
             .as_ref()
-            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+            .map(|f| serde_json::from_str(&f).unwrap());
 
         let processor = self.inner.get_processor(
             &config,
