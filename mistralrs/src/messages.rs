@@ -445,13 +445,37 @@ impl RequestBuilder {
         role: TextMessageRole,
         text: impl ToString,
         image: DynamicImage,
-    ) -> Self {
+        model: &Model,
+    ) -> anyhow::Result<Self> {
+        let prefixer = match &model.config().category {
+            ModelCategory::Text | ModelCategory::Diffusion => {
+                anyhow::bail!("`add_image_message` expects a vision model.")
+            }
+            ModelCategory::Vision {
+                has_conv2d: _,
+                prefixer,
+            } => prefixer,
+        };
+        self.images.push(image);
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
-            ("content".to_string(), Either::Left(text.to_string())),
+            (
+                "content".to_string(),
+                Either::Right(vec![
+                    IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
+                    IndexMap::from([
+                        ("type".to_string(), Value::String("text".to_string())),
+                        (
+                            "text".to_string(),
+                            Value::String(
+                                prefixer.prefix_image(self.images.len() - 1, &text.to_string()),
+                            ),
+                        ),
+                    ]),
+                ]),
+            ),
         ]));
-        self.images.push(image);
-        self
+        Ok(self)
     }
 
     pub fn add_logits_processor(mut self, processor: Arc<dyn CustomLogitsProcessor>) -> Self {
