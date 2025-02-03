@@ -174,19 +174,6 @@ impl Loader for VisionLoader {
             silent,
             self.config.from_uqff.is_some()
         );
-        if let Some(from_uqff) = self.config.from_uqff.clone() {
-            match from_uqff {
-                ModelWeightSource::PathBuf(from_uqff) => {
-                    *self.from_uqff.write().unwrap() = Some(ModelWeightSource::PathBuf(
-                        get_uqff_paths!(&from_uqff, self, silent),
-                    ));
-                }
-                ModelWeightSource::SafeTensorsData(data) => {
-                    *self.from_uqff.write().unwrap() =
-                        Some(ModelWeightSource::SafeTensorsData(data));
-                }
-            }
-        }
         *self
             .token_source
             .write()
@@ -214,6 +201,20 @@ impl Loader for VisionLoader {
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        if let Some(from_uqff) = self.config.from_uqff.clone() {
+            match from_uqff {
+                ModelWeightSource::PathBuf(from_uqff) => {
+                    *self.from_uqff.write().unwrap() = Some(ModelWeightSource::PathBuf(
+                        get_uqff_paths!(&from_uqff, self, silent),
+                    ));
+                }
+                ModelWeightSource::SafeTensorsData(data) => {
+                    *self.from_uqff.write().unwrap() =
+                        Some(ModelWeightSource::SafeTensorsData(data));
+                }
+            }
+        }
+
         let config = paths.get_config().clone();
 
         if !self.inner.supports_paged_attention() {
