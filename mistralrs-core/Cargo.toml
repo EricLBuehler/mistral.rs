@@ -112,6 +112,7 @@ flash-attn = ["cuda", "dep:candle-flash-attn"]
 flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
+arm-nightly-feat = ["candle-core/arm-nightly-feat", "mistralrs-quant/arm-nightly-feat"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }

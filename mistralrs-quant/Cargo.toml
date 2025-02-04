@@ -35,6 +35,7 @@ regex.workspace = true
 cuda = ["candle-core/cuda", "candle-nn/cuda", "dep:bindgen_cuda"]
 metal = ["candle-core/metal", "candle-nn/metal", "dep:metal"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+arm-nightly-feat = ["candle-core/arm-nightly-feat"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }
