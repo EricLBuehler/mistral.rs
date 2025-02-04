@@ -27,7 +27,7 @@ use crate::{
 };
 
 use super::{
-    cache_manager::FullCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
+    cache_manager::{FullCacheManager, NormalCacheManager}, chat_template::ChatTemplate, sampling::SpeculativeSample,
     AdapterActivationMixin, AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata,
     IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
@@ -246,12 +246,12 @@ impl IsqPipelineMixin for SpeculativePipeline {
 // TODO: correct handling of cloning in and out for normal cache
 impl CacheManagerMixin for SpeculativePipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.draft), seqs, modify_draft_cache);
-        FullCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.target), seqs, false);
+        NormalCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.draft), seqs, modify_draft_cache);
+        NormalCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.target), seqs, false);
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.draft), seqs, modify_draft_cache);
-        FullCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.target), seqs, false);
+        NormalCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.draft), seqs, modify_draft_cache);
+        NormalCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.target), seqs, false);
     }
     fn set_none_cache(
         &self,
@@ -260,13 +260,13 @@ impl CacheManagerMixin for SpeculativePipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        FullCacheManager.set_none_cache(
+        NormalCacheManager.set_none_cache(
             &*get_mut_arcmutex!(self.draft),
             seqs,
             modify_draft_cache,
             load_preallocated_cache,
         );
-        FullCacheManager.set_none_cache(
+        NormalCacheManager.set_none_cache(
             &*get_mut_arcmutex!(self.target),
             seqs,
             false,
@@ -278,6 +278,9 @@ impl CacheManagerMixin for SpeculativePipeline {
     }
     fn cache(&self) -> &EitherCache {
         unreachable!()
+    }
+    fn cache_is_normal(&self) -> bool {
+        true
     }
 }
 
@@ -437,9 +440,9 @@ impl Pipeline for SpeculativePipeline {
                         )
                         .nth(0)
                         .unwrap()
-                        .unwrap();
+                        .unwrap().inputs;
                     let logits =
-                        get_mut_arcmutex!(self.draft).forward_inputs(Box::new(inputs), false)?;
+                        get_mut_arcmutex!(self.draft).forward_inputs(inputs, false)?;
                     #[allow(irrefutable_let_patterns)]
                     let ForwardInputsResult::CausalGeneration { logits } = logits
                     else {
@@ -510,10 +513,10 @@ impl Pipeline for SpeculativePipeline {
                     )
                     .nth(0)
                     .unwrap()
-                    .unwrap();
+                    .unwrap().inputs;
 
                 let logits =
-                    get_mut_arcmutex!(self.target).forward_inputs(Box::new(inputs), false)?;
+                    get_mut_arcmutex!(self.target).forward_inputs(inputs, false)?;
                 #[allow(irrefutable_let_patterns)]
                 let ForwardInputsResult::CausalGeneration { logits } = logits
                 else {
