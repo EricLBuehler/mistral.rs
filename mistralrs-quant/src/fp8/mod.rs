@@ -174,7 +174,8 @@ impl QuantMethod for FP8Linear {
             | IsqType::Q8_1
             | IsqType::Iq4Xs
             | IsqType::HQQ4
-            | IsqType::HQQ8 => None,
+            | IsqType::HQQ8
+            | IsqType::F16 => None,
         }
     }
 }

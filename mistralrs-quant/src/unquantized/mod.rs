@@ -228,6 +228,19 @@ impl QuantMethod for UnquantLinear {
                     dtype: DType::F8E4M3,
                 })?))
             }
+            Some(IsqType::F16) => {
+                // Ignore imatrix altogether
+
+                let w = self.w.to_device(&device)?.to_dtype(DType::F16)?;
+                let b = if let Some(b) = &self.b {
+                    Some(b.to_device(&device)?.to_dtype(DType::F16)?)
+                } else {
+                    None
+                };
+                Ok(Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(w, b)),
+                )?))
+            }
             None => {
                 // Ignore imatrix altogether
 
@@ -264,7 +277,8 @@ impl QuantMethod for UnquantLinear {
             | IsqType::Q8K
             | IsqType::Q8_0
             | IsqType::Q8_1
-            | IsqType::Iq4Xs => None,
+            | IsqType::Iq4Xs
+            | IsqType::F16 => None,
         }
     }
 

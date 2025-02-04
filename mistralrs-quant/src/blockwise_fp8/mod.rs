@@ -175,6 +175,19 @@ impl QuantMethod for BlockwiseFP8Linear {
                     dtype: DType::F8E4M3,
                 })?))
             }
+            Some(IsqType::F16) => {
+                // Ignore imatrix altogether
+
+                let w = weight.to_device(&device)?.to_dtype(DType::F16)?;
+                let b = if let Some(b) = &self.bias {
+                    Some(b.to_device(&device)?.to_dtype(DType::F16)?)
+                } else {
+                    None
+                };
+                Ok(Arc::new(UnquantLinear::new(
+                    QuantMethodConfig::Unquantized(Linear::new(w, b)),
+                )?))
+            }
             None => {
                 // Ignore imatrix altogether
 
@@ -208,7 +221,8 @@ impl QuantMethod for BlockwiseFP8Linear {
             | IsqType::Q8_1
             | IsqType::Iq4Xs
             | IsqType::HQQ4
-            | IsqType::HQQ8 => None,
+            | IsqType::HQQ8
+            | IsqType::F16 => None,
         }
     }
 }

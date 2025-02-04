@@ -209,32 +209,54 @@ macro_rules! get_paths {
 #[macro_export]
 macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
-        let api = ApiBuilder::new()
-            .with_progress(!$silent)
-            .with_token(get_token(
-                &$this
-                    .token_source
-                    .read()
-                    .expect("Failed to read token source")
-                    .clone()
-                    .unwrap_or(TokenSource::None),
-            )?)
-            .build()?;
-        let revision = $this
-            .revision
-            .read()
-            .expect("Failed to read revision")
-            .clone()
-            .unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(
-            $this.model_id.to_string(),
-            RepoType::Model,
-            revision.clone(),
-        ));
+        if std::path::Path::new(&$this.model_id).exists() {
+            let path = std::path::Path::new(&$this.model_id).join($from_uqff);
+            if !path.exists() {
+                panic!(
+                    "File \"{}\" not found at model id {:?}",
+                    $from_uqff.display(),
+                    $this.model_id
+                )
+            }
+            info!(
+                "Loading `{}` locally at `{}`",
+                $from_uqff.display(),
+                path.display()
+            );
+            path
+        } else {
+            let api = ApiBuilder::new()
+                .with_progress(!$silent)
+                .with_token(get_token(
+                    &$this
+                        .token_source
+                        .read()
+                        .expect("Failed to read token source")
+                        .clone()
+                        .unwrap_or(TokenSource::None),
+                )?)
+                .build()?;
+            let revision = $this
+                .revision
+                .read()
+                .expect("Failed to read revision")
+                .clone()
+                .unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                $this.model_id.to_string(),
+                RepoType::Model,
+                revision.clone(),
+            ));
 
-        let file = $from_uqff.display().to_string();
-
-        api_get_file!(api, &file, Path::new(&$this.model_id))
+            api.get(&$from_uqff.to_string_lossy().to_string())
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Could not get file {:?} from API: {:?}",
+                        $from_uqff.display(),
+                        e
+                    )
+                })
+        }
     }};
 }
 

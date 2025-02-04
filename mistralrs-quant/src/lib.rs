@@ -254,6 +254,7 @@ pub enum IsqType {
     // HQQ1,
     F8E4M3,
     Iq4Xs,
+    F16,
 }
 
 impl IsqType {
@@ -305,6 +306,7 @@ impl IsqType {
             Self::HQQ4 => 4,
             Self::HQQ8 => 2,
             Self::F8E4M3 => 2,
+            Self::F16 => 1,
         }
     }
 }
@@ -327,6 +329,7 @@ impl TryFrom<IsqType> for GgmlDType {
             IsqType::Q8_0 => Self::Q8_0,
             IsqType::Q8_1 => Self::Q8_1,
             IsqType::Iq4Xs => Self::Iq4Xs,
+            IsqType::F16 => Self::F16,
             _ => candle_core::bail!("Expected valid GGML ISQ type."),
         };
         #[cfg(feature = "cuda")]
@@ -344,8 +347,9 @@ impl TryFrom<IsqType> for GgmlDType {
                     | GgmlDType::Q5K
                     | GgmlDType::Q6K
                     | GgmlDType::Iq4Xs,
+                    | GgmlDType::F16,
             ) {
-                candle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `IQ4XS`")
+                candle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `IQ4XS`, `F16`")
             }
         }
         Ok(tp)
