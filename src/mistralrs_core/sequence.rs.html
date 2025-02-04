@@ -972,7 +972,15 @@
 <a href="#971" id="971">971</a>
 <a href="#972" id="972">972</a>
 <a href="#973" id="973">973</a>
-<a href="#974" id="974">974</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
+<a href="#974" id="974">974</a>
+<a href="#975" id="975">975</a>
+<a href="#976" id="976">976</a>
+<a href="#977" id="977">977</a>
+<a href="#978" id="978">978</a>
+<a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
     get_mut_group,
     pipeline::LayerCaches,
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
@@ -1641,13 +1649,21 @@
     </span><span class="kw">pub fn </span>get_delta(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;String&gt;, Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync&gt;&gt; {
+        <span class="kw">let </span>new_decoded = <span class="self">self</span>.peek_delta();
+        <span class="kw">if </span><span class="macro">matches!</span>(new_decoded, <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(<span class="kw">_</span>))) {
+            <span class="self">self</span>.stream_idx = <span class="self">self</span>.completion_bytes.len();
+        }
+        new_decoded
+    }
+
+    <span class="doccomment">/// Peeks at the delta between the last two decoded sequences, but does not advance the stream index.
+    </span><span class="kw">pub fn </span>peek_delta(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;String&gt;, Box&lt;<span class="kw">dyn </span>std::error::Error + Send + Sync&gt;&gt; {
         <span class="kw">let </span>is_first = <span class="self">self</span>.stream_idx == <span class="number">0</span>;
         <span class="kw">let </span>new_decoded = String::from_utf8_lossy(<span class="kw-2">&amp;</span><span class="self">self</span>.completion_bytes[<span class="self">self</span>.stream_idx..]);
         <span class="comment">// Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
         </span><span class="kw">if </span>new_decoded.ends_with(<span class="string">'�'</span>) {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
         }
-        <span class="self">self</span>.stream_idx = <span class="self">self</span>.completion_bytes.len();
 
         <span class="comment">// The first token usually starts with a space. We don't want to add that to the delta.
         // Since we're using the completion_bytes, we need to take care of that ourselves.

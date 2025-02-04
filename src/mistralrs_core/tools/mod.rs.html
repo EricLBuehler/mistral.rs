@@ -93,13 +93,78 @@
 <a href="#92" id="92">92</a>
 <a href="#93" id="93">93</a>
 <a href="#94" id="94">94</a>
-<a href="#95" id="95">95</a></pre></div><pre class="rust"><code><span class="kw">mod </span>request;
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a>
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a>
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a>
+<a href="#116" id="116">116</a>
+<a href="#117" id="117">117</a>
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a>
+<a href="#121" id="121">121</a>
+<a href="#122" id="122">122</a>
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a>
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a>
+<a href="#140" id="140">140</a>
+<a href="#141" id="141">141</a>
+<a href="#142" id="142">142</a>
+<a href="#143" id="143">143</a>
+<a href="#144" id="144">144</a>
+<a href="#145" id="145">145</a>
+<a href="#146" id="146">146</a>
+<a href="#147" id="147">147</a>
+<a href="#148" id="148">148</a>
+<a href="#149" id="149">149</a>
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a>
+<a href="#152" id="152">152</a>
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a>
+<a href="#155" id="155">155</a>
+<a href="#156" id="156">156</a>
+<a href="#157" id="157">157</a>
+<a href="#158" id="158">158</a>
+<a href="#159" id="159">159</a>
+<a href="#160" id="160">160</a></pre></div><pre class="rust"><code><span class="kw">mod </span>request;
 <span class="kw">mod </span>response;
 
 <span class="kw">pub use </span>request::<span class="kw-2">*</span>;
 <span class="kw">pub use </span>response::<span class="kw-2">*</span>;
 <span class="kw">use </span>serde_json::Value;
-<span class="kw">use </span>std::collections::HashMap;
+<span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 <span class="kw">use </span>uuid::Uuid;
 
 <span class="kw">pub struct </span>ToolCallingMatcher {
@@ -123,6 +188,36 @@
 <span class="kw">impl </span>ToolCallingMatcher {
     <span class="kw">pub fn </span>new(tool_choice: ToolChoice) -&gt; anyhow::Result&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ tool_choice })
+    }
+
+    <span class="comment">// Checks if the the `message_prefix` could be a tool call. If false, either
+    // [`ToolChoice::None`] was selected, or the prefix could not match.
+    //
+    // If the start of a message could be a tool call, then it looks like an incomplete JSON of a given structure, e.g. `{"name": "foo", "param`.
+    //
+    // Returns a tuple of `(could_be_tool, is_complete_tool)`.
+    </span><span class="kw">pub fn </span>prefix_could_be_tool(<span class="kw-2">&amp;</span><span class="self">self</span>, message_prefix: <span class="kw-2">&amp;</span>str) -&gt; (bool, bool) {
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.tool_choice, ToolChoice::None) {
+            <span class="kw">return </span>(<span class="bool-val">false</span>, <span class="bool-val">false</span>);
+        }
+
+        <span class="comment">// Check if the prefix could be a JSON serialization of any of the following types.
+        </span>[
+            could_be_json::&lt;CalledFunctionParameters&gt;,
+            could_be_json::&lt;CalledFunctionArguments&gt;,
+            could_be_json::&lt;Vec&lt;CalledFunctionParameters&gt;&gt;,
+            could_be_json::&lt;Vec&lt;CalledFunctionArguments&gt;&gt;,
+        ]
+        .iter()
+        .find_map(|check| {
+            <span class="kw">let </span>(could_be_tool, is_complete_tool) = check(message_prefix);
+            <span class="kw">if </span>could_be_tool || is_complete_tool {
+                <span class="prelude-val">Some</span>((could_be_tool, is_complete_tool))
+            } <span class="kw">else </span>{
+                <span class="prelude-val">None
+            </span>}
+        })
+        .unwrap_or_default()
     }
 
     <span class="kw">pub fn </span>get_call(<span class="kw-2">&amp;</span><span class="self">self</span>, message: <span class="kw-2">&amp;</span>str) -&gt; anyhow::Result&lt;Vec&lt;ToolCallResponse&gt;&gt; {
@@ -187,5 +282,40 @@
             <span class="prelude-val">Ok</span>(Vec::new())
         }
     }
+}
+
+<span class="doccomment">/// Checks if the given prefix could be the start of, or the entire JSON serialization of a given type, `T`.
+///
+/// Returns a tuple of `(could_be_tool, is_entire_tool)`.
+</span><span class="kw">fn </span>could_be_json&lt;T&gt;(text_prefix: <span class="kw-2">&amp;</span>str) -&gt; (bool, bool)
+<span class="kw">where
+    </span>T: serde::de::DeserializeOwned,
+{
+    <span class="kw">match </span>serde_json::from_str::&lt;T&gt;(text_prefix) {
+        <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; (<span class="bool-val">false</span>, <span class="bool-val">true</span>),
+        <span class="comment">// EOF show that JSON parsing was successful up to the end of the entire string.
+        </span><span class="prelude-val">Err</span>(e) <span class="kw">if </span>e.is_eof() =&gt; (<span class="bool-val">true</span>, <span class="bool-val">false</span>),
+        <span class="kw">_ </span>=&gt; (<span class="bool-val">false</span>, <span class="bool-val">false</span>),
+    }
+}
+
+<span class="doccomment">/// Takes raw UTf8 text and parses any possible tool calls from it.
+</span><span class="kw">pub fn </span>parse_text_tools(
+    raw_text: <span class="kw-2">&amp;</span>str,
+    matcher: <span class="prelude-ty">Option</span>&lt;Arc&lt;ToolCallingMatcher&gt;&gt;,
+) -&gt; anyhow::Result&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;, Vec&lt;ToolCallResponse&gt;)&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>tool_calls = Vec::new();
+    <span class="kw">let </span><span class="kw-2">mut </span>text_new = <span class="prelude-val">Some</span>(raw_text);
+
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>matcher) = matcher {
+        <span class="kw">let </span>calls = matcher
+            .get_call(raw_text)
+            .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+        <span class="kw">if </span>!calls.is_empty() {
+            text_new = <span class="prelude-val">None</span>;
+            tool_calls = calls;
+        }
+    };
+    <span class="prelude-val">Ok</span>((text_new, tool_calls))
 }
 </code></pre></div></section></main></body></html>

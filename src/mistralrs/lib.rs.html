@@ -123,7 +123,17 @@
 <a href="#122" id="122">122</a>
 <a href="#123" id="123">123</a>
 <a href="#124" id="124">124</a>
-<a href="#125" id="125">125</a></pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous API to `mistral.rs`.
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a>
+<a href="#131" id="131">131</a>
+<a href="#132" id="132">132</a>
+<a href="#133" id="133">133</a>
+<a href="#134" id="134">134</a>
+<a href="#135" id="135">135</a></pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous API to `mistral.rs`.
 //!
 //! To get started loading a model, check out the following builders:
 //! - [`TextModelBuilder`]
@@ -177,41 +187,51 @@
 //!
 //! ## Streaming example
 //! ```no_run
-//! use anyhow::Result;
-//! use mistralrs::{
-//!     IsqType, PagedAttentionMetaBuilder, TextMessageRole, TextMessages, TextModelBuilder, Response
-//! };
+//!    use anyhow::Result;
+//!    use mistralrs::{
+//!        IsqType, PagedAttentionMetaBuilder, Response, TextMessageRole, TextMessages,
+//!        TextModelBuilder,
+//!    };
+//!    use mistralrs_core::{ChatCompletionChunkResponse, ChunkChoice, Delta};
 //!
-//! #[tokio::main]
-//! async fn main() -&gt; Result&lt;()&gt; {
-//!     let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct".to_string())
-//!         .with_isq(IsqType::Q8_0)
-//!         .with_logging()
-//!         .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
-//!         .build()
-//!         .await?;
+//!    #[tokio::main]
+//!    async fn main() -&gt; Result&lt;()&gt; {
+//!        let model = TextModelBuilder::new("microsoft/Phi-3.5-mini-instruct".to_string())
+//!            .with_isq(IsqType::Q8_0)
+//!            .with_logging()
+//!            .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+//!            .build()
+//!            .await?;
 //!
-//!     let messages = TextMessages::new()
-//!         .add_message(
-//!             TextMessageRole::System,
-//!             "You are an AI agent with a specialty in programming.",
-//!         )
-//!         .add_message(
-//!             TextMessageRole::User,
-//!             "Hello! How are you? Please write generic binary search function in Rust.",
-//!         );
+//!        let messages = TextMessages::new()
+//!            .add_message(
+//!                TextMessageRole::System,
+//!                "You are an AI agent with a specialty in programming.",
+//!            )
+//!            .add_message(
+//!                TextMessageRole::User,
+//!                "Hello! How are you? Please write generic binary search function in Rust.",
+//!            );
 //!
-//!     let mut stream = model.stream_chat_request(messages).await?;
-//!
-//!     while let Some(chunk) = stream.next().await {
-//!         if let Response::Chunk(chunk) = chunk{
-//!             print!("{}", chunk.choices[0].delta.content);
-//!         }
-//!         // Handle the error cases.
-//!
-//!     }
-//!     Ok(())
-//! }
+//!        let mut stream = model.stream_chat_request(messages).await?;
+
+//!        while let Some(chunk) = stream.next().await {
+//!            if let Response::Chunk(ChatCompletionChunkResponse { choices, .. }) = chunk {
+//!                if let Some(ChunkChoice {
+//!                    delta:
+//!                        Delta {
+//!                            content: Some(content),
+//!                            ..
+//!                        },
+//!                    ..
+//!                }) = choices.first()
+//!                {
+//!                    print!("content");
+//!                };
+//!            }
+//!        }
+//!        Ok(())
+//!    }
 //! ```
 
 </span><span class="kw">mod </span>anymoe;

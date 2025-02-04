@@ -636,12 +636,32 @@
 <a href="#635" id="635">635</a>
 <a href="#636" id="636">636</a>
 <a href="#637" id="637">637</a>
-<a href="#638" id="638">638</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
+<a href="#638" id="638">638</a>
+<a href="#639" id="639">639</a>
+<a href="#640" id="640">640</a>
+<a href="#641" id="641">641</a>
+<a href="#642" id="642">642</a>
+<a href="#643" id="643">643</a>
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
-    Constraint, DiffusionGenerationParams, DrySamplingParams, ImageGenerationResponseFormat,
-    MessageContent, MistralRs, ModelCategory, NormalRequest, Request, RequestMessage, Response,
-    ResponseOk, SamplingParams, TERMINATE_ALL_NEXT_STEP,
+    ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
+    ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
+    Request, RequestMessage, Response, ResponseOk, SamplingParams, TERMINATE_ALL_NEXT_STEP,
 };
 <span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>regex::Regex;
@@ -697,7 +717,7 @@ Commands:
 - `\system &lt;system message here&gt;`:
     Add a system message to the chat without running the model.
     Ex: `\system Always respond as a pirate.`
-- `\image &lt;image URL or local path here&gt; &lt;message here&gt;`: 
+- `\image &lt;image URL or local path here&gt; &lt;message here&gt;`:
     Add a message paired with an image. The image will be fed to the model as if it were the first item in this prompt.
     You do not need to modify your prompt for specific models.
     Ex: `\image path/to/image.jpg Describe what is in this image.`
@@ -825,16 +845,26 @@ Commands:
         <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = rx.recv().<span class="kw">await </span>{
             <span class="kw">match </span>resp {
                 Response::Chunk(chunk) =&gt; {
-                    <span class="kw">let </span>choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
-                    assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
-                    <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
-                    toks += <span class="number">1usize</span>;
-                    io::stdout().flush().unwrap();
-                    <span class="kw">if </span>choice.finish_reason.is_some() {
-                        <span class="kw">if </span><span class="macro">matches!</span>(choice.finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
-                            <span class="macro">print!</span>(<span class="string">"..."</span>);
+                    <span class="kw">if let </span>ChunkChoice {
+                        delta:
+                            Delta {
+                                content: <span class="prelude-val">Some</span>(content),
+                                ..
+                            },
+                        finish_reason,
+                        ..
+                    } = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>]
+                    {
+                        assistant_output.push_str(content);
+                        <span class="macro">print!</span>(<span class="string">"{}"</span>, content);
+                        toks += <span class="number">1usize</span>; <span class="comment">// NOTE: we send toks every 3.
+                        </span>io::stdout().flush().unwrap();
+                        <span class="kw">if </span>finish_reason.is_some() {
+                            <span class="kw">if </span><span class="macro">matches!</span>(finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
+                                <span class="macro">print!</span>(<span class="string">"..."</span>);
+                            }
+                            <span class="kw">break</span>;
                         }
-                        <span class="kw">break</span>;
                     }
                 }
                 Response::InternalError(e) =&gt; {
@@ -1046,16 +1076,26 @@ Commands:
         <span class="kw">while let </span><span class="prelude-val">Some</span>(resp) = rx.recv().<span class="kw">await </span>{
             <span class="kw">match </span>resp {
                 Response::Chunk(chunk) =&gt; {
-                    <span class="kw">let </span>choice = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>];
-                    assistant_output.push_str(<span class="kw-2">&amp;</span>choice.delta.content);
-                    <span class="macro">print!</span>(<span class="string">"{}"</span>, choice.delta.content);
-                    toks += <span class="number">1usize</span>;
-                    io::stdout().flush().unwrap();
-                    <span class="kw">if </span>choice.finish_reason.is_some() {
-                        <span class="kw">if </span><span class="macro">matches!</span>(choice.finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
-                            <span class="macro">print!</span>(<span class="string">"..."</span>);
+                    <span class="kw">if let </span>ChunkChoice {
+                        delta:
+                            Delta {
+                                content: <span class="prelude-val">Some</span>(content),
+                                ..
+                            },
+                        finish_reason,
+                        ..
+                    } = <span class="kw-2">&amp;</span>chunk.choices[<span class="number">0</span>]
+                    {
+                        assistant_output.push_str(content);
+                        <span class="macro">print!</span>(<span class="string">"{}"</span>, content);
+                        toks += <span class="number">1usize</span>; <span class="comment">// NOTE: we send toks every 3.
+                        </span>io::stdout().flush().unwrap();
+                        <span class="kw">if </span>finish_reason.is_some() {
+                            <span class="kw">if </span><span class="macro">matches!</span>(finish_reason.as_ref().unwrap().as_str(), <span class="string">"length"</span>) {
+                                <span class="macro">print!</span>(<span class="string">"..."</span>);
+                            }
+                            <span class="kw">break</span>;
                         }
-                        <span class="kw">break</span>;
                     }
                 }
                 Response::InternalError(e) =&gt; {

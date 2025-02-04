@@ -334,7 +334,8 @@
 <a href="#333" id="333">333</a>
 <a href="#334" id="334">334</a>
 <a href="#335" id="335">335</a>
-<a href="#336" id="336">336</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     error::Error,
     fmt::{Debug, Display},
 };
@@ -377,8 +378,9 @@
 #[derive(Debug, Clone, Serialize)]
 </span><span class="doccomment">/// Delta in content for streaming response.
 </span><span class="kw">pub struct </span>Delta {
-    <span class="kw">pub </span>content: String,
+    <span class="kw">pub </span>content: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>role: String,
+    <span class="kw">pub </span>tool_calls: <span class="prelude-ty">Option</span>&lt;Vec&lt;ToolCallResponse&gt;&gt;,
 }
 
 <span class="macro">generate_repr!</span>(Delta);
