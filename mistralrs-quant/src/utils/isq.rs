@@ -14,6 +14,7 @@ fn get_fallback(dtype: GgmlDType) -> QuantizationBehaviour {
         GgmlDType::Q2K => QuantizationBehaviour::Quantize(GgmlDType::Q4_0),
         GgmlDType::Q3K => QuantizationBehaviour::Quantize(GgmlDType::Q4_0),
         GgmlDType::Q4K => QuantizationBehaviour::Quantize(GgmlDType::Q4_1),
+        GgmlDType::Iq4Xs => QuantizationBehaviour::Quantize(GgmlDType::Q4K),
         GgmlDType::Q5K => QuantizationBehaviour::Quantize(GgmlDType::Q5_0),
         GgmlDType::Q6K => QuantizationBehaviour::Quantize(GgmlDType::Q5_1),
         GgmlDType::Q8K => QuantizationBehaviour::Quantize(GgmlDType::Q8_1),

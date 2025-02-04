@@ -309,7 +309,7 @@ impl QuantizedSerde for UnquantLinear {
     fn name(&self) -> &'static str {
         "unquant-linear"
     }
-    fn serialize(&self) -> Result<Cow<[u8]>> {
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
         // Version is always first!
@@ -320,17 +320,21 @@ impl QuantizedSerde for UnquantLinear {
         buffer.push(QuantizedSerdeType::Unquant as u8);
 
         // Has bias
-        buffer.push(self.b.is_some() as u8);
+        buffer.push(bias.is_some() as u8);
 
         // Weight
         serialize_tensor(&mut buffer, &self.w)?;
 
-        if let Some(bias) = &self.b {
+        if let Some(bias) = &bias {
             // Bias
             serialize_tensor(&mut buffer, bias)?;
         }
 
         Ok(Cow::from(buffer))
+    }
+
+    fn serialize(&self) -> Result<Cow<[u8]>> {
+        self.serialize_with_bias(self.b.clone())
     }
 
     fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>>

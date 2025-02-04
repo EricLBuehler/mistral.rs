@@ -45,13 +45,11 @@ impl Idefics3Model {
         let connector = Idefics3Connector::new(
             cfg,
             vb_m.pp("connector")
-                .set_dtype(DType::F32)
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let vision = Idefics3VisionTransformer::new(
             &cfg.vision_config,
             vb_m.pp("vision_model")
-                .set_dtype(DType::F32)
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let text_model = Llama::new_inner(
@@ -195,10 +193,9 @@ impl Idefics3Model {
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
 
             // Get seq from vision encoder
-            let image_hidden_states = self.vision.forward(
-                &pixel_values.to_dtype(DType::F32)?,
-                Some(&patch_attention_mask),
-            )?;
+            let image_hidden_states = self
+                .vision
+                .forward(&pixel_values, Some(&patch_attention_mask))?;
 
             // Modality proj and perceiver resampling
             let image_hidden_states = self.connector.forward(&image_hidden_states)?;
@@ -206,10 +203,7 @@ impl Idefics3Model {
             if self.text_model.cache().normal().0[0].current_seq_len() == 0 {
                 self.inputs_merger(
                     input_ids,
-                    &self
-                        .text_model
-                        .get_input_embeddings(input_ids)?
-                        .to_dtype(DType::F32)?,
+                    &self.text_model.get_input_embeddings(input_ids)?,
                     &image_hidden_states,
                 )?
                 .to_dtype(self.dtype)?
@@ -241,7 +235,14 @@ impl IsqModel for Idefics3Model {
         )>,
         &dyn DeviceMapper,
     ) {
-        self.text_model.get_layers()
+        let (mut layers, device_map) = self.text_model.get_layers();
+        layers.extend(
+            self.vision
+                .get_layers()
+                .into_iter()
+                .map(|layer| (layer, None)),
+        );
+        (layers, device_map)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {

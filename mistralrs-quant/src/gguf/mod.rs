@@ -184,7 +184,7 @@ impl QuantizedSerde for GgufMatMul {
     fn name(&self) -> &'static str {
         "gguf"
     }
-    fn serialize(&self) -> Result<Cow<[u8]>> {
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = match &self.w {
             QMatMul::QTensor(qw) => {
                 let w = qw.data()?.to_vec();
@@ -221,7 +221,7 @@ impl QuantizedSerde for GgufMatMul {
                 buffer.extend(&(w.len() as u32).to_le_bytes());
 
                 // Has bias
-                buffer.push(self.b.is_some() as u8);
+                buffer.push(bias.is_some() as u8);
 
                 // Dtype (u32)
                 buffer.extend(&dtype.to_le_bytes());
@@ -242,11 +242,14 @@ impl QuantizedSerde for GgufMatMul {
             }
         };
 
-        if let Some(b) = self.b.as_ref() {
+        if let Some(b) = bias.as_ref() {
             serialize_tensor(&mut buffer, b)?;
         }
 
         Ok(Cow::from(buffer))
+    }
+    fn serialize(&self) -> Result<Cow<[u8]>> {
+        self.serialize_with_bias(self.b.clone())
     }
 
     fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>> {
@@ -286,6 +289,7 @@ impl QuantizedSerde for GgufMatMul {
             13 => GgmlDType::Q5K,
             14 => GgmlDType::Q6K,
             15 => GgmlDType::Q8K,
+            23 => GgmlDType::Iq4Xs,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             30 => GgmlDType::BF16,
             _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
@@ -353,6 +357,7 @@ impl GgufMatMul {
             13 => GgmlDType::Q5K,
             14 => GgmlDType::Q6K,
             15 => GgmlDType::Q8K,
+            23 => GgmlDType::Iq4Xs,
             // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
             30 => GgmlDType::BF16,
             _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
