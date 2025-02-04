@@ -2057,22 +2057,6 @@ impl IsqModelLoader for Idefics3Loader {
             Regex::new(r"model.text_model.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"model.text_model.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"model.text_model.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
-            // Vision Attention
-            Regex::new(
-                r"model.vision_model.encoder.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model.vision_model.encoder.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model.vision_model.encoder.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model.vision_model.encoder.layers\.(\d+)\.self_attn\.out_proj\.(weight|bias)$",
-            )?,
-            // Vision MLP
-            Regex::new(r"model.vision_model.encoder.layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?,
-            Regex::new(r"model.vision_model.encoder.layers\.(\d+)\.mlp\.fc2\.(weight|bias)$")?,
         ])
     }
 }

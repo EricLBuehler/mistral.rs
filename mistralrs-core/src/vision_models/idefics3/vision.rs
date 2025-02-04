@@ -1,7 +1,7 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module};
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
-use std::{ops::Mul, sync::Arc};
+use mistralrs_quant::ShardedVarBuilder;
+use std::ops::Mul;
 
 use crate::{
     layers::{self, conv2d, embedding, layer_norm, Activation, CausalMasker, MatMul},
@@ -229,10 +229,10 @@ struct Attention {
     num_heads: usize,
     head_dim: usize,
     scale: f64,
-    q_proj: Arc<dyn QuantMethod>,
-    k_proj: Arc<dyn QuantMethod>,
-    v_proj: Arc<dyn QuantMethod>,
-    o_proj: Arc<dyn QuantMethod>,
+    q_proj: Linear,
+    k_proj: Linear,
+    v_proj: Linear,
+    o_proj: Linear,
     neg_inf: Tensor,
 }
 
@@ -243,10 +243,10 @@ impl Attention {
         let head_dim = embed_dim / num_heads;
         let scale = 1.0 / (head_dim as f64).sqrt();
 
-        let q_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("q_proj"))?;
-        let k_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("k_proj"))?;
-        let v_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("v_proj"))?;
-        let o_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("out_proj"))?;
+        let q_proj = layers::linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
+        let k_proj = layers::linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
+        let v_proj = layers::linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
+        let o_proj = layers::linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
 
         Ok(Self {
             embed_dim,
@@ -264,9 +264,9 @@ impl Attention {
     fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward_autocast(xs)?;
-        let mut k = self.k_proj.forward_autocast(xs)?;
-        let mut v = self.v_proj.forward_autocast(xs)?;
+        let mut q = self.q_proj.forward(xs)?;
+        let mut k = self.k_proj.forward(xs)?;
+        let mut v = self.v_proj.forward(xs)?;
 
         q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -289,46 +289,34 @@ impl Attention {
         attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
         let attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
-        self.o_proj
-            .forward_autocast(&attn_output.transpose(1, 2)?.reshape((
-                b_sz,
-                q_len,
-                self.embed_dim,
-            ))?)
+        attn_output
+            .transpose(1, 2)?
+            .reshape((b_sz, q_len, self.embed_dim))?
+            .apply(&self.o_proj)
     }
 
-    // fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-    //     let uvb = UnVarBuilder::new();
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
 
-    //     uvb.pp("q_proj").add(&self.q_proj);
-    //     uvb.pp("k_proj").add(&self.k_proj);
-    //     uvb.pp("v_proj").add(&self.v_proj);
-    //     uvb.pp("out_proj").add(&self.o_proj);
+        uvb.pp("q_proj").add(&self.q_proj);
+        uvb.pp("k_proj").add(&self.k_proj);
+        uvb.pp("v_proj").add(&self.v_proj);
+        uvb.pp("out_proj").add(&self.o_proj);
 
-    //     uvb.to_safetensors()
-    // }
+        uvb.to_safetensors()
+    }
 }
 
 struct VisionMLP {
     activation: Activation,
-    fc1: Arc<dyn QuantMethod>,
-    fc2: Arc<dyn QuantMethod>,
+    fc1: Linear,
+    fc2: Linear,
 }
 
 impl VisionMLP {
     fn new(config: Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let fc1 = mistralrs_quant::linear(
-            config.hidden_size,
-            config.intermediate_size,
-            &None,
-            vb.pp("fc1"),
-        )?;
-        let fc2 = mistralrs_quant::linear(
-            config.intermediate_size,
-            config.hidden_size,
-            &None,
-            vb.pp("fc2"),
-        )?;
+        let fc1 = layers::linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
+        let fc2 = layers::linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
             activation: config.hidden_act,
             fc1,
@@ -337,19 +325,19 @@ impl VisionMLP {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut x = self.fc1.forward_autocast(x)?;
+        let mut x = self.fc1.forward(x)?;
         x = self.activation.forward(&x)?;
-        self.fc2.forward_autocast(&x)
+        self.fc2.forward(&x)
     }
 
-    // fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-    //     let uvb = UnVarBuilder::new();
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
 
-    //     uvb.pp("fc1").add(&self.fc1);
-    //     uvb.pp("fc2").add(&self.fc2);
+        uvb.pp("fc1").add(&self.fc1);
+        uvb.pp("fc2").add(&self.fc2);
 
-    //     uvb.to_safetensors()
-    // }
+        uvb.to_safetensors()
+    }
 }
 
 struct EncoderLayer {
@@ -493,24 +481,10 @@ impl Idefics3VisionTransformer {
 
             uvb_l.pp("layer_norm1").add(&layer.layer_norm_1);
             uvb_l.pp("layer_norm2").add(&layer.layer_norm_2);
-            // We quantize these
-            // uvb_l.pp("mlp").extend(layer.mlp.residual_tensors());
-            // uvb_l.pp("self_attn").extend(layer.attn.residual_tensors());
+            uvb_l.pp("mlp").extend(layer.mlp.residual_tensors());
+            uvb_l.pp("self_attn").extend(layer.attn.residual_tensors());
         }
 
         uvb.to_safetensors()
-    }
-
-    pub fn get_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        let mut tensors = Vec::new();
-        for layer in self.encoder.layers.iter_mut() {
-            tensors.push(&mut layer.attn.q_proj);
-            tensors.push(&mut layer.attn.k_proj);
-            tensors.push(&mut layer.attn.v_proj);
-            tensors.push(&mut layer.attn.o_proj);
-            tensors.push(&mut layer.mlp.fc1);
-            tensors.push(&mut layer.mlp.fc2);
-        }
-        tensors
     }
 }

@@ -235,14 +235,7 @@ impl IsqModel for Idefics3Model {
         )>,
         &dyn DeviceMapper,
     ) {
-        let (mut layers, device_map) = self.text_model.get_layers();
-        layers.extend(
-            self.vision
-                .get_layers()
-                .into_iter()
-                .map(|layer| (layer, None)),
-        );
-        (layers, device_map)
+        self.text_model.get_layers()
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
