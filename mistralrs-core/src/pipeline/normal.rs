@@ -287,10 +287,9 @@ impl Loader for NormalLoader {
         if let Some(from_uqff) = self.config.from_uqff.clone() {
             match from_uqff {
                 ModelWeightSource::PathBuf(from_uqff) => {
-                    let res = Some(ModelWeightSource::PathBuf(
+                    *self.from_uqff.write().unwrap() = Some(ModelWeightSource::PathBuf(
                         get_uqff_paths!(&from_uqff, self, silent),
                     ));
-                    *self.from_uqff.write().unwrap() = res;
                 }
                 ModelWeightSource::SafeTensorsData(data) => {
                     *self.from_uqff.write().unwrap() =
