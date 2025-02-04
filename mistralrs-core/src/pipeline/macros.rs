@@ -210,7 +210,6 @@ macro_rules! get_paths {
 macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
         if std::path::Path::new(&$this.model_id).exists() {
-            panic!("from_uqff={:?}", $from_uqff);
             let path = std::path::Path::new(&$this.model_id).join($from_uqff);
             if !path.exists() {
                 panic!(
