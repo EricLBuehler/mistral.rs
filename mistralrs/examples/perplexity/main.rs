@@ -79,7 +79,6 @@ async fn main() -> Result<()> {
         None
     };
 
-    let prompt_chunksize = 1024;
     let mut model_builder = TextModelBuilder::new(&args.model_id).with_logging();
     if let Some(quant) = quant {
         model_builder = model_builder.with_isq(quant);
@@ -101,6 +100,7 @@ async fn main() -> Result<()> {
 
     println!("Using bos token id `{bos_token}`.");
 
+    let prompt_chunksize = 256;
     let n_chunks = tokens.len().div_ceil(prompt_chunksize);
     let mut ppl_measurements = Vec::new();
     for (i, chunk) in tokens.chunks(prompt_chunksize).enumerate() {
