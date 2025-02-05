@@ -391,6 +391,11 @@ impl RequestBuilder {
         self
     }
 
+    /// Remove a message to the request without removing any images.
+    pub fn pop_message(mut self) -> Option<IndexMap<String, MessageContent>> {
+        self.messages.pop()
+    }
+
     /// Add a message with the output of a tool call.
     pub fn add_tool_message(mut self, tool_content: impl ToString, tool_id: impl ToString) -> Self {
         self.messages.push(IndexMap::from([
