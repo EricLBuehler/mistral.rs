@@ -392,8 +392,9 @@ impl RequestBuilder {
     }
 
     /// Remove a message to the request without removing any images.
-    pub fn pop_message(mut self) -> Option<IndexMap<String, MessageContent>> {
-        self.messages.pop()
+    pub fn pop_message(mut self) -> (Self, Option<IndexMap<String, MessageContent>>) {
+        let x = self.messages.pop();
+        (self, x)
     }
 
     /// Add a message with the output of a tool call.
