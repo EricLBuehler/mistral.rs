@@ -19,13 +19,12 @@ use crate::pipeline::extract_logits;
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::EitherCache;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapMetadata;
-use crate::Topology;
 use candle_core::quantized::QMatMul;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Embedding;
-use candle_nn::VarBuilder;
+use indicatif::MultiProgress;
+use mistralrs_quant::ShardedVarBuilder;
 use tqdm::Iter;
 use tracing::info;
 
@@ -95,6 +94,7 @@ struct LayerWeights {
     sin: Tensor,
     sliding_window: usize,
     sdpa_params: SdpaParams,
+    dtype: DType,
 }
 
 impl LayerWeights {
@@ -126,12 +126,10 @@ impl LayerWeights {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, n_embd) = x.dims3()?;
-        let qkv = self.attn_qkv.lora_forward(
-            x,
-            scalings.clone(),
-            global_scaling_weight,
-            is_scaling_pass,
-        )?;
+        let qkv = self
+            .attn_qkv
+            .lora_forward(x, scalings.clone(), global_scaling_weight, is_scaling_pass)?
+            .to_dtype(self.dtype)?;
 
         let query_pos = self.n_head * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
@@ -182,9 +180,12 @@ impl LayerWeights {
         )?;
 
         let y = y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?;
-        let y =
-            self.attn_output
-                .lora_forward(&y, scalings, global_scaling_weight, is_scaling_pass)?;
+        let y = self.attn_output.lora_forward(
+            &y.to_dtype(x.dtype())?,
+            scalings,
+            global_scaling_weight,
+            is_scaling_pass,
+        )?;
         Ok(y)
     }
 }
@@ -199,6 +200,7 @@ pub struct ModelWeights {
     pub cache: EitherCache,
     pub max_seq_len: usize,
     xlora_classifier: Option<XLoraClassifier>,
+    dtype: DType,
 }
 
 fn precomput_freqs_cis(
@@ -206,6 +208,7 @@ fn precomput_freqs_cis(
     freq_base: f32,
     device: &Device,
     context_window: usize,
+    dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     let theta: Vec<_> = (0..head_dim)
         .step_by(2)
@@ -216,8 +219,8 @@ fn precomput_freqs_cis(
         .to_dtype(DType::F32)?
         .reshape((context_window, 1))?
         .matmul(&theta.reshape((1, theta.elem_count()))?)?;
-    let cos = idx_theta.cos()?;
-    let sin = idx_theta.sin()?;
+    let cos = idx_theta.cos()?.to_dtype(dtype)?;
+    let sin = idx_theta.sin()?.to_dtype(dtype)?;
     Ok((cos, sin))
 }
 
@@ -227,12 +230,12 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         mut ct: Content<'_, R>,
         device: &Device,
         lora_config: &[((String, String), LoraConfig)],
-        vb: &VarBuilder,
+        vb: &ShardedVarBuilder,
         ordering: &Ordering,
         xlora_config: Option<XLoraConfig>,
-        mapper: DeviceMapMetadata,
-        topology: Option<&'_ Topology>,
-        preload_adapters: &Option<HashMap<String, (VarBuilder, LoraConfig)>>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
+        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+        dtype: DType,
     ) -> Result<Self> {
         verify_sanity_adapters(ordering, &SUPPORTED_LAYERS)?;
 
@@ -252,7 +255,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
             context_window,
         } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
 
-        let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window)?;
+        let (cos, sin) = precomput_freqs_cis(rope_dim, 10_000., device, context_window, dtype)?;
 
         let tok_embeddings = ct.tensor("token_embd.weight", device)?;
         let tok_embeddings = tok_embeddings.dequantize(device)?;
@@ -260,10 +263,12 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
         let output = ct.tensor("output.weight", device)?;
         let mut layers = Vec::with_capacity(block_count);
 
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
-
         let mut count = 0;
-        for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
+        for layer_idx in NiceProgressBar::<_, 'b'>(
+            0..block_count,
+            "Loading repeating layers",
+            &MultiProgress::new(),
+        ) {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let ffn_up = ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?;
@@ -343,6 +348,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: Some(context_window),
                 },
+                dtype,
             })
         }
         if xlora_config.is_none() {
@@ -383,6 +389,7 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
                 XLoraClassifier::new(xlora_config, count, lora_config.len(), vb.clone(), true)
                     .unwrap()
             }),
+            dtype,
         })
     }
 }
@@ -431,7 +438,7 @@ impl ModelWeights {
             input_ids,
             &*cache,
             Some(self.max_seq_len),
-            DType::F32,
+            self.dtype,
             self.layers[0].n_head,
         )?;
         for (i, layer) in self.layers.iter().enumerate() {
@@ -480,8 +487,6 @@ impl ModelWeights {
         input_ids_full: &Tensor,
         seqlen_offsets: &[usize],
         seqlen_offsets_full: &[usize],
-        start_offsets_kernel: Tensor,
-        start_offsets_kernel_full: Tensor,
         no_kv_cache: bool,
         non_granular_state: &Option<NonGranularState>,
         context_lens: Vec<(usize, usize)>,
@@ -494,8 +499,6 @@ impl ModelWeights {
                 input_ids_full,
                 seqlen_offsets,
                 seqlen_offsets_full,
-                &start_offsets_kernel,
-                &start_offsets_kernel_full,
                 no_kv_cache,
                 non_granular_state,
                 &vec![usize::MAX; context_lens.len()],
@@ -583,7 +586,6 @@ impl ScalingsMaker for ModelWeights {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
         scalings: Tensor,
         is_full_pass: bool,
         no_kv_cache: bool,

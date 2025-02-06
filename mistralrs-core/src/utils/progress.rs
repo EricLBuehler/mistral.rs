@@ -1,4 +1,4 @@
-use indicatif::{ProgressBar, ProgressBarIter, ProgressIterator, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressBarIter, ProgressIterator, ProgressStyle};
 use tqdm::Iter;
 
 // Optionally display a progress bar via the `tqdm` crate:
@@ -22,9 +22,13 @@ impl<'a, T: Iterator + 'a> IterWithProgress<'a, T::Item> for T {}
 
 /// Nice progress bar with over an iterator and a message.
 /// COLOR is one of r,g,b
-pub struct NiceProgressBar<T: ExactSizeIterator, const COLOR: char = 'b'>(pub T, pub &'static str);
+pub struct NiceProgressBar<'a, T: ExactSizeIterator, const COLOR: char = 'b'>(
+    pub T,
+    pub &'static str,
+    pub &'a MultiProgress,
+);
 
-impl<T: ExactSizeIterator, const COLOR: char> IntoIterator for NiceProgressBar<T, COLOR> {
+impl<T: ExactSizeIterator, const COLOR: char> IntoIterator for NiceProgressBar<'_, T, COLOR> {
     type IntoIter = ProgressBarIter<T>;
     type Item = T::Item;
 
@@ -45,6 +49,10 @@ impl<T: ExactSizeIterator, const COLOR: char> IntoIterator for NiceProgressBar<T
                 .unwrap()
                 .progress_chars("#>-"),
         );
+
+        // Add to the multi progress
+        self.2.add(bar.clone());
+
         self.0.progress_with(bar)
     }
 }

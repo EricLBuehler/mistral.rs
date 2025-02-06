@@ -2,6 +2,11 @@
 
 <h3>Quantization and device mapping in one file.</h3>
 
+> [!NOTE]
+> Manual device mapping is deprecated in favor of automatic device mapping due to the possibility for user error in manual.
+> The topology system will remain and be used only for quantization settings.
+> Please see the [device mapping documentation](DEVICE_MAPPING.md) for more information.
+
 Use a simple model topology to configure ISQ and device mapping for *per-layer* with a single [YAML file](../topologies/isq_and_device.yml) (examples [here](../topologies))!
 
 To support per-layer mix of ISQ, Mistral.rs supports loading a model topology YAML file. This YAML file is formatted as follows:

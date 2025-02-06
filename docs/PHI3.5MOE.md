@@ -15,10 +15,21 @@ The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture o
     - The design is flexible: 2 or 1 experts can be selected, enabling dense or sparse gating
 
 ```
-./mistralrs-server --isq Q4K -i plain -m microsoft/Phi-3.5-MoE-instruct -a phi3.5moe
+./mistralrs-server --isq Q4K -i plain -m microsoft/Phi-3.5-MoE-instruct
+```
+
+> [!NOTE]
+> This models supports MoQE which can be activated in the ISQ organization parameter within the various APIs, as demonstrated below:
+
+```
+./mistralrs-server --isq Q4K -i plain -m microsoft/Phi-3.5-MoE-instruct --organization moqe
 ```
 
 ## HTTP API
+
+```
+./mistralrs-server --isq Q4K --port 1234 plain -m microsoft/Phi-3.5-MoE-instruct
+```
 
 ```py
 import openai

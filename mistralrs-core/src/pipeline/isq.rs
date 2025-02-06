@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::Result;
 use candle_core::{quantized, Context, Device, Tensor};
-use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use mistralrs_quant::{
     CollectedImatrixData, FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde,
@@ -125,6 +125,7 @@ pub struct UqffFullSer<'a> {
     pub preprocessor_filename: &'a Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum ImatrixDataSource<'a> {
     File(&'a PathBuf),
     Collected,
@@ -250,6 +251,7 @@ pub trait IsqModel {
         organization: IsqOrganization,
         write_artifacts: Option<&PathBuf>,
         full_ser: UqffFullSer<'_>,
+        multi_progress: Arc<MultiProgress>,
     ) -> candle_core::Result<()> {
         {
             let imatrix_to_weight = match imatrix_source {
@@ -390,6 +392,7 @@ pub trait IsqModel {
                     .unwrap()
                     .progress_chars("#>-"),
             );
+            multi_progress.add(bar.clone());
 
             let layers = topology.map(|x| {
                 x.0.iter()
@@ -734,7 +737,7 @@ pub trait IsqModel {
                     if let Some(artifact) = artifact_isqs.get(&i) {
                         let artifact = artifact.data();
                         // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-                        let isq_type = artifact[4];
+                        let isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
                         let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
                             QuantizedSerdeType::Gguf => {
                                 GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?

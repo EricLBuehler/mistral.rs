@@ -211,12 +211,26 @@ macro_rules! serde_default_fn {
     };
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+/// `true` if built with CUDA (requires Unix) /Metal
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 pub const fn paged_attn_supported() -> bool {
     true
 }
 
-#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+/// `true` if built with CUDA (requires Unix) /Metal
+#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 pub const fn paged_attn_supported() -> bool {
     false
+}
+
+/// `true` if built with the `flash-attn` or `flash-attn-v3` features, false otherwise.
+#[cfg(not(any(feature = "flash-attn", feature = "flash-attn-v3")))]
+pub const fn using_flash_attn() -> bool {
+    false
+}
+
+/// `true` if built with the `flash-attn` or `flash-attn-v3` features, false otherwise.
+#[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
+pub const fn using_flash_attn() -> bool {
+    true
 }

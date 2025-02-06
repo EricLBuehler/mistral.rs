@@ -6,8 +6,9 @@ use std::{
 use crate::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
-    DiffusionLoaderBuilder, DiffusionSpecificConfig, GGUFSpecificConfig, Loader, ModelDType,
-    ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
+    toml_selector::get_toml_selected_model_device_map_params,
+    AutoDeviceMapParams, DiffusionLoaderBuilder, DiffusionSpecificConfig, GGUFSpecificConfig,
+    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
     VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
 };
 
@@ -17,7 +18,7 @@ pub struct LoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     use_flash_attn: bool,
-    prompt_batchsize: Option<NonZeroUsize>,
+    prompt_chunksize: Option<NonZeroUsize>,
 }
 
 impl LoaderBuilder {
@@ -27,7 +28,7 @@ impl LoaderBuilder {
             no_kv_cache: false,
             chat_template: None,
             use_flash_attn: false,
-            prompt_batchsize: None,
+            prompt_chunksize: None,
         }
     }
 
@@ -43,8 +44,8 @@ impl LoaderBuilder {
         self.use_flash_attn = use_flash_attn;
         self
     }
-    pub fn with_prompt_batchsize(mut self, prompt_batchsize: Option<NonZeroUsize>) -> Self {
-        self.prompt_batchsize = prompt_batchsize;
+    pub fn with_prompt_chunksize(mut self, prompt_chunksize: Option<NonZeroUsize>) -> Self {
+        self.prompt_chunksize = prompt_chunksize;
         self
     }
 
@@ -85,19 +86,94 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::Lora { dtype, .. }
         | ModelSelected::XLora { dtype, .. }
         | ModelSelected::VisionPlain { dtype, .. }
-        | ModelSelected::DiffusionPlain { dtype, .. } => Ok(*dtype),
-        ModelSelected::GGUF { .. }
-        | ModelSelected::LoraGGUF { .. }
-        | ModelSelected::GGML { .. }
-        | ModelSelected::LoraGGML { .. }
-        | ModelSelected::XLoraGGUF { .. }
-        | ModelSelected::XLoraGGML { .. } => Ok(ModelDType::Auto),
+        | ModelSelected::DiffusionPlain { dtype, .. }
+        | ModelSelected::GGML { dtype, .. }
+        | ModelSelected::GGUF { dtype, .. }
+        | ModelSelected::XLoraGGUF { dtype, .. }
+        | ModelSelected::XLoraGGML { dtype, .. }
+        | ModelSelected::LoraGGUF { dtype, .. }
+        | ModelSelected::LoraGGML { dtype, .. } => Ok(*dtype),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
                     .unwrap_or_else(|_| panic!("Could not load toml selector file at {file}")),
             )?;
             Ok(get_toml_selected_model_dtype(&selector))
+        }
+    }
+}
+
+pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoDeviceMapParams> {
+    match model {
+        ModelSelected::Plain {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::Lora {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::XLora {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::GGML {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::GGUF {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::XLoraGGUF {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::XLoraGGML {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::LoraGGUF {
+            max_seq_len,
+            max_batch_size,
+            ..
+        }
+        | ModelSelected::LoraGGML {
+            max_seq_len,
+            max_batch_size,
+            ..
+        } => Ok(AutoDeviceMapParams::Text {
+            max_seq_len: *max_seq_len,
+            max_batch_size: *max_batch_size,
+        }),
+        ModelSelected::VisionPlain {
+            max_seq_len,
+            max_batch_size,
+            max_image_length,
+            max_num_images,
+            ..
+        } => Ok(AutoDeviceMapParams::Vision {
+            max_seq_len: *max_seq_len,
+            max_batch_size: *max_batch_size,
+            max_image_shape: (*max_image_length, *max_image_length),
+            max_num_images: *max_num_images,
+        }),
+        ModelSelected::DiffusionPlain { .. } => {
+            anyhow::bail!("diffusion model doesn't support max_seq_len")
+        }
+        ModelSelected::Toml { file } => {
+            let selector: TomlSelector = toml::from_str(
+                &fs::read_to_string(file.clone())
+                    .unwrap_or_else(|_| panic!("Could not load toml selector file at {file}")),
+            )?;
+            get_toml_selected_model_device_map_params(&selector)
         }
     }
 }
@@ -114,7 +190,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 use_flash_attn,
                 chat_template: args.chat_template,
                 no_kv_cache: args.no_kv_cache,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
             };
             (selector, args).try_into()?
         }
@@ -129,10 +205,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             from_uqff,
             imatrix,
             calibration_file,
+            max_seq_len: _,
+            max_batch_size: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
@@ -157,10 +235,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             topology,
             write_uqff,
             from_uqff,
+            max_seq_len: _,
+            max_batch_size: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
@@ -193,10 +273,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             topology,
             write_uqff,
             from_uqff,
+            max_seq_len: _,
+            max_batch_size: _,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
@@ -222,6 +304,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_model_id,
             quantized_filename,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -231,7 +314,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
         )
@@ -244,6 +327,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             order,
             tgt_non_granular_index,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -253,7 +337,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
         )
@@ -275,6 +359,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             adapters_model_id,
             order,
             topology,
+            ..
         } => GGUFLoaderBuilder::new(
             args.chat_template,
             tok_model_id,
@@ -284,7 +369,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
         )
@@ -304,10 +389,11 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_filename,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -328,10 +414,11 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tgt_non_granular_index,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -360,10 +447,11 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             order,
             gqa,
             topology,
+            ..
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
             args.chat_template,
@@ -391,10 +479,14 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             from_uqff,
             max_edge,
             calibration_file,
+            max_seq_len: _,
+            max_batch_size: _,
+            max_num_images: _,
+            max_image_length: _,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
-                prompt_batchsize: args.prompt_batchsize,
+                prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
                 from_uqff,

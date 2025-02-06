@@ -3,8 +3,9 @@
 use std::ops::Add;
 
 use candle_core::{DType, Device, Result, Tensor, WithDType};
+use mistralrs_quant::get_use_matmul_via_f16;
 
-use crate::{cublaslt::CUBLASLT_HANDLE, layers::get_use_matmul_via_f16, pipeline::KvCache};
+use crate::pipeline::KvCache;
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 pub struct CausalMasker;
@@ -38,17 +39,6 @@ pub trait PastKvLenCache {
     fn get_past_kv_len(&self) -> Result<usize>;
 }
 
-impl PastKvLenCache for &[Option<(Tensor, Tensor)>] {
-    fn get_past_kv_len(&self) -> Result<usize> {
-        let kv_cache_1 = &self[0];
-        if kv_cache_1.is_none() {
-            return Ok(0);
-        }
-        let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
-        Ok(k_cache_1.dims()[2])
-    }
-}
-
 impl PastKvLenCache for Vec<KvCache> {
     fn get_past_kv_len(&self) -> Result<usize> {
         let kv_cache_1 = &self[0];
@@ -74,16 +64,6 @@ impl PastKvLenCache for Vec<Option<(Tensor, Tensor)>> {
         }
         let k_cache_1 = &kv_cache_1.as_ref().unwrap().0;
         Ok(k_cache_1.dims()[2])
-    }
-}
-
-impl PastKvLenCache for Option<&[(Tensor, Tensor)]> {
-    fn get_past_kv_len(&self) -> Result<usize> {
-        match self {
-            None => Ok(0),
-            Some([(k_cache_1, _), ..]) => Ok(k_cache_1.dims()[2]),
-            _ => candle_core::bail!("Unreachable"),
-        }
     }
 }
 
@@ -136,7 +116,7 @@ impl CausalMasker {
         input_ids: &Tensor,
         cache: &dyn PastKvLenCache,
         dtype: DType,
-        n_attn_heads: usize,
+        _n_attn_heads: usize,
     ) -> Result<Option<Tensor>> {
         let past_kv_len = cache.get_past_kv_len()?;
         let (_b_sz, tgt_len) = input_ids.dims2()?;
@@ -161,13 +141,6 @@ impl CausalMasker {
             mask
         };
 
-        // IMPORTANT: this must match the logic in attention.rs.
-        if causal_mask.device().is_cuda()
-            && !get_use_matmul_via_f16()
-            && CUBLASLT_HANDLE.lock().unwrap().is_some()
-        {
-            causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
-        }
         Ok(Some(causal_mask))
     }
 
@@ -210,18 +183,11 @@ impl CausalMasker {
             )?
         };
 
-        // IMPORTANT: this must match the logic in attention.rs.
-        if causal_mask.device().is_cuda()
-            && !get_use_matmul_via_f16()
-            && CUBLASLT_HANDLE.lock().unwrap().is_some()
-        {
-            causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
-        }
         Ok(Some(causal_mask))
     }
 
     #[deprecated(
-        since = "0.3.4",
+        since = "0.3.5",
         note = "use `make_causal_mask_matrix_as_attn_bias` instead. This is incompatible with `Sdpa`."
     )]
     pub fn make_causal_mask_as_attn_bias(
@@ -272,7 +238,7 @@ impl CausalMasker {
     }
 
     #[deprecated(
-        since = "0.3.4",
+        since = "0.3.5",
         note = "use `make_causal_mask_matrix_with_sliding_window_as_attn_bias` instead. This is incompatible with `Sdpa`."
     )]
     pub fn make_causal_mask_with_sliding_window_as_attn_bias(

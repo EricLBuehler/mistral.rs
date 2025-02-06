@@ -31,6 +31,20 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
+- 🐋🐋🐋 Run the Deepseek R1/V3 model: [documentation](docs/DEEPSEEKV3.md)
+
+    ```
+    ./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1
+    ```
+
+- 🐋🐋🐋 Run the Deepseek R1 [distillations](https://huggingface.co/collections/deepseek-ai/deepseek-r1-678e1e131c0169c0bc89728d) out of the box
+
+    ```
+    ./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+    ./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+    ./mistralrs-server -i --isq Q4K plain -m deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+    ```
+
 - 🦙📷 Run the **Llama 3.2 Vision** Model: [documentation and guide here](docs/VLLAMA.md)
 
     <img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "400" height = "267">
@@ -40,10 +54,10 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
     ```
 
-- 🌟📷 Run the **Qwen2-VL** Model: [documentation and guide here](docs/QWEN2VL.md)
+- 🌟📷 Run the **MiniCPM-O 2.6** Model: [documentation and guide here](docs/MINICPMO_2_6.md)
 
     ```
-    ./mistralrs-server -i vision-plain -m Qwen/Qwen2-VL-2B-Instruct -a qwen2vl
+    ./mistralrs-server -i vision-plain -m openbmb/MiniCPM-o-2_6 -a minicpmo
     ```
 
 - 🤗📷 Run the **Smol VLM** Model: [documentation and guide here](docs/IDEFICS3.md)
@@ -92,12 +106,13 @@ Mistral.rs supports several model categories:
 - Grammar support with JSON Schema, Regex, Lark, and Guidance via [LLGuidance library](https://github.com/microsoft/llguidance)
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
     - Enhance performance with an [imatrix](docs/IMATRIX.md)!
+- Automatic [device mapping](docs/DEVICE_MAPPING.md) to easily load and run models across multiple GPUs and CPU.
 
 **Fast**:
 - Apple silicon support: ARM NEON, Accelerate, Metal
 - Accelerated CPU inference with MKL, AVX support
-- CUDA support with flash attention and cuDNN.
-- [Device mapping](docs/DEVICE_MAPPING.md): load and run some layers on the device and the rest on the CPU.
+- CUDA support with FlashAttention and cuDNN.
+- Automatic tensor-parallelism support with NCCL: [distributed documentation](docs/DISTRIBUTED.md)
 
 **Quantization**:
 - [Details](docs/QUANTS.md)
@@ -116,7 +131,8 @@ Mistral.rs supports several model categories:
 - Prompt chunking: process large prompts in a more manageable way
 
 **Advanced features**:
-- [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching
+- [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching (CUDA and Metal support)
+- [FlashAttention](docs/FLASH_ATTENTION.md) V2/V3
 - Prefix caching
 - [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
 - [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
@@ -132,7 +148,7 @@ This is a demo of interactive mode with streaming running Phi 3 128k mini with q
 
 https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-9006-4ec6ebc6473c
 
-## Support matrix
+## Architecture Support matrix
 
 > Note: See [supported models](#supported-models) for more information
 
@@ -155,6 +171,9 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Llama 3.2 Vision|✅| |✅| |
 |Qwen2-VL|✅| |✅| |
 |Idefics 3|✅| |✅|✅|
+|DeepseekV2|✅| |✅| |
+|DeepseekV3|✅| |✅| |
+|MinCPM-O 2.6|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -338,6 +357,8 @@ Throughout mistral.rs, any model ID argument or option may be a local path and s
 
 To run GGUF models, the only mandatory arguments are the quantized model ID and the quantized filename. The quantized model ID can be a HF model ID.
 
+You must also specify either `-i` for interactive mode or `--port` to launch a server, just like when [running a non-GGUF model with the CLI](#run-with-the-cli)
+
 GGUF models contain a tokenizer. However, mistral.rs allows you to run the model with a tokenizer from a specified model, typically the official one. This means there are two options:
 1) [With a specified tokenizer](#with-a-specified-tokenizer)
 1) [With the builtin tokenizer](#with-the-builtin-tokenizer)
@@ -389,11 +410,11 @@ please consider using the method demonstrated in examples below, where the token
 
 ## Run with the CLI
 
-Mistral.rs uses subcommands to control the model type. They are generally of format `<XLORA/LORA>-<QUANTIZATION>`. Please run `./mistralrs-server --help` to see the subcommands.
+Mistral.rs uses subcommands to control the model type. Please run `./mistralrs-server --help` to see the subcommands which categorize the models by kind.
 
 ### Architecture for plain models
 
-> Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`).
+> Note: for plain models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device. This is specified in the `--dype`/`-d` parameter after the model architecture (`plain`). For quantized models (gguf/ggml), you may specify data type of `f32` or `bf16` (`f16` is not recommended due to its lower precision in quantized inference).
 
 If you do not specify the architecture, an attempt will be made to use the model's config. If this fails, please raise an issue.
 
@@ -407,6 +428,8 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `qwen2`
 - `gemma2`
 - `starcoder2`
+- `deepseekv2`
+- `deepseekv3`
 
 ### Architecture for vision models
 
@@ -419,6 +442,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `vllama`
 - `qwen2vl`
 - `idefics3`
+- `minicpmo`
 
 ### Supported GGUF architectures
 
@@ -453,6 +477,13 @@ And even diffusion models:
 
 ```bash
 ./mistralrs-server -i diffusion-plain -m black-forest-labs/FLUX.1-schnell -a flux
+```
+
+On Apple Silicon (`Metal`), run with throughput log, settings of paged attention (maximum usage of 4GB for kv cache) and dtype (bf16 for kv cache and attention)
+
+```bash
+cargo build --release --features metal
+./target/release/mistralrs-server -i --throughput --paged-attn --pa-gpu-mem 4096 gguf --dtype bf16 -m /Users/Downloads/ -f Phi-3.5-mini-instruct-Q4_K_M.gguf
 ```
 
 ### OpenAI HTTP server
@@ -509,6 +540,9 @@ Please submit more benchmarks via raising an issue!
 |Llama 3.2 Vision| | |✅|
 |Qwen2-VL| | |✅|
 |Idefics 3| | |✅|
+|Deepseek V2| | |✅|
+|Deepseek V3| | |✅|
+|MiniCPM-O 2.6| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -537,6 +571,9 @@ Please submit more benchmarks via raising an issue!
 |LLaVa| | | |
 |Qwen2-VL| | | |
 |Idefics 3| | | |
+|Deepseek V2| | | |
+|Deepseek V3| | | |
+|MiniCPM-O 2.6| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -558,6 +595,9 @@ Please submit more benchmarks via raising an issue!
 |Llama 3.2 Vision| |
 |Qwen2-VL| |
 |Idefics 3|✅|
+|Deepseek V2| |
+|Deepseek V3| |
+|MiniCPM-O 2.6| |
 
 
 ### Using derivative model

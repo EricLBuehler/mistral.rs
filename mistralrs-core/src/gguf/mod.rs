@@ -11,8 +11,8 @@ use std::str::FromStr;
 
 pub const GGUF_MULTI_FILE_DELIMITER: &str = " ";
 
-#[derive(Debug, EnumString, Clone, Copy)]
-#[strum(serialize_all = "kebab-case")]
+#[derive(Debug, EnumString, Clone, Copy, strum::Display)]
+#[strum(serialize_all = "lowercase")]
 pub enum GGUFArchitecture {
     Llama,
     Mpt,

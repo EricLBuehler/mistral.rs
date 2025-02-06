@@ -41,8 +41,9 @@ generate_repr!(ResponseMessage);
 #[derive(Debug, Clone, Serialize)]
 /// Delta in content for streaming response.
 pub struct Delta {
-    pub content: String,
+    pub content: Option<String>,
     pub role: String,
+    pub tool_calls: Option<Vec<ToolCallResponse>>,
 }
 
 generate_repr!(Delta);
@@ -154,6 +155,7 @@ pub struct ChatCompletionChunkResponse {
     pub model: String,
     pub system_fingerprint: String,
     pub object: String,
+    pub usage: Option<Usage>,
 }
 
 generate_repr!(ChatCompletionChunkResponse);

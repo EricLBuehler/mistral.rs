@@ -27,8 +27,8 @@ use crate::{
 };
 
 // Match files against these, avoids situations like `consolidated.safetensors`
-const SAFETENSOR_MATCH: &str = r"model-\d{5}-of-\d{5}.safetensors\b";
-const QUANT_SAFETENSOR_MATCH: &str = r"model.safetensors\b";
+const SAFETENSOR_MATCH: &str = r"model-\d+-of-\d+\.safetensors\b";
+const QUANT_SAFETENSOR_MATCH: &str = r"model\.safetensors\b";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 pub(crate) struct XLoraPaths {
@@ -347,12 +347,13 @@ pub fn get_model_paths(
 ///   Falls back to `chat_template_file` if it is invalid. *The user must add the bos/unk/eos tokens manually if this
 ///   is used.*
 ///
+/// THE FOLLOWING IS IGNORED:
 /// After this, if the `chat_template_json` filename is specified (a json with one field: "chat_template"),
 ///  the chat template is overwritten with this chat template.
 #[allow(clippy::borrowed_box)]
 pub(crate) fn get_chat_template(
     paths: &Box<dyn ModelPaths>,
-    chat_template_json: &Option<String>,
+    _chat_template_json: &Option<String>,
     chat_template_fallback: &Option<String>,
     chat_template_ovrd: Option<String>,
 ) -> ChatTemplate {
@@ -381,7 +382,6 @@ pub(crate) fn get_chat_template(
     } else {
         panic!("Expected chat template file to end with .json, or you can specify a tokenizer model ID to load the chat template there. If you are running a GGUF model, it probably does not contain a chat template.");
     };
-
     let mut template: ChatTemplate = match chat_template_ovrd {
         Some(chat_template) => {
             // In this case the override chat template is being used. The user must add the bos/eos/unk toks themselves.
@@ -392,20 +392,20 @@ pub(crate) fn get_chat_template(
         }
         None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
     };
-    // Overwrite to use any present `chat_template.json`
-    if let Some(ChatTemplateValue(chat_template_value)) = &mut template.chat_template {
-        if let Some(chat_template_json) = chat_template_json {
-            #[derive(Debug, serde::Deserialize)]
-            struct AutomaticTemplate {
-                chat_template: String,
-            }
-            let deser: AutomaticTemplate = serde_json::from_str(
-                &fs::read_to_string(chat_template_json).expect("Loading chat template failed."),
-            )
-            .unwrap();
-            *chat_template_value = Either::Left(deser.chat_template);
-        }
-    }
+    // // Overwrite to use any present `chat_template.json`
+    // if let Some(ChatTemplateValue(chat_template_value)) = &mut template.chat_template {
+    //     if let Some(chat_template_json) = chat_template_json {
+    //         #[derive(Debug, serde::Deserialize)]
+    //         struct AutomaticTemplate {
+    //             chat_template: String,
+    //         }
+    //         let deser: AutomaticTemplate = serde_json::from_str(
+    //             &fs::read_to_string(chat_template_json).expect("Loading chat template failed."),
+    //         )
+    //         .unwrap();
+    //         *chat_template_value = Either::Left(deser.chat_template);
+    //     }
+    // }
 
     let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
         .get_processor_config()
@@ -496,9 +496,7 @@ mod tests {
             "model-00006-of-00006.safetensors",
         ];
         let negative_ids = [
-            "model-000001-of-00001.safetensors",
             "model-0000a-of-00002.safetensors",
-            "model-000-of-00003.safetensors",
             "consolidated.safetensors",
         ];
         for id in positive_ids {

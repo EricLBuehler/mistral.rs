@@ -4,14 +4,10 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
-use candle_core::{
-    quantized::{GgmlDType, QTensor},
-    Context, DType, Device, Result, Shape, Tensor, D,
-};
-use candle_nn::VarBuilder;
+use candle_core::{Context, DType, Device, Result, Shape, Tensor};
 use serde::Deserialize;
 
-use crate::{GgufMatMul, IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde};
+use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, ShardedVarBuilder};
 
 #[cfg(feature = "cuda")]
 mod ffi;
@@ -77,7 +73,12 @@ pub struct BnbLinear {
 }
 
 impl BnbLinear {
-    pub fn linear_b(_in_dim: usize, out_dim: usize, bias: bool, vb: VarBuilder) -> Result<Self> {
+    pub fn linear_b(
+        _in_dim: usize,
+        out_dim: usize,
+        bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let weight = vb.get_unchecked_dtype("weight", DType::U8)?;
 
         let vb_w = vb.pp("weight");
@@ -208,7 +209,8 @@ impl QuantMethod for BnbLinear {
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_)
-            | QuantMethodConfig::FP8 { .. } => unreachable!(),
+            | QuantMethodConfig::FP8 { .. }
+            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
             QuantMethodConfig::Bnb {
                 weight,
                 bias,
@@ -251,10 +253,6 @@ impl QuantMethod for BnbLinear {
         (self.params.dtype.into(), self.weight.device().clone())
     }
 
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        self.bias.as_mut()
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         _dtype: Option<IsqType>,
@@ -267,29 +265,6 @@ impl QuantMethod for BnbLinear {
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
-    }
-
-    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        let weight = Self::dequantize(&self.weight, &self.params, self.quant_ty)?;
-        let bias = self.bias.clone();
-
-        let last_dim = weight.dim(D::Minus1)?;
-        let dtype = match self.quant_ty {
-            BnbQuantType::Fp4 | BnbQuantType::Nf4 if last_dim % 256 == 0 => GgmlDType::Q4K,
-            BnbQuantType::Fp4 | BnbQuantType::Nf4 if last_dim % 64 == 0 && last_dim % 256 != 0 => {
-                GgmlDType::Q4_0
-            }
-            BnbQuantType::Fp4 | BnbQuantType::Nf4 if last_dim % 64 != 0 && last_dim % 256 != 0 => {
-                GgmlDType::F32
-            }
-            BnbQuantType::Int8 => GgmlDType::Q8_0,
-            _ => unreachable!(),
-        };
-        let qmatmul = QTensor::quantize(&weight, dtype)?;
-        Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-            q_weight: Arc::new(qmatmul),
-            b: bias,
-        })?))
     }
 }
 

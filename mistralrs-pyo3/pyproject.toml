@@ -1,10 +1,10 @@
 [build-system]
-requires = ["maturin==1.4"]
+requires = ["maturin==1.7"]
 build-backend = "maturin"
 
 [project]
 name = "mistralrs"
-version = "0.3.4"
+version = "0.4.0"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",

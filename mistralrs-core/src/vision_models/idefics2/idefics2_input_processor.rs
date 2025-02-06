@@ -10,6 +10,7 @@ use tokenizers::Tokenizer;
 use tracing::warn;
 
 use crate::{
+    device_map::DeviceMapper,
     pipeline::{
         apply_chat_template,
         text_models_inputs_processor::{
@@ -140,7 +141,8 @@ impl InputsProcessor for Idefics2ImageProcessor {
         return_raw_logits: bool,
         other_config: Option<Arc<dyn Any>>,
         mut paged_attn_metadata: Option<PagedAttentionMeta<'_>>,
-        prompt_batchsize: Option<NonZeroUsize>,
+        prompt_chunksize: Option<NonZeroUsize>,
+        mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = anyhow::Result<InputProcessorOutput>>> {
         if is_xlora {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
@@ -153,8 +155,8 @@ impl InputsProcessor for Idefics2ImageProcessor {
             ))));
         }
         // TODO(EricLBuehler): support this? Would require some handling of image tokens.
-        if prompt_batchsize.is_some() {
-            warn!("`prompt_batchsize` is set. Idefics 2 does not support prompt batching.");
+        if prompt_chunksize.is_some() {
+            warn!("`prompt_chunksize` is set. Idefics 2 does not support prompt batching.");
         }
 
         let text_models_inputs_processor::InnerInputProcessorOutput {
@@ -162,7 +164,6 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 text_models_inputs_processor::InputMetadata {
                     input,
                     positions,
-                    positions_kernel,
                     context_lens,
                     position_ids,
                     paged_attn_meta,
@@ -181,6 +182,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
+                mapper,
             )
             .nth(0)
             .unwrap()
@@ -198,6 +200,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
                 return_raw_logits,
                 paged_attn_metadata.as_mut(),
                 None, // TODO: evaluate if it is possible to batch this
+                mapper,
             )
             .nth(0)
             .unwrap()
@@ -226,6 +229,9 @@ impl InputsProcessor for Idefics2ImageProcessor {
                     video_grid_thw: _,
                     rows: _,
                     cols: _,
+                    pixel_values_list: _,
+                    tgt_sizes: _,
+                    image_sizes_all: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -251,7 +257,6 @@ impl InputsProcessor for Idefics2ImageProcessor {
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
-            seqlen_offsets_kernel: positions_kernel,
             context_lens,
             position_ids,
             pixel_values,
@@ -394,6 +399,9 @@ impl ImagePreProcessor for Idefics2ImageProcessor {
             video_grid_thw: None,
             rows: None,
             cols: None,
+            pixel_values_list: None,
+            tgt_sizes: None,
+            image_sizes_all: None,
         })
     }
 }

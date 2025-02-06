@@ -184,11 +184,11 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTo
         Normalizer::Replace(" ", "▁"),
     ]);
 
-    let mut tokenizer: Tokenizer = TokenizerX::try_builder()
-        .with_model(model)
-        .with_decoder(decoder)
-        .with_normalizer(normalizer)
-        .build()?;
+    let mut tokenizer: Tokenizer = TokenizerX::new(
+        ModelWrapper::Unigram(model),
+        Some(decoder),
+        Some(normalizer),
+    )?;
 
     // Add special tokens (bos, eos, unk):
     let special_tokens = add_special_tokens(p, &mut tokenizer, bos, eos, Some(unk));
@@ -234,10 +234,11 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
 
     let bpe = bpe.build().map_err(anyhow::Error::msg)?;
 
-    let mut tokenizer = TokenizerX::try_builder()
-        .with_model(bpe)
-        .with_decoder(Decoder::ByteLevel(true, true, true))
-        .build()?;
+    let mut tokenizer = TokenizerX::new(
+        ModelWrapper::BPE(bpe),
+        Some(Decoder::ByteLevel(true, true, true)),
+        None,
+    )?;
     tokenizer.with_pre_tokenizer(Some(pre_tokenizers::byte_level::ByteLevel::new(
         false, true, true,
     )));
@@ -277,23 +278,23 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind, AddedTokens
 // Upstream `TokenizerBuilder` is difficult to work with:
 // https://github.com/huggingface/tokenizers/issues/1549
 struct TokenizerX;
-#[buildstructor::buildstructor]
+
 impl TokenizerX {
-    #[builder]
-    fn try_new<'a>(
-        with_model: ModelWrapper,
-        with_decoder: Option<Decoder<'a>>,
-        with_normalizer: Option<Normalizer<'a>>,
+    #[allow(clippy::new_ret_no_self)]
+    fn new<'a>(
+        model: ModelWrapper,
+        decoder: Option<Decoder<'a>>,
+        normalizer: Option<Normalizer<'a>>,
     ) -> Result<Tokenizer> {
-        let mut tokenizer = Tokenizer::new(with_model);
+        let mut tokenizer = Tokenizer::new(model);
 
         // Handle local enum to remote enum type:
-        if let Some(decoder) = with_decoder {
+        if let Some(decoder) = decoder {
             let d = DecoderWrapper::try_from(decoder)?;
             tokenizer.with_decoder(Some(d));
         }
-        if let Some(normalizer) = with_normalizer {
-            let n = NormalizerWrapper::try_from(normalizer)?;
+        if let Some(normalizer) = normalizer {
+            let n: NormalizerWrapper = NormalizerWrapper::try_from(normalizer)?;
             tokenizer.with_normalizer(Some(n));
         }
 

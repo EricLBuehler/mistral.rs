@@ -85,6 +85,7 @@ impl Topology {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(topology: &str) -> anyhow::Result<Self> {
         let deser: DeserTopology = serde_yaml::from_str(topology)?;
+        let device_regex = Regex::new(DEVICE_PATTERN)?;
 
         let mut layers = Vec::new();
         for (range, DeserLayerTopology { isq, device }) in deser.0 {
@@ -113,8 +114,6 @@ impl Topology {
 
             // Parse device
             let device = if let Some(device) = device {
-                let device_regex = Regex::new(DEVICE_PATTERN)?;
-
                 let Some(captures) = device_regex.captures(&device) else {
                     anyhow::bail!("Device specifier must match regex {DEVICE_PATTERN}. Examples: `cpu`, `cuda[ORD]`, `metal[ORD]`");
                 };

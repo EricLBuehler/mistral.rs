@@ -31,7 +31,7 @@ impl GgufXLoraModelBuilder {
 
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = GGUFSpecificConfig {
-            prompt_batchsize: self.gguf_model.prompt_batchsize,
+            prompt_chunksize: self.gguf_model.prompt_chunksize,
             topology: self.gguf_model.topology,
         };
 
@@ -61,7 +61,9 @@ impl GgufXLoraModelBuilder {
             &ModelDType::Auto,
             &best_device(self.gguf_model.force_cpu)?,
             !self.gguf_model.with_logging,
-            DeviceMapMetadata::dummy(),
+            self.gguf_model
+                .device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             None,
             self.gguf_model.paged_attn_cfg,
         )?;

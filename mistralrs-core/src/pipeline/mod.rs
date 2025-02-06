@@ -19,6 +19,7 @@ mod vision;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
+use crate::device_map::DeviceMapper;
 use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
@@ -30,13 +31,14 @@ use image::DynamicImage;
 pub use inputs_processor::InputProcessorOutput;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization};
 pub use loaders::{
-    AdapterKind, AutoLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
+    AdapterKind, AutoDeviceMapParams, AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader,
+    DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
     Gemma2Loader, GemmaLoader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader,
-    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
-    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
-    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind, Qwen2Loader,
-    Qwen2VLLoader, Starcoder2Loader, TokenSource, VLlamaLoader, VisionLoaderType, VisionModel,
-    VisionModelLoader,
+    LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, MistralLoader, MixtralLoader, ModelKind,
+    ModelPaths, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
+    Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, PrettyName, QuantizationKind,
+    Qwen2Loader, Qwen2VLLoader, Starcoder2Loader, TokenSource, VLlamaLoader, VisionLoaderType,
+    VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -71,7 +73,8 @@ pub struct GeneralMetadata {
     pub max_seq_len: usize,
     /// Only None if it doesnt make sense for the model
     pub tok_env: Option<llguidance::toktrie::TokEnv>,
-    pub has_no_kv_cache: bool,
+    pub no_kv_cache: bool,
+    pub no_prefix_cache: bool,
     pub num_hidden_layers: usize,
     pub eos_tok: Vec<u32>,
     pub kind: ModelKind,
@@ -81,8 +84,8 @@ pub struct GeneralMetadata {
     pub sliding_window: Option<usize>,
     // PagedAttention stuff
     pub cache_config: Option<CacheConfig>,
-    pub cache_engine: Option<CacheEngine>,
-    pub prompt_batchsize: Option<NonZeroUsize>,
+    pub cache_engines: Option<Vec<CacheEngine>>,
+    pub prompt_chunksize: Option<NonZeroUsize>,
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
 }
 
@@ -148,6 +151,7 @@ pub trait MetadataMixin {
     fn name(&self) -> String;
     fn reset_non_granular_state(&self);
     fn get_metadata(&self) -> Arc<GeneralMetadata>;
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper>;
 }
 
 /// Implemented by the base model of an AnyMoe.
@@ -320,23 +324,24 @@ pub trait Pipeline:
                     is_prompt,
                     self.get_metadata().is_xlora,
                     &self.device(),
-                    self.get_metadata().has_no_kv_cache,
+                    self.get_metadata().no_kv_cache,
                     None,
                     return_raw_logits,
                     self.get_input_processor_config(),
                     None,
-                    self.get_metadata().prompt_batchsize,
+                    self.get_metadata().prompt_chunksize,
+                    self.device_mapper(),
                 );
 
                 let mut logits = vec![None; input_seqs.len()];
-                let prompt_batchsize = self
+                let prompt_chunksize = self
                     .get_metadata()
-                    .prompt_batchsize
+                    .prompt_chunksize
                     .map(NonZeroUsize::get)
                     .unwrap_or(1);
                 let len_inputs = input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().len().div_ceil(prompt_batchsize))
+                    .map(|seq| seq.get_toks().len().div_ceil(prompt_chunksize))
                     .max()
                     .unwrap();
                 let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
@@ -520,11 +525,19 @@ pub trait Pipeline:
                 blocks_to_swap_in,
                 blocks_to_swap_out,
             } => {
-                self.get_metadata()
-                    .cache_engine
+                for engine in self
+                    .get_metadata()
+                    .cache_engines
                     .as_ref()
-                    .expect("PagedAttention must have cache engine.")
-                    .execute_scheduler_ops(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)?;
+                    .expect("PagedAttention must have cache engines.")
+                {
+                    // Cloning might be bad?
+                    engine.execute_scheduler_ops(
+                        blocks_to_swap_in.clone(),
+                        blocks_to_swap_out.clone(),
+                        blocks_to_copy.clone(),
+                    )?;
+                }
 
                 let inputs_iter = self.get_processor().inputs_processor().process_inputs(
                     self.tokenizer(),
@@ -532,23 +545,24 @@ pub trait Pipeline:
                     is_prompt,
                     self.get_metadata().is_xlora,
                     &self.device(),
-                    self.get_metadata().has_no_kv_cache,
+                    self.get_metadata().no_kv_cache,
                     None,
                     return_raw_logits,
                     self.get_input_processor_config(),
                     Some(metadata),
-                    self.get_metadata().prompt_batchsize,
+                    self.get_metadata().prompt_chunksize,
+                    self.device_mapper(),
                 );
 
                 let mut logits = vec![None; input_seqs.len()];
-                let prompt_batchsize = self
+                let prompt_chunksize = self
                     .get_metadata()
-                    .prompt_batchsize
+                    .prompt_chunksize
                     .map(NonZeroUsize::get)
                     .unwrap_or(1);
                 let len_inputs = input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().len().div_ceil(prompt_batchsize))
+                    .map(|seq| seq.get_toks().len().div_ceil(prompt_chunksize))
                     .max()
                     .unwrap();
                 let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];

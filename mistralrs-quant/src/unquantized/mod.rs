@@ -13,8 +13,8 @@ use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_HANDLE},
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, HQFF_VERSION},
-    FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, QuantMethod, QuantMethodConfig,
+    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
+    FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul, QuantMethod, QuantMethodConfig,
     QuantizedSerde, QuantizedSerdeType,
 };
 
@@ -36,7 +36,8 @@ impl QuantMethod for UnquantLinear {
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
-            | QuantMethodConfig::Bnb { .. } => unreachable!(),
+            | QuantMethodConfig::Bnb { .. }
+            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self {
                 w: l.weight().clone(),
                 b: l.bias().cloned(),
@@ -99,13 +100,27 @@ impl QuantMethod for UnquantLinear {
                     out.to_dtype(a.dtype())
                 }
                 DeviceLocation::Cpu => {
-                    let mut out = b.contiguous()?;
-                    a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
-                    Ok(out)
+                    #[cfg(feature = "accelerate")]
+                    {
+                        let original_dtype = a.dtype();
+                        let mut out = b.contiguous()?.to_dtype(DType::F32)?;
+                        a.to_dtype(DType::F32)?.matmul_with_alpha_beta(
+                            &w.t()?.to_dtype(DType::F32)?,
+                            &mut out,
+                            None,
+                        )?;
+                        out.to_dtype(original_dtype)
+                    }
+                    #[cfg(not(feature = "accelerate"))]
+                    {
+                        let mut out = b.contiguous()?;
+                        a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
+                        Ok(out)
+                    }
                 }
             }
         } else {
-            a.matmul(&w.t()?)
+            MatMul.matmul(a, &w.t()?)
         }
     }
 
@@ -123,10 +138,6 @@ impl QuantMethod for UnquantLinear {
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
         (self.w.dtype(), self.w.device().clone())
-    }
-
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        None
     }
 
     fn apply_isq(
@@ -273,16 +284,12 @@ impl QuantMethod for UnquantLinear {
             candle_core::bail!("`{}` does not support tracking stats.", self.name())
         }
     }
-
-    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        Ok(self.clone())
-    }
 }
 
 // Serialization structure:
 //
 // -----------------------
-// HQFF version, u32, little endian
+// UQFF version, u32, little endian
 // -----------------------
 // ISQ type (1 for unquantized), u8, little endian
 // -----------------------
@@ -303,7 +310,9 @@ impl QuantizedSerde for UnquantLinear {
     fn serialize(&self) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
-        buffer.extend(&HQFF_VERSION.to_le_bytes());
+        // Version is always first!
+
+        buffer.extend(&UQFF_VERSION.to_le_bytes());
 
         // ISQ type for unquant is 1
         buffer.push(QuantizedSerdeType::Unquant as u8);
@@ -326,7 +335,7 @@ impl QuantizedSerde for UnquantLinear {
     where
         Self: Sized,
     {
-        let mut buffer = Cursor::new(data.to_vec());
+        let mut buffer = Cursor::new(data);
 
         let version = buffer.read_u32::<LittleEndian>()?;
         if let Err(e) = version_is_compatible(version) {

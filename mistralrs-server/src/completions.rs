@@ -43,17 +43,18 @@ pub struct Streamer {
 impl futures::Stream for Streamer {
     type Item = Result<Event, axum::Error>;
 
-    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.is_done {
             return Poll::Ready(None);
         }
-        match self.rx.try_recv() {
-            Ok(resp) => match resp {
-                Response::ModelError(msg, _) => {
+        match self.rx.poll_recv(cx) {
+            Poll::Ready(Some(resp)) => match resp {
+                Response::CompletionModelError(msg, _) => {
                     MistralRs::maybe_log_error(
                         self.state.clone(),
                         &ModelErrorMessage(msg.to_string()),
                     );
+                    self.is_done = true;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))
                 }
                 Response::ValidationError(e) => {
@@ -72,12 +73,12 @@ impl futures::Stream for Streamer {
                 }
                 Response::Done(_) => unreachable!(),
                 Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
                 Response::Chunk(_) => unreachable!(),
                 Response::ImageGeneration(_) => unreachable!(),
+                Response::ModelError(_, _) => unreachable!(),
                 Response::Raw { .. } => unreachable!(),
             },
-            Err(_) => Poll::Pending,
+            Poll::Pending | Poll::Ready(None) => Poll::Pending,
         }
     }
 }
@@ -259,16 +260,12 @@ pub async fn completions(
             state,
         };
 
+        let keep_alive_interval = env::var("KEEP_ALIVE_INTERVAL")
+            .map(|val| val.parse::<u64>().unwrap_or(10000))
+            .unwrap_or(10000);
         CompletionResponder::Sse(
-            Sse::new(streamer).keep_alive(
-                KeepAlive::new()
-                    .interval(Duration::from_millis(
-                        env::var("KEEP_ALIVE_INTERVAL")
-                            .map(|val| val.parse::<u64>().unwrap_or(1000))
-                            .unwrap_or(1000),
-                    ))
-                    .text("keep-alive-text"),
-            ),
+            Sse::new(streamer)
+                .keep_alive(KeepAlive::new().interval(Duration::from_millis(keep_alive_interval))),
         )
     } else {
         let response = match rx.recv().await {

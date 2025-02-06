@@ -3,16 +3,20 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Device, IndexOp, Result, Tensor};
-use candle_nn::{embedding, Activation, Embedding, Module, VarBuilder};
-use mistralrs_quant::{linear_no_bias, QuantMethod, QuantMethodConfig, UnquantLinear};
+use candle_nn::{Activation, Embedding, Module};
+use mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+};
 
 use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
+    layers::{embedding, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
-    pipeline::{extract_logits, Cache, EitherCache, IsqModel, NormalLoadingMetadata},
+    pipeline::{
+        extract_logits, EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata,
+    },
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -26,24 +30,34 @@ struct MLlamaTextMlp {
 }
 
 impl MLlamaTextMlp {
-    fn new(cfg: &MLlamaTextConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &MLlamaTextConfig,
+        vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         Ok(Self {
-            gate_proj: linear_no_bias(
+            gate_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.intermediate_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("gate_proj"),
             )?,
-            up_proj: linear_no_bias(
+            up_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.intermediate_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("up_proj"),
             )?,
-            down_proj: linear_no_bias(
+            down_proj: RowParallelLayer::new(
                 cfg.intermediate_size,
                 cfg.hidden_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("down_proj"),
             )?,
             act: cfg.hidden_act,
@@ -84,34 +98,43 @@ struct MLlamaTextSelfAttention {
 impl MLlamaTextSelfAttention {
     fn new(
         cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         rope: Arc<Llama3RotaryEmbedding>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
 
         Ok(Self {
-            q_proj: linear_no_bias(
+            q_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("q_proj"),
             )?,
-            k_proj: linear_no_bias(
+            k_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("k_proj"),
             )?,
-            v_proj: linear_no_bias(
+            v_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("v_proj"),
             )?,
-            o_proj: linear_no_bias(
+            o_proj: RowParallelLayer::new(
                 cfg.num_attention_heads * cfg.head_dim(),
                 cfg.hidden_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("o_proj"),
             )?,
             sdpa_params: SdpaParams {
@@ -122,8 +145,8 @@ impl MLlamaTextSelfAttention {
                 sliding_window: None,
             },
             rope,
-            num_heads: cfg.num_attention_heads,
-            num_kv_heads: cfg.num_key_value_heads,
+            num_heads: cfg.num_attention_heads / comm.world_size(),
+            num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
             head_dim,
         })
     }
@@ -133,8 +156,7 @@ impl MLlamaTextSelfAttention {
         hidden_states: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -152,27 +174,27 @@ impl MLlamaTextSelfAttention {
             v = v.to_dtype(original_dtype)?;
         }
 
-        q = q.reshape((bs * q_len, self.num_heads, self.head_dim))?;
-        k = k.reshape((bs * q_len, self.num_kv_heads, self.head_dim))?;
-        v = v
-            .reshape((bs, q_len, self.num_kv_heads, self.head_dim))?
-            .transpose(1, 2)?;
-
-        self.rope
-            .forward(seqlen_offsets, &start_offsets_kernel, &mut q, &mut k, bs)?;
-
-        if q.rank() == 3 {
-            q = q
+        let (q, k, mut v) = if q_len != 1 {
+            let q = q
                 .reshape((bs, q_len, self.num_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
+                .transpose(1, 2)?;
+            let k = k
                 .reshape((bs, q_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        }
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((bs, q_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
+        } else {
+            let q = q.reshape((bs, self.num_heads, q_len, self.head_dim))?;
+            let k = k.reshape((bs, self.num_kv_heads, q_len, self.head_dim))?;
+            let v = v.reshape((bs, self.num_kv_heads, q_len, self.head_dim))?;
+            (q, k, v)
+        };
 
-        (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
+        let (q, mut k) = self.rope.forward(&q, &k, seqlen_offsets)?;
+
+        (k, v) = kv_cache.append(&k, &v)?;
 
         let mut attn_output = Sdpa
             .run_attention(
@@ -209,13 +231,18 @@ struct MLlamaSelfAttentionDecoderLayer {
 impl MLlamaSelfAttentionDecoderLayer {
     fn new(
         cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         rope: Arc<Llama3RotaryEmbedding>,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
+        let mlp = MLlamaTextMlp::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+            comm,
+        )?;
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -230,6 +257,7 @@ impl MLlamaSelfAttentionDecoderLayer {
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             rope,
+            comm,
         )?;
 
         Ok(Self {
@@ -245,20 +273,15 @@ impl MLlamaSelfAttentionDecoderLayer {
         hidden_states: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
+        kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states = self.attn.forward(
-            &hidden_states,
-            attention_mask,
-            seqlen_offsets,
-            start_offsets_kernel,
-            kv_cache,
-        )?;
+        hidden_states =
+            self.attn
+                .forward(&hidden_states, attention_mask, seqlen_offsets, kv_cache)?;
         hidden_states = (residual + hidden_states)?;
 
         let residual = &hidden_states;
@@ -285,33 +308,42 @@ struct MLlamaTextCrossAttention {
 impl MLlamaTextCrossAttention {
     fn new(
         cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         Ok(Self {
-            q_proj: linear_no_bias(
+            q_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("q_proj"),
             )?,
-            k_proj: linear_no_bias(
+            k_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("k_proj"),
             )?,
-            v_proj: linear_no_bias(
+            v_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_key_value_heads * cfg.head_dim(),
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("v_proj"),
             )?,
-            o_proj: linear_no_bias(
+            o_proj: RowParallelLayer::new(
                 cfg.num_attention_heads * cfg.head_dim(),
                 cfg.hidden_size,
                 &cfg.quantization_config,
+                false,
+                comm,
                 vb.pp("o_proj"),
             )?,
             q_norm: RmsNorm::new(
@@ -324,8 +356,8 @@ impl MLlamaTextCrossAttention {
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb.pp("k_norm"), false),
             )?,
-            num_heads: cfg.num_attention_heads,
-            num_kv_heads: cfg.num_key_value_heads,
+            num_heads: cfg.num_attention_heads / comm.world_size(),
+            num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
             head_dim: cfg.head_dim(),
             sdpa_params: SdpaParams {
                 n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
@@ -342,7 +374,6 @@ impl MLlamaTextCrossAttention {
         hidden_states: &Tensor,
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -383,10 +414,7 @@ impl MLlamaTextCrossAttention {
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
 
-            (k, v) = Cache::update_kv_cache(kv_cache, k, v, false)?;
             (k, v)
-        } else if let Some((k_cache, v_cache)) = kv_cache {
-            (k_cache.clone(), v_cache.clone())
         } else {
             candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
         };
@@ -430,12 +458,17 @@ struct MLlamaCrossAttentionDecoderLayer {
 impl MLlamaCrossAttentionDecoderLayer {
     fn new(
         cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let mlp = MLlamaTextMlp::new(cfg, mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq))?;
+        let mlp = MLlamaTextMlp::new(
+            cfg,
+            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+            comm,
+        )?;
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -451,6 +484,7 @@ impl MLlamaCrossAttentionDecoderLayer {
             mapper.set_device(layer_idx, vb.pp("cross_attn"), loading_isq),
             mapper,
             layer_idx,
+            comm,
         )?;
 
         Ok(Self {
@@ -473,15 +507,14 @@ impl MLlamaCrossAttentionDecoderLayer {
         cross_attn_states: Option<&Tensor>,
         attention_mask: Option<&Tensor>,
         full_text_row_masked_out_mask: Option<&Tensor>,
-        kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states =
-            self.attn
-                .forward(&hidden_states, cross_attn_states, attention_mask, kv_cache)?;
+        hidden_states = self
+            .attn
+            .forward(&hidden_states, cross_attn_states, attention_mask)?;
         hidden_states = (residual + hidden_states.broadcast_mul(&self.attn_gate.tanh()?)?)?;
 
         let residual = &hidden_states;
@@ -518,7 +551,7 @@ pub(super) struct MLlamaTextModel {
 impl MLlamaTextModel {
     pub(super) fn new(
         cfg: &MLlamaTextConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -535,19 +568,21 @@ impl MLlamaTextModel {
         )?;
 
         let lm_head = if !cfg.tie_word_embeddings {
-            mistralrs_quant::linear_no_bias(
+            ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &None,
-                mapper.set_nm_device(vb.pp("lm_head"), false),
+                false,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
-                    None,
-                ),
-            ))?)
+            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+                mapper.cast_nm_device(
+                    embed_tokens.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )?,
+                None,
+            ))?
         };
 
         let vb = vb.pp("model");
@@ -576,6 +611,7 @@ impl MLlamaTextModel {
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
+            let comm = mapper.get_comm_for(i)?;
             if cfg.cross_attention_layers.contains(&i) {
                 layers.push(MLlamaDecoderLayer::CrossAttn(
                     MLlamaCrossAttentionDecoderLayer::new(
@@ -584,6 +620,7 @@ impl MLlamaTextModel {
                         &*mapper,
                         i,
                         false,
+                        &comm,
                     )?,
                 ))
             } else {
@@ -601,6 +638,7 @@ impl MLlamaTextModel {
                         &*mapper,
                         i,
                         normal_loading_metadata.loading_isq,
+                        &comm,
                     )?,
                 ))
             }
@@ -612,14 +650,20 @@ impl MLlamaTextModel {
             norm,
             lm_head,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: cfg.num_key_value_heads,
-                num_attn_heads: cfg.num_attention_heads,
+                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
+                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
+                    .max(1),
                 sliding_window: None,
-                head_dim: None,
+                k_head_dim: cfg.head_dim(),
+                v_head_dim: cfg.head_dim(),
             },
-            cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
+            cache: EitherCache::Normal(NormalCache::new(
+                cfg.num_hidden_layers,
+                cfg.max_position_embeddings,
+            )),
             device: normal_loading_metadata.real_device,
             max_position_embeddings: cfg.max_position_embeddings,
             mapper,
@@ -634,15 +678,14 @@ impl MLlamaTextModel {
         cross_attention_mask: Option<&Tensor>,
         full_text_row_masked_out_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
     ) -> Result<Tensor> {
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
-        let mut cache = self.cache.full().lock();
+        let cache = &mut self.cache.normal().0;
         let self_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
-            &seqlen_offsets as &dyn PastKvLenCache,
+            cache as &dyn PastKvLenCache,
             hidden_states.dtype(),
             self.cfg.num_attn_heads,
         )?;
@@ -653,9 +696,11 @@ impl MLlamaTextModel {
                 MLlamaDecoderLayer::SelfAttn(attn) => {
                     hidden_states = attn.forward(
                         &hidden_states,
-                        self_mask.as_ref(),
+                        self_mask
+                            .as_ref()
+                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
                         seqlen_offsets,
-                        start_offsets_kernel.clone(),
                         &mut cache[i],
                     )?;
                 }
@@ -668,10 +713,18 @@ impl MLlamaTextModel {
                     }
                     hidden_states = attn.forward(
                         &hidden_states,
-                        cross_attn_states,
-                        cross_attention_mask,
-                        full_text_row_masked_out_mask,
-                        &mut cache[i],
+                        cross_attn_states
+                            .as_ref()
+                            .map(|x| x.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
+                        cross_attention_mask
+                            .as_ref()
+                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
+                        full_text_row_masked_out_mask
+                            .as_ref()
+                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+                            .as_ref(),
                     )?;
                 }
             }

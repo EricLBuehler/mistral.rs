@@ -12,6 +12,7 @@ use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use indicatif::MultiProgress;
 use mistralrs_quant::IsqType;
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
@@ -19,13 +20,14 @@ use tracing::{info, warn};
 
 use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
+    device_map::DeviceMapper,
     get_mut_arcmutex,
     prefix_cacher_v2::PrefixCacheManagerV2,
     sampler::Sampler,
     sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
-    DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
-    Pipeline, Response, TokenSource, TryIntoDType,
+    DeviceMapSetting, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig, Pipeline,
+    Response, TokenSource, TryIntoDType,
 };
 
 use super::{
@@ -57,7 +59,7 @@ impl Loader for AnyMoeLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
@@ -99,7 +101,7 @@ impl Loader for AnyMoeLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
@@ -244,6 +246,9 @@ impl MetadataMixin for AnyMoePipeline {
     fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
+    fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
+        None
+    }
 }
 
 #[async_trait::async_trait]
@@ -387,7 +392,9 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         let mut latest_loss = vec![0.0; optimizers.len()];
         let mut all_losses = Vec::new();
 
-        for _ in NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers") {
+        for _ in
+            NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers", &MultiProgress::new())
+        {
             samples.as_mut_slice().shuffle(&mut rng);
             for batch in samples.chunks(batch_size) {
                 steps += 1;
@@ -463,12 +470,13 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         true, // Always a prompt
                         metadata.is_xlora,
                         &device,
-                        metadata.has_no_kv_cache,
+                        metadata.no_kv_cache,
                         None,
                         false,
                         input_processor_cfg.clone(),
                         None, // TODO: get block tables/handle it for PagedAttention
                         None, // TODO: prompt chunking doesn't work.
+                        None,
                     )
                     .nth(0)
                     .unwrap();
