@@ -483,6 +483,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             max_batch_size: _,
             max_num_images: _,
             max_image_length: _,
+            imatrix,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -492,6 +493,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 from_uqff,
                 max_edge,
                 calibration_file,
+                imatrix,
             },
             args.chat_template,
             tokenizer_json,

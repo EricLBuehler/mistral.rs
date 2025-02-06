@@ -409,6 +409,9 @@ pub enum TomlModelSelected {
         /// Generate and utilize an imatrix to enhance GGUF quantizations.
         calibration_file: Option<PathBuf>,
 
+        /// .cimatrix file to enhance GGUF quantizations with. This must be a .cimatrix file.
+        imatrix: Option<PathBuf>,
+
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_seq_len")]
         max_seq_len: usize,
@@ -862,6 +865,7 @@ fn loader_from_selected(
             max_batch_size: _,
             max_num_images: _,
             max_image_length: _,
+            imatrix,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -871,6 +875,7 @@ fn loader_from_selected(
                 from_uqff,
                 max_edge,
                 calibration_file,
+                imatrix,
             },
             args.chat_template,
             args.tokenizer_json,

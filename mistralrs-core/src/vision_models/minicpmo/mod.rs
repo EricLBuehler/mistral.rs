@@ -1,9 +1,9 @@
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 pub use config::MiniCpmOConfig;
 pub use inputs_processor::MiniCpmOProcessor;
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
 use resampler::Resampler;
 
 use crate::{
@@ -331,7 +331,7 @@ impl IsqModel for MiniCpmOModel {
     }
 
     /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
         self.llm.extract_imatrix_data()
     }
 }

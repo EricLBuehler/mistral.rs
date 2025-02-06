@@ -15,7 +15,7 @@ use vision::MLlamaVisionModel;
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -273,7 +273,7 @@ impl IsqModel for MLlamaModel {
     }
 
     /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
         let layers = self
             .language_model
             .get_layers()
@@ -286,7 +286,7 @@ impl IsqModel for MLlamaModel {
         for (i, layer) in layers {
             data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
         }
-        Ok(data)
+        Ok(CollectedImatrixData(data))
     }
 }
 
