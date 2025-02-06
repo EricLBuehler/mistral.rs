@@ -122,7 +122,7 @@ class TextAutoMapParams:
     These affects automatic device mapping but are not a hard limit.
     """
 
-    max_seq_len: int = 4* 1024
+    max_seq_len: int = 4 * 1024
     max_batch_size: int = 1
 
 @dataclass
@@ -132,7 +132,7 @@ class VisionAutoMapParams:
     These affects automatic device mapping but are not a hard limit.
     """
 
-    max_seq_len: int = 4* 1024
+    max_seq_len: int = 4 * 1024
     max_batch_size: int = 1
     max_num_images: int = 1
     max_image_length: int = 1024
@@ -155,6 +155,8 @@ class Which(Enum):
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
+        calibration_file: str | None = None
+        imatrix: str | None = None
 
     @dataclass
     class XLora:
@@ -260,6 +262,8 @@ class Which(Enum):
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
         auto_map_params: VisionAutoMapParams | None = (None,)
+        calibration_file: str | None = None
+        imatrix: str | None = None
 
     @dataclass
     class DiffusionPlain:

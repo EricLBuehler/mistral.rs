@@ -491,6 +491,10 @@ pub enum ModelSelected {
         #[arg(short, long)]
         calibration_file: Option<PathBuf>,
 
+        /// .cimatrix file to enhance GGUF quantizations with. This must be a .cimatrix file.
+        #[arg(short, long)]
+        imatrix: Option<PathBuf>,
+
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
         max_seq_len: usize,

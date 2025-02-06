@@ -60,6 +60,8 @@ class Which(Enum):
         organization: IsqOrganization | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        calibration_file: str | None = None
+        imatrix: str | None = None
 
     @dataclass
     class XLora:
@@ -156,6 +158,8 @@ class Which(Enum):
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
+        calibration_file: str | None = None
+        imatrix: str | None = None
 
     @dataclass
     class DiffusionPlain:

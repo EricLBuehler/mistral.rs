@@ -44,7 +44,7 @@ pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
-pub use imatrix::ImatrixLayerStats;
+pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
 pub use unquantized::UnquantLinear;
 pub use utils::UQFF_QUANT_TYPE_OFFSET;
 

@@ -69,6 +69,7 @@ pub struct VisionPipeline {
     config_ser: String,
     processor_config_ser: Option<String>,
     preprocessor_config_ser: Option<String>,
+    imatrix: Option<PathBuf>,
 }
 
 /// A loader for a vision (non-quantized) model.
@@ -105,6 +106,7 @@ pub struct VisionSpecificConfig {
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<ModelWeightSource>,
     pub max_edge: Option<u32>,
+    pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
 }
 
@@ -352,6 +354,12 @@ impl Loader for VisionLoader {
                 .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
         }
 
+        if self.config.imatrix.is_some() && self.config.calibration_file.is_some() {
+            anyhow::bail!(
+                "`imatrix` and `calibration_file` were both specified, this is not allowed."
+            );
+        }
+
         // Load onto the regular device if not using isq or if the calibration file is specified
         let load_device = if !loading_isq || self.config.calibration_file.is_some() {
             loading_isq = false;
@@ -494,11 +502,15 @@ impl Loader for VisionLoader {
         if (in_situ_quant.is_some() || self.config.topology.is_some())
             && self.config.from_uqff.is_none()
         {
-            let imatrix_source = self
-                .config
-                .calibration_file
-                .as_ref()
-                .map(|_| ImatrixDataSource::Collected);
+            let imatrix_source = match (
+                self.config.imatrix.as_ref(),
+                self.config.calibration_file.is_some(),
+            ) {
+                (None, false) => None,
+                (Some(file), false) => Some(ImatrixDataSource::File(file)),
+                (None, true) => Some(ImatrixDataSource::Collected),
+                (Some(_), true) => unreachable!(),
+            };
             model.quantize(
                 in_situ_quant,
                 device.clone(),
@@ -589,6 +601,7 @@ impl Loader for VisionLoader {
             processor_config_ser: paths.get_processor_config().clone(),
             preprocessor_config_ser: paths.get_preprocessor_config().clone(),
             mapper: pipeline_mapper,
+            imatrix: self.config.imatrix.clone(),
         })))
     }
 
@@ -622,7 +635,7 @@ impl IsqPipelineMixin for VisionPipeline {
                 device,
                 self.topology.as_ref(),
                 self.silent,
-                None,
+                self.imatrix.as_ref().map(ImatrixDataSource::File),
                 IsqOrganization::Default,
                 None,
                 UqffFullSer {
