@@ -69,7 +69,7 @@ pub struct VisionPipeline {
     config: String,
     processor_filename: Option<PathBuf>,
     preprocessor_filename: Option<PathBuf>,
-    imatrix: Option<PathBuf>
+    imatrix: Option<PathBuf>,
 }
 
 /// A loader for a vision (non-quantized) model.
