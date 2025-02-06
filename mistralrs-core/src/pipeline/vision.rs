@@ -105,6 +105,7 @@ pub struct VisionSpecificConfig {
     pub write_uqff: Option<PathBuf>,
     pub from_uqff: Option<PathBuf>,
     pub max_edge: Option<u32>,
+    pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
 }
 

@@ -360,6 +360,7 @@ fn parse_which(
             dtype: _,
             max_edge,
             calibration_file,
+            imatrix,
             auto_map_params: _,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
@@ -370,6 +371,7 @@ fn parse_which(
                 from_uqff,
                 max_edge,
                 calibration_file,
+                imatrix,
             },
             chat_template,
             tokenizer_json,

@@ -387,6 +387,7 @@ pub enum Which {
         dtype = ModelDType::Auto,
         max_edge = None,
         calibration_file = None,
+        imatrix = None,
         auto_map_params = None,
     ))]
     VisionPlain {
@@ -399,6 +400,7 @@ pub enum Which {
         dtype: ModelDType,
         max_edge: Option<u32>,
         calibration_file: Option<PathBuf>,
+        imatrix: Option<PathBuf>,
         auto_map_params: Option<VisionAutoMapParams>,
     },
 

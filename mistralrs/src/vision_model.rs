@@ -12,6 +12,7 @@ pub struct VisionModelBuilder {
     pub(crate) write_uqff: Option<PathBuf>,
     pub(crate) from_uqff: Option<PathBuf>,
     pub(crate) calibration_file: Option<PathBuf>,
+    pub(crate) imatrix: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
@@ -57,6 +58,7 @@ impl VisionModelBuilder {
             with_logging: false,
             device_mapping: None,
             calibration_file: None,
+            imatrix: None,
         }
     }
 
@@ -173,6 +175,7 @@ impl VisionModelBuilder {
             from_uqff: self.from_uqff,
             max_edge: self.max_edge,
             calibration_file: self.calibration_file,
+            imatrix: self.imatrix,
         };
 
         if self.with_logging {
