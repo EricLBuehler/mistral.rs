@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
 
 use hf_hub::api::sync::ApiRepo;
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{ModelWeightSource, ShardedVarBuilder};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -18,7 +18,7 @@ use serde::Deserialize;
 
 use tracing::info;
 
-use super::{ModelPaths, NormalLoadingMetadata};
+use super::{ModelSource, NormalLoadingMetadata};
 use crate::{
     api_dir_list, api_get_file,
     diffusion_models::{
@@ -87,22 +87,22 @@ impl FromStr for DiffusionLoaderType {
 }
 
 #[derive(Clone, Debug)]
-pub struct DiffusionModelPathsInner {
+pub struct DiffusionModelSourceInner {
     pub config_filenames: Vec<PathBuf>,
-    pub filenames: Vec<PathBuf>,
+    pub filenames: Vec<ModelWeightSource>,
 }
 
 #[derive(Clone, Debug)]
-pub struct DiffusionModelPaths(pub DiffusionModelPathsInner);
+pub struct DiffusionModelSource(pub DiffusionModelSourceInner);
 
-impl ModelPaths for DiffusionModelPaths {
-    fn get_config_filename(&self) -> &PathBuf {
+impl ModelSource for DiffusionModelSource {
+    fn get_config(&self) -> &String {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_tokenizer_filename(&self) -> &PathBuf {
+    fn get_tokenizer(&self) -> &String {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_weight_filenames(&self) -> &[PathBuf] {
+    fn get_weights(&self) -> &[ModelWeightSource] {
         unreachable!("Use `std::any::Any`.")
     }
     fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
@@ -120,22 +120,22 @@ impl ModelPaths for DiffusionModelPaths {
     fn get_ordering(&self) -> &Option<Ordering> {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_template_filename(&self) -> &Option<PathBuf> {
+    fn get_chat_template(&self) -> &Option<String> {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
+    fn get_generation_config(&self) -> Option<&String> {
         unreachable!("Use `std::any::Any`.")
     }
     fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>> {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_preprocessor_config(&self) -> &Option<PathBuf> {
+    fn get_preprocessor_config(&self) -> &Option<String> {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_processor_config(&self) -> &Option<PathBuf> {
+    fn get_processor_config(&self) -> &Option<String> {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_chat_template_json(&self) -> &Option<PathBuf> {
+    fn get_chat_template_json(&self) -> &Option<String> {
         unreachable!("Use `std::any::Any`.")
     }
 }

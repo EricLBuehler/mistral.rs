@@ -23,7 +23,7 @@ use crate::{
     },
     utils::tokens::get_token,
     xlora_models::XLoraConfig,
-    ModelPaths, Ordering, TokenSource,
+    ModelSource, Ordering, TokenSource,
 };
 
 // Match files against these, avoids situations like `consolidated.safetensors`
@@ -339,7 +339,7 @@ pub fn get_model_paths(
 }
 
 /// Find and parse the appropriate [`ChatTemplate`], and ensure is has a valid [`ChatTemplate.chat_template`].
-/// If the provided `tokenizer_config.json` from [`ModelPaths.get_template_filename`] does not
+/// If the provided `tokenizer_config.json` from [`ModelSource.get_template_filename`] does not
 /// have a `chat_template`, use the provided one.
 ///
 /// - Uses `chat_template_fallback` if `paths` does not contain a chat template file. This may be a literal or .json file.
@@ -352,22 +352,14 @@ pub fn get_model_paths(
 ///  the chat template is overwritten with this chat template.
 #[allow(clippy::borrowed_box)]
 pub(crate) fn get_chat_template(
-    paths: &Box<dyn ModelPaths>,
+    paths: &Box<dyn ModelSource>,
     _chat_template_json: &Option<String>,
     chat_template_fallback: &Option<String>,
     chat_template_ovrd: Option<String>,
 ) -> ChatTemplate {
     // Get template content, this may be overridden.
-    let template_content = if let Some(template_filename) = paths.get_template_filename() {
-        if template_filename
-            .extension()
-            .expect("Template filename must be a file")
-            .to_string_lossy()
-            != "json"
-        {
-            panic!("Template filename {template_filename:?} must end with `.json`.");
-        }
-        Some(fs::read_to_string(template_filename).expect("Loading chat template failed."))
+    let template_content = if let Some(chat_template) = paths.get_chat_template() {
+        Some(chat_template.clone())
     } else if chat_template_fallback
         .as_ref()
         .is_some_and(|f| f.ends_with(".json"))
@@ -410,7 +402,7 @@ pub(crate) fn get_chat_template(
     let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
         .get_processor_config()
         .as_ref()
-        .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
+        .map(|f| serde_json::from_str(&f).unwrap());
     if let Some(processor_conf) = processor_conf {
         if processor_conf.chat_template.is_some() {
             template.chat_template = processor_conf

@@ -26,8 +26,8 @@ use crate::{
     sampler::Sampler,
     sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
-    DeviceMapSetting, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig, Pipeline,
-    Response, TokenSource, TryIntoDType,
+    DeviceMapSetting, Loader, ModelCategory, ModelKind, ModelSource, PagedAttentionConfig,
+    Pipeline, Response, TokenSource, TryIntoDType,
 };
 
 use super::{
@@ -97,7 +97,7 @@ impl Loader for AnyMoeLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &Box<dyn ModelSource>,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,

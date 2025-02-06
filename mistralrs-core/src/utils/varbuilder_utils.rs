@@ -2,13 +2,14 @@
 
 use std::{
     collections::HashMap,
-    path::PathBuf,
     sync::Arc,
     thread::{self, JoinHandle},
 };
 
 use candle_core::{pickle::PthTensors, DType, Device, Result, Tensor};
-use mistralrs_quant::{safetensors::MmapedSafetensors, ShardedSafeTensors, ShardedVarBuilder};
+use mistralrs_quant::{
+    safetensors::MmapedSafetensors, ModelWeightSource, ShardedSafeTensors, ShardedVarBuilder,
+};
 use regex::Regex;
 
 use crate::lora::LoraConfig;
@@ -64,8 +65,8 @@ pub enum DeviceForLoadTensor {
 /// - Otherwise, only include keys for which predicate evaluates to true.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn from_mmaped_safetensors<'a>(
-    paths: Vec<PathBuf>,
-    xlora_paths: Vec<PathBuf>,
+    paths: Vec<ModelWeightSource>,
+    xlora_paths: Vec<ModelWeightSource>,
     dtype: Option<DType>,
     base_device: &Device,
     layer_devices: Vec<Option<Device>>,
@@ -180,7 +181,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
 }
 
 pub(crate) fn load_preload_adapters<'a>(
-    paths: &Option<HashMap<String, (PathBuf, LoraConfig)>>,
+    paths: &Option<HashMap<String, (ModelWeightSource, LoraConfig)>>,
     dtype: DType,
     device: &Device,
     silent: bool,
@@ -219,7 +220,7 @@ trait LoadTensors {
     #[allow(clippy::too_many_arguments)]
     fn load_tensors_from_path(
         &self,
-        path: &PathBuf,
+        src: &ModelWeightSource,
         base_device: &Device,
         layer_devices: Vec<Option<Device>>,
         get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
@@ -228,19 +229,26 @@ trait LoadTensors {
         predicate: impl Fn(String) -> bool,
         make_dummy_predicate: impl Fn(&str) -> bool,
     ) -> Result<HashMap<String, Tensor>> {
-        let tensors: Box<dyn TensorLoaderBackend> = match path
-            .extension()
-            .expect("Expected extension")
-            .to_str()
-            .expect("Expected to convert")
-        {
-            "safetensors" => Box::new(SafetensorBackend(unsafe {
-                MmapedSafetensors::new(path)?
+        let tensors: Box<dyn TensorLoaderBackend> = match src {
+            ModelWeightSource::SafeTensorsData(data) => Box::new(SafetensorBackend(unsafe {
+                MmapedSafetensors::new(&ModelWeightSource::SafeTensorsData(*data))?
             })),
-            "pth" | "pt" | "bin" => Box::new(PickleBackend(
-                candle_core::pickle::PthTensors::new(path, None)?
-            )),
-            other => candle_core::bail!("Unexpected extension `{other}`, this should have been handled by `get_model_paths`."),
+            ModelWeightSource::PathBuf(path) => {
+                match path
+                .extension()
+                .expect("Expected extension")
+                .to_str()
+                .expect("Expected to convert")
+            {
+                "safetensors" => Box::new(SafetensorBackend(unsafe {
+                    MmapedSafetensors::new(&ModelWeightSource::PathBuf(path.clone()))?
+                })),
+                "pth" | "pt" | "bin" => Box::new(PickleBackend(
+                    candle_core::pickle::PthTensors::new(path, None)?
+                )),
+                other => candle_core::bail!("Unexpected extension `{other}`, this should have been handled by `get_model_paths`."),
+            }
+            }
         };
 
         // Extracts the tensor name and processes it, filtering tensors and deriving the key name:
@@ -256,13 +264,15 @@ trait LoadTensors {
             for (load_name, key_name) in iter.into_iter().with_progress(is_silent) {
                 if !make_dummy_predicate(&load_name) {
                     let dev = match get_device_for_tensor(load_name.clone()) {
-                        DeviceForLoadTensor::Base => base_device,
-                        DeviceForLoadTensor::Idx(i) => {
-                            layer_devices[i].as_ref().unwrap_or(base_device)
-                        }
+                        DeviceForLoadTensor::Base => base_device.clone(),
+                        DeviceForLoadTensor::Idx(i) => layer_devices
+                            .get(i)
+                            .cloned()
+                            .unwrap_or(Some(base_device.clone()))
+                            .unwrap_or(base_device.clone()),
                     };
                     // If making a dummy, don't add the tensor. `mistralrs_quant` handles this!
-                    let tensor = tensors.load_name(&load_name, dev, dtype)?;
+                    let tensor = tensors.load_name(&load_name, &dev, dtype)?;
 
                     loaded_tensors.insert(key_name, tensor);
                 }

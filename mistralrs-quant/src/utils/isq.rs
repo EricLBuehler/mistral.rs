@@ -14,6 +14,7 @@ fn get_fallback(dtype: GgmlDType) -> QuantizationBehaviour {
         GgmlDType::Q2K => QuantizationBehaviour::Quantize(GgmlDType::Q4_0),
         GgmlDType::Q3K => QuantizationBehaviour::Quantize(GgmlDType::Q4_0),
         GgmlDType::Q4K => QuantizationBehaviour::Quantize(GgmlDType::Q4_1),
+        GgmlDType::Iq4Xs => QuantizationBehaviour::Quantize(GgmlDType::Q4K),
         GgmlDType::Q5K => QuantizationBehaviour::Quantize(GgmlDType::Q5_0),
         GgmlDType::Q6K => QuantizationBehaviour::Quantize(GgmlDType::Q5_1),
         GgmlDType::Q8K => QuantizationBehaviour::Quantize(GgmlDType::Q8_1),
@@ -78,11 +79,19 @@ macro_rules! generate_isq_imatrix {
                 $crate::utils::isq::QuantizationBehaviour::Skip => {
                     let shape = $tensor.shape();
                     tracing::warn!("Skipping quantization of tensor with shape {shape:?} as it is not quantizable.");
-                    Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(&$tensor, &$imatrix, GgmlDType::F32, &$device)?)
+                    if $tensor.device().is_cpu() {
+                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(&$tensor, &$imatrix, GgmlDType::F32, &$device)?)
+                    } else {
+                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix(&$tensor, &$imatrix, GgmlDType::F32)?)
+                    }
                 },
                 $crate::utils::isq::QuantizationBehaviour::Quantize(dtype) => {
                     $n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(&$tensor, &$imatrix, dtype, &$device)?)
+                    if $tensor.device().is_cpu() {
+                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(&$tensor, &$imatrix, dtype, &$device)?)
+                    } else {
+                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix(&$tensor, &$imatrix, dtype)?)
+                    }
                 }
             }
         }

@@ -677,7 +677,7 @@ impl QuantizedSerde for HqqLayer {
     fn name(&self) -> &'static str {
         "hqq"
     }
-    fn serialize(&self) -> Result<Cow<[u8]>> {
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
         // Version is always first!
@@ -687,7 +687,7 @@ impl QuantizedSerde for HqqLayer {
         buffer.push(QuantizedSerdeType::Hqq as u8);
 
         // Has bias
-        buffer.push(self.bias.is_some() as u8);
+        buffer.push(bias.is_some() as u8);
 
         serialize_tensor(&mut buffer, &self.w_q)?;
         serialize_tensor(&mut buffer, &self.scales)?;
@@ -710,12 +710,15 @@ impl QuantizedSerde for HqqLayer {
         buffer.push(self.cfg.round_zeros as u8);
         buffer.push(self.cfg.channel_wise as u8);
 
-        if let Some(bias) = &self.bias {
+        if let Some(bias) = &bias {
             // Bias
             serialize_tensor(&mut buffer, bias)?;
         }
 
         Ok(Cow::from(buffer))
+    }
+    fn serialize(&self) -> Result<Cow<[u8]>> {
+        self.serialize_with_bias(self.bias.clone())
     }
 
     fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>>

@@ -168,21 +168,39 @@ macro_rules! get_paths {
         } else {
             None
         };
+        if let Some(template_filename) = &template_filename {
+            if template_filename
+                .extension()
+                .expect("Template filename must be a file")
+                .to_string_lossy()
+                != "json"
+            {
+                panic!("Chat template filename {template_filename:?} must end with `.json`.");
+            }
+        }
         Ok(Box::new($path_name {
-            tokenizer_filename,
-            config_filename,
-            filenames,
+            tokenizer: std::fs::read_to_string(tokenizer_filename)?,
+            config: std::fs::read_to_string(config_filename)?,
+            filenames: filenames
+                .into_iter()
+                .map(ModelWeightSource::PathBuf)
+                .collect(),
             xlora_adapter_configs: adapter_configs,
             xlora_adapter_filenames: adapter_safetensors,
             classifier_path,
             classifier_config: xlora_config,
             xlora_ordering: xlora_order,
-            template_filename,
-            gen_conf,
+            chat_template: template_filename
+                .map(|template_filename| std::fs::read_to_string(template_filename).unwrap()),
+            generation_config: gen_conf.map(|gen_conf| std::fs::read_to_string(gen_conf).unwrap()),
             lora_preload_adapter_info,
-            preprocessor_config,
-            processor_config,
-            chat_template_json_filename,
+            preprocessor_config: preprocessor_config
+                .map(|preprocessor_config| std::fs::read_to_string(preprocessor_config).unwrap()),
+            processor_config: processor_config
+                .map(|processor_config| std::fs::read_to_string(processor_config).unwrap()),
+            chat_template_json: chat_template_json_filename.map(|chat_template_json_filename| {
+                std::fs::read_to_string(chat_template_json_filename).unwrap()
+            }),
         }))
     }};
 }
@@ -191,32 +209,54 @@ macro_rules! get_paths {
 #[macro_export]
 macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
-        let api = ApiBuilder::new()
-            .with_progress(!$silent)
-            .with_token(get_token(
-                &$this
-                    .token_source
-                    .read()
-                    .expect("Failed to read token source")
-                    .clone()
-                    .unwrap_or(TokenSource::None),
-            )?)
-            .build()?;
-        let revision = $this
-            .revision
-            .read()
-            .expect("Failed to read revision")
-            .clone()
-            .unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(
-            $this.model_id.to_string(),
-            RepoType::Model,
-            revision.clone(),
-        ));
+        if std::path::Path::new(&$this.model_id).exists() {
+            let path = std::path::Path::new(&$this.model_id).join($from_uqff);
+            if !path.exists() {
+                panic!(
+                    "File \"{}\" not found at model id {:?}",
+                    $from_uqff.display(),
+                    $this.model_id
+                )
+            }
+            info!(
+                "Loading `{}` locally at `{}`",
+                $from_uqff.display(),
+                path.display()
+            );
+            path
+        } else {
+            let api = ApiBuilder::new()
+                .with_progress(!$silent)
+                .with_token(get_token(
+                    &$this
+                        .token_source
+                        .read()
+                        .expect("Failed to read token source")
+                        .clone()
+                        .unwrap_or(TokenSource::None),
+                )?)
+                .build()?;
+            let revision = $this
+                .revision
+                .read()
+                .expect("Failed to read revision")
+                .clone()
+                .unwrap_or("main".to_string());
+            let api = api.repo(Repo::with_revision(
+                $this.model_id.to_string(),
+                RepoType::Model,
+                revision.clone(),
+            ));
 
-        let file = $from_uqff.display().to_string();
-
-        api_get_file!(api, &file, Path::new(&$this.model_id))
+            api.get(&$from_uqff.to_string_lossy().to_string())
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Could not get file {:?} from API: {:?}",
+                        $from_uqff.display(),
+                        e
+                    )
+                })
+        }
     }};
 }
 
@@ -355,20 +395,25 @@ macro_rules! get_paths_gguf {
         };
 
         Ok(Box::new($path_name {
-            tokenizer_filename,
-            config_filename: PathBuf::from_str("")?,
-            filenames,
+            tokenizer: std::fs::read_to_string(tokenizer_filename)?,
+            config: "".to_string(),
+            filenames: filenames.into_iter().map(ModelWeightSource::PathBuf).collect(),
             xlora_adapter_configs: adapter_configs,
             xlora_adapter_filenames: adapter_safetensors,
             classifier_path,
             classifier_config: xlora_config,
             xlora_ordering: xlora_order,
-            template_filename: chat_template,
-            gen_conf,
+            chat_template: chat_template
+                .map(|chat_template| std::fs::read_to_string(chat_template).unwrap()),
+            generation_config: gen_conf.map(|gen_conf| std::fs::read_to_string(gen_conf).unwrap()),
             lora_preload_adapter_info,
-            preprocessor_config,
-            processor_config,
-            chat_template_json_filename,
+            preprocessor_config: preprocessor_config
+                .map(|preprocessor_config| std::fs::read_to_string(preprocessor_config).unwrap()),
+            processor_config: processor_config
+                .map(|processor_config| std::fs::read_to_string(processor_config).unwrap()),
+            chat_template_json: chat_template_json_filename.map(|chat_template_json_filename| {
+                std::fs::read_to_string(chat_template_json_filename).unwrap()
+            }),
         }))
     }};
 }
@@ -407,7 +452,7 @@ macro_rules! normal_model_loader {
             $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
 
         let vb = from_mmaped_safetensors(
-            $paths.get_weight_filenames().to_vec(),
+            $paths.get_weights().to_vec(),
             Vec::new(),
             $dtype,
             $device,
@@ -491,7 +536,7 @@ macro_rules! vision_normal_model_loader {
             $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
 
         let vb = from_mmaped_safetensors(
-            $paths.get_weight_filenames().to_vec(),
+            $paths.get_weights().to_vec(),
             Vec::new(),
             $dtype,
             $device,
@@ -534,8 +579,10 @@ macro_rules! xlora_model_loader {
         $real_device:expr,
         $multi_progress:expr,
     ) => {{
-        let mut safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
-        safetensors_paths.push($paths.get_classifier_path().as_ref().unwrap());
+        let mut safetensors_paths = $paths.get_weights().iter().collect::<Vec<_>>();
+        let src =
+            ModelWeightSource::PathBuf($paths.get_classifier_path().as_ref().unwrap().to_owned());
+        safetensors_paths.push(&src);
         let get_device_for_tensor =
             $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
 
@@ -549,7 +596,7 @@ macro_rules! xlora_model_loader {
                 .as_ref()
                 .unwrap()
                 .iter()
-                .map(|(_, x)| (*x).to_owned())
+                .map(|(_, x)| ModelWeightSource::PathBuf((*x).to_owned()))
                 .collect::<Vec<_>>(),
             $dtype,
             $device,
@@ -595,7 +642,7 @@ macro_rules! lora_model_loader {
         $real_device:expr,
         $multi_progress:expr,
     ) => {{
-        let safetensors_paths = $paths.get_weight_filenames().iter().collect::<Vec<_>>();
+        let safetensors_paths = $paths.get_weights().iter().collect::<Vec<_>>();
         let get_device_for_tensor =
             $loader.get_device_for_tensor(&$config, &*$mapper, $loading_isq)?;
 
@@ -609,7 +656,7 @@ macro_rules! lora_model_loader {
                 .as_ref()
                 .unwrap()
                 .iter()
-                .map(|(_, x)| (*x).to_owned())
+                .map(|(_, x)| ModelWeightSource::PathBuf((*x).to_owned()))
                 .collect::<Vec<_>>(),
             Some($dtype),
             $device,
@@ -634,7 +681,16 @@ macro_rules! lora_model_loader {
                 multi_progress: $multi_progress,
             },
             &$crate::utils::varbuilder_utils::load_preload_adapters(
-                $paths.get_lora_preload_adapter_info(),
+                &$paths.get_lora_preload_adapter_info().as_ref().map(|x| {
+                    x.into_iter()
+                        .map(|(k, v)| {
+                            (
+                                k.to_string(),
+                                (ModelWeightSource::PathBuf(v.0.to_owned()), v.1.clone()),
+                            )
+                        })
+                        .collect()
+                }),
                 $dtype,
                 $device,
                 $silent,

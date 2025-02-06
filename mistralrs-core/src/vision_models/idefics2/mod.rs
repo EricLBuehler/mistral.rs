@@ -1213,9 +1213,7 @@ impl IsqModel for Idefics2 {
         let uvb = UnVarBuilder::new();
 
         let uvb_m = uvb.pp("model");
-        uvb_m
-            .pp("text_model")
-            .extend(self.text_model.residual_tensors());
+        uvb.extend(self.text_model.residual_tensors_m(uvb_m.pp("text_model")));
         uvb_m
             .pp("vision_model")
             .extend(self.vision_model.residual_tensors());

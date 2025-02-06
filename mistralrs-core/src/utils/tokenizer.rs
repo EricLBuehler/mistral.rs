@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -12,13 +12,12 @@ struct AddedToken {
 }
 
 /// May fix the tokenizer according to: https://gist.github.com/jneuff/682d47b786329f19291d166957b3274a
-pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
-    p: P,
+pub(crate) fn get_tokenizer(
+    ser: &str,
     processor_added_tokens: Option<&[&str]>,
 ) -> Result<Tokenizer> {
     let mut tokenizer = {
-        let raw = std::fs::read(p.clone()).map_err(anyhow::Error::msg)?;
-        let mut tokenizer: Value = serde_json::from_slice(&raw).unwrap();
+        let mut tokenizer: Value = serde_json::from_str(ser).unwrap();
         let added_tokens: Vec<AddedToken> =
             serde_json::from_value(tokenizer["added_tokens"].clone()).unwrap();
         let vocab: HashMap<String, usize> =

@@ -30,7 +30,7 @@ use super::{
     cache_manager::FullCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
     AdapterActivationMixin, AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata,
-    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, ModelSource, PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
@@ -92,7 +92,7 @@ impl Loader for SpeculativeLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &Box<dyn ModelSource>,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,

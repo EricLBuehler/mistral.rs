@@ -1,7 +1,7 @@
 use mistralrs_core::{
     initialize_logging, AnyMoeConfig, AnyMoeLoader, AutoDeviceMapParams, DefaultSchedulerMethod,
-    DeviceMapSetting, Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
-    SchedulerConfig,
+    DeviceMapSetting, Loader, MistralRsBuilder, ModelWeightSource, NormalLoaderBuilder,
+    NormalSpecificConfig, SchedulerConfig,
 };
 
 use crate::{best_device, Model, TextModelBuilder};
@@ -47,7 +47,7 @@ impl AnyMoeModelBuilder {
             topology: self.base.topology,
             organization: self.base.organization,
             write_uqff: self.base.write_uqff,
-            from_uqff: self.base.from_uqff,
+            from_uqff: self.base.from_uqff.map(ModelWeightSource::PathBuf),
             imatrix: None,
             calibration_file: None,
         };
