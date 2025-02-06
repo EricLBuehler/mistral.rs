@@ -189,25 +189,7 @@ impl QuantizedSerde for GgufMatMul {
             QMatMul::QTensor(qw) => {
                 let w = qw.data()?.to_vec();
                 let w_shape = qw.shape().dims();
-                let dtype: u32 = match qw.dtype() {
-                    GgmlDType::F32 => 0,
-                    GgmlDType::F16 => 1,
-                    GgmlDType::Q4_0 => 2,
-                    GgmlDType::Q4_1 => 3,
-                    GgmlDType::Q5_0 => 6,
-                    GgmlDType::Q5_1 => 7,
-                    GgmlDType::Q8_0 => 8,
-                    GgmlDType::Q8_1 => 9,
-                    GgmlDType::Q2K => 10,
-                    GgmlDType::Q3K => 11,
-                    GgmlDType::Q4K => 12,
-                    GgmlDType::Q5K => 13,
-                    GgmlDType::Q6K => 14,
-                    GgmlDType::Q8K => 15,
-                    GgmlDType::Iq4Xs => 23,
-                    // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
-                    GgmlDType::BF16 => 30,
-                };
+                let dtype = qw.dtype().to_u32();
 
                 let mut buffer = Vec::new();
 
@@ -274,26 +256,7 @@ impl QuantizedSerde for GgufMatMul {
 
         // TODO: keep this in sync with get_isq_type_from_uqff!
         let dtype = buffer.read_u32::<LittleEndian>()?;
-        let dtype = match dtype {
-            0 => GgmlDType::F32,
-            1 => GgmlDType::F16,
-            2 => GgmlDType::Q4_0,
-            3 => GgmlDType::Q4_1,
-            6 => GgmlDType::Q5_0,
-            7 => GgmlDType::Q5_1,
-            8 => GgmlDType::Q8_0,
-            9 => GgmlDType::Q8_1,
-            10 => GgmlDType::Q2K,
-            11 => GgmlDType::Q3K,
-            12 => GgmlDType::Q4K,
-            13 => GgmlDType::Q5K,
-            14 => GgmlDType::Q6K,
-            15 => GgmlDType::Q8K,
-            23 => GgmlDType::Iq4Xs,
-            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
-            30 => GgmlDType::BF16,
-            _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
-        };
+        let dtype = GgmlDType::from_u32(dtype)?;
 
         let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
 
