@@ -337,12 +337,12 @@
 <a href="#336" id="336">336</a>
 <a href="#337" id="337">337</a>
 <a href="#338" id="338">338</a>
-<a href="#339" id="339">339</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{any::Any, collections::HashMap, sync::Arc};
+<a href="#339" id="339">339</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{any::Any, sync::Arc};
 
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">pub use </span>config::MiniCpmOConfig;
 <span class="kw">pub use </span>inputs_processor::MiniCpmOProcessor;
-<span class="kw">use </span>mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+<span class="kw">use </span>mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
 <span class="kw">use </span>resampler::Resampler;
 
 <span class="kw">use crate</span>::{
@@ -670,7 +670,7 @@
     }
 
     <span class="doccomment">/// End stats tracking and return the imatrix data
-    </span><span class="kw">fn </span>extract_imatrix_data(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; candle_core::Result&lt;HashMap&lt;usize, <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;&gt;&gt; {
+    </span><span class="kw">fn </span>extract_imatrix_data(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; candle_core::Result&lt;CollectedImatrixData&gt; {
         <span class="self">self</span>.llm.extract_imatrix_data()
     }
 }

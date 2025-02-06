@@ -924,7 +924,20 @@
 <a href="#923" id="923">923</a>
 <a href="#924" id="924">924</a>
 <a href="#925" id="925">925</a>
-<a href="#926" id="926">926</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#926" id="926">926</a>
+<a href="#927" id="927">927</a>
+<a href="#928" id="928">928</a>
+<a href="#929" id="929">929</a>
+<a href="#930" id="930">930</a>
+<a href="#931" id="931">931</a>
+<a href="#932" id="932">932</a>
+<a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -995,6 +1008,7 @@
     config: String,
     processor_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     preprocessor_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 }
 
 <span class="doccomment">/// A loader for a vision (non-quantized) model.
@@ -1031,6 +1045,7 @@
     <span class="kw">pub </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub </span>max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
+    <span class="kw">pub </span>imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub </span>calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 }
 
@@ -1269,6 +1284,12 @@
                 .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
         }
 
+        <span class="kw">if </span><span class="self">self</span>.config.imatrix.is_some() &amp;&amp; <span class="self">self</span>.config.calibration_file.is_some() {
+            <span class="macro">anyhow::bail!</span>(
+                <span class="string">"`imatrix` and `calibration_file` were both specified, this is not allowed."
+            </span>);
+        }
+
         <span class="comment">// Load onto the regular device if not using isq or if the calibration file is specified
         </span><span class="kw">let </span>load_device = <span class="kw">if </span>!loading_isq || <span class="self">self</span>.config.calibration_file.is_some() {
             loading_isq = <span class="bool-val">false</span>;
@@ -1417,11 +1438,15 @@
         <span class="kw">if </span>(in_situ_quant.is_some() || <span class="self">self</span>.config.topology.is_some())
             &amp;&amp; <span class="self">self</span>.config.from_uqff.is_none()
         {
-            <span class="kw">let </span>imatrix_source = <span class="self">self
-                </span>.config
-                .calibration_file
-                .as_ref()
-                .map(|<span class="kw">_</span>| ImatrixDataSource::Collected);
+            <span class="kw">let </span>imatrix_source = <span class="kw">match </span>(
+                <span class="self">self</span>.config.imatrix.as_ref(),
+                <span class="self">self</span>.config.calibration_file.is_some(),
+            ) {
+                (<span class="prelude-val">None</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">None</span>,
+                (<span class="prelude-val">Some</span>(file), <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(ImatrixDataSource::File(file)),
+                (<span class="prelude-val">None</span>, <span class="bool-val">true</span>) =&gt; <span class="prelude-val">Some</span>(ImatrixDataSource::Collected),
+                (<span class="prelude-val">Some</span>(<span class="kw">_</span>), <span class="bool-val">true</span>) =&gt; <span class="macro">unreachable!</span>(),
+            };
             model.quantize(
                 in_situ_quant,
                 device.clone(),
@@ -1512,6 +1537,7 @@
             processor_filename: paths.get_processor_config().clone(),
             preprocessor_filename: paths.get_preprocessor_config().clone(),
             mapper: pipeline_mapper,
+            imatrix: <span class="self">self</span>.config.imatrix.clone(),
         })))
     }
 
@@ -1545,7 +1571,7 @@
                 device,
                 <span class="self">self</span>.topology.as_ref(),
                 <span class="self">self</span>.silent,
-                <span class="prelude-val">None</span>,
+                <span class="self">self</span>.imatrix.as_ref().map(ImatrixDataSource::File),
                 IsqOrganization::Default,
                 <span class="prelude-val">None</span>,
                 UqffFullSer {

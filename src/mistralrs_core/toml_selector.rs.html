@@ -929,7 +929,12 @@
 <a href="#928" id="928">928</a>
 <a href="#929" id="929">929</a>
 <a href="#930" id="930">930</a>
-<a href="#931" id="931">931</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fs::File, num::NonZeroUsize, path::PathBuf};
+<a href="#931" id="931">931</a>
+<a href="#932" id="932">932</a>
+<a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fs::File, num::NonZeroUsize, path::PathBuf};
 
 <span class="kw">use </span>serde::Deserialize;
 
@@ -1339,6 +1344,9 @@
 
         <span class="doccomment">/// Generate and utilize an imatrix to enhance GGUF quantizations.
         </span>calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+
+        <span class="doccomment">/// .cimatrix file to enhance GGUF quantizations with. This must be a .cimatrix file.
+        </span>imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 
         <span class="doccomment">/// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         </span><span class="attr">#[serde(default = <span class="string">"default_max_seq_len"</span>)]
@@ -1793,6 +1801,7 @@
             max_batch_size: <span class="kw">_</span>,
             max_num_images: <span class="kw">_</span>,
             max_image_length: <span class="kw">_</span>,
+            imatrix,
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -1802,6 +1811,7 @@
                 from_uqff,
                 max_edge,
                 calibration_file,
+                imatrix,
             },
             args.chat_template,
             args.tokenizer_json,

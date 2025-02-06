@@ -524,7 +524,11 @@
 <a href="#523" id="523">523</a>
 <a href="#524" id="524">524</a>
 <a href="#525" id="525">525</a>
-<a href="#526" id="526">526</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::path::PathBuf;
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::path::PathBuf;
 
 <span class="kw">use </span>clap::Subcommand;
 
@@ -1016,6 +1020,10 @@
         <span class="doccomment">/// Generate and utilize an imatrix to enhance GGUF quantizations.
         </span><span class="attr">#[arg(short, long)]
         </span>calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+
+        <span class="doccomment">/// .cimatrix file to enhance GGUF quantizations with. This must be a .cimatrix file.
+        </span><span class="attr">#[arg(short, long)]
+        </span>imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 
         <span class="doccomment">/// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         </span><span class="attr">#[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
