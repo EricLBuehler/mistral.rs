@@ -28,6 +28,10 @@ struct Args {
     /// Generate and utilize an imatrix to enhance GGUF quantizations.
     #[arg(short, long)]
     calibration_file: Option<PathBuf>,
+
+    /// Use a .imatrix of .cimatrix file.
+    #[arg(short, long)]
+    imatrix: Option<PathBuf>,
 }
 
 async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(Tensor, Vec<u32>)> {
@@ -85,6 +89,9 @@ async fn main() -> Result<()> {
     }
     if let Some(calibration_file) = &args.calibration_file {
         model_builder = model_builder.with_calibration_file(calibration_file.clone());
+    }
+    if let Some(imatrix) = &args.imatrix {
+        model_builder = model_builder.with_imatrix(imatrix.clone());
     }
 
     let model = model_builder.build().await?;
