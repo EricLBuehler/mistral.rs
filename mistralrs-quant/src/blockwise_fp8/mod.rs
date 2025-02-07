@@ -143,7 +143,8 @@ impl QuantMethod for BlockwiseFP8Linear {
                 | IsqType::Q8_0
                 | IsqType::Q8_1
                 | IsqType::Iq4Xs
-                | IsqType::Iq4Nl,
+                | IsqType::Iq4Nl
+                | IsqType::Iq3Xxs,
             ) => {
                 let dtype: GgmlDType = dtype.unwrap().try_into()?;
                 let res = if let Some(imatrix_weight) = imatrix_weight {
@@ -222,6 +223,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             | IsqType::Q8_1
             | IsqType::Iq4Xs
             | IsqType::Iq4Nl
+            | IsqType::Iq3Xxs
             | IsqType::HQQ4
             | IsqType::HQQ8
             | IsqType::F16 => None,

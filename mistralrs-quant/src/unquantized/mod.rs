@@ -196,7 +196,8 @@ impl QuantMethod for UnquantLinear {
                 | IsqType::Q8_0
                 | IsqType::Q8_1
                 | IsqType::Iq4Xs
-                | IsqType::Iq4Nl,
+                | IsqType::Iq4Nl
+                | IsqType::Iq3Xxs,
             ) => {
                 let dtype: GgmlDType = dtype.unwrap().try_into()?;
                 let res = if let Some(imatrix_weight) = imatrix_weight {
@@ -280,6 +281,7 @@ impl QuantMethod for UnquantLinear {
             | IsqType::Q8_1
             | IsqType::Iq4Xs
             | IsqType::Iq4Nl
+            | IsqType::Iq3Xxs
             | IsqType::F16 => None,
         }
     }
