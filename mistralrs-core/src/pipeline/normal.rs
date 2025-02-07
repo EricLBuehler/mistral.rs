@@ -302,7 +302,8 @@ impl Loader for NormalLoader {
 
         let use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
             && available_devices.len() > 1
-            && std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1");
+            && (std::env::var("MISTRALRS_NO_NCCL").is_err()
+                || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"));
 
         // If auto, convert to Map if not using nccl
         if use_nccl {
