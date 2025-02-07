@@ -535,6 +535,7 @@ impl Loader for NormalLoader {
                         stream.write_all(&body).unwrap();
                         stream.flush().unwrap();
 
+                        counter += 1;
                         info!("SERVER: Sent ID to worker {counter}");
 
                         break;
