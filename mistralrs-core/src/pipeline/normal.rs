@@ -501,7 +501,7 @@ impl Loader for NormalLoader {
                 info!("HEAD: STARTING SERVER; Listening on port 8765...");
 
                 // Accept incoming connections in a loop.
-                let counter = 0;
+                let mut counter = 0;
                 while counter < n_nodes {
                     for stream in listener.incoming() {
                         info!("SERVER: Got request");
