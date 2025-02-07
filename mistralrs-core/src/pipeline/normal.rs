@@ -38,11 +38,11 @@ use crate::{
     normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
-use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
+use mistralrs_quant::{GgufMatMul, HqqLayer, Id, IsqType, QuantizedSerdeType, ShardedSafeTensors};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -51,12 +51,14 @@ use rayon::iter::{
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
-use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Barrier, RwLock};
 use std::time::Instant;
+use std::{env, fs, slice};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -476,26 +478,123 @@ impl Loader for NormalLoader {
                 anyhow::bail!("MISTRALRS_PIPELINE_PARALLEL must be nonzero")
             }
 
-            let world_size = available_devices.len() / pipeline_parallel_size;
+            let global_world_size = 16; //available_devices.len() / pipeline_parallel_size;
+            let local_world_size = available_devices.len() / pipeline_parallel_size;
 
-            info!("Tensor parallel world size is {world_size}");
+            info!("Local tensor parallel world size is {local_world_size}");
+            info!("Global tensor parallel world size is {global_world_size}");
             info!("Pipeline parallelism size is {pipeline_parallel_size}");
 
-            let ids = (0..pipeline_parallel_size)
+            let mut ids = (0..pipeline_parallel_size)
                 .map(|_| mistralrs_quant::Id::new())
                 .collect::<Vec<_>>();
 
-            if available_devices.len() % ids.len() != 0 {
-                anyhow::bail!(
-                    "Pipeline parallel size {} must divide the number of available devices {}",
-                    pipeline_parallel_size,
-                    available_devices.len()
-                );
+            assert_eq!(ids.len(), 1, "TODO THIS IS DEBUGGING!!!!!!!");
+
+            let id = &mut ids[0];
+
+            if let Ok(n_nodes) = env::var("MISTRALRS_HEAD_NUM_NODES") {
+                let n_nodes = usize::from_str(&n_nodes).context("MISTRALRS_HEAD_NUM_NODES")?;
+
+                let listener = TcpListener::bind("0.0.0.0:8765")?;
+                info!("HEAD: STARTING SERVER; Listening on port 8765...");
+
+                // Accept incoming connections in a loop.
+                let counter = 0;
+                while counter < n_nodes {
+                    for stream in listener.incoming() {
+                        info!("SERVER: Got request");
+                        let mut stream = stream?;
+
+                        let mut buffer = [0; 512];
+                        // Read the incoming data into the buffer.
+                        stream.read(&mut buffer).unwrap();
+
+                        // Check if the request starts with a GET for "/".
+                        let get_request = b"GET / HTTP/1.1\r\n";
+                        if !buffer.starts_with(get_request) {
+                            continue;
+                        }
+
+                        let body = id.internal();
+
+                        let header = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\n\r\n",
+                            body.len()
+                        );
+
+                        // SAFETY: we know the provenance & lifetime are valid here.
+                        let body = unsafe {
+                            slice::from_raw_parts(body.as_ptr() as *const u8, body.len())
+                        };
+
+                        // Build and send the HTTP response.
+                        stream.write_all(header.as_bytes()).unwrap();
+                        stream.write_all(&body).unwrap();
+                        stream.flush().unwrap();
+
+                        info!("SERVER: Sent ID to worker {counter}");
+
+                        break;
+                    }
+                }
+            } else if let Ok(addr) = env::var("MISTRALRS_WORKER_SERVER_ADDR") {
+                let mut stream = TcpStream::connect(&addr)?;
+                info!("WORKER: STARTING CLIENT; Connecting to {addr}...");
+
+                // Read data into a buffer.
+                let mut buffer = [0u8; 512]; // You can adjust the size if needed.
+                let n = stream.read(&mut buffer)?;
+                println!("Received {} bytes", n);
+
+                // Assume the server sends an HTTP response with a header, then binary data.
+                // Find the end of the header (which ends with "\r\n\r\n").
+                let response = &buffer[..n];
+                let header_end = response
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|pos| pos + 4);
+                if let Some(pos) = header_end {
+                    let _header = &response[..pos];
+                    let body = &response[pos..];
+
+                    // If for some reason you need to reinterpret the body as &[i8],
+                    // you can do an unsafe conversion (since both types have the same size).
+                    let body_as_i8: &[i8] = unsafe {
+                        std::slice::from_raw_parts(body.as_ptr() as *const i8, body.len())
+                    };
+
+                    assert_eq!(body_as_i8.len(), 128);
+                    let mut uninit = [0i8; 128];
+                    for (i, x) in body_as_i8.into_iter().enumerate() {
+                        uninit[i] = *x;
+                    }
+
+                    *id = Id::uninit(uninit);
+
+                    info!("Recieved new ID");
+                } else {
+                    anyhow::bail!("DID NOT GET NEW ID!");
+                }
             }
+
+            // if available_devices.len() % ids.len() != 0 {
+            //     anyhow::bail!(
+            //         "Pipeline parallel size {} must divide the number of available devices {}",
+            //         pipeline_parallel_size,
+            //         available_devices.len()
+            //     );
+            // }
 
             let split_available_devices = available_devices
                 .chunks(available_devices.len() / pipeline_parallel_size)
                 .collect::<Vec<_>>();
+
+            let rank_offset = if env::var("MISTRALRS_WORKER_SERVER_ADDR").is_ok() {
+                8
+            } else {
+                0
+            };
 
             // Transpose
             let mut comms_all = Vec::new();
@@ -503,7 +602,7 @@ impl Loader for NormalLoader {
                 split_available_devices.iter().enumerate()
             {
                 // Each pipeline parallel gets its own barrier
-                let barrier = Arc::new(Barrier::new(world_size));
+                let barrier = Arc::new(Barrier::new(local_world_size));
 
                 // They each block on each other
                 // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
@@ -522,8 +621,8 @@ impl Loader for NormalLoader {
                         mistralrs_quant::Comm::from_device(
                             ids[pipeline_parallel_i],
                             device,
-                            rank,
-                            world_size,
+                            rank + rank_offset,
+                            global_world_size,
                             barrier.clone(),
                         )
                     })
@@ -539,7 +638,7 @@ impl Loader for NormalLoader {
 
             // row major: number of ranks x pipeline parallel
             // Also corresponds to the device for that comm for the
-            let comms = (0..world_size)
+            let comms = (0..local_world_size)
                 .map(|pipeline_parallel_i| {
                     comms_all
                         .iter()

@@ -19,6 +19,14 @@ mod ops {
             let id = cudarc::nccl::Id::new().expect("Failed to create `Id`.");
             Self(id)
         }
+
+        pub fn uninit(internal: [::core::ffi::c_char; 128usize]) -> Self {
+            Self(cudarc::nccl::Id::uninit(internal))
+        }
+
+        pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
+            self.0.internal()
+        }
     }
 
     #[derive(Debug)]
@@ -159,6 +167,20 @@ mod ops {
     impl Id {
         pub fn new() -> Self {
             Self
+        }
+
+        pub fn uninit(_internal: [::core::ffi::c_char; 128usize]) -> Self {
+            Self
+        }
+
+        pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
+            &[
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ]
         }
     }
 
