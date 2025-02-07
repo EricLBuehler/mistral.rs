@@ -518,7 +518,7 @@ impl Loader for NormalLoader {
                         // }
 
                         let body = id.internal();
-                        info!("ID is: {body}");
+                        info!("ID is: {body:?}");
 
                         let header = format!(
                             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\n\r\n",
@@ -571,7 +571,7 @@ impl Loader for NormalLoader {
                     for (i, x) in body_as_i8.into_iter().enumerate() {
                         uninit[i] = *x;
                     }
-                    info!("New ID is: {uninit}");
+                    info!("New ID is: {uninit:?}");
 
                     *id = Id::uninit(uninit);
 
