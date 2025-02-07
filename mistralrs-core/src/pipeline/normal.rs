@@ -518,6 +518,7 @@ impl Loader for NormalLoader {
                         // }
 
                         let body = id.internal();
+                        info!("ID is: {body}");
 
                         let header = format!(
                             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\n\r\n",
@@ -546,7 +547,7 @@ impl Loader for NormalLoader {
                 // Read data into a buffer.
                 let mut buffer = [0u8; 512]; // You can adjust the size if needed.
                 let n = stream.read(&mut buffer)?;
-                println!("Received {} bytes", n);
+                info!("Received {} bytes", n);
 
                 // Assume the server sends an HTTP response with a header, then binary data.
                 // Find the end of the header (which ends with "\r\n\r\n").
@@ -570,6 +571,7 @@ impl Loader for NormalLoader {
                     for (i, x) in body_as_i8.into_iter().enumerate() {
                         uninit[i] = *x;
                     }
+                    info!("New ID is: {uninit}");
 
                     *id = Id::uninit(uninit);
 
