@@ -512,10 +512,10 @@ impl Loader for NormalLoader {
                         stream.read(&mut buffer).unwrap();
 
                         // Check if the request starts with a GET for "/".
-                        let get_request = b"GET / HTTP/1.1\r\n";
-                        if !buffer.starts_with(get_request) {
-                            continue;
-                        }
+                        // let get_request = b"GET / HTTP/1.1\r\n";
+                        // if !buffer.starts_with(get_request) {
+                        //     continue;
+                        // }
 
                         let body = id.internal();
 
