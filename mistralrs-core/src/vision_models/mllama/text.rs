@@ -577,10 +577,7 @@ impl MLlamaTextModel {
             )?
         } else {
             ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    false,
-                )?,
+                mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
                 None,
             ))?
         };
@@ -619,7 +616,7 @@ impl MLlamaTextModel {
                         vb.pp(format!("layers.{i}")),
                         &*mapper,
                         i,
-                        false,//normal_loading_metadata.loading_isq,
+                        false,
                         &comm,
                     )?,
                 ))
