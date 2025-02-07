@@ -47,6 +47,8 @@ pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 /// - `F16`
 /// - `IQ4XS`
 /// - `IQ4NL`
+/// - `IQ3XXS`
+/// - `F8Q8`
 pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
     let tp = match s.to_lowercase().as_str() {
         "q4_0" => IsqType::Q4_0,
@@ -68,10 +70,11 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
         "f16" => IsqType::F16,
         "iq4nl" => IsqType::Iq4Nl,
         "iq3xxs" => IsqType::Iq3Xxs,
+        "f8q8" => IsqType::F8Q8,
         // "hqq3" => IsqType::HQQ3,
         // "hqq2" => IsqType::HQQ2,
         // "hqq1" => IsqType::HQQ1,
-        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `IQ4XS`, `IQ4NL`, `F16`, `IQ3XXS`.")),
+        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `IQ4XS`, `IQ4NL`, `F16`, `IQ3XXS`, `F8Q8`.")),
     };
     #[cfg(feature = "cuda")]
     {
@@ -94,11 +97,12 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
                 | IsqType::Iq4Xs
                 | IsqType::Iq4Nl
                 | IsqType::Iq3Xxs
-                | IsqType::F16 // | IsqType::HQQ3
-                               // | IsqType::HQQ2
-                               // | IsqType::HQQ1
+                | IsqType::F16
+                | IsqType::F8Q8 // | IsqType::HQQ3
+                                // | IsqType::HQQ2
+                                // | IsqType::HQQ1
         ) {
-            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`, `IQ4XS`, `IQ4NL`, `IQ3XXS`, `F16`".to_string());
+            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`, `IQ4XS`, `IQ4NL`, `IQ3XXS`, `F16`, `F8Q8`".to_string());
         }
     }
     Ok(tp)

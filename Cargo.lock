@@ -452,11 +452,11 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d3909ae#d3909ae33af7dd7370245745b9ad9ff23bea1474"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=feb3387c#feb3387cd485d9890a72978eb988350de9893458"
 dependencies = [
  "accelerate-src",
  "byteorder",
- "candle-kernels 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-kernels 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "candle-metal-kernels",
  "cudarc",
  "float8",
@@ -481,11 +481,11 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d3909ae#d3909ae33af7dd7370245745b9ad9ff23bea1474"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=feb3387c#feb3387cd485d9890a72978eb988350de9893458"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
- "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "half",
 ]
 
@@ -512,7 +512,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d3909ae#d3909ae33af7dd7370245745b9ad9ff23bea1474"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=feb3387c#feb3387cd485d9890a72978eb988350de9893458"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -520,7 +520,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d3909ae#d3909ae33af7dd7370245745b9ad9ff23bea1474"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=feb3387c#feb3387cd485d9890a72978eb988350de9893458"
 dependencies = [
  "metal",
  "once_cell",
@@ -531,10 +531,10 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d3909ae#d3909ae33af7dd7370245745b9ad9ff23bea1474"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=feb3387c#feb3387cd485d9890a72978eb988350de9893458"
 dependencies = [
  "accelerate-src",
- "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "candle-metal-kernels",
  "half",
  "intel-mkl-src",
@@ -2449,7 +2449,7 @@ name = "mistralrs"
 version = "0.4.0"
 dependencies = [
  "anyhow",
- "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "candle-nn",
  "clap",
  "either",
@@ -2469,7 +2469,7 @@ name = "mistralrs-bench"
 version = "0.4.0"
 dependencies = [
  "anyhow",
- "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "clap",
  "cli-table",
  "mistralrs-core",
@@ -2492,7 +2492,7 @@ dependencies = [
  "bindgen_cuda 0.1.5",
  "bytemuck",
  "bytemuck_derive",
- "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "candle-flash-attn",
  "candle-flash-attn-v3",
  "candle-nn",
@@ -2563,7 +2563,7 @@ version = "0.4.0"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.6",
- "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "float8",
  "half",
  "metal",
@@ -2578,7 +2578,7 @@ dependencies = [
  "accelerate-src",
  "anyhow",
  "base64 0.22.1",
- "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "data-url",
  "either",
  "futures",
@@ -2601,7 +2601,7 @@ version = "0.4.0"
 dependencies = [
  "bindgen_cuda 0.1.5",
  "byteorder",
- "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "candle-nn",
  "float8",
  "half",
@@ -2627,7 +2627,7 @@ dependencies = [
  "accelerate-src",
  "anyhow",
  "axum",
- "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "clap",
  "ctrlc",
  "data-url",
@@ -2654,7 +2654,7 @@ dependencies = [
 name = "mistralrs-vision"
 version = "0.4.0"
 dependencies = [
- "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=d3909ae)",
+ "candle-core 0.8.0 (git+https://github.com/EricLBuehler/candle.git?rev=feb3387c)",
  "image",
 ]
 
