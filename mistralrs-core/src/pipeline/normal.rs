@@ -507,9 +507,9 @@ impl Loader for NormalLoader {
                         info!("SERVER: Got request");
                         let mut stream = stream?;
 
-                        let mut buffer = [0; 512];
-                        // Read the incoming data into the buffer.
-                        stream.read(&mut buffer).unwrap();
+                        // let mut buffer = [0; 512];
+                        // // Read the incoming data into the buffer.
+                        // stream.read(&mut buffer).unwrap();
 
                         // Check if the request starts with a GET for "/".
                         // let get_request = b"GET / HTTP/1.1\r\n";
