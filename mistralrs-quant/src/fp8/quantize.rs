@@ -1,4 +1,4 @@
-use candle_core::{DType, Result, Tensor};
+use candle_core::{DType, Result, Shape, Tensor, D};
 use candle_nn::Linear;
 use float8::F8E4M3;
 use half::bf16;
@@ -8,6 +8,7 @@ use super::FP8Linear;
 pub(super) struct QuantizationResult {
     /// Quantized tensor (f8)
     pub(super) qw: Tensor,
+    pub(super) shape: Shape,
     /// Scalar, f32 tensor.
     ///
     /// Convert unquantized to quantized tensor as follows:
@@ -22,22 +23,14 @@ pub(super) struct QuantizationResult {
 
 impl FP8Linear {
     pub(super) fn quantize(data: &Tensor, dtype: DType) -> Result<QuantizationResult> {
+        let shape = data.shape();
+        let data = data.reshape((128, ()))?;
         let data = data.to_dtype(DType::BF16)?;
-        let mut absmax = data.clone();
-        let mut absmin = data.clone();
-        while !absmax.dims().is_empty() {
-            absmax = absmax.max(0)?;
-            absmin = absmin.min(0)?;
-        }
+        let amax = data.abs()?.max(D::Minus1)?;
 
-        let absmax = absmax.to_dtype(DType::F32)?.to_scalar::<f32>()?;
-        let absmin = absmin.to_dtype(DType::F32)?.to_scalar::<f32>()?;
-        let amax = f32::max(absmax.abs(), absmin.abs());
-
-        let max_v = F8E4M3::MAX.to_f32();
-        let scale = (max_v / amax).clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32());
-        let scale = Tensor::new(scale, data.device())?;
-        let to_cast = data.broadcast_mul(&scale.to_dtype(data.dtype())?)?;
+        let max_v = F8E4M3::MAX.to_f64();
+        let scale = (max_v / amax)?.clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32())?;
+        let to_cast = data.broadcast_mul(&scale.to_dtype(data.dtype())?.unsqueeze(D::Minus1)?)?;
         let qw = if data.device().is_metal() {
             // Evil hack to allow metal shader to get the double value!
             let transmute_data = to_cast
@@ -54,6 +47,7 @@ impl FP8Linear {
             qw,
             quantize_scale: scale.clone(),
             dequantize_scale: scale.recip()?,
+            shape: shape.clone(),
         })
     }
 
@@ -62,7 +56,8 @@ impl FP8Linear {
             .lin
             .weight()
             .to_dtype(dtype)?
-            .broadcast_mul(&self.dequant_w_scale.to_dtype(dtype)?)?;
+            .broadcast_mul(&self.dequant_w_scale.to_dtype(dtype)?.unsqueeze(D::Minus1)?)?
+            .reshape(&self.shape)?;
         Ok(Linear::new(dequant_w, self.lin.bias().cloned()))
     }
 }
@@ -91,6 +86,7 @@ mod tests {
             qw,
             quantize_scale: _,
             dequantize_scale,
+            shape: _,
         } = FP8Linear::quantize(&data, DType::F8E4M3)?;
 
         let dequant = qw.to_dtype(DType::F32)?.broadcast_mul(&dequantize_scale)?;

@@ -6,7 +6,7 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use candle_core::{DType, Device, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Shape, Tensor, D};
 use candle_nn::{Linear, Module};
 use quantize::QuantizationResult;
 
@@ -29,6 +29,7 @@ pub struct FP8Linear {
     quant_scale: Tensor,
     /// Quantized type
     dtype: DType,
+    shape: Shape,
 }
 
 impl QuantMethod for FP8Linear {
@@ -49,6 +50,7 @@ impl QuantMethod for FP8Linear {
                     qw,
                     quantize_scale,
                     dequantize_scale,
+                    shape,
                 } = Self::quantize(lin.weight(), dtype)?;
                 Ok(Self {
                     lin: Linear::new(qw, lin.bias().cloned()),
@@ -56,6 +58,7 @@ impl QuantMethod for FP8Linear {
                     dequant_w_scale: dequantize_scale,
                     quant_scale: quantize_scale,
                     dtype,
+                    shape,
                 })
             }
         }
@@ -90,8 +93,9 @@ impl QuantMethod for FP8Linear {
                         qw,
                         quantize_scale: _,
                         dequantize_scale,
+                        shape,
                     } = Self::quantize(&x, DType::F8E4M3)?;
-                    x = qw;
+                    x = qw.reshape(shape)?;
                     dequant_x_scale = dequantize_scale;
                 }
 
@@ -225,7 +229,7 @@ impl QuantizedSerde for FP8Linear {
         buffer.push(bias.is_some() as u8);
 
         // Weight
-        serialize_tensor(&mut buffer, self.lin.weight())?;
+        serialize_tensor(&mut buffer, &self.lin.weight().reshape(&self.shape)?)?;
 
         // Dequant a scale
         buffer.extend(self.dequant_w_scale.to_scalar::<f32>()?.to_le_bytes());
@@ -285,7 +289,8 @@ impl QuantizedSerde for FP8Linear {
         };
 
         Ok(Arc::new(Self {
-            lin: Linear::new(w, b),
+            lin: Linear::new(w.reshape((32, ()))?, b),
+            shape: w.shape().clone(),
             dequant_w_scale,
             dequant_x_scale,
             quant_scale,
