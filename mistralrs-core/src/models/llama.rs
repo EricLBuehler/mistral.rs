@@ -249,7 +249,7 @@ impl CausalSelfAttention {
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: if kv_replicate != 1 {
-                    kv_replicate
+                    cfg.num_attention_heads / kv_replicate
                 } else {
                     cfg.num_attention_heads / cfg.num_key_value_heads
                 },
