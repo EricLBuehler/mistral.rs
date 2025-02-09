@@ -193,20 +193,28 @@ impl CausalSelfAttention {
             comm,
             vb.pp("q_proj"),
         )?;
-        let k_proj = ColumnParallelLayer::new(
+        // We may need to replicate the kv heads
+        let kv_replicate = if comm.world_size() < cfg.num_key_value_heads {
+            cfg.num_key_value_heads / comm.world_size()
+        } else {
+            1
+        };
+        let k_proj = ColumnParallelLayer::new_with_shard_id(
             size_in,
             size_kv,
             &cfg.quantization_config,
             false,
             comm,
+            comm.rank() / kv_replicate,
             vb.pp("k_proj"),
         )?;
-        let v_proj = ColumnParallelLayer::new(
+        let v_proj = ColumnParallelLayer::new_with_shard_id(
             size_in,
             size_kv,
             &cfg.quantization_config,
             false,
             comm,
+            comm.rank() / kv_replicate,
             vb.pp("v_proj"),
         )?;
         let o_proj = RowParallelLayer::new(

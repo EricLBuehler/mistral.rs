@@ -195,17 +195,18 @@ pub struct ColumnParallelLayer {
 
 impl ColumnParallelLayer {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new(
+    pub fn new_with_shard_id(
         in_dim: usize,
         out_dim: usize,
         config: &Option<QuantizedConfig>,
         bias: bool,
         comm: &Arc<crate::Comm>,
+        shard_id: usize,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let rank = comm.rank();
         let world_size = comm.world_size();
-        let shard = shard(0, rank, world_size);
+        assert!(shard_id < world_size);
+        let shard = shard(0, shard_id, world_size);
 
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
@@ -258,6 +259,19 @@ impl ColumnParallelLayer {
         };
 
         Ok(Arc::new(Self { weight, bias }))
+    }
+
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(
+        in_dim: usize,
+        out_dim: usize,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        comm: &Arc<crate::Comm>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let rank = comm.rank();
+        Self::new_with_shard_id(in_dim, out_dim, config, bias, comm, rank, vb)
     }
 }
 
