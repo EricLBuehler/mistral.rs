@@ -297,15 +297,22 @@ impl<'a> ShardedSafeTensors<'a> {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct Shard {
-    pub dim: usize,
-    pub rank: usize,
-    pub world_size: usize,
+pub enum Shard {
+    Simple {
+        dim: usize,
+        rank: usize,
+        world_size: usize,
+    },
+    Offset {
+        dim: usize,
+        offset: usize,
+        len: usize,
+    },
 }
 
 impl Default for Shard {
     fn default() -> Self {
-        Self {
+        Self::Simple {
             dim: 0,
             rank: 0,
             world_size: 1,
@@ -335,7 +342,7 @@ impl Backend for ShardedSafeTensors<'_> {
         dtype: DType,
         dev: &Device,
     ) -> Result<Tensor> {
-        if h.world_size == 1 {
+        if let Shard::Simple { world_size: 1, .. } = &h {
             // There is no sharding to be applied here so we use the default backend to speed
             // things up.
             match self {
@@ -372,91 +379,159 @@ impl Backend for ShardedSafeTensors<'_> {
             }
         }
 
-        let Shard {
-            dim,
-            rank,
-            world_size,
-        } = h;
-        match self {
-            Self::Sharded {
-                b,
-                make_dummy_regexes,
+        match h {
+            Shard::Simple {
+                dim,
+                rank,
+                world_size,
             } => {
-                use safetensors::slice::IndexOp;
+                match self {
+                    Self::Sharded {
+                        b,
+                        make_dummy_regexes,
+                    } => {
+                        use safetensors::slice::IndexOp;
 
-                if let Some(make_dummy_regexes) = make_dummy_regexes {
-                    if make_dummy_regexes.iter().any(|x| x.is_match(path)) {
-                        return Err(Error::CannotFindTensor {
-                            path: path.to_string(),
-                        });
+                        if let Some(make_dummy_regexes) = make_dummy_regexes {
+                            if make_dummy_regexes.iter().any(|x| x.is_match(path)) {
+                                return Err(Error::CannotFindTensor {
+                                    path: path.to_string(),
+                                });
+                            }
+                        }
+
+                        let view = b.get(path)?;
+                        let view_dtype = view.dtype();
+                        let mut shape = view.shape().to_vec();
+                        let size = shape[dim];
+
+                        if size % world_size != 0 {
+                            return Err(Error::ShapeMismatchSplit {
+                                shape: shape.into(),
+                                dim,
+                                n_parts: world_size,
+                            });
+                        }
+                        let block_size = size / world_size;
+                        let start = rank * block_size;
+                        let stop = (rank + 1) * block_size;
+
+                        // Everything is expressed in tensor dimension
+                        // bytes offsets is handled automatically for safetensors.
+
+                        let iterator = if dim == 0 {
+                            view.slice(start..stop).map_err(|_| {
+                                Error::Msg(format!(
+                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                ))
+                            })?
+                        } else if dim == 1 {
+                            view.slice((.., start..stop)).map_err(|_| {
+                                Error::Msg(format!(
+                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                ))
+                            })?
+                        } else {
+                            candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                        };
+
+                        shape[dim] = block_size;
+
+                        let view_dtype: DType = view_dtype.try_into()?;
+                        let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
+                        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)
+                    }
+                    Self::SimpleBackend(b) => {
+                        use candle_core::IndexOp;
+                        let tensor = b.get(target_shape, path, Default::default(), dtype, dev)?;
+
+                        let size = tensor.dim(dim)?;
+                        let shape = tensor.dims().to_vec();
+
+                        if size % world_size != 0 {
+                            return Err(Error::ShapeMismatchSplit {
+                                shape: shape.into(),
+                                dim,
+                                n_parts: world_size,
+                            });
+                        }
+                        let block_size = size / world_size;
+                        let start = rank * block_size;
+                        let stop = (rank + 1) * block_size;
+
+                        if dim == 0 {
+                            tensor.i((start..stop, ..))
+                        } else if dim == 1 {
+                            tensor.i((.., start..stop))
+                        } else {
+                            candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                        }
                     }
                 }
-
-                let view = b.get(path)?;
-                let view_dtype = view.dtype();
-                let mut shape = view.shape().to_vec();
-                let size = shape[dim];
-
-                if size % world_size != 0 {
-                    return Err(Error::ShapeMismatchSplit {
-                        shape: shape.into(),
-                        dim,
-                        n_parts: world_size,
-                    });
-                }
-                let block_size = size / world_size;
-                let start = rank * block_size;
-                let stop = (rank + 1) * block_size;
-
-                // Everything is expressed in tensor dimension
-                // bytes offsets is handled automatically for safetensors.
-
-                let iterator = if dim == 0 {
-                    view.slice(start..stop).map_err(|_| {
-                        Error::Msg(format!(
-                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
-                ))
-                    })?
-                } else if dim == 1 {
-                    view.slice((.., start..stop)).map_err(|_| {
-                        Error::Msg(format!(
-                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
-                ))
-                    })?
-                } else {
-                    candle_core::bail!("Got sharded on dimensions != 0 or 1")
-                };
-
-                shape[dim] = block_size;
-
-                let view_dtype: DType = view_dtype.try_into()?;
-                let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
-                Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)
             }
-            Self::SimpleBackend(b) => {
-                use candle_core::IndexOp;
-                let tensor = b.get(target_shape, path, Default::default(), dtype, dev)?;
+            Shard::Offset { dim, offset, len } => {
+                match self {
+                    Self::Sharded {
+                        b,
+                        make_dummy_regexes,
+                    } => {
+                        use safetensors::slice::IndexOp;
 
-                let size = tensor.dim(dim)?;
-                let shape = tensor.dims().to_vec();
+                        if let Some(make_dummy_regexes) = make_dummy_regexes {
+                            if make_dummy_regexes.iter().any(|x| x.is_match(path)) {
+                                return Err(Error::CannotFindTensor {
+                                    path: path.to_string(),
+                                });
+                            }
+                        }
 
-                if size % world_size != 0 {
-                    return Err(Error::ShapeMismatchSplit {
-                        shape: shape.into(),
-                        dim,
-                        n_parts: world_size,
-                    });
-                }
-                let block_size = size / world_size;
-                let start = rank * block_size;
-                let stop = (rank + 1) * block_size;
+                        let view = b.get(path)?;
+                        let view_dtype = view.dtype();
+                        let mut shape = view.shape().to_vec();
 
-                if dim == 0 {
-                    tensor.i((start..stop, ..))
-                } else if dim == 1 {
-                    tensor.i((.., start..stop))
-                } else {
-                    candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                        let start = offset;
+                        let stop = start + len;
+
+                        // Everything is expressed in tensor dimension
+                        // bytes offsets is handled automatically for safetensors.
+
+                        let iterator = if dim == 0 {
+                            view.slice(start..stop).map_err(|_| {
+                                Error::Msg(format!(
+                                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                                ))
+                            })?
+                        } else if dim == 1 {
+                            view.slice((.., start..stop)).map_err(|_| {
+                                Error::Msg(format!(
+                                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                                ))
+                            })?
+                        } else {
+                            candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                        };
+
+                        shape[dim] = len;
+
+                        let view_dtype: DType = view_dtype.try_into()?;
+                        let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
+                        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)
+                    }
+                    Self::SimpleBackend(b) => {
+                        use candle_core::IndexOp;
+                        let tensor = b.get(target_shape, path, Default::default(), dtype, dev)?;
+
+                        let start = offset;
+                        let stop = start + len;
+
+                        if dim == 0 {
+                            tensor.i((start..stop, ..))
+                        } else if dim == 1 {
+                            tensor.i((.., start..stop))
+                        } else {
+                            candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                        }
+                    }
                 }
             }
         }

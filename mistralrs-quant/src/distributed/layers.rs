@@ -10,7 +10,7 @@ use crate::{
 };
 
 fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
-    Shard {
+    Shard::Simple {
         dim,
         rank,
         world_size,
@@ -195,19 +195,15 @@ pub struct ColumnParallelLayer {
 
 impl ColumnParallelLayer {
     #[allow(clippy::new_ret_no_self)]
-    pub fn new_with_shard_id(
+    pub fn new_with_shard(
         in_dim: usize,
         out_dim: usize,
         config: &Option<QuantizedConfig>,
         bias: bool,
         comm: &Arc<crate::Comm>,
-        shard_id: usize,
+        shard: Shard,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let world_size = comm.world_size();
-        assert!(shard_id < world_size);
-        let shard = shard(0, shard_id, world_size);
-
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
@@ -271,7 +267,10 @@ impl ColumnParallelLayer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         let rank = comm.rank();
-        Self::new_with_shard_id(in_dim, out_dim, config, bias, comm, rank, vb)
+        let world_size = comm.world_size();
+        let shard = shard(0, rank, world_size);
+
+        Self::new_with_shard(in_dim, out_dim, config, bias, comm, shard, vb)
     }
 }
 

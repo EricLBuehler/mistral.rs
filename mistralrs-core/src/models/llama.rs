@@ -3,7 +3,7 @@
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer, Shard,
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
@@ -193,28 +193,37 @@ impl CausalSelfAttention {
             comm,
             vb.pp("q_proj"),
         )?;
+
         // We may need to replicate the kv heads
         let kv_replicate = if comm.world_size() > cfg.num_key_value_heads {
             comm.world_size() / cfg.num_key_value_heads
         } else {
             1
         };
-        let k_proj = ColumnParallelLayer::new_with_shard_id(
+
+        let kv_shard_id = comm.rank() / kv_replicate;
+        let shard = Shard::Offset {
+            dim: 0,
+            offset: kv_shard_id * size_kv,
+            len: size_kv,
+        };
+
+        let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
             &cfg.quantization_config,
             false,
             comm,
-            comm.rank() / kv_replicate,
+            shard,
             vb.pp("k_proj"),
         )?;
-        let v_proj = ColumnParallelLayer::new_with_shard_id(
+        let v_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
             &cfg.quantization_config,
             false,
             comm,
-            comm.rank() / kv_replicate,
+            shard,
             vb.pp("v_proj"),
         )?;
         let o_proj = RowParallelLayer::new(
