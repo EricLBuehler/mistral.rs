@@ -194,7 +194,7 @@ impl CausalSelfAttention {
             vb.pp("q_proj"),
         )?;
         // We may need to replicate the kv heads
-        let kv_replicate = if comm.world_size() < cfg.num_key_value_heads {
+        let kv_replicate = if comm.world_size() > cfg.num_key_value_heads {
             comm.world_size() / cfg.num_key_value_heads
         } else {
             1
