@@ -202,7 +202,8 @@ impl CausalSelfAttention {
         };
 
         let kv_shard_id = comm.rank() / kv_replicate;
-        let kv_block_size = size_kv / comm.world_size();
+        // let kv_block_size = size_kv / comm.world_size();
+        let kv_block_size = cfg.hidden_size / cfg.num_attention_heads;
         let shard = Shard::Offset {
             dim: 0,
             offset: kv_shard_id * kv_block_size,
@@ -247,7 +248,11 @@ impl CausalSelfAttention {
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                n_kv_groups: if kv_replicate != 1 {
+                    kv_replicate
+                } else {
+                    cfg.num_attention_heads / cfg.num_key_value_heads
+                },
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),

@@ -422,14 +422,14 @@ impl Backend for ShardedSafeTensors<'_> {
                         let iterator = if dim == 0 {
                             view.slice(start..stop).map_err(|_| {
                                 Error::Msg(format!(
-                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
-                ))
+                                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                                ))
                             })?
                         } else if dim == 1 {
                             view.slice((.., start..stop)).map_err(|_| {
                                 Error::Msg(format!(
-                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
-                ))
+                                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                                ))
                             })?
                         } else {
                             candle_core::bail!("Got sharded on dimensions != 0 or 1")
