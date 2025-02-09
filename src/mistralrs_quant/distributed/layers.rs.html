@@ -474,7 +474,11 @@
 <a href="#473" id="473">473</a>
 <a href="#474" id="474">474</a>
 <a href="#475" id="475">475</a>
-<a href="#476" id="476">476</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{Context, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::Linear;
@@ -802,10 +806,14 @@
             </span>.weight
             .clone()
             .apply_isq(dtype, device, n_quantized, imatrix_weight)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{
-            weight,
-            bias: <span class="self">self</span>.bias.clone(),
-        }))
+        <span class="kw">let </span>bias = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.bias {
+            <span class="prelude-val">Some</span>(b) =&gt; {
+                <span class="kw">let </span>(dtype, device) = weight.dtype_and_device();
+                <span class="prelude-val">Some</span>(b.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>.to_dtype(dtype)<span class="question-mark">?</span>)
+            }
+            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+        };
+        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{ weight, bias }))
     }
 }
 
