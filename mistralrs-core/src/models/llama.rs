@@ -202,10 +202,11 @@ impl CausalSelfAttention {
         };
 
         let kv_shard_id = comm.rank() / kv_replicate;
+        let kv_block_size = size_kv / comm.world_size();
         let shard = Shard::Offset {
             dim: 0,
-            offset: kv_shard_id * size_kv,
-            len: size_kv,
+            offset: kv_shard_id * kv_block_size,
+            len: kv_block_size,
         };
 
         let k_proj = ColumnParallelLayer::new_with_shard(
