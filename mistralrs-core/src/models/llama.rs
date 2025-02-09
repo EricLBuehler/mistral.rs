@@ -195,7 +195,7 @@ impl CausalSelfAttention {
         )?;
         // We may need to replicate the kv heads
         let kv_replicate = if comm.world_size() < cfg.num_key_value_heads {
-            cfg.num_key_value_heads / comm.world_size()
+            comm.world_size() / cfg.num_key_value_heads
         } else {
             1
         };
