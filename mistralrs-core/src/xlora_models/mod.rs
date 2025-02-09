@@ -18,7 +18,7 @@ use crate::{
     pipeline::{text_models_inputs_processor::FlashParams, EitherCache},
 };
 use candle_core::{DType, Device, Result, Tensor};
-pub(crate) use config::XLoraConfig;
+pub use config::XLoraConfig;
 pub(crate) use gemma::XLoraModel as XLoraGemma;
 pub(crate) use gemma2::Model as XLoraGemma2;
 pub(crate) use llama::XLoraLlama;

@@ -32,7 +32,7 @@ mod unquantized;
 mod utils;
 
 use gptq::gptq_linear;
-pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
+pub use safetensors::{ModelWeightSource, Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use distributed::{
@@ -253,6 +253,10 @@ pub enum IsqType {
     // HQQ2,
     // HQQ1,
     F8E4M3,
+    Iq4Xs,
+    Iq4Nl,
+    Iq3Xxs,
+    F16,
 }
 
 impl IsqType {
@@ -260,46 +264,41 @@ impl IsqType {
     /// original size / pack factor = quantized size
     pub fn pack_factor(&self, dtype: DType) -> usize {
         match self {
-            Self::Q4_0 => {
-                (dtype.size_in_bytes() * GgmlDType::Q4_0.block_size()) / GgmlDType::Q4_0.type_size()
-            }
-            Self::Q4_1 => {
-                (dtype.size_in_bytes() * GgmlDType::Q4_1.block_size()) / GgmlDType::Q4_1.type_size()
-            }
-            Self::Q5_0 => {
-                (dtype.size_in_bytes() * GgmlDType::Q5_0.block_size()) / GgmlDType::Q5_0.type_size()
-            }
-            Self::Q5_1 => {
-                (dtype.size_in_bytes() * GgmlDType::Q5_1.block_size()) / GgmlDType::Q5_1.type_size()
-            }
-            Self::Q8_0 => {
-                (dtype.size_in_bytes() * GgmlDType::Q8_0.block_size()) / GgmlDType::Q8_0.type_size()
-            }
-            Self::Q8_1 => {
-                (dtype.size_in_bytes() * GgmlDType::Q8_1.block_size()) / GgmlDType::Q8_1.type_size()
-            }
-            Self::Q2K => {
-                (dtype.size_in_bytes() * GgmlDType::Q2K.block_size()) / GgmlDType::Q2K.type_size()
-            }
-            Self::Q3K => {
-                (dtype.size_in_bytes() * GgmlDType::Q3K.block_size()) / GgmlDType::Q3K.type_size()
-            }
-            Self::Q4K => {
-                (dtype.size_in_bytes() * GgmlDType::Q4K.block_size()) / GgmlDType::Q4K.type_size()
-            }
-            Self::Q5K => {
-                (dtype.size_in_bytes() * GgmlDType::Q5K.block_size()) / GgmlDType::Q5K.type_size()
-            }
-            Self::Q6K => {
-                (dtype.size_in_bytes() * GgmlDType::Q6K.block_size()) / GgmlDType::Q6K.type_size()
-            }
-            Self::Q8K => {
-                (dtype.size_in_bytes() * GgmlDType::Q8K.block_size()) / GgmlDType::Q8K.type_size()
-            }
+            Self::Q4_0 => (dtype.size_in_bytes() * GgmlDType::Q4_0.block_size())
+                .div_ceil(GgmlDType::Q4_0.type_size()),
+            Self::Q4_1 => (dtype.size_in_bytes() * GgmlDType::Q4_1.block_size())
+                .div_ceil(GgmlDType::Q4_1.type_size()),
+            Self::Q5_0 => (dtype.size_in_bytes() * GgmlDType::Q5_0.block_size())
+                .div_ceil(GgmlDType::Q5_0.type_size()),
+            Self::Q5_1 => (dtype.size_in_bytes() * GgmlDType::Q5_1.block_size())
+                .div_ceil(GgmlDType::Q5_1.type_size()),
+            Self::Q8_0 => (dtype.size_in_bytes() * GgmlDType::Q8_0.block_size())
+                .div_ceil(GgmlDType::Q8_0.type_size()),
+            Self::Q8_1 => (dtype.size_in_bytes() * GgmlDType::Q8_1.block_size())
+                .div_ceil(GgmlDType::Q8_1.type_size()),
+            Self::Q2K => (dtype.size_in_bytes() * GgmlDType::Q2K.block_size())
+                .div_ceil(GgmlDType::Q2K.type_size()),
+            Self::Q3K => (dtype.size_in_bytes() * GgmlDType::Q3K.block_size())
+                .div_ceil(GgmlDType::Q3K.type_size()),
+            Self::Q4K => (dtype.size_in_bytes() * GgmlDType::Q4K.block_size())
+                .div_ceil(GgmlDType::Q4K.type_size()),
+            Self::Q5K => (dtype.size_in_bytes() * GgmlDType::Q5K.block_size())
+                .div_ceil(GgmlDType::Q5K.type_size()),
+            Self::Q6K => (dtype.size_in_bytes() * GgmlDType::Q6K.block_size())
+                .div_ceil(GgmlDType::Q6K.type_size()),
+            Self::Q8K => (dtype.size_in_bytes() * GgmlDType::Q8K.block_size())
+                .div_ceil(GgmlDType::Q8K.type_size()),
+            Self::Iq4Xs => (dtype.size_in_bytes() * GgmlDType::Iq4Xs.block_size())
+                .div_ceil(GgmlDType::Iq4Xs.type_size()),
+            Self::Iq4Nl => (dtype.size_in_bytes() * GgmlDType::Iq4Nl.block_size())
+                .div_ceil(GgmlDType::Iq4Nl.type_size()),
+            Self::Iq3Xxs => (dtype.size_in_bytes() * GgmlDType::Iq3Xxs.block_size())
+                .div_ceil(GgmlDType::Iq3Xxs.type_size()),
             // Estimates
             Self::HQQ4 => 4,
             Self::HQQ8 => 2,
             Self::F8E4M3 => 2,
+            Self::F16 => 1,
         }
     }
 }
@@ -321,6 +320,10 @@ impl TryFrom<IsqType> for GgmlDType {
             IsqType::Q8K => Self::Q8K,
             IsqType::Q8_0 => Self::Q8_0,
             IsqType::Q8_1 => Self::Q8_1,
+            IsqType::Iq4Xs => Self::Iq4Xs,
+            IsqType::Iq4Nl => Self::Iq4Nl,
+            IsqType::Iq3Xxs => Self::Iq3Xxs,
+            IsqType::F16 => Self::F16,
             _ => candle_core::bail!("Expected valid GGML ISQ type."),
         };
         #[cfg(feature = "cuda")]
@@ -337,8 +340,12 @@ impl TryFrom<IsqType> for GgmlDType {
                     | GgmlDType::Q4K
                     | GgmlDType::Q5K
                     | GgmlDType::Q6K
+                    | GgmlDType::Iq4Xs
+                    | GgmlDType::Iq4Nl
+                    | GgmlDType::Iq3Xxs
+                    | GgmlDType::F16,
             ) {
-                candle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`")
+                candle_core::bail!("GGML ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `IQ4XS`, `IQ4NL`, `IQ3XXS`, F16`")
             }
         }
         Ok(tp)
@@ -362,7 +369,11 @@ impl TryFrom<GgmlDType> for IsqType {
             GgmlDType::Q8_0 => Ok(Self::Q8_0),
             GgmlDType::Q8_1 => Ok(Self::Q8_1),
             GgmlDType::Q8K => Ok(Self::Q8K),
-            GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 => {
+            GgmlDType::Iq4Xs => Ok(Self::Iq4Xs),
+            GgmlDType::Iq4Nl => Ok(Self::Iq4Nl),
+            GgmlDType::Iq3Xxs => Ok(Self::Iq4Nl),
+            GgmlDType::F16 => Ok(Self::F16),
+            GgmlDType::BF16 | GgmlDType::F32 => {
                 candle_core::bail!("Expected valid GGML ISQ type.")
             }
         }

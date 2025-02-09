@@ -24,8 +24,8 @@ rust-version = "1.82"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "fb5cc8c" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "fb5cc8c" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "d3909ae" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "d3909ae" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
@@ -41,7 +41,7 @@ tokio = { version = "1.36.0", features = ["full", "rt-multi-thread"] }
 once_cell = "1.19.0"
 # All features but avif, avif increases the msrv dramatically
 image = { version = "0.25.1", default-features = false, features = ['bmp', 'dds', 'exr', 'ff', 'gif', 'hdr', 'ico', 'jpeg', 'png', 'pnm', 'qoi', 'tga', 'tiff', 'webp']}
-reqwest = { version = "0.12.4", features = ["blocking"] }
+reqwest = { version = "0.12.4", default-features = false, features = ["blocking", "rustls-tls", "charset", "http2", "macos-system-configuration"] }
 base64 = "0.22.1"
 half = "2.4.0"
 rayon = "1.1.0"

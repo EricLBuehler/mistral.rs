@@ -172,8 +172,12 @@ impl QuantMethod for FP8Linear {
             | IsqType::Q8K
             | IsqType::Q8_0
             | IsqType::Q8_1
+            | IsqType::Iq4Xs
+            | IsqType::Iq4Nl
             | IsqType::HQQ4
-            | IsqType::HQQ8 => None,
+            | IsqType::HQQ8
+            | IsqType::Iq3Xxs
+            | IsqType::F16 => None,
         }
     }
 }
@@ -207,7 +211,7 @@ impl QuantizedSerde for FP8Linear {
     fn name(&self) -> &'static str {
         "fp8-linear"
     }
-    fn serialize(&self) -> Result<Cow<[u8]>> {
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
         // Version is always first!
@@ -217,7 +221,7 @@ impl QuantizedSerde for FP8Linear {
         buffer.push(QuantizedSerdeType::Fp8 as u8);
 
         // Has bias
-        buffer.push(self.lin.bias().is_some() as u8);
+        buffer.push(bias.is_some() as u8);
 
         // Weight
         serialize_tensor(&mut buffer, self.lin.weight())?;
@@ -232,12 +236,15 @@ impl QuantizedSerde for FP8Linear {
         // DType
         write_dtype(self.dtype, &mut buffer);
 
-        if let Some(bias) = self.lin.bias() {
+        if let Some(bias) = &bias {
             // Bias
             serialize_tensor(&mut buffer, bias)?;
         }
 
         Ok(Cow::from(buffer))
+    }
+    fn serialize(&self) -> Result<Cow<[u8]>> {
+        self.serialize_with_bias(self.lin.bias().cloned())
     }
 
     fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>>

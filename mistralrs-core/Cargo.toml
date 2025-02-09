@@ -17,11 +17,11 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "fb5cc8c", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "d3909ae", optional = true }
 dirs = "5.0.1"
-hf-hub = { version = "0.3.3", package = "candle-hf-hub" }
+hf-hub = { version = "0.4.1", default-features = false, features = ["ureq", "tokio", "rustls-tls"] }
 thiserror = "1.0.57"
-tokenizers = "0.21.0"
+tokenizers = { version = "0.21.0", default-features = false }
 tqdm = "0.7.0"
 chrono = "0.4.34"
 minijinja = { version = "2.0.2", features = ["builtins", "json"] }
@@ -77,11 +77,13 @@ regex.workspace = true
 serde_plain = "1.0.2"
 as-any = "0.3.1"
 float8.workspace = true
-llguidance = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc", default-features = false, features = ["lark"] }
-toktrie_hf_tokenizers = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc" }
+llguidance = { git = "https://github.com/EricLBuehler/llguidance", rev = "13483c1", default-features = false, features = ["lark"] }
+toktrie_hf_tokenizers = { git = "https://github.com/EricLBuehler/llguidance", rev = "13483c1" }
 objc = { version = "0.2.7", optional = true }
 metal = { workspace = true, optional = true }
-candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "fb5cc8c", optional = true }
+yoke = "0.7.5"
+memmap2 = "0.9.5"
+candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "6a06b89", optional = true }
 safetensors.workspace = true
 
 [features]
@@ -110,6 +112,7 @@ flash-attn = ["cuda", "dep:candle-flash-attn"]
 flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
+arm-nightly-feat = ["candle-core/arm-nightly-feat", "mistralrs-quant/arm-nightly-feat"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }

@@ -1,5 +1,6 @@
 use std::{fs::File, num::NonZeroUsize, path::PathBuf};
 
+use mistralrs_quant::ModelWeightSource;
 use serde::Deserialize;
 
 use crate::{
@@ -600,7 +601,7 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(ModelWeightSource::PathBuf),
                 imatrix,
                 calibration_file,
             },
@@ -628,7 +629,7 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(ModelWeightSource::PathBuf),
                 imatrix: None,
                 calibration_file: None,
             },
@@ -664,7 +665,7 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(ModelWeightSource::PathBuf),
                 imatrix: None,
                 calibration_file: None,
             },
@@ -872,7 +873,7 @@ fn loader_from_selected(
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(ModelWeightSource::PathBuf),
                 max_edge,
                 calibration_file,
                 imatrix,

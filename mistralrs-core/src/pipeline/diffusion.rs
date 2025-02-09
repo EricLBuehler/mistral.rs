@@ -1,9 +1,9 @@
-use super::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
+use super::loaders::{DiffusionModelSource, DiffusionModelSourceInner};
 use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
     DiffusionModel, DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult,
-    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
-    PreProcessingMixin, Processor, TokenSource,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind,
+    ModelSource, PreProcessingMixin, Processor, TokenSource,
 };
 use crate::device_map::DeviceMapper;
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
@@ -19,7 +19,7 @@ use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use image::{DynamicImage, RgbImage};
 use indicatif::MultiProgress;
-use mistralrs_quant::IsqType;
+use mistralrs_quant::{IsqType, ModelWeightSource};
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::io;
@@ -93,7 +93,7 @@ impl Loader for DiffusionLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = {
+        let paths: anyhow::Result<Box<dyn ModelSource>> = {
             let api = ApiBuilder::new()
                 .with_progress(!silent)
                 .with_token(get_token(&token_source)?)
@@ -105,9 +105,14 @@ impl Loader for DiffusionLoader {
                 revision.clone(),
             ));
             let model_id = std::path::Path::new(&self.model_id);
-            let filenames = self.inner.get_model_paths(&api, model_id)?;
+            let filenames = self
+                .inner
+                .get_model_paths(&api, model_id)?
+                .into_iter()
+                .map(ModelWeightSource::PathBuf)
+                .collect();
             let config_filenames = self.inner.get_config_filenames(&api, model_id)?;
-            Ok(Box::new(DiffusionModelPaths(DiffusionModelPathsInner {
+            Ok(Box::new(DiffusionModelSource(DiffusionModelSourceInner {
                 config_filenames,
                 filenames,
             })))
@@ -126,7 +131,7 @@ impl Loader for DiffusionLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &Box<dyn ModelSource>,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -137,7 +142,7 @@ impl Loader for DiffusionLoader {
         let paths = &paths
             .as_ref()
             .as_any()
-            .downcast_ref::<DiffusionModelPaths>()
+            .downcast_ref::<DiffusionModelSource>()
             .expect("Path downcast failed.")
             .0;
 

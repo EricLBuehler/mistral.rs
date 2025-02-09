@@ -427,10 +427,10 @@ impl DeviceMappedModelLoader for Phi3VLoader {
 
             let size_in = cfg.hidden_size;
             let head_dim = cfg.head_dim();
-            let op_size = head_dim * head_dim + 2 * cfg.num_key_value_heads * head_dim;
+            let op_size =
+                cfg.num_attention_heads * head_dim + 2 * cfg.num_key_value_heads * head_dim;
             let qkv_proj = size_in * op_size / weight_pack_factor;
-            let o_proj =
-                (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor + size_in;
+            let o_proj = (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor;
 
             let h_size = cfg.hidden_size;
             let i_size = cfg.intermediate_size;
@@ -551,14 +551,14 @@ impl IsqModelLoader for Idefics2Loader {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
-            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"text_model.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"text_model.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"text_model.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"text_model.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
-            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"text_model.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"text_model.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"text_model.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
 }

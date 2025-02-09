@@ -28,6 +28,10 @@ struct Args {
     /// Generate and utilize an imatrix to enhance GGUF quantizations.
     #[arg(short, long)]
     calibration_file: Option<PathBuf>,
+
+    /// Use a .imatrix of .cimatrix file.
+    #[arg(short, long)]
+    imatrix: Option<PathBuf>,
 }
 
 async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(Tensor, Vec<u32>)> {
@@ -79,13 +83,15 @@ async fn main() -> Result<()> {
         None
     };
 
-    let prompt_chunksize = 1024;
     let mut model_builder = TextModelBuilder::new(&args.model_id).with_logging();
     if let Some(quant) = quant {
         model_builder = model_builder.with_isq(quant);
     }
     if let Some(calibration_file) = &args.calibration_file {
         model_builder = model_builder.with_calibration_file(calibration_file.clone());
+    }
+    if let Some(imatrix) = &args.imatrix {
+        model_builder = model_builder.with_imatrix(imatrix.clone());
     }
 
     let model = model_builder.build().await?;
@@ -101,6 +107,7 @@ async fn main() -> Result<()> {
 
     println!("Using bos token id `{bos_token}`.");
 
+    let prompt_chunksize = 256;
     let n_chunks = tokens.len().div_ceil(prompt_chunksize);
     let mut ppl_measurements = Vec::new();
     for (i, chunk) in tokens.chunks(prompt_chunksize).enumerate() {

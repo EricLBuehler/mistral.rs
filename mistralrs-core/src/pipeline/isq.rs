@@ -13,8 +13,8 @@ use candle_core::{quantized, Context, Device, Tensor};
 use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use mistralrs_quant::{
-    CollectedImatrixData, FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde,
-    QuantizedSerdeType, UnquantLinear,
+    safetensors::MmapedSafetensors, CollectedImatrixData, FP8Linear, GgufMatMul, HqqLayer, IsqType,
+    ModelWeightSource, QuantMethod, QuantizedSerde, QuantizedSerdeType, UnquantLinear,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
@@ -44,6 +44,9 @@ pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 /// - `HQQ3`
 /// - `HQQ4`
 /// - `HQQ8`
+/// - `F16`
+/// - `IQ4XS`
+/// - `IQ4NL`
 pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
     let tp = match s.to_lowercase().as_str() {
         "q4_0" => IsqType::Q4_0,
@@ -61,10 +64,14 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
         "hqq8" => IsqType::HQQ8,
         "hqq4" => IsqType::HQQ4,
         "fp8" => IsqType::F8E4M3,
+        "iq4xs" => IsqType::Iq4Xs,
+        "f16" => IsqType::F16,
+        "iq4nl" => IsqType::Iq4Nl,
+        "iq3xxs" => IsqType::Iq3Xxs,
         // "hqq3" => IsqType::HQQ3,
         // "hqq2" => IsqType::HQQ2,
         // "hqq1" => IsqType::HQQ1,
-        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`.")),
+        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `IQ4XS`, `IQ4NL`, `F16`, `IQ3XXS`.")),
     };
     #[cfg(feature = "cuda")]
     {
@@ -80,13 +87,18 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
                 | IsqType::Q4K
                 | IsqType::Q5K
                 | IsqType::Q6K
+                | IsqType::Iq4Xs
                 | IsqType::HQQ8
                 | IsqType::HQQ4
-                | IsqType::F8E4M3 // | IsqType::HQQ3
-                                  // | IsqType::HQQ2
-                                  // | IsqType::HQQ1
+                | IsqType::F8E4M3
+                | IsqType::Iq4Xs
+                | IsqType::Iq4Nl
+                | IsqType::Iq3Xxs
+                | IsqType::F16 // | IsqType::HQQ3
+                               // | IsqType::HQQ2
+                               // | IsqType::HQQ1
         ) {
-            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`".to_string());
+            return Err("ISQ type on CUDA must be one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `HQQ8`, `HQQ4`, `FP8`, `IQ4XS`, `IQ4NL`, `IQ3XXS`, `F16`".to_string());
         }
     }
     Ok(tp)
@@ -118,11 +130,11 @@ impl FromStr for IsqOrganization {
 
 pub struct UqffFullSer<'a> {
     pub tokenizer: &'a Tokenizer,
-    pub template_filename: &'a Option<PathBuf>,
-    pub generation_config: Option<&'a PathBuf>,
+    pub chat_template: &'a Option<String>,
+    pub generation_config: Option<&'a String>,
     pub config: String,
-    pub processor_filename: &'a Option<PathBuf>,
-    pub preprocessor_filename: &'a Option<PathBuf>,
+    pub processor_config: &'a Option<String>,
+    pub preprocessor_config: &'a Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -593,11 +605,11 @@ pub trait IsqModel {
 
                 let UqffFullSer {
                     tokenizer,
-                    template_filename,
+                    chat_template,
                     generation_config,
                     config,
-                    processor_filename,
-                    preprocessor_filename,
+                    processor_config,
+                    preprocessor_config,
                 } = full_ser;
 
                 info!("Serializing configuration to `{}`.", config_out.display());
@@ -609,15 +621,13 @@ pub trait IsqModel {
                 serde_json::to_writer_pretty(File::create(&tokenizer_out)?, tokenizer)
                     .map_err(candle_core::Error::msg)?;
 
-                if let Some(template_filename) = template_filename {
+                if let Some(chat_template) = chat_template {
                     info!(
                         "Serializing tokenizer config to `{}`.",
                         tokenizer_cfg_out.display()
                     );
 
-                    let template =
-                        std::fs::read(template_filename).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&tokenizer_cfg_out, template)
+                    std::fs::write(tokenizer_cfg_out, chat_template)
                         .map_err(candle_core::Error::msg)?;
                 }
 
@@ -627,29 +637,28 @@ pub trait IsqModel {
                         gen_cfg_out.display()
                     );
 
-                    let cfg = std::fs::read(generation_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&gen_cfg_out, cfg).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&gen_cfg_out, generation_config)
+                        .map_err(candle_core::Error::msg)?;
                 }
 
-                if let Some(processor_config) = processor_filename {
+                if let Some(processor_config) = processor_config {
                     info!(
                         "Serializing processor config to `{}`.",
                         processor_out.display()
                     );
 
-                    let cfg = std::fs::read(processor_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&processor_out, cfg).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&processor_out, processor_config)
+                        .map_err(candle_core::Error::msg)?;
                 }
 
-                if let Some(preprocessor_config) = preprocessor_filename {
+                if let Some(preprocessor_config) = preprocessor_config {
                     info!(
                         "Serializing preprocessor config to `{}`.",
                         preprocessor_out.display()
                     );
 
-                    let cfg =
-                        std::fs::read(preprocessor_config).map_err(candle_core::Error::msg)?;
-                    std::fs::write(&preprocessor_out, cfg).map_err(candle_core::Error::msg)?;
+                    std::fs::write(&preprocessor_out, preprocessor_config)
+                        .map_err(candle_core::Error::msg)?;
                 }
             }
             let delta = Instant::now().duration_since(t_start).as_secs_f32();
@@ -663,7 +672,7 @@ pub trait IsqModel {
         device: Device,
         topology: Option<&Topology>,
         silent: bool,
-        artifacts: &PathBuf,
+        artifacts: &ModelWeightSource,
     ) -> candle_core::Result<()> {
         let (tensors, mapper) = self.get_layers();
         let total_tensors = tensors.len();
@@ -698,7 +707,7 @@ pub trait IsqModel {
             devices.push(device);
         }
 
-        let artifacts = unsafe { candle_core::safetensors::MmapedSafetensors::new(artifacts)? };
+        let artifacts = unsafe { MmapedSafetensors::new(artifacts)? };
 
         let artifact_isqs = artifacts
             .tensors()

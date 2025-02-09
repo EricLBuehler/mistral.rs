@@ -4,7 +4,7 @@ use super::isq::ImatrixDataSource;
 use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
+    CacheManager, GeneralMetadata, Loader, ModelKind, ModelSource, NormalModel, NormalModelLoader,
     TokenSource, XLoraPaths,
 };
 use super::{
@@ -26,7 +26,7 @@ use crate::pipeline::get_chat_template;
 use crate::pipeline::isq::UqffFullSer;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
-use crate::pipeline::{ChatTemplate, LocalModelPaths};
+use crate::pipeline::{ChatTemplate, LocalModelSource};
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
@@ -42,7 +42,10 @@ use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
-use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
+use mistralrs_quant::safetensors::MmapedSafetensors;
+use mistralrs_quant::{
+    GgufMatMul, HqqLayer, IsqType, ModelWeightSource, QuantizedSerdeType, ShardedSafeTensors,
+};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -51,7 +54,6 @@ use rayon::iter::{
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
-use std::fs;
 use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -73,9 +75,9 @@ pub struct NormalPipeline {
     silent: bool,
     organization: IsqOrganization,
     // For full UQFF serialization
-    template_filename: Option<PathBuf>,
-    generation_config: Option<PathBuf>,
-    config: String,
+    chat_template_ser: Option<String>,
+    generation_config_ser: Option<String>,
+    config_ser: String,
     imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
 }
@@ -94,7 +96,7 @@ pub struct NormalLoader {
     tgt_non_granular_index: Option<usize>,
     token_source: RwLock<Option<TokenSource>>,
     revision: RwLock<Option<String>>,
-    from_uqff: RwLock<Option<PathBuf>>,
+    from_uqff: RwLock<Option<ModelWeightSource>>,
 }
 
 #[derive(Default)]
@@ -119,7 +121,7 @@ pub struct NormalSpecificConfig {
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
     pub write_uqff: Option<PathBuf>,
-    pub from_uqff: Option<PathBuf>,
+    pub from_uqff: Option<ModelWeightSource>,
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
 }
@@ -245,8 +247,8 @@ impl Loader for NormalLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
-            LocalModelPaths,
+        let paths: anyhow::Result<Box<dyn ModelSource>> = get_paths!(
+            LocalModelSource,
             &token_source,
             revision.clone(),
             self,
@@ -255,9 +257,6 @@ impl Loader for NormalLoader {
             silent,
             self.config.from_uqff.is_some()
         );
-        if let Some(from_uqff) = self.config.from_uqff.clone() {
-            *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
-        }
         *self
             .token_source
             .write()
@@ -277,7 +276,7 @@ impl Loader for NormalLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &Box<dyn ModelSource>,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -285,7 +284,21 @@ impl Loader for NormalLoader {
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let config = std::fs::read_to_string(paths.get_config_filename())?;
+        if let Some(from_uqff) = self.config.from_uqff.clone() {
+            match from_uqff {
+                ModelWeightSource::PathBuf(from_uqff) => {
+                    *self.from_uqff.write().unwrap() = Some(ModelWeightSource::PathBuf(
+                        get_uqff_paths!(&from_uqff, self, silent),
+                    ));
+                }
+                ModelWeightSource::SafeTensorsData(data) => {
+                    *self.from_uqff.write().unwrap() =
+                        Some(ModelWeightSource::SafeTensorsData(data));
+                }
+            }
+        }
+
+        let config = paths.get_config().clone();
 
         // Apply default prompt size here
         let prompt_chunksize = self
@@ -300,7 +313,8 @@ impl Loader for NormalLoader {
 
         let use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
             && available_devices.len() > 1
-            && std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1");
+            && (std::env::var("MISTRALRS_NO_NCCL").is_err()
+                || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"));
 
         // If auto, convert to Map if not using nccl
         if use_nccl {
@@ -316,9 +330,7 @@ impl Loader for NormalLoader {
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(serialized) = &*self.from_uqff.read().unwrap() {
                     let weight_pack_factor = {
-                        let ser_artifacts = unsafe {
-                            candle_core::safetensors::MmapedSafetensors::new(serialized)?
-                        };
+                        let ser_artifacts = unsafe { MmapedSafetensors::new(serialized)? };
                         let mut total_pack_factors = 0;
                         let total_tensors = ser_artifacts.tensors().len();
                         for (_, artifact) in ser_artifacts.tensors() {
@@ -563,7 +575,7 @@ impl Loader for NormalLoader {
 
             let sharded_vb = unsafe {
                 ShardedSafeTensors::sharded(
-                    paths.get_weight_filenames(),
+                    paths.get_weights(),
                     dtype,
                     &load_device,
                     make_dummy_regexes,
@@ -700,9 +712,9 @@ impl Loader for NormalLoader {
             vec![model]
         };
 
-        let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
-        let gen_conf: Option<GenerationConfig> = paths.get_gen_conf_filename().map(|f| {
-            serde_json::from_str(&fs::read_to_string(f).unwrap())
+        let tokenizer = get_tokenizer(paths.get_tokenizer(), None)?;
+        let gen_conf: Option<GenerationConfig> = paths.get_generation_config().map(|c| {
+            serde_json::from_str(&c)
                 .expect("bos_token_id/eos_token_id missing in generation_config.json")
         });
 
@@ -711,7 +723,7 @@ impl Loader for NormalLoader {
             &paths
                 .get_chat_template_json()
                 .as_ref()
-                .map(|x| x.to_string_lossy().to_string())
+                .map(|x| x.clone())
                 .clone(),
             &self.chat_template,
             None,
@@ -833,11 +845,11 @@ impl Loader for NormalLoader {
                         self.config.write_uqff.as_ref(),
                         UqffFullSer {
                             tokenizer: &tokenizer,
-                            template_filename: paths.get_template_filename(),
-                            generation_config: paths.get_gen_conf_filename(),
+                            chat_template: paths.get_chat_template(),
+                            generation_config: paths.get_generation_config(),
                             config: config.clone(),
-                            processor_filename: &None,
-                            preprocessor_filename: &None,
+                            processor_config: &None,
+                            preprocessor_config: &None,
                         },
                         multi_progress.clone(),
                     )
@@ -947,9 +959,9 @@ impl Loader for NormalLoader {
             topology: self.config.topology.clone(),
             silent,
             organization: self.config.organization,
-            template_filename: paths.get_template_filename().clone(),
-            generation_config: paths.get_gen_conf_filename().cloned(),
-            config,
+            chat_template_ser: paths.get_chat_template().clone(),
+            generation_config_ser: paths.get_generation_config().cloned(),
+            config_ser: config,
             imatrix: self.config.imatrix.clone(),
             mapper: pipeline_mapper,
         })))
@@ -993,11 +1005,11 @@ impl IsqPipelineMixin for NormalPipeline {
                     None,
                     UqffFullSer {
                         tokenizer: &self.tokenizer,
-                        template_filename: &self.template_filename,
-                        generation_config: self.generation_config.as_ref(),
-                        config: self.config.clone(),
-                        processor_filename: &None,
-                        preprocessor_filename: &None,
+                        chat_template: &self.chat_template_ser,
+                        generation_config: self.generation_config_ser.as_ref(),
+                        config: self.config_ser.clone(),
+                        processor_config: &None,
+                        preprocessor_config: &None,
                     },
                     multi_progress.clone(),
                 )
@@ -1360,7 +1372,9 @@ impl AnyMoePipelineMixin for NormalPipeline {
 
             let mut filenames = vec![];
             for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
-                filenames.push(api_get_file!(api, &rfilename, model_id));
+                filenames.push(ModelWeightSource::PathBuf(api_get_file!(
+                    api, &rfilename, model_id
+                )));
             }
 
             let regex = regex.clone();
@@ -1411,7 +1425,9 @@ impl AnyMoePipelineMixin for NormalPipeline {
 
             let mut gate_filenames = vec![];
             for rfilename in api_dir_list!(api, model_id).filter(|x| x.ends_with(".safetensors")) {
-                gate_filenames.push(api_get_file!(api, &rfilename, model_id));
+                gate_filenames.push(ModelWeightSource::PathBuf(api_get_file!(
+                    api, &rfilename, model_id
+                )));
             }
             assert_eq!(
                 gate_filenames.len(),
@@ -1430,10 +1446,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
                 |_| true,
                 Arc::new(|_| DeviceForLoadTensor::Base),
             )?;
-            info!(
-                "Loaded gating layers from `{}`",
-                gate_filenames[0].display()
-            );
+            info!("Loaded gating layers.");
             Some(vb)
         } else {
             None
