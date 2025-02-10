@@ -168,6 +168,7 @@ impl CausalSelfAttention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
+        println!("REACHED");
         let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
