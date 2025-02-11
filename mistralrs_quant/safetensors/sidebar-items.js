@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ShardedSafeTensors"],"struct":["MmapedSafetensors","Shard"],"trait":["Load"],"type":["ShardedVarBuilder"]};
+window.SIDEBAR_ITEMS = {"enum":["Shard","ShardedSafeTensors"],"struct":["MmapedSafetensors"],"trait":["Load"],"type":["ShardedVarBuilder"]};

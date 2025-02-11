@@ -1461,7 +1461,90 @@
 <a href="#1460" id="1460">1460</a>
 <a href="#1461" id="1461">1461</a>
 <a href="#1462" id="1462">1462</a>
-<a href="#1463" id="1463">1463</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1463" id="1463">1463</a>
+<a href="#1464" id="1464">1464</a>
+<a href="#1465" id="1465">1465</a>
+<a href="#1466" id="1466">1466</a>
+<a href="#1467" id="1467">1467</a>
+<a href="#1468" id="1468">1468</a>
+<a href="#1469" id="1469">1469</a>
+<a href="#1470" id="1470">1470</a>
+<a href="#1471" id="1471">1471</a>
+<a href="#1472" id="1472">1472</a>
+<a href="#1473" id="1473">1473</a>
+<a href="#1474" id="1474">1474</a>
+<a href="#1475" id="1475">1475</a>
+<a href="#1476" id="1476">1476</a>
+<a href="#1477" id="1477">1477</a>
+<a href="#1478" id="1478">1478</a>
+<a href="#1479" id="1479">1479</a>
+<a href="#1480" id="1480">1480</a>
+<a href="#1481" id="1481">1481</a>
+<a href="#1482" id="1482">1482</a>
+<a href="#1483" id="1483">1483</a>
+<a href="#1484" id="1484">1484</a>
+<a href="#1485" id="1485">1485</a>
+<a href="#1486" id="1486">1486</a>
+<a href="#1487" id="1487">1487</a>
+<a href="#1488" id="1488">1488</a>
+<a href="#1489" id="1489">1489</a>
+<a href="#1490" id="1490">1490</a>
+<a href="#1491" id="1491">1491</a>
+<a href="#1492" id="1492">1492</a>
+<a href="#1493" id="1493">1493</a>
+<a href="#1494" id="1494">1494</a>
+<a href="#1495" id="1495">1495</a>
+<a href="#1496" id="1496">1496</a>
+<a href="#1497" id="1497">1497</a>
+<a href="#1498" id="1498">1498</a>
+<a href="#1499" id="1499">1499</a>
+<a href="#1500" id="1500">1500</a>
+<a href="#1501" id="1501">1501</a>
+<a href="#1502" id="1502">1502</a>
+<a href="#1503" id="1503">1503</a>
+<a href="#1504" id="1504">1504</a>
+<a href="#1505" id="1505">1505</a>
+<a href="#1506" id="1506">1506</a>
+<a href="#1507" id="1507">1507</a>
+<a href="#1508" id="1508">1508</a>
+<a href="#1509" id="1509">1509</a>
+<a href="#1510" id="1510">1510</a>
+<a href="#1511" id="1511">1511</a>
+<a href="#1512" id="1512">1512</a>
+<a href="#1513" id="1513">1513</a>
+<a href="#1514" id="1514">1514</a>
+<a href="#1515" id="1515">1515</a>
+<a href="#1516" id="1516">1516</a>
+<a href="#1517" id="1517">1517</a>
+<a href="#1518" id="1518">1518</a>
+<a href="#1519" id="1519">1519</a>
+<a href="#1520" id="1520">1520</a>
+<a href="#1521" id="1521">1521</a>
+<a href="#1522" id="1522">1522</a>
+<a href="#1523" id="1523">1523</a>
+<a href="#1524" id="1524">1524</a>
+<a href="#1525" id="1525">1525</a>
+<a href="#1526" id="1526">1526</a>
+<a href="#1527" id="1527">1527</a>
+<a href="#1528" id="1528">1528</a>
+<a href="#1529" id="1529">1529</a>
+<a href="#1530" id="1530">1530</a>
+<a href="#1531" id="1531">1531</a>
+<a href="#1532" id="1532">1532</a>
+<a href="#1533" id="1533">1533</a>
+<a href="#1534" id="1534">1534</a>
+<a href="#1535" id="1535">1535</a>
+<a href="#1536" id="1536">1536</a>
+<a href="#1537" id="1537">1537</a>
+<a href="#1538" id="1538">1538</a>
+<a href="#1539" id="1539">1539</a>
+<a href="#1540" id="1540">1540</a>
+<a href="#1541" id="1541">1541</a>
+<a href="#1542" id="1542">1542</a>
+<a href="#1543" id="1543">1543</a>
+<a href="#1544" id="1544">1544</a>
+<a href="#1545" id="1545">1545</a>
+<a href="#1546" id="1546">1546</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
@@ -1501,7 +1584,7 @@
     normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
-<span class="kw">use </span>anyhow::Result;
+<span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>indicatif::MultiProgress;
@@ -1514,12 +1597,12 @@
 <span class="kw">use </span>regex_automata::meta::Regex;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::borrow::Cow;
-<span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::num::{NonZero, NonZeroUsize};
 <span class="kw">use </span>std::path::{Path, PathBuf};
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::{Arc, Barrier, RwLock};
 <span class="kw">use </span>std::time::Instant;
+<span class="kw">use </span>std::{env, fs};
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
 <span class="kw">use </span>tracing::{info, warn};
@@ -1763,7 +1846,8 @@
 
         <span class="kw">let </span>use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
             &amp;&amp; available_devices.len() &gt; <span class="number">1
-            </span>&amp;&amp; std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| x != <span class="string">"1"</span>);
+            </span>&amp;&amp; (std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_err()
+                || std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| x != <span class="string">"1"</span>));
 
         <span class="comment">// If auto, convert to Map if not using nccl
         </span><span class="kw">if </span>use_nccl {
@@ -1939,14 +2023,62 @@
                 <span class="macro">anyhow::bail!</span>(<span class="string">"MISTRALRS_PIPELINE_PARALLEL must be nonzero"</span>)
             }
 
-            <span class="kw">let </span>world_size = available_devices.len() / pipeline_parallel_size;
+            <span class="kw">let </span>local_world_size = available_devices.len() / pipeline_parallel_size;
+            <span class="kw">let </span>global_world_size = <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"MISTRALRS_MN_GLOBAL_WORLD_SIZE"</span>) {
+                usize::from_str(<span class="kw-2">&amp;</span>x).context(<span class="string">"MISTRALRS_MN_GLOBAL_WORLD_SIZE"</span>)<span class="question-mark">?
+            </span>} <span class="kw">else </span>{
+                local_world_size
+            };
 
-            <span class="macro">info!</span>(<span class="string">"Tensor parallel world size is {world_size}"</span>);
+            <span class="kw">let </span>use_multi_node = global_world_size != local_world_size;
+            <span class="kw">if </span>use_multi_node {
+                <span class="macro">info!</span>(<span class="string">"Global world size != local world size, entering multi-node."</span>);
+            }
+
+            <span class="kw">if </span>global_world_size &lt; local_world_size || global_world_size % local_world_size != <span class="number">0 </span>{
+                <span class="macro">anyhow::bail!</span>(<span class="string">"Global world size {global_world_size} must both be at least and divide the local world size {local_world_size}"</span>);
+            }
+
+            <span class="macro">info!</span>(<span class="string">"Local tensor parallel world size is {local_world_size}"</span>);
+            <span class="macro">info!</span>(<span class="string">"Global tensor parallel world size is {global_world_size}"</span>);
             <span class="macro">info!</span>(<span class="string">"Pipeline parallelism size is {pipeline_parallel_size}"</span>);
 
-            <span class="kw">let </span>ids = (<span class="number">0</span>..pipeline_parallel_size)
+            <span class="kw">let </span><span class="kw-2">mut </span>ids = (<span class="number">0</span>..pipeline_parallel_size)
                 .map(|<span class="kw">_</span>| mistralrs_quant::Id::new())
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+
+            <span class="kw">if </span>ids.len() != <span class="number">1 </span>{
+                <span class="macro">anyhow::bail!</span>(
+                    <span class="string">"MISTRALRS_PIPELINE_PARALLEL cannot be set at the same time as MISTRALRS_MN_GLOBAL_WORLD_SIZE; multi-node is incompatible with pipeline parallel."
+                </span>);
+            }
+
+            <span class="kw">if </span>use_multi_node {
+                <span class="kw">let </span>id = <span class="kw-2">&amp;mut </span>ids[<span class="number">0</span>];
+                <span class="kw">if let </span><span class="prelude-val">Ok</span>(n_nodes) = env::var(<span class="string">"MISTRALRS_MN_HEAD_NUM_WORKERS"</span>) {
+                    <span class="kw">let </span>n_nodes =
+                        usize::from_str(<span class="kw-2">&amp;</span>n_nodes).context(<span class="string">"MISTRALRS_MN_HEAD_NUM_WORKERS"</span>)<span class="question-mark">?</span>;
+                    <span class="macro">info!</span>(<span class="string">"Head node managing {n_nodes} workers."</span>);
+                    <span class="kw">let </span><span class="prelude-val">Ok</span>(port) = env::var(<span class="string">"MISTRALRS_MN_HEAD_PORT"</span>) <span class="kw">else </span>{
+                        <span class="macro">anyhow::bail!</span>(
+                            <span class="string">"Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
+                        </span>);
+                    };
+                    <span class="macro">info!</span>(<span class="string">"Head node initializing connection on {port}."</span>);
+                    <span class="kw">let </span>server = mistralrs_quant::Server::new(
+                        <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"0.0.0.0:{port}"</span>),
+                        n_nodes,
+                        local_world_size,
+                    )<span class="question-mark">?</span>;
+
+                    server.broadcast_id(id)<span class="question-mark">?</span>;
+                } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(addr) = env::var(<span class="string">"MISTRALRS_MN_WORKER_SERVER_ADDR"</span>) {
+                    <span class="macro">info!</span>(<span class="string">"Worker node connecting to {addr}."</span>);
+                    <span class="kw">let </span>client = mistralrs_quant::Client::new(addr.parse()<span class="question-mark">?</span>, local_world_size)<span class="question-mark">?</span>;
+
+                    <span class="kw-2">*</span>id = client.receive_id()<span class="question-mark">?</span>;
+                }
+            }
 
             <span class="kw">if </span>available_devices.len() % ids.len() != <span class="number">0 </span>{
                 <span class="macro">anyhow::bail!</span>(
@@ -1960,13 +2092,47 @@
                 .chunks(available_devices.len() / pipeline_parallel_size)
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
+            <span class="kw">let </span>rank_offset = <span class="kw">if </span>env::var(<span class="string">"MISTRALRS_MN_WORKER_SERVER_ADDR"</span>).is_ok() {
+                <span class="kw">let </span><span class="prelude-val">Ok</span>(node_id) = env::var(<span class="string">"MISTRALRS_MN_WORKER_ID"</span>) <span class="kw">else </span>{
+                    <span class="macro">anyhow::bail!</span>(
+                        <span class="string">"Got MISTRALRS_MN_WORKER_SERVER_ADDR, expected MISTRALRS_MN_WORKER_ID"
+                    </span>);
+                };
+                <span class="kw">let </span>node_id = usize::from_str(<span class="kw-2">&amp;</span>node_id).context(<span class="string">"MISTRALRS_MN_WORKER_ID"</span>)<span class="question-mark">?</span>;
+                <span class="macro">info!</span>(<span class="string">"Worker ID is {node_id}."</span>);
+                (node_id + <span class="number">1</span>) * local_world_size
+            } <span class="kw">else </span>{
+                <span class="number">0
+            </span>};
+
             <span class="comment">// Transpose
             </span><span class="kw">let </span><span class="kw-2">mut </span>comms_all = Vec::new();
             <span class="kw">for </span>(pipeline_parallel_i, devices_per_pipeline_parallel) <span class="kw">in
                 </span>split_available_devices.iter().enumerate()
             {
                 <span class="comment">// Each pipeline parallel gets its own barrier
-                </span><span class="kw">let </span>barrier = Arc::new(Barrier::new(world_size));
+                </span><span class="kw">let </span>barrier = <span class="kw">if let </span><span class="prelude-val">Ok</span>(n_nodes) = env::var(<span class="string">"MISTRALRS_MN_HEAD_NUM_WORKERS"</span>) {
+                    <span class="kw">let </span>n_nodes =
+                        usize::from_str(<span class="kw-2">&amp;</span>n_nodes).context(<span class="string">"MISTRALRS_MN_HEAD_NUM_WORKERS"</span>)<span class="question-mark">?</span>;
+                    <span class="kw">let </span><span class="prelude-val">Ok</span>(port) = env::var(<span class="string">"MISTRALRS_MN_HEAD_PORT"</span>) <span class="kw">else </span>{
+                        <span class="macro">anyhow::bail!</span>(
+                            <span class="string">"Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
+                        </span>);
+                    };
+                    <span class="kw">let </span>server = mistralrs_quant::Server::new(
+                        <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"0.0.0.0:{port}"</span>),
+                        n_nodes,
+                        local_world_size,
+                    )<span class="question-mark">?</span>;
+
+                    Arc::new(server) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>mistralrs_quant::BarrierLike&gt;
+                } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(addr) = env::var(<span class="string">"MISTRALRS_MN_WORKER_SERVER_ADDR"</span>) {
+                    <span class="kw">let </span>client = mistralrs_quant::Client::new(addr.parse()<span class="question-mark">?</span>, local_world_size)<span class="question-mark">?</span>;
+                    Arc::new(client) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>mistralrs_quant::BarrierLike&gt;
+                } <span class="kw">else </span>{
+                    Arc::new(Barrier::new(local_world_size))
+                        <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>mistralrs_quant::BarrierLike&gt;
+                };
 
                 <span class="comment">// They each block on each other
                 // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
@@ -1985,8 +2151,8 @@
                         mistralrs_quant::Comm::from_device(
                             ids[pipeline_parallel_i],
                             device,
-                            rank,
-                            world_size,
+                            rank + rank_offset,
+                            global_world_size,
                             barrier.clone(),
                         )
                     })
@@ -2002,7 +2168,7 @@
 
             <span class="comment">// row major: number of ranks x pipeline parallel
             // Also corresponds to the device for that comm for the
-            </span><span class="kw">let </span>comms = (<span class="number">0</span>..world_size)
+            </span><span class="kw">let </span>comms = (<span class="number">0</span>..local_world_size)
                 .map(|pipeline_parallel_i| {
                     comms_all
                         .iter()

@@ -498,7 +498,82 @@
 <a href="#497" id="497">497</a>
 <a href="#498" id="498">498</a>
 <a href="#499" id="499">499</a>
-<a href="#500" id="500">500</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, Device, Error, <span class="prelude-ty">Result</span>, Shape, Tensor, WithDType};
+<a href="#500" id="500">500</a>
+<a href="#501" id="501">501</a>
+<a href="#502" id="502">502</a>
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, Device, Error, <span class="prelude-ty">Result</span>, Shape, Tensor, WithDType};
 <span class="kw">use </span>candle_nn::var_builder::{Backend, SimpleBackend, VarBuilderArgs};
 <span class="kw">use </span>float8::F8E4M3;
 <span class="kw">use </span>regex::Regex;
@@ -797,15 +872,22 @@
 }
 
 <span class="attr">#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-</span><span class="kw">pub struct </span>Shard {
-    <span class="kw">pub </span>dim: usize,
-    <span class="kw">pub </span>rank: usize,
-    <span class="kw">pub </span>world_size: usize,
+</span><span class="kw">pub enum </span>Shard {
+    Simple {
+        dim: usize,
+        rank: usize,
+        world_size: usize,
+    },
+    Offset {
+        dim: usize,
+        offset: usize,
+        len: usize,
+    },
 }
 
 <span class="kw">impl </span>Default <span class="kw">for </span>Shard {
     <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-        <span class="self">Self </span>{
+        <span class="self">Self</span>::Simple {
             dim: <span class="number">0</span>,
             rank: <span class="number">0</span>,
             world_size: <span class="number">1</span>,
@@ -835,7 +917,7 @@
         dtype: DType,
         dev: <span class="kw-2">&amp;</span>Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">if </span>h.world_size == <span class="number">1 </span>{
+        <span class="kw">if let </span>Shard::Simple { world_size: <span class="number">1</span>, .. } = <span class="kw-2">&amp;</span>h {
             <span class="comment">// There is no sharding to be applied here so we use the default backend to speed
             // things up.
             </span><span class="kw">match </span><span class="self">self </span>{
@@ -872,91 +954,159 @@
             }
         }
 
-        <span class="kw">let </span>Shard {
-            dim,
-            rank,
-            world_size,
-        } = h;
-        <span class="kw">match </span><span class="self">self </span>{
-            <span class="self">Self</span>::Sharded {
-                b,
-                make_dummy_regexes,
+        <span class="kw">match </span>h {
+            Shard::Simple {
+                dim,
+                rank,
+                world_size,
             } =&gt; {
-                <span class="kw">use </span>safetensors::slice::IndexOp;
+                <span class="kw">match </span><span class="self">self </span>{
+                    <span class="self">Self</span>::Sharded {
+                        b,
+                        make_dummy_regexes,
+                    } =&gt; {
+                        <span class="kw">use </span>safetensors::slice::IndexOp;
 
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(make_dummy_regexes) = make_dummy_regexes {
-                    <span class="kw">if </span>make_dummy_regexes.iter().any(|x| x.is_match(path)) {
-                        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::CannotFindTensor {
-                            path: path.to_string(),
-                        });
+                        <span class="kw">if let </span><span class="prelude-val">Some</span>(make_dummy_regexes) = make_dummy_regexes {
+                            <span class="kw">if </span>make_dummy_regexes.iter().any(|x| x.is_match(path)) {
+                                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::CannotFindTensor {
+                                    path: path.to_string(),
+                                });
+                            }
+                        }
+
+                        <span class="kw">let </span>view = b.get(path)<span class="question-mark">?</span>;
+                        <span class="kw">let </span>view_dtype = view.dtype();
+                        <span class="kw">let </span><span class="kw-2">mut </span>shape = view.shape().to_vec();
+                        <span class="kw">let </span>size = shape[dim];
+
+                        <span class="kw">if </span>size % world_size != <span class="number">0 </span>{
+                            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::ShapeMismatchSplit {
+                                shape: shape.into(),
+                                dim,
+                                n_parts: world_size,
+                            });
+                        }
+                        <span class="kw">let </span>block_size = size / world_size;
+                        <span class="kw">let </span>start = rank * block_size;
+                        <span class="kw">let </span>stop = (rank + <span class="number">1</span>) * block_size;
+
+                        <span class="comment">// Everything is expressed in tensor dimension
+                        // bytes offsets is handled automatically for safetensors.
+
+                        </span><span class="kw">let </span>iterator = <span class="kw">if </span>dim == <span class="number">0 </span>{
+                            view.slice(start..stop).map_err(|<span class="kw">_</span>| {
+                                Error::Msg(<span class="macro">format!</span>(
+                                    <span class="string">"Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                                </span>))
+                            })<span class="question-mark">?
+                        </span>} <span class="kw">else if </span>dim == <span class="number">1 </span>{
+                            view.slice((.., start..stop)).map_err(|<span class="kw">_</span>| {
+                                Error::Msg(<span class="macro">format!</span>(
+                                    <span class="string">"Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                                </span>))
+                            })<span class="question-mark">?
+                        </span>} <span class="kw">else </span>{
+                            <span class="macro">candle_core::bail!</span>(<span class="string">"Got sharded on dimensions != 0 or 1"</span>)
+                        };
+
+                        shape[dim] = block_size;
+
+                        <span class="kw">let </span>view_dtype: DType = view_dtype.try_into()<span class="question-mark">?</span>;
+                        <span class="kw">let </span>raw: Vec&lt;u8&gt; = iterator.into_iter().flatten().cloned().collect();
+                        Tensor::from_raw_buffer(<span class="kw-2">&amp;</span>raw, view_dtype, <span class="kw-2">&amp;</span>shape, dev)<span class="question-mark">?</span>.to_dtype(dtype)
+                    }
+                    <span class="self">Self</span>::SimpleBackend(b) =&gt; {
+                        <span class="kw">use </span>candle_core::IndexOp;
+                        <span class="kw">let </span>tensor = b.get(target_shape, path, Default::default(), dtype, dev)<span class="question-mark">?</span>;
+
+                        <span class="kw">let </span>size = tensor.dim(dim)<span class="question-mark">?</span>;
+                        <span class="kw">let </span>shape = tensor.dims().to_vec();
+
+                        <span class="kw">if </span>size % world_size != <span class="number">0 </span>{
+                            <span class="kw">return </span><span class="prelude-val">Err</span>(Error::ShapeMismatchSplit {
+                                shape: shape.into(),
+                                dim,
+                                n_parts: world_size,
+                            });
+                        }
+                        <span class="kw">let </span>block_size = size / world_size;
+                        <span class="kw">let </span>start = rank * block_size;
+                        <span class="kw">let </span>stop = (rank + <span class="number">1</span>) * block_size;
+
+                        <span class="kw">if </span>dim == <span class="number">0 </span>{
+                            tensor.i((start..stop, ..))
+                        } <span class="kw">else if </span>dim == <span class="number">1 </span>{
+                            tensor.i((.., start..stop))
+                        } <span class="kw">else </span>{
+                            <span class="macro">candle_core::bail!</span>(<span class="string">"Got sharded on dimensions != 0 or 1"</span>)
+                        }
                     }
                 }
-
-                <span class="kw">let </span>view = b.get(path)<span class="question-mark">?</span>;
-                <span class="kw">let </span>view_dtype = view.dtype();
-                <span class="kw">let </span><span class="kw-2">mut </span>shape = view.shape().to_vec();
-                <span class="kw">let </span>size = shape[dim];
-
-                <span class="kw">if </span>size % world_size != <span class="number">0 </span>{
-                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::ShapeMismatchSplit {
-                        shape: shape.into(),
-                        dim,
-                        n_parts: world_size,
-                    });
-                }
-                <span class="kw">let </span>block_size = size / world_size;
-                <span class="kw">let </span>start = rank * block_size;
-                <span class="kw">let </span>stop = (rank + <span class="number">1</span>) * block_size;
-
-                <span class="comment">// Everything is expressed in tensor dimension
-                // bytes offsets is handled automatically for safetensors.
-
-                </span><span class="kw">let </span>iterator = <span class="kw">if </span>dim == <span class="number">0 </span>{
-                    view.slice(start..stop).map_err(|<span class="kw">_</span>| {
-                        Error::Msg(<span class="macro">format!</span>(
-                    <span class="string">"Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
-                </span>))
-                    })<span class="question-mark">?
-                </span>} <span class="kw">else if </span>dim == <span class="number">1 </span>{
-                    view.slice((.., start..stop)).map_err(|<span class="kw">_</span>| {
-                        Error::Msg(<span class="macro">format!</span>(
-                    <span class="string">"Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
-                </span>))
-                    })<span class="question-mark">?
-                </span>} <span class="kw">else </span>{
-                    <span class="macro">candle_core::bail!</span>(<span class="string">"Got sharded on dimensions != 0 or 1"</span>)
-                };
-
-                shape[dim] = block_size;
-
-                <span class="kw">let </span>view_dtype: DType = view_dtype.try_into()<span class="question-mark">?</span>;
-                <span class="kw">let </span>raw: Vec&lt;u8&gt; = iterator.into_iter().flatten().cloned().collect();
-                Tensor::from_raw_buffer(<span class="kw-2">&amp;</span>raw, view_dtype, <span class="kw-2">&amp;</span>shape, dev)<span class="question-mark">?</span>.to_dtype(dtype)
             }
-            <span class="self">Self</span>::SimpleBackend(b) =&gt; {
-                <span class="kw">use </span>candle_core::IndexOp;
-                <span class="kw">let </span>tensor = b.get(target_shape, path, Default::default(), dtype, dev)<span class="question-mark">?</span>;
+            Shard::Offset { dim, offset, len } =&gt; {
+                <span class="kw">match </span><span class="self">self </span>{
+                    <span class="self">Self</span>::Sharded {
+                        b,
+                        make_dummy_regexes,
+                    } =&gt; {
+                        <span class="kw">use </span>safetensors::slice::IndexOp;
 
-                <span class="kw">let </span>size = tensor.dim(dim)<span class="question-mark">?</span>;
-                <span class="kw">let </span>shape = tensor.dims().to_vec();
+                        <span class="kw">if let </span><span class="prelude-val">Some</span>(make_dummy_regexes) = make_dummy_regexes {
+                            <span class="kw">if </span>make_dummy_regexes.iter().any(|x| x.is_match(path)) {
+                                <span class="kw">return </span><span class="prelude-val">Err</span>(Error::CannotFindTensor {
+                                    path: path.to_string(),
+                                });
+                            }
+                        }
 
-                <span class="kw">if </span>size % world_size != <span class="number">0 </span>{
-                    <span class="kw">return </span><span class="prelude-val">Err</span>(Error::ShapeMismatchSplit {
-                        shape: shape.into(),
-                        dim,
-                        n_parts: world_size,
-                    });
-                }
-                <span class="kw">let </span>block_size = size / world_size;
-                <span class="kw">let </span>start = rank * block_size;
-                <span class="kw">let </span>stop = (rank + <span class="number">1</span>) * block_size;
+                        <span class="kw">let </span>view = b.get(path)<span class="question-mark">?</span>;
+                        <span class="kw">let </span>view_dtype = view.dtype();
+                        <span class="kw">let </span><span class="kw-2">mut </span>shape = view.shape().to_vec();
 
-                <span class="kw">if </span>dim == <span class="number">0 </span>{
-                    tensor.i((start..stop, ..))
-                } <span class="kw">else if </span>dim == <span class="number">1 </span>{
-                    tensor.i((.., start..stop))
-                } <span class="kw">else </span>{
-                    <span class="macro">candle_core::bail!</span>(<span class="string">"Got sharded on dimensions != 0 or 1"</span>)
+                        <span class="kw">let </span>start = offset;
+                        <span class="kw">let </span>stop = start + len;
+
+                        <span class="comment">// Everything is expressed in tensor dimension
+                        // bytes offsets is handled automatically for safetensors.
+
+                        </span><span class="kw">let </span>iterator = <span class="kw">if </span>dim == <span class="number">0 </span>{
+                            view.slice(start..stop).map_err(|<span class="kw">_</span>| {
+                                Error::Msg(<span class="macro">format!</span>(
+                                    <span class="string">"Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                                </span>))
+                            })<span class="question-mark">?
+                        </span>} <span class="kw">else if </span>dim == <span class="number">1 </span>{
+                            view.slice((.., start..stop)).map_err(|<span class="kw">_</span>| {
+                                Error::Msg(<span class="macro">format!</span>(
+                                    <span class="string">"Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                                </span>))
+                            })<span class="question-mark">?
+                        </span>} <span class="kw">else </span>{
+                            <span class="macro">candle_core::bail!</span>(<span class="string">"Got sharded on dimensions != 0 or 1"</span>)
+                        };
+
+                        shape[dim] = len;
+
+                        <span class="kw">let </span>view_dtype: DType = view_dtype.try_into()<span class="question-mark">?</span>;
+                        <span class="kw">let </span>raw: Vec&lt;u8&gt; = iterator.into_iter().flatten().cloned().collect();
+                        Tensor::from_raw_buffer(<span class="kw-2">&amp;</span>raw, view_dtype, <span class="kw-2">&amp;</span>shape, dev)<span class="question-mark">?</span>.to_dtype(dtype)
+                    }
+                    <span class="self">Self</span>::SimpleBackend(b) =&gt; {
+                        <span class="kw">use </span>candle_core::IndexOp;
+                        <span class="kw">let </span>tensor = b.get(target_shape, path, Default::default(), dtype, dev)<span class="question-mark">?</span>;
+
+                        <span class="kw">let </span>start = offset;
+                        <span class="kw">let </span>stop = start + len;
+
+                        <span class="kw">if </span>dim == <span class="number">0 </span>{
+                            tensor.i((start..stop, ..))
+                        } <span class="kw">else if </span>dim == <span class="number">1 </span>{
+                            tensor.i((.., start..stop))
+                        } <span class="kw">else </span>{
+                            <span class="macro">candle_core::bail!</span>(<span class="string">"Got sharded on dimensions != 0 or 1"</span>)
+                        }
+                    }
                 }
             }
         }
