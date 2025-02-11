@@ -22,6 +22,8 @@ impl Server {
     /// Binds the listener and then accepts exactly `n_nodes` persistent connections.
     pub fn new<A: ToSocketAddrs>(addr: &A, n_nodes: usize, n_local_ranks: usize) -> Result<Self> {
         let listener = TcpListener::bind(addr)?;
+        listener.set_nonblocking(false)?;
+
         let start = Instant::now();
         let mut connections = Vec::with_capacity(n_nodes);
         while connections.len() < n_nodes {
@@ -58,12 +60,7 @@ impl BarrierLike for Server {
         let res = self.barrier_all.wait();
 
         if res.is_leader() {
-            // Leader sends the barrier signal "Go!" to every node.
-            for mut stream in &self.connections {
-                stream.write_all(b"Go!")?;
-                stream.flush()?;
-            }
-            // Now, wait to receive an acknowledgement "Ack" from every node.
+            // ait to receive an acknowledgement "Ack" from every node.
             let mut ack_buf = [0u8; 3];
             for mut stream in &self.connections {
                 stream.read_exact(&mut ack_buf)?;
@@ -89,14 +86,23 @@ pub struct Client {
 
 impl Client {
     pub fn new(addr: SocketAddr, n_local_ranks: usize) -> Result<Self> {
-        let stream = TcpStream::connect(addr)?;
-        stream.set_nodelay(true)?;
-        stream.set_nonblocking(false)?;
-        Ok(Self {
-            stream: Mutex::new(stream),
-            barrier_all: Barrier::new(n_local_ranks),
-            barrier_crossnode: Barrier::new(n_local_ranks),
-        })
+        let start = Instant::now();
+        loop {
+            let stream = TcpStream::connect(addr);
+            if let Ok(stream) = stream {
+                stream.set_nodelay(true)?;
+                stream.set_nonblocking(false)?;
+
+                return Ok(Self {
+                    stream: Mutex::new(stream),
+                    barrier_all: Barrier::new(n_local_ranks),
+                    barrier_crossnode: Barrier::new(n_local_ranks),
+                });
+            }
+            if start.elapsed() > Duration::from_secs(10) {
+                candle_core::bail!("Failed to connect to head node due to timeout: over 10s");
+            }
+        }
     }
 
     /// Receives the broadcasted ID from the persistent stream.
@@ -120,12 +126,6 @@ impl BarrierLike for Client {
 
         if res.is_leader() {
             let mut stream = self.stream.lock().unwrap();
-            // Read the barrier signal "Go!" from the persistent stream.
-            let mut buf = [0u8; 3];
-            stream.read_exact(&mut buf)?;
-            if &buf != b"Go!" {
-                candle_core::bail!("Did not receive correct barrier signal from head node");
-            }
             // Immediately send back an acknowledgement "Ack".
             stream.write_all(b"Ack")?;
             stream.flush()?;
