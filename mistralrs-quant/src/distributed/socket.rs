@@ -7,7 +7,6 @@ use std::{
 };
 
 use candle_core::Result;
-use tracing::info;
 
 use super::{BarrierLike, Id};
 
@@ -62,18 +61,15 @@ impl BarrierLike for Server {
         let res = self.barrier_all.wait();
 
         if res.is_leader() {
-            info!("s a");
             let mut streams = Vec::new();
             for stream in self.listener.incoming().take(self.n_nodes) {
                 streams.push(stream?);
             }
-            info!("s b");
 
             // Got all connections, send go ahead responses
             for mut stream in streams {
                 stream.write_all(b"Go!")?;
             }
-            info!("s c");
         }
 
         self.barrier_crossnode.wait();
@@ -137,9 +133,7 @@ impl BarrierLike for Client {
 
         if res.is_leader() {
             let mut out = [0u8; 128];
-            info!("c a");
             let n = self.stream(Duration::from_secs(0))?.read(&mut out)?;
-            info!("c b");
             assert_ne!(n, 0);
         }
 
