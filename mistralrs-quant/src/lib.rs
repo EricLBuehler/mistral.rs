@@ -37,7 +37,8 @@ pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use distributed::{
     layers::{ColumnParallelLayer, ReplicatedLayer, RowParallelLayer},
-    Comm, Id, SumAllReduce,
+    socket::{Client, Server},
+    BarrierLike, Comm, Id, SumAllReduce,
 };
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;

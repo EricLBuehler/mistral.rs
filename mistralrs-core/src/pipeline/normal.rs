@@ -38,7 +38,7 @@ use crate::{
     normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
@@ -51,12 +51,12 @@ use rayon::iter::{
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
-use std::fs;
 use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Barrier, RwLock};
 use std::time::Instant;
+use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -300,7 +300,8 @@ impl Loader for NormalLoader {
 
         let use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
             && available_devices.len() > 1
-            && std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1");
+            && (std::env::var("MISTRALRS_NO_NCCL").is_err()
+                || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"));
 
         // If auto, convert to Map if not using nccl
         if use_nccl {
@@ -476,14 +477,62 @@ impl Loader for NormalLoader {
                 anyhow::bail!("MISTRALRS_PIPELINE_PARALLEL must be nonzero")
             }
 
-            let world_size = available_devices.len() / pipeline_parallel_size;
+            let local_world_size = available_devices.len() / pipeline_parallel_size;
+            let global_world_size = if let Ok(x) = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE") {
+                usize::from_str(&x).context("MISTRALRS_MN_GLOBAL_WORLD_SIZE")?
+            } else {
+                local_world_size
+            };
 
-            info!("Tensor parallel world size is {world_size}");
+            let use_multi_node = global_world_size != local_world_size;
+            if use_multi_node {
+                info!("Global world size != local world size, entering multi-node.");
+            }
+
+            if global_world_size < local_world_size || global_world_size % local_world_size != 0 {
+                anyhow::bail!("Global world size {global_world_size} must both be at least and divide the local world size {local_world_size}");
+            }
+
+            info!("Local tensor parallel world size is {local_world_size}");
+            info!("Global tensor parallel world size is {global_world_size}");
             info!("Pipeline parallelism size is {pipeline_parallel_size}");
 
-            let ids = (0..pipeline_parallel_size)
+            let mut ids = (0..pipeline_parallel_size)
                 .map(|_| mistralrs_quant::Id::new())
                 .collect::<Vec<_>>();
+
+            if ids.len() != 1 {
+                anyhow::bail!(
+                    "MISTRALRS_PIPELINE_PARALLEL cannot be set at the same time as MISTRALRS_MN_GLOBAL_WORLD_SIZE; multi-node is incompatible with pipeline parallel."
+                );
+            }
+
+            if use_multi_node {
+                let id = &mut ids[0];
+                if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
+                    let n_nodes =
+                        usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
+                    info!("Head node managing {n_nodes} workers.");
+                    let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
+                        anyhow::bail!(
+                            "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
+                        );
+                    };
+                    info!("Head node initializing connection on {port}.");
+                    let server = mistralrs_quant::Server::new(
+                        &format!("0.0.0.0:{port}"),
+                        n_nodes,
+                        local_world_size,
+                    )?;
+
+                    server.broadcast_id(id)?;
+                } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
+                    info!("Worker node connecting to {addr}.");
+                    let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
+
+                    *id = client.receive_id()?;
+                }
+            }
 
             if available_devices.len() % ids.len() != 0 {
                 anyhow::bail!(
@@ -497,13 +546,47 @@ impl Loader for NormalLoader {
                 .chunks(available_devices.len() / pipeline_parallel_size)
                 .collect::<Vec<_>>();
 
+            let rank_offset = if env::var("MISTRALRS_MN_WORKER_SERVER_ADDR").is_ok() {
+                let Ok(node_id) = env::var("MISTRALRS_MN_WORKER_ID") else {
+                    anyhow::bail!(
+                        "Got MISTRALRS_MN_WORKER_SERVER_ADDR, expected MISTRALRS_MN_WORKER_ID"
+                    );
+                };
+                let node_id = usize::from_str(&node_id).context("MISTRALRS_MN_WORKER_ID")?;
+                info!("Worker ID is {node_id}.");
+                (node_id + 1) * local_world_size
+            } else {
+                0
+            };
+
             // Transpose
             let mut comms_all = Vec::new();
             for (pipeline_parallel_i, devices_per_pipeline_parallel) in
                 split_available_devices.iter().enumerate()
             {
                 // Each pipeline parallel gets its own barrier
-                let barrier = Arc::new(Barrier::new(world_size));
+                let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
+                    let n_nodes =
+                        usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
+                    let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
+                        anyhow::bail!(
+                            "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
+                        );
+                    };
+                    let server = mistralrs_quant::Server::new(
+                        &format!("0.0.0.0:{port}"),
+                        n_nodes,
+                        local_world_size,
+                    )?;
+
+                    Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
+                } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
+                    let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
+                    Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
+                } else {
+                    Arc::new(Barrier::new(local_world_size))
+                        as Arc<dyn mistralrs_quant::BarrierLike>
+                };
 
                 // They each block on each other
                 // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
@@ -522,8 +605,8 @@ impl Loader for NormalLoader {
                         mistralrs_quant::Comm::from_device(
                             ids[pipeline_parallel_i],
                             device,
-                            rank,
-                            world_size,
+                            rank + rank_offset,
+                            global_world_size,
                             barrier.clone(),
                         )
                     })
@@ -539,7 +622,7 @@ impl Loader for NormalLoader {
 
             // row major: number of ranks x pipeline parallel
             // Also corresponds to the device for that comm for the
-            let comms = (0..world_size)
+            let comms = (0..local_world_size)
                 .map(|pipeline_parallel_i| {
                     comms_all
                         .iter()
