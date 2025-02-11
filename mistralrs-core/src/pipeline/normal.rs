@@ -477,8 +477,21 @@ impl Loader for NormalLoader {
                 anyhow::bail!("MISTRALRS_PIPELINE_PARALLEL must be nonzero")
             }
 
-            let global_world_size = 16; //available_devices.len() / pipeline_parallel_size;
             let local_world_size = available_devices.len() / pipeline_parallel_size;
+            let global_world_size = if let Ok(x) = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE") {
+                usize::from_str(&x).context("MISTRALRS_MN_GLOBAL_WORLD_SIZE")?
+            } else {
+                local_world_size
+            };
+
+            let use_multi_node = global_world_size != local_world_size;
+            if use_multi_node {
+                info!("Global world size != local world size, entering multi-node.");
+            }
+
+            if global_world_size < local_world_size || global_world_size % local_world_size != 0 {
+                anyhow::bail!("Global world size {global_world_size} must both be at least and divide the local world size {local_world_size}");
+            }
 
             info!("Local tensor parallel world size is {local_world_size}");
             info!("Global tensor parallel world size is {global_world_size}");
@@ -488,36 +501,56 @@ impl Loader for NormalLoader {
                 .map(|_| mistralrs_quant::Id::new())
                 .collect::<Vec<_>>();
 
-            assert_eq!(ids.len(), 1, "TODO THIS IS DEBUGGING!!!!!!!");
-
-            let id = &mut ids[0];
-
-            if let Ok(n_nodes) = env::var("MISTRALRS_HEAD_NUM_NODES") {
-                let n_nodes = usize::from_str(&n_nodes).context("MISTRALRS_HEAD_NUM_NODES")?;
-                let server =
-                    mistralrs_quant::Server::new(&"0.0.0.0:8765", n_nodes, local_world_size)?;
-
-                server.broadcast_id(&id)?;
-            } else if let Ok(addr) = env::var("MISTRALRS_WORKER_SERVER_ADDR") {
-                let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
-
-                *id = client.recieve_id()?;
+            if ids.len() != 1 {
+                anyhow::bail!(
+                    "MISTRALRS_PIPELINE_PARALLEL cannot be set at the same time as MISTRALRS_MN_GLOBAL_WORLD_SIZE; multi-node is incompatible with pipeline parallel."
+                );
             }
 
-            // if available_devices.len() % ids.len() != 0 {
-            //     anyhow::bail!(
-            //         "Pipeline parallel size {} must divide the number of available devices {}",
-            //         pipeline_parallel_size,
-            //         available_devices.len()
-            //     );
-            // }
+            if use_multi_node {
+                let id = &mut ids[0];
+                if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
+                    let n_nodes =
+                        usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
+                    let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
+                        anyhow::bail!(
+                            "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
+                        );
+                    };
+                    let server = mistralrs_quant::Server::new(
+                        &format!("0.0.0.0:{port}"),
+                        n_nodes,
+                        local_world_size,
+                    )?;
+
+                    server.broadcast_id(&id)?;
+                } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
+                    let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
+
+                    *id = client.recieve_id()?;
+                }
+            }
+
+            if available_devices.len() % ids.len() != 0 {
+                anyhow::bail!(
+                    "Pipeline parallel size {} must divide the number of available devices {}",
+                    pipeline_parallel_size,
+                    available_devices.len()
+                );
+            }
 
             let split_available_devices = available_devices
                 .chunks(available_devices.len() / pipeline_parallel_size)
                 .collect::<Vec<_>>();
 
-            let rank_offset = if env::var("MISTRALRS_WORKER_SERVER_ADDR").is_ok() {
-                8
+            let rank_offset = if env::var("MISTRALRS_MN_WORKER_SERVER_ADDR").is_ok() {
+                let Ok(node_id) = env::var("MISTRALRS_MN_WORKER_ID") else {
+                    anyhow::bail!(
+                        "Got MISTRALRS_MN_WORKER_SERVER_ADDR, expected MISTRALRS_MN_WORKER_ID"
+                    );
+                };
+                let node_id = usize::from_str(&node_id).context("MISTRALRS_MN_WORKER_ID")?;
+                node_id * local_world_size
             } else {
                 0
             };
@@ -528,13 +561,21 @@ impl Loader for NormalLoader {
                 split_available_devices.iter().enumerate()
             {
                 // Each pipeline parallel gets its own barrier
-                // let barrier = Arc::new(Barrier::new(local_world_size));
-                let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_HEAD_NUM_NODES") {
-                    let n_nodes = usize::from_str(&n_nodes).context("MISTRALRS_HEAD_NUM_NODES")?;
-                    let server =
-                        mistralrs_quant::Server::new(&"0.0.0.0:8765", n_nodes, local_world_size)?;
+                let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
+                    let n_nodes =
+                        usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
+                    let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
+                        anyhow::bail!(
+                            "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
+                        );
+                    };
+                    let server = mistralrs_quant::Server::new(
+                        &format!("0.0.0.0:{port}"),
+                        n_nodes,
+                        local_world_size,
+                    )?;
                     Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
-                } else if let Ok(addr) = env::var("MISTRALRS_WORKER_SERVER_ADDR") {
+                } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
                     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
                     Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
                 } else {
