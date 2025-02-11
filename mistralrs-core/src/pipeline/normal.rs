@@ -524,13 +524,14 @@ impl Loader for NormalLoader {
                         n_nodes,
                         local_world_size,
                     )?;
+                    server.accept_nodes()?;
 
                     server.broadcast_id(&id)?;
                 } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
                     info!("Worker node connecting to {addr}.");
-                    let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
+                    let mut client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
 
-                    *id = client.recieve_id()?;
+                    *id = client.receive_id()?;
                 }
             }
 
@@ -578,6 +579,8 @@ impl Loader for NormalLoader {
                         n_nodes,
                         local_world_size,
                     )?;
+                    server.accept_nodes()?;
+
                     Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
                 } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
                     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
