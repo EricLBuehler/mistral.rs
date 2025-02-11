@@ -1,15 +1,31 @@
+use std::{fmt::Debug, sync::Barrier};
+
+use candle_core::Result;
+pub use ops::{Comm, Id, SumAllReduce};
+pub mod layers;
+pub mod socket;
+
+pub trait BarrierLike: Debug + Send + Sync {
+    fn wait(&self) -> Result<()>;
+}
+
+impl BarrierLike for Barrier {
+    fn wait(&self) -> Result<()> {
+        Barrier::wait(&self);
+        Ok(())
+    }
+}
+
 #[cfg(feature = "cuda")]
 mod ops {
-    use std::{
-        fmt::Debug,
-        ops::Deref,
-        sync::{Arc, Barrier},
-    };
+    use std::{fmt::Debug, ops::Deref, sync::Arc};
 
     use candle_core::{
         backend::BackendStorage, cuda::cudarc, cuda_backend::WrapErr, CpuStorage, CustomOp1, DType,
         Device, Layout, Result, Shape, Tensor,
     };
+
+    use super::BarrierLike;
 
     #[derive(Debug, Clone, Copy)]
     pub struct Id(cudarc::nccl::Id);
@@ -32,7 +48,7 @@ mod ops {
     #[derive(Debug)]
     pub struct Comm {
         comm: cudarc::nccl::Comm,
-        barrier: Arc<Barrier>,
+        barrier: Arc<dyn BarrierLike>,
     }
 
     impl Comm {
@@ -41,7 +57,7 @@ mod ops {
             dev: &Device,
             rank: usize,
             world_size: usize,
-            barrier: Arc<Barrier>,
+            barrier: Arc<dyn BarrierLike>,
         ) -> Result<Self> {
             let device = dev.as_cuda_device()?.cuda_device();
             Ok(Self {
@@ -78,7 +94,7 @@ mod ops {
         pub fn apply(&self, xs: &Tensor) -> Result<Tensor> {
             use candle_core::cuda::cudarc::driver::result;
             unsafe { result::ctx::set_current(*self.comm.comm.device().cu_primary_ctx()) }.unwrap();
-            self.comm.barrier.wait();
+            self.comm.barrier.wait()?;
             xs.apply_op1_no_bwd(self)
         }
     }
@@ -151,9 +167,11 @@ mod ops {
 
 #[cfg(not(feature = "cuda"))]
 mod ops {
-    use std::sync::{Arc, Barrier};
+    use std::sync::Arc;
 
     use candle_core::{Device, Result, Tensor};
+
+    use super::BarrierLike;
 
     #[derive(Debug, Clone, Copy)]
     pub struct Id;
@@ -193,7 +211,7 @@ mod ops {
             _dev: &Device,
             _rank: usize,
             _world_size: usize,
-            _barrier: Arc<Barrier>,
+            _barrier: Arc<dyn BarrierLike>,
         ) -> Result<Self> {
             Ok(Self)
         }
@@ -220,7 +238,3 @@ mod ops {
         }
     }
 }
-
-pub use ops::{Comm, Id, SumAllReduce};
-pub mod layers;
-pub mod socket;

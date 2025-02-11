@@ -38,7 +38,7 @@ pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use distributed::{
     layers::{ColumnParallelLayer, ReplicatedLayer, RowParallelLayer},
     socket::{Client, Server},
-    Comm, Id, SumAllReduce,
+    BarrierLike, Comm, Id, SumAllReduce,
 };
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;

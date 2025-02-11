@@ -498,7 +498,7 @@ impl Loader for NormalLoader {
 
                 server.broadcast_id(&id)?;
             } else if let Ok(addr) = env::var("MISTRALRS_WORKER_SERVER_ADDR") {
-                let mut client = mistralrs_quant::Client::new(&addr)?;
+                let client = mistralrs_quant::Client::new(addr.parse()?)?;
 
                 *id = client.recieve_id()?;
             }
@@ -527,7 +527,18 @@ impl Loader for NormalLoader {
                 split_available_devices.iter().enumerate()
             {
                 // Each pipeline parallel gets its own barrier
-                let barrier = Arc::new(Barrier::new(local_world_size));
+                // let barrier = Arc::new(Barrier::new(local_world_size));
+                let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_HEAD_NUM_NODES") {
+                    let n_nodes = usize::from_str(&n_nodes).context("MISTRALRS_HEAD_NUM_NODES")?;
+                    let server = mistralrs_quant::Server::new(&"0.0.0.0:8765", n_nodes)?;
+                    Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
+                } else if let Ok(addr) = env::var("MISTRALRS_WORKER_SERVER_ADDR") {
+                    let client = mistralrs_quant::Client::new(addr.parse()?)?;
+                    Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
+                } else {
+                    Arc::new(Barrier::new(local_world_size))
+                        as Arc<dyn mistralrs_quant::BarrierLike>
+                };
 
                 // They each block on each other
                 // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank

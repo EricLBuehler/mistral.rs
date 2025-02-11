@@ -1,14 +1,15 @@
 use std::{
     io::{Read, Write},
-    net::{TcpListener, TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     slice,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use candle_core::Result;
 
-use super::Id;
+use super::{BarrierLike, Id};
 
+#[derive(Debug)]
 pub struct Server {
     listener: TcpListener,
     n_nodes: usize,
@@ -47,30 +48,51 @@ impl Server {
     }
 }
 
+impl BarrierLike for Server {
+    fn wait(&self) -> Result<()> {
+        let mut streams = Vec::new();
+        for stream in self.listener.incoming().take(self.n_nodes) {
+            streams.push(stream?);
+        }
+
+        // Got all connections, send go ahead responses
+        for mut stream in streams {
+            stream.write_all(b"Go!")?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
 pub struct Client {
-    stream: TcpStream,
+    addr: SocketAddr,
 }
 
 impl Client {
-    /// Creates a stream, with a connection timeout of 10 seconds.
-    pub fn new<A: ToSocketAddrs>(addr: &A) -> Result<Self> {
+    pub fn new(addr: SocketAddr) -> Result<Self> {
+        Ok(Self { addr })
+    }
+
+    fn stream(&self, timeout: Duration) -> Result<TcpStream> {
         let start = Instant::now();
         loop {
-            let stream = TcpStream::connect(addr);
+            let stream = TcpStream::connect(&self.addr);
             if let Ok(stream) = stream {
-                return Ok(Self { stream });
+                return Ok(stream);
             }
-            if Instant::now().duration_since(start).as_secs_f32() >= 10. {
-                candle_core::bail!("Client connect timeout: over 10s")
+            if Instant::now().duration_since(start) >= timeout {
+                candle_core::bail!("Client connect timeout: over {timeout:?}")
             }
         }
     }
 
-    pub fn recieve_id(&mut self) -> Result<Id> {
-        // Read data into a buffer, we node there are 128.
+    /// Connect, with a timeout of 10s
+    pub fn recieve_id(&self) -> Result<Id> {
+        // Read data into a buffer, we know there are 128
         let mut internal = [0u8; 128];
-        let n = self.stream.read(&mut internal)?;
-        assert_eq!(n, internal.len());
+        self.stream(Duration::from_secs(10))?
+            .read_exact(&mut internal)?;
 
         let body_as_i8: &[i8] =
             unsafe { std::slice::from_raw_parts(internal.as_ptr() as *const i8, internal.len()) };
@@ -82,5 +104,15 @@ impl Client {
         }
 
         Ok(Id::uninit(uninit))
+    }
+}
+
+impl BarrierLike for Client {
+    fn wait(&self) -> Result<()> {
+        let mut out = [0u8; 128];
+        let n = self.stream(Duration::from_secs(0))?.read(&mut out)?;
+        assert_ne!(n, 0);
+
+        Ok(())
     }
 }
