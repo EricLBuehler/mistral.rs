@@ -88,7 +88,6 @@ safetensors.workspace = true
 pyo3_macros = ["pyo3"]
 cuda = [
     "candle-core/cuda",
-    "candle-core/nccl",
     "candle-nn/cuda",
     "dep:bindgen_cuda",
     "mistralrs-quant/cuda",
@@ -110,6 +109,7 @@ flash-attn = ["cuda", "dep:candle-flash-attn"]
 flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
+nccl = ["cuda", "mistralrs-quant/nccl"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }
