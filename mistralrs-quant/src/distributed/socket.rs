@@ -26,6 +26,9 @@ impl Server {
         let mut connections = Vec::with_capacity(n_nodes);
         while connections.len() < n_nodes {
             if let Ok((stream, _)) = listener.accept() {
+                stream.set_read_timeout(Some(Duration::from_secs_f32(10.)))?;
+                stream.set_write_timeout(Some(Duration::from_secs_f32(10.)))?;
+
                 connections.push(stream);
             }
             if start.elapsed() > Duration::from_secs(10) {
@@ -95,6 +98,9 @@ impl Client {
             if let Ok(stream) = stream {
                 stream.set_nodelay(true)?;
                 stream.set_nonblocking(false)?;
+
+                stream.set_read_timeout(Some(Duration::from_secs_f32(10.)))?;
+                stream.set_write_timeout(Some(Duration::from_secs_f32(10.)))?;
 
                 return Ok(Self {
                     stream: Mutex::new(stream),
