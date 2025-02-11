@@ -37,6 +37,7 @@ pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use distributed::{
     layers::{ColumnParallelLayer, ReplicatedLayer, RowParallelLayer},
+    socket::{Client, Server},
     Comm, Id, SumAllReduce,
 };
 pub use dummy::DummyLayer;

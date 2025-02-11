@@ -42,7 +42,7 @@ use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
-use mistralrs_quant::{GgufMatMul, HqqLayer, Id, IsqType, QuantizedSerdeType, ShardedSafeTensors};
+use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -51,14 +51,12 @@ use rayon::iter::{
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
 use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Barrier, RwLock};
 use std::time::Instant;
-use std::{env, fs, slice};
+use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -496,90 +494,13 @@ impl Loader for NormalLoader {
 
             if let Ok(n_nodes) = env::var("MISTRALRS_HEAD_NUM_NODES") {
                 let n_nodes = usize::from_str(&n_nodes).context("MISTRALRS_HEAD_NUM_NODES")?;
+                let server = mistralrs_quant::Server::new(&"0.0.0.0:8765", n_nodes)?;
 
-                let listener = TcpListener::bind("0.0.0.0:8765")?;
-                info!("HEAD: STARTING SERVER; Listening on port 8765...");
-
-                // Accept incoming connections in a loop.
-                let mut counter = 0;
-                while counter < n_nodes {
-                    for stream in listener.incoming() {
-                        info!("SERVER: Got request");
-                        let mut stream = stream?;
-
-                        // let mut buffer = [0; 512];
-                        // // Read the incoming data into the buffer.
-                        // stream.read(&mut buffer).unwrap();
-
-                        // Check if the request starts with a GET for "/".
-                        // let get_request = b"GET / HTTP/1.1\r\n";
-                        // if !buffer.starts_with(get_request) {
-                        //     continue;
-                        // }
-
-                        let body = id.internal();
-                        info!("ID is: {body:?}");
-
-                        let header = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\n\r\n",
-                            body.len()
-                        );
-
-                        // SAFETY: we know the provenance & lifetime are valid here.
-                        let body = unsafe {
-                            slice::from_raw_parts(body.as_ptr() as *const u8, body.len())
-                        };
-
-                        // Build and send the HTTP response.
-                        stream.write_all(header.as_bytes()).unwrap();
-                        stream.write_all(&body).unwrap();
-                        stream.flush().unwrap();
-
-                        counter += 1;
-                        info!("SERVER: Sent ID to worker {counter}");
-
-                        break;
-                    }
-                }
+                server.broadcast_id(&id)?;
             } else if let Ok(addr) = env::var("MISTRALRS_WORKER_SERVER_ADDR") {
-                let mut stream = TcpStream::connect(&addr)?;
-                info!("WORKER: STARTING CLIENT; Connecting to {addr}...");
+                let mut client = mistralrs_quant::Client::new(&addr)?;
 
-                // Read data into a buffer.
-                let mut buffer = [0u8; 512]; // You can adjust the size if needed.
-                let n = stream.read(&mut buffer)?;
-                info!("Received {} bytes", n);
-
-                // Assume the server sends an HTTP response with a header, then binary data.
-                // Find the end of the header (which ends with "\r\n\r\n").
-                let response = &buffer[..n];
-                let header_end = response
-                    .windows(4)
-                    .position(|window| window == b"\r\n\r\n")
-                    .map(|pos| pos + 4);
-                if let Some(pos) = header_end {
-                    let _header = &response[..pos];
-                    let body = &response[pos..];
-
-                    // If for some reason you need to reinterpret the body as &[i8],
-                    // you can do an unsafe conversion (since both types have the same size).
-                    let body_as_i8: &[i8] = unsafe {
-                        std::slice::from_raw_parts(body.as_ptr() as *const i8, body.len())
-                    };
-
-                    assert_eq!(body_as_i8.len(), 128);
-                    let mut uninit = [0i8; 128];
-                    for (i, x) in body_as_i8.into_iter().enumerate() {
-                        uninit[i] = *x;
-                    }
-                    info!("New ID is: {uninit:?}");
-
-                    *id = Id::uninit(uninit);
-
-                    info!("Recieved new ID");
-                } else {
-                    anyhow::bail!("DID NOT GET NEW ID!");
-                }
+                *id = client.recieve_id()?;
             }
 
             // if available_devices.len() % ids.len() != 0 {
