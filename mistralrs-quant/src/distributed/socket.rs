@@ -2,143 +2,136 @@ use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     slice,
-    sync::Barrier,
+    sync::{Barrier, Mutex},
     time::{Duration, Instant},
 };
 
+use super::{BarrierLike, Id};
 use candle_core::Result;
 
-use super::{BarrierLike, Id};
-
+/// The Server maintains persistent connections.
 #[derive(Debug)]
 pub struct Server {
-    listener: TcpListener,
-    n_nodes: usize,
+    // Persistent TCP connections from each node.
+    connections: Vec<TcpStream>,
     barrier_all: Barrier,
     barrier_crossnode: Barrier,
 }
 
 impl Server {
+    /// Binds the listener and then accepts exactly `n_nodes` persistent connections.
     pub fn new<A: ToSocketAddrs>(addr: &A, n_nodes: usize, n_local_ranks: usize) -> Result<Self> {
+        let listener = TcpListener::bind(addr)?;
         let start = Instant::now();
-        loop {
-            let listener = TcpListener::bind(addr);
-            if let Ok(listener) = listener {
-                return Ok(Self {
-                    listener,
-                    n_nodes,
-                    barrier_all: Barrier::new(n_local_ranks),
-                    barrier_crossnode: Barrier::new(n_local_ranks),
-                });
+        let mut connections = Vec::with_capacity(n_nodes);
+        while connections.len() < n_nodes {
+            if let Ok((stream, _)) = listener.accept() {
+                connections.push(stream);
             }
-            if Instant::now().duration_since(start).as_secs_f32() >= 10. {
-                candle_core::bail!("Worker did not connect to head node due to timeout: over 10s")
+            if start.elapsed() > Duration::from_secs(10) {
+                candle_core::bail!("Worker did not connect to head node due to timeout: over 10s");
             }
         }
+        Ok(Self {
+            connections,
+            barrier_all: Barrier::new(n_local_ranks),
+            barrier_crossnode: Barrier::new(n_local_ranks),
+        })
     }
 
-    /// Broadcast this ID to the specified number of nodes (different from ranks)
+    /// Broadcasts the given ID over all persistent connections.
     pub fn broadcast_id(&self, id: &Id) -> Result<()> {
-        for stream in self.listener.incoming().take(self.n_nodes) {
-            let mut stream = stream?;
-
-            let body = id.internal();
-
-            // SAFETY: we know the provenance & lifetime are valid here.
-            let body = unsafe { slice::from_raw_parts(body.as_ptr() as *const u8, body.len()) };
-
-            // Build and send the HTTP response.
-            stream.write_all(&body)?;
+        let body = id.internal();
+        // SAFETY: We know the provenance and lifetime of `body` are valid.
+        let body_bytes = unsafe { slice::from_raw_parts(body.as_ptr() as *const u8, body.len()) };
+        for mut stream in &self.connections {
+            stream.write_all(body_bytes)?;
             stream.flush()?;
         }
-
         Ok(())
     }
 }
 
 impl BarrierLike for Server {
     fn wait(&self) -> Result<()> {
+        // First, synchronize locally.
         let res = self.barrier_all.wait();
 
         if res.is_leader() {
-            let mut streams = Vec::new();
-            for stream in self.listener.incoming().take(self.n_nodes) {
-                streams.push(stream?);
-            }
-
-            // Got all connections, send go ahead responses
-            for mut stream in streams {
+            // Leader sends the barrier signal "Go!" to every node.
+            for mut stream in &self.connections {
                 stream.write_all(b"Go!")?;
+                stream.flush()?;
+            }
+            // Now, wait to receive an acknowledgement "Ack" from every node.
+            let mut ack_buf = [0u8; 3];
+            for mut stream in &self.connections {
+                stream.read_exact(&mut ack_buf)?;
+                if &ack_buf != b"Ack" {
+                    candle_core::bail!("Did not get Ack from worker node");
+                }
             }
         }
 
         self.barrier_crossnode.wait();
-
         Ok(())
     }
 }
 
+/// The Client holds its persistent connection inside a Mutex so that its barrier
+/// operations can have mutable access to the stream.
 #[derive(Debug)]
 pub struct Client {
-    addr: SocketAddr,
+    stream: Mutex<TcpStream>,
     barrier_all: Barrier,
     barrier_crossnode: Barrier,
 }
 
 impl Client {
     pub fn new(addr: SocketAddr, n_local_ranks: usize) -> Result<Self> {
+        let stream = TcpStream::connect(addr)?;
+        stream.set_nodelay(true)?;
+        stream.set_nonblocking(false)?;
         Ok(Self {
-            addr,
+            stream: Mutex::new(stream),
             barrier_all: Barrier::new(n_local_ranks),
             barrier_crossnode: Barrier::new(n_local_ranks),
         })
     }
 
-    fn stream(&self, timeout: Duration) -> Result<TcpStream> {
-        let start = Instant::now();
-        loop {
-            let stream = TcpStream::connect(&self.addr);
-            if let Ok(stream) = stream {
-                return Ok(stream);
-            }
-            if Instant::now().duration_since(start) >= timeout {
-                candle_core::bail!("Client connect timeout: over {timeout:?}")
-            }
-        }
-    }
-
-    /// Connect, with a timeout of 10s
+    /// Receives the broadcasted ID from the persistent stream.
     pub fn receive_id(&self) -> Result<Id> {
-        // Read data into a buffer, we know there are 128
-        let mut internal = [0u8; 128];
-        self.stream(Duration::from_secs(10))?
-            .read_exact(&mut internal)?;
+        let mut stream = self.stream.lock().unwrap();
+        let mut buffer = [0u8; 128];
+        stream.read_exact(&mut buffer)?;
 
-        let body_as_i8: &[i8] =
-            unsafe { std::slice::from_raw_parts(internal.as_ptr() as *const i8, internal.len()) };
-
-        assert_eq!(body_as_i8.len(), 128);
-        let mut uninit = [0i8; 128];
-        for (i, x) in body_as_i8.into_iter().enumerate() {
-            uninit[i] = *x;
+        let mut id_bytes = [0i8; 128];
+        for (i, &b) in buffer.iter().enumerate() {
+            id_bytes[i] = b as i8;
         }
-
-        Ok(Id::uninit(uninit))
+        Ok(Id::uninit(id_bytes))
     }
 }
 
 impl BarrierLike for Client {
     fn wait(&self) -> Result<()> {
+        // Synchronize locally.
         let res = self.barrier_all.wait();
 
         if res.is_leader() {
-            let mut out = [0u8; 128];
-            let n = self.stream(Duration::from_secs(0))?.read(&mut out)?;
-            assert_ne!(n, 0);
+            let mut stream = self.stream.lock().unwrap();
+            // Read the barrier signal "Go!" from the persistent stream.
+            let mut buf = [0u8; 3];
+            stream.read_exact(&mut buf)?;
+            if &buf != b"Go!" {
+                candle_core::bail!("Did not receive correct barrier signal from head node");
+            }
+            // Immediately send back an acknowledgement "Ack".
+            stream.write_all(b"Ack")?;
+            stream.flush()?;
         }
-
+        // Synchronize again across local ranks.
         self.barrier_crossnode.wait();
-
         Ok(())
     }
 }
