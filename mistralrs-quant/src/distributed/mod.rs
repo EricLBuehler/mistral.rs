@@ -11,7 +11,7 @@ pub trait BarrierLike: Debug + Send + Sync {
 
 impl BarrierLike for Barrier {
     fn wait(&self) -> Result<()> {
-        Barrier::wait(&self);
+        Barrier::wait(self);
         Ok(())
     }
 }

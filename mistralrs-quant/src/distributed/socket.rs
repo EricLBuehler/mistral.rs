@@ -22,8 +22,6 @@ impl Server {
     /// Binds the listener and then accepts exactly `n_nodes` persistent connections.
     pub fn new<A: ToSocketAddrs>(addr: &A, n_nodes: usize, n_local_ranks: usize) -> Result<Self> {
         let listener = TcpListener::bind(addr)?;
-        listener.set_nonblocking(false)?;
-
         let start = Instant::now();
         let mut connections = Vec::with_capacity(n_nodes);
         while connections.len() < n_nodes {
@@ -60,11 +58,16 @@ impl BarrierLike for Server {
         let res = self.barrier_all.wait();
 
         if res.is_leader() {
-            // ait to receive an acknowledgement "Ack" from every node.
-            let mut ack_buf = [0u8; 3];
+            // Leader sends the barrier signal "g" to every node.
+            for mut stream in &self.connections {
+                stream.write_all(b"g")?;
+                stream.flush()?;
+            }
+            // Now, wait to receive an acknowledgement "a" from every node.
+            let mut ack_buf = [0u8; 1];
             for mut stream in &self.connections {
                 stream.read_exact(&mut ack_buf)?;
-                if &ack_buf != b"Ack" {
+                if &ack_buf != b"a" {
                     candle_core::bail!("Did not get Ack from worker node");
                 }
             }
@@ -126,8 +129,14 @@ impl BarrierLike for Client {
 
         if res.is_leader() {
             let mut stream = self.stream.lock().unwrap();
+            // Read the barrier signal "Go!" from the persistent stream.
+            let mut buf = [0u8; 1];
+            stream.read_exact(&mut buf)?;
+            if &buf != b"g" {
+                candle_core::bail!("Did not receive correct barrier signal from head node");
+            }
             // Immediately send back an acknowledgement "Ack".
-            stream.write_all(b"Ack")?;
+            stream.write_all(b"a")?;
             stream.flush()?;
         }
         // Synchronize again across local ranks.

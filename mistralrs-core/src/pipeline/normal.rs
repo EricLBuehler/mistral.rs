@@ -525,7 +525,7 @@ impl Loader for NormalLoader {
                         local_world_size,
                     )?;
 
-                    server.broadcast_id(&id)?;
+                    server.broadcast_id(id)?;
                 } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
                     info!("Worker node connecting to {addr}.");
                     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
