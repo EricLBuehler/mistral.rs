@@ -32,7 +32,7 @@ impl Server {
                 });
             }
             if Instant::now().duration_since(start).as_secs_f32() >= 10. {
-                candle_core::bail!("Client connect timeout: over 10s")
+                candle_core::bail!("Worker did not connect to head node due to timeout: over 10s")
             }
         }
     }

@@ -512,11 +512,13 @@ impl Loader for NormalLoader {
                 if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
                     let n_nodes =
                         usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
+                    info!("Head node managing {n_nodes} workers.");
                     let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
                         anyhow::bail!(
                             "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
                         );
                     };
+                    info!("Head node initializing connection on {port}.");
                     let server = mistralrs_quant::Server::new(
                         &format!("0.0.0.0:{port}"),
                         n_nodes,
@@ -525,6 +527,7 @@ impl Loader for NormalLoader {
 
                     server.broadcast_id(&id)?;
                 } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
+                    info!("Worker node connecting to {addr}.");
                     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
 
                     *id = client.recieve_id()?;
@@ -565,13 +568,11 @@ impl Loader for NormalLoader {
                 let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
                     let n_nodes =
                         usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
-                    info!("Head node managing {n_nodes} workers.");
                     let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
                         anyhow::bail!(
                             "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
                         );
                     };
-                    info!("Head node initializing connection on {port}.");
                     let server = mistralrs_quant::Server::new(
                         &format!("0.0.0.0:{port}"),
                         n_nodes,
@@ -579,7 +580,6 @@ impl Loader for NormalLoader {
                     )?;
                     Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
                 } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
-                    info!("Worker node connecting to {addr}.");
                     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
                     Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
                 } else {
