@@ -1544,7 +1544,13 @@
 <a href="#1543" id="1543">1543</a>
 <a href="#1544" id="1544">1544</a>
 <a href="#1545" id="1545">1545</a>
-<a href="#1546" id="1546">1546</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1546" id="1546">1546</a>
+<a href="#1547" id="1547">1547</a>
+<a href="#1548" id="1548">1548</a>
+<a href="#1549" id="1549">1549</a>
+<a href="#1550" id="1550">1550</a>
+<a href="#1551" id="1551">1551</a>
+<a href="#1552" id="1552">1552</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
@@ -1847,7 +1853,8 @@
         <span class="kw">let </span>use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
             &amp;&amp; available_devices.len() &gt; <span class="number">1
             </span>&amp;&amp; (std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_err()
-                || std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| x != <span class="string">"1"</span>));
+                || std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| x != <span class="string">"1"</span>))
+            &amp;&amp; <span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>);
 
         <span class="comment">// If auto, convert to Map if not using nccl
         </span><span class="kw">if </span>use_nccl {
@@ -2009,6 +2016,11 @@
         <span class="kw">let </span>multi_progress = Arc::new(MultiProgress::new());
 
         <span class="kw">let </span><span class="kw-2">mut </span>parallel_models = <span class="kw">if </span>use_nccl {
+            <span class="attr">#[cfg(not(feature = <span class="string">"nccl"</span>))]
+            </span><span class="macro">warn!</span>(
+                <span class="string">"NCCL support was included in the build, be sure to build with `--features nccl`."
+            </span>);
+
             <span class="comment">// NCCL case!
 
             </span><span class="kw">let </span>pipeline_parallel_size = std::env::var(<span class="string">"MISTRALRS_PIPELINE_PARALLEL"</span>)

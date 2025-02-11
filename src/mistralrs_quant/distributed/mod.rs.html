@@ -256,7 +256,7 @@
     }
 }
 
-<span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
+<span class="attr">#[cfg(all(feature = <span class="string">"cuda"</span>, feature = <span class="string">"nccl"</span>))]
 </span><span class="kw">mod </span>ops {
     <span class="kw">use </span>std::{fmt::Debug, ops::Deref, sync::Arc};
 
@@ -405,7 +405,7 @@
     }
 }
 
-<span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
+<span class="attr">#[cfg(not(all(feature = <span class="string">"cuda"</span>, feature = <span class="string">"nccl"</span>)))]
 </span><span class="kw">mod </span>ops {
     <span class="kw">use </span>std::sync::Arc;
 
