@@ -494,11 +494,12 @@ impl Loader for NormalLoader {
 
             if let Ok(n_nodes) = env::var("MISTRALRS_HEAD_NUM_NODES") {
                 let n_nodes = usize::from_str(&n_nodes).context("MISTRALRS_HEAD_NUM_NODES")?;
-                let server = mistralrs_quant::Server::new(&"0.0.0.0:8765", n_nodes)?;
+                let server =
+                    mistralrs_quant::Server::new(&"0.0.0.0:8765", n_nodes, local_world_size)?;
 
                 server.broadcast_id(&id)?;
             } else if let Ok(addr) = env::var("MISTRALRS_WORKER_SERVER_ADDR") {
-                let client = mistralrs_quant::Client::new(addr.parse()?)?;
+                let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
 
                 *id = client.recieve_id()?;
             }
@@ -530,10 +531,11 @@ impl Loader for NormalLoader {
                 // let barrier = Arc::new(Barrier::new(local_world_size));
                 let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_HEAD_NUM_NODES") {
                     let n_nodes = usize::from_str(&n_nodes).context("MISTRALRS_HEAD_NUM_NODES")?;
-                    let server = mistralrs_quant::Server::new(&"0.0.0.0:8765", n_nodes)?;
+                    let server =
+                        mistralrs_quant::Server::new(&"0.0.0.0:8765", n_nodes, local_world_size)?;
                     Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
                 } else if let Ok(addr) = env::var("MISTRALRS_WORKER_SERVER_ADDR") {
-                    let client = mistralrs_quant::Client::new(addr.parse()?)?;
+                    let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
                     Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
                 } else {
                     Arc::new(Barrier::new(local_world_size))

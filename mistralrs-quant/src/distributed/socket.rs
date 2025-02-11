@@ -2,6 +2,7 @@ use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     slice,
+    sync::Barrier,
     time::{Duration, Instant},
 };
 
@@ -14,15 +15,22 @@ use super::{BarrierLike, Id};
 pub struct Server {
     listener: TcpListener,
     n_nodes: usize,
+    barrier_all: Barrier,
+    barrier_crossnode: Barrier,
 }
 
 impl Server {
-    pub fn new<A: ToSocketAddrs>(addr: &A, n_nodes: usize) -> Result<Self> {
+    pub fn new<A: ToSocketAddrs>(addr: &A, n_nodes: usize, n_local_ranks: usize) -> Result<Self> {
         let start = Instant::now();
         loop {
             let listener = TcpListener::bind(addr);
             if let Ok(listener) = listener {
-                return Ok(Self { listener, n_nodes });
+                return Ok(Self {
+                    listener,
+                    n_nodes,
+                    barrier_all: Barrier::new(n_local_ranks),
+                    barrier_crossnode: Barrier::new(n_local_ranks),
+                });
             }
             if Instant::now().duration_since(start).as_secs_f32() >= 10. {
                 candle_core::bail!("Client connect timeout: over 10s")
@@ -51,18 +59,24 @@ impl Server {
 
 impl BarrierLike for Server {
     fn wait(&self) -> Result<()> {
-        info!("s a");
-        let mut streams = Vec::new();
-        for stream in self.listener.incoming().take(self.n_nodes) {
-            streams.push(stream?);
-        }
-        info!("s b");
+        let res = self.barrier_all.wait();
 
-        // Got all connections, send go ahead responses
-        for mut stream in streams {
-            stream.write_all(b"Go!")?;
+        if res.is_leader() {
+            info!("s a");
+            let mut streams = Vec::new();
+            for stream in self.listener.incoming().take(self.n_nodes) {
+                streams.push(stream?);
+            }
+            info!("s b");
+
+            // Got all connections, send go ahead responses
+            for mut stream in streams {
+                stream.write_all(b"Go!")?;
+            }
+            info!("s c");
         }
-        info!("s c");
+
+        self.barrier_crossnode.wait();
 
         Ok(())
     }
@@ -71,11 +85,17 @@ impl BarrierLike for Server {
 #[derive(Debug)]
 pub struct Client {
     addr: SocketAddr,
+    barrier_all: Barrier,
+    barrier_crossnode: Barrier,
 }
 
 impl Client {
-    pub fn new(addr: SocketAddr) -> Result<Self> {
-        Ok(Self { addr })
+    pub fn new(addr: SocketAddr, n_local_ranks: usize) -> Result<Self> {
+        Ok(Self {
+            addr,
+            barrier_all: Barrier::new(n_local_ranks),
+            barrier_crossnode: Barrier::new(n_local_ranks),
+        })
     }
 
     fn stream(&self, timeout: Duration) -> Result<TcpStream> {
@@ -113,11 +133,17 @@ impl Client {
 
 impl BarrierLike for Client {
     fn wait(&self) -> Result<()> {
-        let mut out = [0u8; 128];
-        info!("c a");
-        let n = self.stream(Duration::from_secs(0))?.read(&mut out)?;
-        info!("c b");
-        assert_ne!(n, 0);
+        let res = self.barrier_all.wait();
+
+        if res.is_leader() {
+            let mut out = [0u8; 128];
+            info!("c a");
+            let n = self.stream(Duration::from_secs(0))?.read(&mut out)?;
+            info!("c b");
+            assert_ne!(n, 0);
+        }
+
+        self.barrier_crossnode.wait();
 
         Ok(())
     }
