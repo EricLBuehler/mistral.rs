@@ -16,7 +16,7 @@ impl BarrierLike for Barrier {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", feature = "nccl"))]
 mod ops {
     use std::{fmt::Debug, ops::Deref, sync::Arc};
 
@@ -165,7 +165,7 @@ mod ops {
     }
 }
 
-#[cfg(not(feature = "cuda"))]
+#[cfg(not(all(feature = "cuda", feature = "nccl")))]
 mod ops {
     use std::sync::Arc;
 

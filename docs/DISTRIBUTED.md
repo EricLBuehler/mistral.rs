@@ -10,6 +10,8 @@ TP splits the model into shards and benefits from fast single-node interconnects
 
 > Note: In mistral.rs, if NCCL is enabled, then automatic device mapping *will not* be used.
 
+**Important**: To build for NCCL, be sure to add the `nccl` feature flag (for example: `--features nccl,cuda`).
+
 See the following environment variables:
 
 |Name|Function|Usage|

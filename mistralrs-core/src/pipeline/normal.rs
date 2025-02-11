@@ -301,7 +301,8 @@ impl Loader for NormalLoader {
         let use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
             && available_devices.len() > 1
             && (std::env::var("MISTRALRS_NO_NCCL").is_err()
-                || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"));
+                || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"))
+            && cfg!(feature = "nccl");
 
         // If auto, convert to Map if not using nccl
         if use_nccl {
@@ -463,6 +464,11 @@ impl Loader for NormalLoader {
         let multi_progress = Arc::new(MultiProgress::new());
 
         let mut parallel_models = if use_nccl {
+            #[cfg(not(feature = "nccl"))]
+            warn!(
+                "NCCL support was included in the build, be sure to build with `--features nccl`."
+            );
+
             // NCCL case!
 
             let pipeline_parallel_size = std::env::var("MISTRALRS_PIPELINE_PARALLEL")
