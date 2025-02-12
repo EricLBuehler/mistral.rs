@@ -43,7 +43,6 @@ use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
-use mpi::traits::Communicator;
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -544,10 +543,13 @@ impl Loader for NormalLoader {
             }
             #[cfg(feature = "mpi")]
             {
+                use mpi::traits::Communicator;
+                
                 let universe = mpi::initialize().context("Could not initialize MPI universe")?;
                 // TODO!!!
                 assert_eq!(universe.world().size(), 2);
-                let sync = unsafe { mistralrs_quant::MpiSync::new(&universe, 0) }?;
+                let sync =
+                    unsafe { mistralrs_quant::MpiSync::new(&universe, 0, local_world_size) }?;
                 if universe.world().rank() == 0 {
                     sync.broadcast_id(*id)?;
                 } else {
@@ -611,11 +613,14 @@ impl Loader for NormalLoader {
                 };
                 #[cfg(feature = "mpi")]
                 let barrier = if use_multi_node {
+                    use mpi::traits::Communicator;
+
                     let universe =
                         mpi::initialize().context("Could not initialize MPI universe")?;
                     // TODO!!!
                     assert_eq!(universe.world().size(), 2);
-                    let sync = unsafe { mistralrs_quant::MpiSync::new(&universe, 0) }?;
+                    let sync =
+                        unsafe { mistralrs_quant::MpiSync::new(&universe, 0, local_world_size) }?;
 
                     Arc::new(sync) as Arc<dyn mistralrs_quant::BarrierLike>
                 } else {

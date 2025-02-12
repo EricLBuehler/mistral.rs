@@ -153,7 +153,7 @@ impl BarrierLike for Client {
 
 #[cfg(feature = "mpi")]
 pub mod mpi {
-    use std::fmt::Debug;
+    use std::{fmt::Debug, sync::Barrier};
 
     use candle_core::Result;
     use mpi::{
@@ -171,13 +171,15 @@ pub mod mpi {
 
     pub struct MpiSync {
         world: WrapSimpleCommunicator,
-        head_rank: usize,
+        head_node_rank: usize,
+        barrier_all: Barrier,
+        barrier_crossnode: Barrier,
     }
 
     impl Debug for MpiSync {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("MpiSync")
-                .field("head_rank", &self.head_rank)
+                .field("head_node_rank", &self.head_node_rank)
                 .finish()
         }
     }
@@ -187,15 +189,21 @@ pub mod mpi {
         /// Not really sure about the safety here.
         ///
         /// Each MpiSync has one world which comes from the Universe.
-        pub unsafe fn new(universe: &Universe, head_rank: usize) -> Result<Self> {
+        pub unsafe fn new(
+            universe: &Universe,
+            head_node_rank: usize,
+            n_local_ranks: usize,
+        ) -> Result<Self> {
             Ok(Self {
                 world: WrapSimpleCommunicator(universe.world()),
-                head_rank,
+                head_node_rank,
+                barrier_all: Barrier::new(n_local_ranks),
+                barrier_crossnode: Barrier::new(n_local_ranks),
             })
         }
 
         fn head_process(&self) -> Process<'_> {
-            self.world.0.process_at_rank(self.head_rank as i32)
+            self.world.0.process_at_rank(self.head_node_rank as i32)
         }
 
         pub fn broadcast_id(&self, id: Id) -> Result<()> {
@@ -213,7 +221,11 @@ pub mod mpi {
 
     impl BarrierLike for MpiSync {
         fn wait(&self) -> Result<()> {
-            self.head_process().barrier();
+            let res = self.barrier_all.wait();
+            if res.is_leader() {
+                self.head_process().barrier();
+            }
+            self.barrier_crossnode.wait();
             Ok(())
         }
     }
