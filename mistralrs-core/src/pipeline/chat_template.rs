@@ -214,6 +214,12 @@ fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
     })
 }
 
+fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
+    let date = chrono::Utc::now();
+    let date_string = date.format(&fmt).to_string();
+    Ok(date_string)
+}
+
 pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
@@ -266,6 +272,7 @@ pub fn apply_chat_template_to(
     env.add_template("chat_template", &template)?;
     env.add_function("raise_exception", raise_exception);
     env.add_filter("tojson", tojson);
+    env.add_function("strftime_now", strftime_now);
     let tmpl = env.get_template("chat_template").unwrap();
 
     let date = chrono::Utc::now();
