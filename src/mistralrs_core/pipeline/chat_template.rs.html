@@ -292,7 +292,14 @@
 <a href="#291" id="291">291</a>
 <a href="#292" id="292">292</a>
 <a href="#293" id="293">293</a>
-<a href="#294" id="294">294</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>either::Either;
@@ -508,6 +515,12 @@
     })
 }
 
+<span class="kw">fn </span>strftime_now(fmt: String) -&gt; <span class="prelude-ty">Result</span>&lt;String, minijinja::Error&gt; {
+    <span class="kw">let </span>date = chrono::Utc::now();
+    <span class="kw">let </span>date_string = date.format(<span class="kw-2">&amp;</span>fmt).to_string();
+    <span class="prelude-val">Ok</span>(date_string)
+}
+
 <span class="kw">pub fn </span>apply_chat_template_to(
     messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
     add_generation_prompt: bool,
@@ -560,6 +573,7 @@
     env.add_template(<span class="string">"chat_template"</span>, <span class="kw-2">&amp;</span>template)<span class="question-mark">?</span>;
     env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
     env.add_filter(<span class="string">"tojson"</span>, tojson);
+    env.add_function(<span class="string">"strftime_now"</span>, strftime_now);
     <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
 
     <span class="kw">let </span>date = chrono::Utc::now();
