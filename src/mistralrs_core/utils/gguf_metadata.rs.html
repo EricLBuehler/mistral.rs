@@ -564,7 +564,18 @@
 <a href="#563" id="563">563</a>
 <a href="#564" id="564">564</a>
 <a href="#565" id="565">565</a>
-<a href="#566" id="566">566</a></pre></div><pre class="rust"><code><span class="kw">use </span>akin::akin;
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a></pre></div><pre class="rust"><code><span class="kw">use </span>akin::akin;
 <span class="kw">use </span>anyhow::ensure;
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::gguf_file;
@@ -579,12 +590,15 @@
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::DeviceMappedModelLoader;
 <span class="kw">use </span><span class="kw">crate</span>::GGUFArchitecture;
 
-<span class="kw">pub struct </span>ContentConfig {
+<span class="attr">#[derive(Debug)]
+</span><span class="kw">pub struct </span>ContentConfig {
     max_seq_len: usize,
     hidden_size: usize,
     num_attn_heads: usize,
     num_kv_heads: usize,
     num_layers: usize,
+    key_length: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    value_length: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 
 <span class="attr">#[allow(clippy::cast_possible_truncation)]
@@ -606,6 +620,12 @@
                 .to_u64()
                 .unwrap() <span class="kw">as </span>usize,
             num_layers: metadata[<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.block_count"</span>)].to_u64().unwrap() <span class="kw">as </span>usize,
+            key_length: metadata
+                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.key_length"</span>))
+                .map(|x| x.to_u64().unwrap() <span class="kw">as </span>usize),
+            value_length: metadata
+                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{arch}.attention.value_length"</span>))
+                .map(|x| x.to_u64().unwrap() <span class="kw">as </span>usize),
         }
     }
 }
@@ -627,10 +647,12 @@
         <span class="self">self</span>.num_layers
     }
     <span class="kw">fn </span>k_head_dim(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="self">self</span>.hidden_size / <span class="self">self</span>.num_attn_heads
+        <span class="self">self</span>.key_length
+            .unwrap_or(<span class="self">self</span>.hidden_size / <span class="self">self</span>.num_attn_heads)
     }
     <span class="kw">fn </span>v_head_dim(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="self">self</span>.hidden_size / <span class="self">self</span>.num_attn_heads
+        <span class="self">self</span>.value_length
+            .unwrap_or(<span class="self">self</span>.hidden_size / <span class="self">self</span>.num_attn_heads)
     }
 }
 

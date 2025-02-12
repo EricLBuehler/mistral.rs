@@ -855,7 +855,7 @@
         kv_cache: <span class="kw-2">&amp;mut </span>KvCache,
         metadata: <span class="prelude-ty">Option</span>&lt;((Tensor, Tensor), <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>(b_sz, seq_len, n_embd) = x.dims3()<span class="question-mark">?</span>;
+        <span class="kw">let </span>(b_sz, seq_len, <span class="kw">_</span>) = x.dims3()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>q = MatMul
             .qmethod_matmul(x, <span class="kw-2">&amp;*</span><span class="self">self</span>.attention_wq)<span class="question-mark">?
@@ -910,9 +910,9 @@
         };
 
         <span class="kw">let </span>y = <span class="kw">if </span>mask.is_some() {
-            y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?
+            y.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape((b_sz, seq_len, ()))<span class="question-mark">?
         </span>} <span class="kw">else </span>{
-            y.reshape(<span class="kw-2">&amp;</span>[b_sz, seq_len, n_embd])<span class="question-mark">?
+            y.reshape((b_sz, seq_len, ()))<span class="question-mark">?
         </span>};
 
         <span class="kw">let </span>y = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>y.to_dtype(x.dtype())<span class="question-mark">?</span>, <span class="kw-2">&amp;*</span><span class="self">self</span>.attention_wo)<span class="question-mark">?</span>;
