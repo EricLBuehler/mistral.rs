@@ -544,10 +544,13 @@ impl Loader for NormalLoader {
             #[cfg(feature = "mpi")]
             {
                 use mpi::traits::Communicator;
-                
+
                 let universe = mpi::initialize().context("Could not initialize MPI universe")?;
+                let n_nodes = universe.world().size();
+                info!("Using MPI backend with {n_nodes} nodes.");
+
                 // TODO!!!
-                assert_eq!(universe.world().size(), 2);
+                assert_eq!(n_nodes, 2);
                 let sync =
                     unsafe { mistralrs_quant::MpiSync::new(&universe, 0, local_world_size) }?;
                 if universe.world().rank() == 0 {
