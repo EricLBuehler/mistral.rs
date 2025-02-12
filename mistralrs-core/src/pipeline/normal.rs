@@ -43,6 +43,7 @@ use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
+use mpi::traits::Communicator;
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -513,8 +514,10 @@ impl Loader for NormalLoader {
                 );
             }
 
+            // Broadcast the ID, handling MPI
+            let id = &mut ids[0];
+            #[cfg(not(feature = "mpi"))]
             if use_multi_node {
-                let id = &mut ids[0];
                 if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
                     let n_nodes =
                         usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
@@ -537,6 +540,18 @@ impl Loader for NormalLoader {
                     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
 
                     *id = client.receive_id()?;
+                }
+            }
+            #[cfg(feature = "mpi")]
+            {
+                let universe = mpi::initialize().context("Could not initialize MPI universe")?;
+                // TODO!!!
+                assert_eq!(universe.world().size(), 2);
+                let sync = unsafe { mistralrs_quant::MpiSync::new(&universe, 0) }?;
+                if universe.world().rank() == 0 {
+                    sync.broadcast_id(*id)?;
+                } else {
+                    *id = sync.receive_id()?;
                 }
             }
 
@@ -570,6 +585,7 @@ impl Loader for NormalLoader {
             for (pipeline_parallel_i, devices_per_pipeline_parallel) in
                 split_available_devices.iter().enumerate()
             {
+                #[cfg(not(feature = "mpi"))]
                 // Each pipeline parallel gets its own barrier
                 let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
                     let n_nodes =
@@ -589,6 +605,19 @@ impl Loader for NormalLoader {
                 } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
                     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
                     Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
+                } else {
+                    Arc::new(Barrier::new(local_world_size))
+                        as Arc<dyn mistralrs_quant::BarrierLike>
+                };
+                #[cfg(feature = "mpi")]
+                let barrier = if use_multi_node {
+                    let universe =
+                        mpi::initialize().context("Could not initialize MPI universe")?;
+                    // TODO!!!
+                    assert_eq!(universe.world().size(), 2);
+                    let sync = unsafe { mistralrs_quant::MpiSync::new(&universe, 0) }?;
+
+                    Arc::new(sync) as Arc<dyn mistralrs_quant::BarrierLike>
                 } else {
                     Arc::new(Barrier::new(local_world_size))
                         as Arc<dyn mistralrs_quant::BarrierLike>

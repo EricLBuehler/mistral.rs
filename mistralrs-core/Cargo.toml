@@ -83,6 +83,7 @@ objc = { version = "0.2.7", optional = true }
 metal = { workspace = true, optional = true }
 candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "fb5cc8c", optional = true }
 safetensors.workspace = true
+mpi = { workspace = true, optional = true }
 
 [features]
 pyo3_macros = ["pyo3"]
@@ -110,6 +111,7 @@ flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
 nccl = ["cuda", "mistralrs-quant/nccl"]
+mpi = ["mistralrs-quant/mpi", "dep:mpi"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }

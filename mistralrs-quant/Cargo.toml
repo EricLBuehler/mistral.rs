@@ -30,6 +30,7 @@ yoke = "0.7.5"
 memmap2 = "0.9.5"
 safetensors.workspace = true
 regex.workspace = true
+mpi = { workspace = true, optional = true }
 
 [features]
 cuda = [
@@ -40,6 +41,7 @@ cuda = [
 nccl = ["cuda", "candle-core/nccl"]
 metal = ["candle-core/metal", "candle-nn/metal", "dep:metal"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+mpi = ["dep:mpi"]
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }
