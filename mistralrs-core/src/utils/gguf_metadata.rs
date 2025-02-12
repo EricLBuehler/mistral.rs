@@ -13,12 +13,15 @@ use crate::pipeline::AutoDeviceMapParams;
 use crate::pipeline::DeviceMappedModelLoader;
 use crate::GGUFArchitecture;
 
+#[derive(Debug)]
 pub struct ContentConfig {
     max_seq_len: usize,
     hidden_size: usize,
     num_attn_heads: usize,
     num_kv_heads: usize,
     num_layers: usize,
+    key_length: Option<usize>,
+    value_length: Option<usize>,
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -40,6 +43,12 @@ impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConf
                 .to_u64()
                 .unwrap() as usize,
             num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
+            key_length: metadata
+                .get(&format!("{arch}.attention.key_length"))
+                .map(|x| x.to_u64().unwrap() as usize),
+            value_length: metadata
+                .get(&format!("{arch}.attention.value_length"))
+                .map(|x| x.to_u64().unwrap() as usize),
         }
     }
 }
@@ -61,10 +70,12 @@ impl ModelConfigLike for ContentConfig {
         self.num_layers
     }
     fn k_head_dim(&self) -> usize {
-        self.hidden_size / self.num_attn_heads
+        self.key_length
+            .unwrap_or(self.hidden_size / self.num_attn_heads)
     }
     fn v_head_dim(&self) -> usize {
-        self.hidden_size / self.num_attn_heads
+        self.value_length
+            .unwrap_or(self.hidden_size / self.num_attn_heads)
     }
 }
 
