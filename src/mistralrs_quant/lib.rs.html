@@ -562,7 +562,10 @@
 <a href="#561" id="561">561</a>
 <a href="#562" id="562">562</a>
 <a href="#563" id="563">563</a>
-<a href="#564" id="564">564</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
@@ -600,7 +603,10 @@
 
 <span class="kw">pub use </span>bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 <span class="kw">pub use </span>distributed::{
-    layers::{ColumnParallelLayer, ReplicatedLayer, RowParallelLayer},
+    layers::{
+        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, ReplicatedLayer,
+        RowParallelLayer,
+    },
     socket::{Client, Server},
     BarrierLike, Comm, Id, SumAllReduce,
 };

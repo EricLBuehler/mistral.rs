@@ -763,7 +763,18 @@
 <a href="#762" id="762">762</a>
 <a href="#763" id="763">763</a>
 <a href="#764" id="764">764</a>
-<a href="#765" id="765">765</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#765" id="765">765</a>
+<a href="#766" id="766">766</a>
+<a href="#767" id="767">767</a>
+<a href="#768" id="768">768</a>
+<a href="#769" id="769">769</a>
+<a href="#770" id="770">770</a>
+<a href="#771" id="771">771</a>
+<a href="#772" id="772">772</a>
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="doccomment">/// Mixtral Model
 /// https://github.com/huggingface/transformers/blob/main/src/transformers/models/mixtral/modeling_mixtral.py
@@ -850,20 +861,27 @@
             comm,
             vb.pp(<span class="string">"q_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>k_proj = ColumnParallelLayer::new(
+        <span class="kw">let </span>kv_shard = mistralrs_quant::compute_kv_shard(
+            cfg.num_key_value_heads,
+            cfg.hidden_size / cfg.num_attention_heads,
+            comm,
+        );
+        <span class="kw">let </span>k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
             <span class="bool-val">false</span>,
             comm,
+            kv_shard,
             vb.pp(<span class="string">"k_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>v_proj = ColumnParallelLayer::new(
+        <span class="kw">let </span>v_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
             <span class="bool-val">false</span>,
             comm,
+            kv_shard,
             vb.pp(<span class="string">"v_proj"</span>),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>o_proj = RowParallelLayer::new(
@@ -886,7 +904,11 @@
             sliding_window: cfg.sliding_window,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: num_heads / num_kv_heads,
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(
+                    cfg.num_key_value_heads,
+                    cfg.num_attention_heads,
+                    comm,
+                ),
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: <span class="prelude-val">None</span>,
                 softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),

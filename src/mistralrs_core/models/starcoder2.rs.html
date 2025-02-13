@@ -793,7 +793,18 @@
 <a href="#792" id="792">792</a>
 <a href="#793" id="793">793</a>
 <a href="#794" id="794">794</a>
-<a href="#795" id="795">795</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a>
+<a href="#797" id="797">797</a>
+<a href="#798" id="798">798</a>
+<a href="#799" id="799">799</a>
+<a href="#800" id="800">800</a>
+<a href="#801" id="801">801</a>
+<a href="#802" id="802">802</a>
+<a href="#803" id="803">803</a>
+<a href="#804" id="804">804</a>
+<a href="#805" id="805">805</a>
+<a href="#806" id="806">806</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::{LayerNorm, Linear};
@@ -969,20 +980,27 @@
             comm,
             vb.pp(<span class="string">"q_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>k_proj = ColumnParallelLayer::new(
+        <span class="kw">let </span>kv_shard = mistralrs_quant::compute_kv_shard(
+            cfg.num_key_value_heads,
+            cfg.hidden_size / cfg.num_attention_heads,
+            comm,
+        );
+        <span class="kw">let </span>k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
             b,
             comm,
+            kv_shard,
             vb.pp(<span class="string">"k_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>v_proj = ColumnParallelLayer::new(
+        <span class="kw">let </span>v_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
             b,
             comm,
+            kv_shard,
             vb.pp(<span class="string">"v_proj"</span>),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>o_proj = RowParallelLayer::new(
@@ -1005,7 +1023,11 @@
             sliding_window: cfg.sliding_window,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: num_heads / num_kv_heads,
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(
+                    cfg.num_key_value_heads,
+                    cfg.num_attention_heads,
+                    comm,
+                ),
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: <span class="prelude-val">None</span>,
                 softmax_scale: <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt(),

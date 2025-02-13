@@ -778,7 +778,18 @@
 <a href="#777" id="777">777</a>
 <a href="#778" id="778">778</a>
 <a href="#779" id="779">779</a>
-<a href="#780" id="780">780</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a>
+<a href="#787" id="787">787</a>
+<a href="#788" id="788">788</a>
+<a href="#789" id="789">789</a>
+<a href="#790" id="790">790</a>
+<a href="#791" id="791">791</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
 </span><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -948,20 +959,27 @@
             comm,
             vb.pp(<span class="string">"q_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>k_proj = ColumnParallelLayer::new(
+        <span class="kw">let </span>kv_shard = mistralrs_quant::compute_kv_shard(
+            cfg.num_key_value_heads,
+            cfg.hidden_size / cfg.num_attention_heads,
+            comm,
+        );
+        <span class="kw">let </span>k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
             <span class="bool-val">false</span>,
             comm,
+            kv_shard,
             vb.pp(<span class="string">"k_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>v_proj = ColumnParallelLayer::new(
+        <span class="kw">let </span>v_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
             <span class="kw-2">&amp;</span>cfg.quantization_config,
             <span class="bool-val">false</span>,
             comm,
+            kv_shard,
             vb.pp(<span class="string">"v_proj"</span>),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>o_proj = RowParallelLayer::new(
@@ -983,7 +1001,11 @@
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(
+                    cfg.num_key_value_heads,
+                    cfg.num_attention_heads,
+                    comm,
+                ),
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: <span class="prelude-val">None</span>,
                 softmax_scale: <span class="number">1.0 </span>/ ((cfg.hidden_size / cfg.num_attention_heads) <span class="kw">as </span>f32).sqrt(),
