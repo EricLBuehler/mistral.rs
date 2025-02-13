@@ -35,6 +35,7 @@ flash-attn = ["cuda", "mistralrs-core/flash-attn"]
 accelerate = ["mistralrs-core/accelerate"]
 mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
+mpi = ["mistralrs-core/mpi"]
 
 [[example]]
 name = "simple"

@@ -150,3 +150,83 @@ impl BarrierLike for Client {
         Ok(())
     }
 }
+
+#[cfg(feature = "mpi")]
+pub mod mpi {
+    use std::{fmt::Debug, sync::Barrier};
+
+    use candle_core::Result;
+    use mpi::{
+        environment::Universe,
+        topology::{Process, SimpleCommunicator},
+        traits::{Communicator, CommunicatorCollectives, Root},
+    };
+
+    use crate::{BarrierLike, Id};
+
+    struct WrapSimpleCommunicator(SimpleCommunicator);
+
+    unsafe impl Send for WrapSimpleCommunicator {}
+    unsafe impl Sync for WrapSimpleCommunicator {}
+
+    pub struct MpiSync {
+        world: WrapSimpleCommunicator,
+        head_node_rank: usize,
+        barrier_all: Barrier,
+        barrier_crossnode: Barrier,
+    }
+
+    impl Debug for MpiSync {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MpiSync")
+                .field("head_node_rank", &self.head_node_rank)
+                .finish()
+        }
+    }
+
+    impl MpiSync {
+        /// # SAFETY
+        /// Not really sure about the safety here.
+        ///
+        /// Each MpiSync has one world which comes from the Universe.
+        pub unsafe fn new(
+            universe: &Universe,
+            head_node_rank: usize,
+            n_local_ranks: usize,
+        ) -> Result<Self> {
+            Ok(Self {
+                world: WrapSimpleCommunicator(universe.world()),
+                head_node_rank,
+                barrier_all: Barrier::new(n_local_ranks),
+                barrier_crossnode: Barrier::new(n_local_ranks),
+            })
+        }
+
+        fn head_process(&self) -> Process<'_> {
+            self.world.0.process_at_rank(self.head_node_rank as i32)
+        }
+
+        pub fn broadcast_id(&self, id: Id) -> Result<()> {
+            let mut buf = *id.internal();
+            self.head_process().broadcast_into(&mut buf);
+            Ok(())
+        }
+
+        pub fn receive_id(&self) -> Result<Id> {
+            let mut buf = [0i8; 128];
+            self.head_process().broadcast_into(&mut buf);
+            Ok(Id::uninit(buf))
+        }
+    }
+
+    impl BarrierLike for MpiSync {
+        fn wait(&self) -> Result<()> {
+            let res = self.barrier_all.wait();
+            if res.is_leader() {
+                self.head_process().barrier();
+            }
+            self.barrier_crossnode.wait();
+            Ok(())
+        }
+    }
+}
