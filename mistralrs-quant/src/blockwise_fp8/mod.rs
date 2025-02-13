@@ -15,6 +15,9 @@ use crate::{
     QuantMethodConfig, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
+#[cfg(feature = "cuda")]
+mod ffi;
+
 #[derive(Debug)]
 pub struct BlockwiseFP8Linear {
     weight: Tensor,

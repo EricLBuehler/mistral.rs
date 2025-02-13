@@ -85,7 +85,7 @@ impl PagedAttention {
                 query,
                 key,
                 value,
-                Some(&mask),
+                Some(mask),
                 flash_params,
                 sdpa_params,
             )?),

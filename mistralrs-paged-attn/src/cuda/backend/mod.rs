@@ -65,7 +65,7 @@ impl<'a, T, R> Conjoined<'a, T, R> {
 ///
 /// ## Safety
 /// - The returned pointer **must not** outlive the &self reference. Otherwise, a dangling pointer is created.
-unsafe impl<'a, T, R> DeviceRepr for Conjoined<'a, T, R> {
+unsafe impl<T, R> DeviceRepr for Conjoined<'_, T, R> {
     fn as_kernel_param(&self) -> *mut std::ffi::c_void {
         addr_of!(self.raw) as *mut _
     }
