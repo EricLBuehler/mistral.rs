@@ -572,10 +572,7 @@
 <a href="#571" id="571">571</a>
 <a href="#572" id="572">572</a>
 <a href="#573" id="573">573</a>
-<a href="#574" id="574">574</a>
-<a href="#575" id="575">575</a>
-<a href="#576" id="576">576</a>
-<a href="#577" id="577">577</a></pre></div><pre class="rust"><code><span class="kw">use </span>akin::akin;
+<a href="#574" id="574">574</a></pre></div><pre class="rust"><code><span class="kw">use </span>akin::akin;
 <span class="kw">use </span>anyhow::ensure;
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::quantized::gguf_file;
@@ -1077,10 +1074,7 @@
                     + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.attn_v.bias"</span>)<span class="question-mark">?</span>);
                 <span class="kw">let </span>attn_output = <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
                     </span>.model
-                    .tensor_info(<span class="string">"blk.0.attn_output.weight"</span>)<span class="question-mark">?</span>)
-                    + <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self
-                        </span>.model
-                        .tensor_info(<span class="string">"blk.0.attn_output.bias"</span>)<span class="question-mark">?</span>);
+                    .tensor_info(<span class="string">"blk.0.attn_output.weight"</span>)<span class="question-mark">?</span>);
 
                 <span class="kw">let </span>ffn_gate =
                     <span class="macro">tensor_info_size_in_bytes!</span>(<span class="self">self</span>.model.tensor_info(<span class="string">"blk.0.ffn_gate.weight"</span>)<span class="question-mark">?</span>);
