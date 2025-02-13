@@ -68,14 +68,15 @@ void launch_fp8_blockwise_dequantize(
 }
 
 #define FP8_BLOCKWISE_DEQUANT(TYPENAME, RUST_NAME) \
-  extern "C" void launch_fp8_blockwise_dequantize_##RUST_NAME( \
-    const __nv_fp8_e4m3* d_weight, \
+extern "C" void launch_fp8_blockwise_dequantize_##RUST_NAME( \
+    const void* d_weight, \
     const float* d_scale, \
     TYPENAME* d_out, \
     int rows, int cols, \
     int block_size_rows, int block_size_cols \
 ) { \
-launch_fp8_blockwise_dequantize<TYPENAME>(d_weight, d_scale, d_out, rows, cols, block_size_rows, block_size_cols); \
+    const __nv_fp8_e4m3* weight = reinterpret_cast<const __nv_fp8_e4m3*>(d_weight);\
+    launch_fp8_blockwise_dequantize<TYPENAME>(weight, d_scale, d_out, rows, cols, block_size_rows, block_size_cols); \
 }
 
 FP8_BLOCKWISE_DEQUANT(float, f32)

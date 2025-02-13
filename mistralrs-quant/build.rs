@@ -63,6 +63,7 @@ fn main() {
             "kernels/hqq/hqq.cu",
             "kernels/ops/ops.cu",
             "kernels/bitsandbytes/dequant.cu",
+            "kernels/blockwise_fp8/dequant.cu",
         ];
         if compile_marlin {
             lib_files.push("kernels/marlin/marlin_kernel.cu");

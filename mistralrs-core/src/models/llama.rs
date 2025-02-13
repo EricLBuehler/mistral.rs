@@ -200,9 +200,7 @@ impl CausalSelfAttention {
         } else {
             1
         };
-
         let kv_shard_id = comm.rank() / kv_replicate;
-        // let kv_block_size = size_kv / comm.world_size();
         let kv_block_size = cfg.hidden_size / cfg.num_attention_heads;
         let shard = Shard::Offset {
             dim: 0,
