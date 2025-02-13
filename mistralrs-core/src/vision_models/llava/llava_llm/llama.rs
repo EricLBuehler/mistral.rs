@@ -168,20 +168,27 @@ impl CausalSelfAttention {
             comm,
             vb.pp("q_proj"),
         )?;
-        let k_proj = ColumnParallelLayer::new(
+        let kv_shard = mistralrs_quant::compute_kv_shard(
+            cfg.num_key_value_heads,
+            cfg.hidden_size / cfg.num_attention_heads,
+            comm,
+        );
+        let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
             &cfg.quantization_config,
             false,
             comm,
+            kv_shard,
             vb.pp("k_proj"),
         )?;
-        let v_proj = ColumnParallelLayer::new(
+        let v_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
             &cfg.quantization_config,
             false,
             comm,
+            kv_shard,
             vb.pp("v_proj"),
         )?;
         let o_proj = RowParallelLayer::new(
@@ -203,7 +210,11 @@ impl CausalSelfAttention {
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(
+                    cfg.num_key_value_heads,
+                    cfg.num_attention_heads,
+                    comm,
+                ),
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),

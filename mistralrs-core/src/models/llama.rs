@@ -196,7 +196,7 @@ impl CausalSelfAttention {
         let kv_shard = mistralrs_quant::compute_kv_shard(
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
-            &comm,
+            comm,
         );
         let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
@@ -239,7 +239,7 @@ impl CausalSelfAttention {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
-                    &comm,
+                    comm,
                 ),
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
