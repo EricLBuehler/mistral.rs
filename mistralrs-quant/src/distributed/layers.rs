@@ -9,6 +9,8 @@ use crate::{
     ShardedVarBuilder, UnquantLinear,
 };
 
+use super::Comm;
+
 fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {
         dim,
@@ -489,5 +491,47 @@ impl QuantizedSerde for ReplicatedLayer {
     }
     fn serialize(&self) -> Result<std::borrow::Cow<[u8]>> {
         self.0.serialize()
+    }
+}
+
+/// Compute the appropriate KV shard. This handles KV head replication. Be sure to use `compute_n_kv_groups` in tandem.
+pub fn compute_kv_shard(total_num_kv_heads: usize, head_dim: usize, comm: &Comm) -> Shard {
+    if comm.world_size() == 1 {
+        return Shard::default();
+    }
+
+    // Tensor parallelism case
+
+    // We may need to replicate the kv heads
+    let kv_replicate = if comm.world_size() > total_num_kv_heads {
+        comm.world_size() / total_num_kv_heads
+    } else {
+        1
+    };
+
+    let num_kv_heads = (total_num_kv_heads / comm.world_size()).max(1);
+    let kv_shard_id = (comm.rank() / kv_replicate) * num_kv_heads;
+    Shard::Offset {
+        dim: 0,
+        offset: kv_shard_id * head_dim,
+        len: head_dim,
+    }
+}
+
+/// Compute the number of KV groups, taking into account KV head replication.
+pub fn compute_n_kv_groups(
+    total_num_kv_heads: usize,
+    num_attention_heads: usize,
+    comm: &Comm,
+) -> usize {
+    let kv_replicate = if comm.world_size() > total_num_kv_heads {
+        comm.world_size() / total_num_kv_heads
+    } else {
+        1
+    };
+    if kv_replicate != 0 {
+        (num_attention_heads / total_num_kv_heads) / kv_replicate
+    } else {
+        num_attention_heads / total_num_kv_heads
     }
 }
