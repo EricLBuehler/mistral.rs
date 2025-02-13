@@ -500,10 +500,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                     + tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.attn_v.bias")?);
                 let attn_output = tensor_info_size_in_bytes!(self
                     .model
-                    .tensor_info("blk.0.attn_output.weight")?)
-                    + tensor_info_size_in_bytes!(self
-                        .model
-                        .tensor_info("blk.0.attn_output.bias")?);
+                    .tensor_info("blk.0.attn_output.weight")?);
 
                 let ffn_gate =
                     tensor_info_size_in_bytes!(self.model.tensor_info("blk.0.ffn_gate.weight")?);

@@ -254,7 +254,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     head_dim,
                     max_seq_len,
                     device,
-                    false,
+                    true,
                     dtype,
                 )?),
             );
