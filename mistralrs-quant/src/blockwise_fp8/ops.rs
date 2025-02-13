@@ -1,6 +1,16 @@
+#[cfg(feature = "cuda")]
+use candle_core::cuda::{
+    cudarc::driver::{CudaSlice, DeviceRepr, ValidAsZeroBits},
+    CudaDevice,
+};
+
 use candle_core::{CpuStorage, CustomOp2, DType, Result, Tensor, WithDType};
+
 use float8::F8E4M3;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+
+#[cfg(feature = "cuda")]
+use crate::blockwise_fp8::ffi;
 
 struct Fp8BlockwiseDequantize {
     weight_block_size: Vec<usize>,
@@ -57,6 +67,37 @@ impl Fp8BlockwiseDequantize {
 
         Ok(res)
     }
+
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_cuda_kernel<T: WithDType + DeviceRepr + ValidAsZeroBits>(
+        &self,
+        weight: &CudaSlice<F8E4M3>,
+        d_scale: &CudaSlice<f32>,
+        rows: i32,
+        cols: i32,
+        block_size_rows: i32,
+        block_size_cols: i32,
+        dev: &CudaDevice,
+        kernel: unsafe extern "C" fn(*const F8E4M3, *const f32, *mut T, i32, i32, i32, i32),
+    ) -> Result<CudaSlice<T>> {
+        use candle_core::cuda::{cudarc::driver::DevicePtr, WrapErr};
+
+        let out = unsafe { dev.alloc::<T>(rows as usize * cols as usize).w()? };
+        unsafe {
+            kernel(
+                (*weight.device_ptr()) as *const _,
+                (*d_scale.device_ptr()) as *const _,
+                (*out.device_ptr()) as *mut _,
+                rows,
+                cols,
+                block_size_rows,
+                block_size_cols,
+            )
+        };
+
+        Ok(out)
+    }
 }
 
 impl CustomOp2 for Fp8BlockwiseDequantize {
@@ -107,6 +148,83 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
             )),
             other => candle_core::bail!("unexpected out type of fp8 blockwise dequant {other:?}"),
         }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        scale_s: &candle_core::CudaStorage,
+        scale_l: &candle_core::Layout,
+        weight_s: &candle_core::CudaStorage,
+        weight_l: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        use candle_core::backend::BackendStorage;
+        use half::{bf16, f16};
+
+        if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
+            candle_core::bail!("Expected weight to have start offset 0, continuous");
+        }
+        if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
+            candle_core::bail!("Expected scales to have start offset 0, continuous");
+        }
+        if weight_l.dims().len() != 2 {
+            candle_core::bail!("Expected weight to be rank 2");
+        }
+        if scale_l.dims().len() != 2 || self.weight_block_size.len() != 2 {
+            candle_core::bail!("Expected scale to be rank 2");
+        }
+
+        let weight_slice = weight_s.as_cuda_slice::<F8E4M3>()?;
+        let scale_slice = scale_s.as_cuda_slice::<f32>()?;
+
+        let (rows, cols) = weight_l.shape().dims2()?;
+        let (block_size_rows, block_size_cols) = scale_l.shape().dims2()?;
+
+        let dev = weight_s.device().clone();
+        let out = match self.out_ty {
+            DType::F32 => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<f32>(
+                    weight_slice,
+                    scale_slice,
+                    rows as i32,
+                    cols as i32,
+                    block_size_rows as i32,
+                    block_size_cols as i32,
+                    &dev,
+                    ffi::launch_fp8_blockwise_dequantize_f32,
+                )?,
+                dev,
+            ),
+            DType::BF16 => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<bf16>(
+                    weight_slice,
+                    scale_slice,
+                    rows as i32,
+                    cols as i32,
+                    block_size_rows as i32,
+                    block_size_cols as i32,
+                    &dev,
+                    ffi::launch_fp8_blockwise_dequantize_bf16,
+                )?,
+                dev,
+            ),
+            DType::F16 => candle_core::CudaStorage::wrap_cuda_slice(
+                self.dispatch_cuda_kernel::<f16>(
+                    weight_slice,
+                    scale_slice,
+                    rows as i32,
+                    cols as i32,
+                    block_size_rows as i32,
+                    block_size_cols as i32,
+                    &dev,
+                    ffi::launch_fp8_blockwise_dequantize_f16,
+                )?,
+                dev,
+            ),
+            _ => candle_core::bail!("Invalid out type, expected either f32/bf16/f16"),
+        };
+
+        Ok((out, weight_l.shape().clone()))
     }
 }
 
