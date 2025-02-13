@@ -3,7 +3,7 @@
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer, Shard,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
@@ -193,30 +193,18 @@ impl CausalSelfAttention {
             comm,
             vb.pp("q_proj"),
         )?;
-
-        // We may need to replicate the kv heads
-        let kv_replicate = if comm.world_size() > cfg.num_key_value_heads {
-            comm.world_size() / cfg.num_key_value_heads
-        } else {
-            1
-        };
-
-        let kv_shard_id = comm.rank() / kv_replicate;
-        // let kv_block_size = size_kv / comm.world_size();
-        let kv_block_size = cfg.hidden_size / cfg.num_attention_heads;
-        let shard = Shard::Offset {
-            dim: 0,
-            offset: kv_shard_id * kv_block_size,
-            len: kv_block_size,
-        };
-
+        let kv_shard = mistralrs_quant::compute_kv_shard(
+            cfg.num_key_value_heads,
+            cfg.hidden_size / cfg.num_attention_heads,
+            comm,
+        );
         let k_proj = ColumnParallelLayer::new_with_shard(
             size_in,
             size_kv,
             &cfg.quantization_config,
             false,
             comm,
-            shard,
+            kv_shard,
             vb.pp("k_proj"),
         )?;
         let v_proj = ColumnParallelLayer::new_with_shard(
@@ -225,7 +213,7 @@ impl CausalSelfAttention {
             &cfg.quantization_config,
             false,
             comm,
-            shard,
+            kv_shard,
             vb.pp("v_proj"),
         )?;
         let o_proj = RowParallelLayer::new(
@@ -248,11 +236,11 @@ impl CausalSelfAttention {
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: if kv_replicate != 1 {
-                    (cfg.num_attention_heads / cfg.num_key_value_heads) / kv_replicate
-                } else {
-                    cfg.num_attention_heads / cfg.num_key_value_heads
-                },
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(
+                    cfg.num_key_value_heads,
+                    cfg.num_attention_heads,
+                    comm,
+                ),
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),

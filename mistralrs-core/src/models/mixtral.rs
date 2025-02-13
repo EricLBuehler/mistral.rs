@@ -85,20 +85,27 @@ impl Attention {
             comm,
             vb.pp("q_proj"),
         )?;
-        let k_proj = ColumnParallelLayer::new(
+        let kv_shard = mistralrs_quant::compute_kv_shard(
+            cfg.num_key_value_heads,
+            cfg.hidden_size / cfg.num_attention_heads,
+            comm,
+        );
+        let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
             &cfg.quantization_config,
             false,
             comm,
+            kv_shard,
             vb.pp("k_proj"),
         )?;
-        let v_proj = ColumnParallelLayer::new(
+        let v_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
             &cfg.quantization_config,
             false,
             comm,
+            kv_shard,
             vb.pp("v_proj"),
         )?;
         let o_proj = RowParallelLayer::new(
@@ -121,7 +128,11 @@ impl Attention {
             sliding_window: cfg.sliding_window,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: num_heads / num_kv_heads,
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(
+                    cfg.num_key_value_heads,
+                    cfg.num_attention_heads,
+                    comm,
+                ),
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
