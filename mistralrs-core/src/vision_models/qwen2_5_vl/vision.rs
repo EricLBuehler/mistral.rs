@@ -5,7 +5,7 @@ use candle_nn::{Linear, Module};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
-    layers::{self, layer_norm, Activation, Conv3dConfig, Conv3dNoBias, MatMul, RmsNorm},
+    layers::{self, Activation, Conv3dConfig, Conv3dNoBias, MatMul, RmsNorm},
     ops::RepeatInterleaveOp,
 };
 
