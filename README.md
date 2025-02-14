@@ -290,11 +290,11 @@ Enabling features is done by passing `--features ...` to the build system. When 
         ```bash
         cargo install --path mistralrs-server --features cuda
         ```
-6) The build process will output a binary `mistralrs-server` at `./target/release/mistralrs-server` which may be copied into the working directory with the following command:
-    
+6) The build process will output a binary `mistralrs-server` at `./target/release/mistralrs-server`. We can switch to that directory so that the binary can be accessed as `./mistralrs-server` with the following command:
+
     *Example on Ubuntu:*
     ```
-    cp ./target/release/mistralrs-server ./mistralrs-server
+    cd target/release
     ```
 
 7) Use our APIs and integrations: 
