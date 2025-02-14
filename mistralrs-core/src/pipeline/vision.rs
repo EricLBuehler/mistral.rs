@@ -9,7 +9,8 @@ use super::{
     VisionPromptPrefixer, XLoraPaths,
 };
 use super::{
-    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2_5VLLoader,
+    VisionLoaderType,
 };
 use crate::device_map::{self, DeviceMapper};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -136,6 +137,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
             VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
             VisionLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
+            VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
