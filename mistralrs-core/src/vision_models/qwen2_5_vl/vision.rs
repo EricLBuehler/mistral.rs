@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{LayerNorm, Linear, Module};
+use candle_nn::{Linear, Module};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
-    layers::{self, layer_norm, Activation, Conv3dConfig, Conv3dNoBias, MatMul},
+    layers::{self, layer_norm, Activation, Conv3dConfig, Conv3dNoBias, MatMul, RmsNorm},
     ops::RepeatInterleaveOp,
 };
 
@@ -158,16 +158,16 @@ impl VisionAttention {
 
 // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L418
 struct VisionBlock {
-    norm1: LayerNorm,
-    norm2: LayerNorm,
+    norm1: RmsNorm,
+    norm2: RmsNorm,
     mlp: VisionMlp,
     attn: VisionAttention,
 }
 
 impl VisionBlock {
     fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let norm1 = layer_norm(cfg.hidden_size, 1e-6, vb.pp("norm1"))?;
-        let norm2 = layer_norm(cfg.hidden_size, 1e-6, vb.pp("norm2"))?;
+        let norm1 = RmsNorm::new(cfg.hidden_size, 1e-6, vb.pp("norm1"))?;
+        let norm2 = RmsNorm::new(cfg.hidden_size, 1e-6, vb.pp("norm2"))?;
 
         let mlp_hidden_dim = (cfg.hidden_size as f64 * cfg.mlp_ratio) as usize;
         let mlp = VisionMlp::new(
@@ -201,7 +201,7 @@ impl VisionBlock {
 }
 
 struct PatchMerger {
-    ln_q: LayerNorm,
+    ln_q: RmsNorm,
     mlp0: Linear,
     mlp2: Linear,
     out_hidden_size: usize,
@@ -218,7 +218,7 @@ impl PatchMerger {
         let mlp0 = layers::linear(out_hidden_size, out_hidden_size, vb.pp("mlp.0"))?;
         let mlp2 = layers::linear(out_hidden_size, dim, vb.pp("mlp.2"))?;
         Ok(Self {
-            ln_q: layer_norm(context_dim, 1e-6, vb.pp("ln_q"))?,
+            ln_q: RmsNorm::new(context_dim, 1e-6, vb.pp("ln_q"))?,
             mlp0,
             mlp2,
             out_hidden_size,
