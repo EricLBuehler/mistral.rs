@@ -345,7 +345,7 @@ impl Qwen2VLVisionModel {
             .flatten_from(1)
     }
 
-    fn get_window_index(&self, grid_thw: &Tensor, device: &Device) -> Result<(Tensor, Vec<i32>)> {
+    fn get_window_index(&self, grid_thw: &Tensor, device: &Device) -> Result<(Tensor, Vec<i64>)> {
         let mut window_index = Vec::new();
         let mut cu_window_seqlens = vec![0];
         let mut window_index_id = 0;
@@ -381,7 +381,11 @@ impl Qwen2VLVisionModel {
                 ))?;
                 index
             };
-            let seqlens = index_padded.ne(-100.)?.sum((2, 3))?.flatten_all()?;
+            let seqlens = index_padded
+                .ne(-100.)?
+                .to_dtype(index_padded.dtype())?
+                .sum((2, 3))?
+                .flatten_all()?;
             let index_new = index_padded
                 .flatten_all()?
                 .to_vec1::<i32>()?
@@ -392,9 +396,13 @@ impl Qwen2VLVisionModel {
                 [index_new, vec![window_index_id]].concat(),
                 device,
             )?);
-            let cu_seqlens_tmp = ((seqlens.cumsum(0)? * self.spatial_merge_unit as f64)?
+            let cu_seqlens_tmp = ((seqlens
+                .to_dtype(DType::F32)?
+                .cumsum(0)?
+                .to_dtype(seqlens.dtype())?
+                * self.spatial_merge_unit as f64)?
                 + cu_window_seqlens[cu_window_seqlens.len() - 1] as f64)?;
-            cu_window_seqlens.extend(cu_seqlens_tmp.to_vec1::<i32>()?);
+            cu_window_seqlens.extend(cu_seqlens_tmp.to_vec1::<i64>()?);
             window_index_id += (t * llm_grid_h * llm_grid_w) as i32;
         }
 
@@ -453,7 +461,7 @@ impl Qwen2VLVisionModel {
             }
         };
         let attention_mask_window = match &cu_window_seqlens[..] {
-            &[0, len] if len == seq_len as i32 => None,
+            &[0, len] if len == seq_len as i64 => None,
             cu_seqlens => {
                 let mut attention_mask =
                     Tensor::full(f32::MIN, (1, seq_len, seq_len), xs.device())?
