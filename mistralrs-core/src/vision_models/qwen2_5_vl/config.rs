@@ -16,7 +16,7 @@ pub struct VisionConfig {
     pub out_hidden_size: usize,
     #[serde(default = "default_vision_hidden_act")]
     pub hidden_act: Activation,
-    pub mlp_ratio: f64,
+    pub intermediate_size: usize,
     pub num_heads: usize,
     #[serde(default = "default_in_channels")]
     pub in_chans: usize,

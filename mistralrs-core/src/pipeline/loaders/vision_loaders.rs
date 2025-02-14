@@ -2737,9 +2737,8 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
             let norm2 = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
 
             #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-            let mlp_hidden_dim = (cfg.hidden_size as f64 * cfg.mlp_ratio) as usize;
-            let fc1 = cfg.hidden_size * mlp_hidden_dim + mlp_hidden_dim;
-            let fc2 = cfg.hidden_size * mlp_hidden_dim + cfg.hidden_size;
+            let fc1 = cfg.hidden_size * cfg.intermediate_size + cfg.intermediate_size;
+            let fc2 = cfg.hidden_size * cfg.intermediate_size + cfg.hidden_size;
 
             let qkv = cfg.hidden_size * cfg.hidden_size * 3 + cfg.hidden_size * 3;
             let out = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;

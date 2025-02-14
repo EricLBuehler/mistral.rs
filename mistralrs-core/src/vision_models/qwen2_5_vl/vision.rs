@@ -169,10 +169,9 @@ impl VisionBlock {
         let norm1 = RmsNorm::new(cfg.hidden_size, 1e-6, vb.pp("norm1"))?;
         let norm2 = RmsNorm::new(cfg.hidden_size, 1e-6, vb.pp("norm2"))?;
 
-        let mlp_hidden_dim = (cfg.hidden_size as f64 * cfg.mlp_ratio) as usize;
         let mlp = VisionMlp::new(
             cfg.hidden_size,
-            mlp_hidden_dim,
+            cfg.intermediate_size,
             cfg.hidden_act,
             vb.pp("mlp"),
         )?;
