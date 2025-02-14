@@ -11,13 +11,17 @@ use candle_nn::{
 };
 use float8::F8E4M3;
 use half::{bf16, f16};
-use mistralrs_quant::{get_use_matmul_via_f16, ShardedVarBuilder};
+use mistralrs_quant::{
+    get_use_matmul_via_f16, ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer,
+    ShardedVarBuilder,
+};
 use serde::{Deserialize, Serialize};
 
 pub use crate::attention::Sdpa;
 pub use crate::layers_masker::CausalMasker;
 pub use crate::layers_utils::repeat_kv;
 use crate::{
+    amoe::{AnyMoeTrainableLayer, MlpLayer},
     gguf::Content,
     models::llama,
     ops::SplitOp,
@@ -1225,6 +1229,30 @@ impl Module for Activation {
     }
 }
 
+impl TryInto<candle_nn::Activation> for Activation {
+    type Error = candle_core::Error;
+
+    fn try_into(self) -> Result<candle_nn::Activation> {
+        match self {
+            Self::Gelu => Ok(candle_nn::Activation::Gelu),
+            Self::Relu => Ok(candle_nn::Activation::Relu),
+            Self::Silu => Ok(candle_nn::Activation::Silu),
+            Self::NewGelu => Ok(candle_nn::Activation::NewGelu),
+            Self::Relu2 => Ok(candle_nn::Activation::Relu2),
+            Self::Relu6 => Ok(candle_nn::Activation::Relu6),
+            Self::Sigmoid => Ok(candle_nn::Activation::Sigmoid),
+            Self::HardSigmoid => Ok(candle_nn::Activation::HardSigmoid),
+            Self::Swiglu => Ok(candle_nn::Activation::Swiglu),
+            Self::Swish => Ok(candle_nn::Activation::Swish),
+            Self::HardSwish => Ok(candle_nn::Activation::HardSwish),
+            Self::Elu(x) => Ok(candle_nn::Activation::Elu(x)),
+            Self::LeakyRelu(x) => Ok(candle_nn::Activation::LeakyRelu(x)),
+            Self::GeluPytorchTanh => Ok(candle_nn::Activation::GeluPytorchTanh),
+            Self::QuickGelu => candle_core::bail!("No mapping to candle_nn for QuickGelu"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Conv3dConfig {
     pub padding: usize,
@@ -1397,5 +1425,134 @@ impl GetFloatInfo for DType {
             }
         };
         Ok(finfo)
+    }
+}
+
+#[derive(Clone)]
+pub struct Mlp {
+    pub gate: Arc<dyn QuantMethod>,
+    pub up: Arc<dyn QuantMethod>,
+    pub down: Arc<dyn QuantMethod>,
+    act: Activation,
+    params: Vec<usize>,
+}
+
+impl Mlp {
+    pub fn new(
+        vb: ShardedVarBuilder,
+        hidden_size: usize,
+        intermediate_size: usize,
+        quantization_config: &Option<QuantizedConfig>,
+        hidden_act: Activation,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        Ok(Self {
+            gate: ColumnParallelLayer::new(
+                hidden_size,
+                intermediate_size,
+                quantization_config,
+                false,
+                comm,
+                vb.pp("gate_proj"),
+            )?,
+            up: ColumnParallelLayer::new(
+                hidden_size,
+                intermediate_size,
+                quantization_config,
+                false,
+                comm,
+                vb.pp("up_proj"),
+            )?,
+            down: RowParallelLayer::new(
+                intermediate_size,
+                hidden_size,
+                quantization_config,
+                false,
+                comm,
+                vb.pp("down_proj"),
+            )?,
+            act: hidden_act,
+            params: vec![hidden_size, intermediate_size],
+        })
+    }
+
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.gate.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let lhs = self.gate.forward(&xs)?;
+        let rhs = self.up.forward(&xs)?;
+        let mut res = self.down.forward(&candle_nn::ops::mul_and_act(
+            &lhs,
+            &rhs,
+            self.act.try_into()?,
+        )?)?;
+        if self.gate.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
+    }
+}
+
+impl AnyMoeTrainableLayer for Mlp {}
+
+impl MlpLayer for Mlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.gate.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let lhs = MatMul.qmethod_matmul(&xs, &*self.gate)?;
+        let rhs = MatMul.qmethod_matmul(&xs, &*self.up)?;
+        let mut res = MatMul.qmethod_matmul(
+            &candle_nn::ops::mul_and_act(&lhs, &rhs, self.act.try_into()?)?,
+            &*self.down,
+        )?;
+        if self.gate.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
+    }
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        vec![&mut self.gate, &mut self.up, &mut self.down]
+    }
+    fn clone(&self) -> Box<dyn MlpLayer> {
+        Box::new(Clone::clone(self))
+    }
+    fn get_params(&self) -> &[usize] {
+        &self.params
+    }
+    // gate, up, down
+    fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
+        let gate = if let Some(ref delta) = deltas[0] {
+            self.gate.add_delta_w(delta)?
+        } else {
+            self.gate.clone()
+        };
+        let up = if let Some(ref delta) = deltas[1] {
+            self.up.add_delta_w(delta)?
+        } else {
+            self.up.clone()
+        };
+        let down = if let Some(ref delta) = deltas[2] {
+            self.down.add_delta_w(delta)?
+        } else {
+            self.down.clone()
+        };
+
+        Ok(Box::new(Self {
+            gate,
+            up,
+            down,
+            act: self.act,
+            params: self.params.clone(),
+        }))
+    }
+
+    fn dtype_device(&self) -> (DType, Device) {
+        self.gate.dtype_and_device()
     }
 }
