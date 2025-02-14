@@ -480,6 +480,8 @@ impl Qwen2VLVisionModel {
             xs = blk.forward(&xs, attention_mask, &rotary_pos_emb)?;
         }
 
-        self.patch_merger.forward(&xs)
+        xs = self.patch_merger.forward(&xs)?;
+        let reverse_indices = window_index.arg_sort_last_dim(true)?;
+        xs.index_select(&reverse_indices, 0)
     }
 }
