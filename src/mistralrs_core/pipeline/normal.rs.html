@@ -1550,7 +1550,8 @@
 <a href="#1549" id="1549">1549</a>
 <a href="#1550" id="1550">1550</a>
 <a href="#1551" id="1551">1551</a>
-<a href="#1552" id="1552">1552</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1552" id="1552">1552</a>
+<a href="#1553" id="1553">1553</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
@@ -2649,24 +2650,24 @@
 }
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>NormalPipeline {
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
         <span class="kw">if </span><span class="self">self</span>.parallel_models.len() != <span class="number">1 </span>{
             <span class="macro">panic!</span>(<span class="string">"Number of parallel models is not 1."</span>);
         }
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.parallel_models[<span class="number">0</span>].cache(), EitherCache::Full(<span class="kw">_</span>)) {
-            FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         } <span class="kw">else </span>{
-            NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         }
     }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
         <span class="kw">if </span><span class="self">self</span>.parallel_models.len() != <span class="number">1 </span>{
             <span class="macro">panic!</span>(<span class="string">"Number of parallel models is not 1."</span>);
         }
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.parallel_models[<span class="number">0</span>].cache(), EitherCache::Full(<span class="kw">_</span>)) {
-            FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         } <span class="kw">else </span>{
-            NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         }
     }
     <span class="kw">fn </span>set_none_cache(
@@ -2674,6 +2675,7 @@
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         reset_non_granular: bool,
         modify_draft_cache: bool,
+
         load_preallocated_cache: bool,
     ) {
         <span class="kw">if </span><span class="self">self</span>.parallel_models.len() != <span class="number">1 </span>{

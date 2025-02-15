@@ -1388,18 +1388,18 @@
 }
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>GGUFPipeline {
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.cache(), EitherCache::Full(<span class="kw">_</span>)) {
-            FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         } <span class="kw">else </span>{
-            NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         }
     }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.cache(), EitherCache::Full(<span class="kw">_</span>)) {
-            FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         } <span class="kw">else </span>{
-            NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         }
     }
     <span class="kw">fn </span>set_none_cache(

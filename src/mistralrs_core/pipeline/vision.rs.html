@@ -937,7 +937,8 @@
 <a href="#936" id="936">936</a>
 <a href="#937" id="937">937</a>
 <a href="#938" id="938">938</a>
-<a href="#939" id="939">939</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -1589,18 +1590,18 @@
 }
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>VisionPipeline {
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
-            FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         } <span class="kw">else </span>{
-            NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         }
     }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
-            FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         } <span class="kw">else </span>{
-            NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+            NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         }
     }
     <span class="kw">fn </span>set_none_cache(
@@ -1608,6 +1609,7 @@
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         reset_non_granular: bool,
         modify_draft_cache: bool,
+
         load_preallocated_cache: bool,
     ) {
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {

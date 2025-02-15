@@ -318,12 +318,14 @@
 <a href="#317" id="317">317</a>
 <a href="#318" id="318">318</a>
 <a href="#319" id="319">319</a>
-<a href="#320" id="320">320</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{num::NonZeroUsize, path::PathBuf};
 
 <span class="kw">use crate</span>::{best_device, Model};
 
-<span class="doccomment">/// Configure a text model with the various parameters for loading, running, and other inference behaviors.
+<span class="attr">#[derive(Clone)]
+</span><span class="doccomment">/// Configure a text model with the various parameters for loading, running, and other inference behaviors.
 </span><span class="kw">pub struct </span>TextModelBuilder {
     <span class="comment">// Loading model
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) model_id: String,

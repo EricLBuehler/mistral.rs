@@ -133,7 +133,9 @@
 <a href="#132" id="132">132</a>
 <a href="#133" id="133">133</a>
 <a href="#134" id="134">134</a>
-<a href="#135" id="135">135</a></pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous API to `mistral.rs`.
+<a href="#135" id="135">135</a>
+<a href="#136" id="136">136</a>
+<a href="#137" id="137">137</a></pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous API to `mistral.rs`.
 //!
 //! To get started loading a model, check out the following builders:
 //! - [`TextModelBuilder`]
@@ -242,6 +244,7 @@
 <span class="kw">mod </span>lora_model;
 <span class="kw">mod </span>messages;
 <span class="kw">mod </span>model;
+<span class="kw">mod </span>speculative;
 <span class="kw">mod </span>text_model;
 <span class="kw">mod </span>vision_model;
 <span class="kw">mod </span>xlora_model;
@@ -258,6 +261,7 @@
         RequestBuilder, RequestLike, TextMessageRole, TextMessages, VisionMessages,
     };
     <span class="kw">pub use </span><span class="kw">super</span>::model::{best_device, Model};
+    <span class="kw">pub use </span><span class="kw">super</span>::speculative::TextSpeculativeBuilder;
     <span class="kw">pub use </span><span class="kw">super</span>::text_model::{PagedAttentionMetaBuilder, TextModelBuilder};
     <span class="kw">pub use </span><span class="kw">super</span>::vision_model::VisionModelBuilder;
     <span class="kw">pub use </span><span class="kw">super</span>::xlora_model::XLoraModelBuilder;

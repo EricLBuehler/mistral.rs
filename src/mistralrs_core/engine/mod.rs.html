@@ -1063,7 +1063,7 @@
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
-        AdapterInstruction, CacheBackendMetadata, CacheInstruction, EitherCache, NormalCache,
+        AdapterInstruction, CacheBackendMetadata, CacheInstruction, NormalCache,
     },
     prefix_cacher_v2::PrefixCacheManagerV2,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
@@ -1871,8 +1871,8 @@
                 .clone()
                 .map(|conf| conf.block_size);
 
-            <span class="kw">let </span>cache = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).cache().clone();
-            <span class="kw">let </span>seq_preallocated_cache = <span class="kw">if let </span>EitherCache::Normal(_cache) = cache {
+            <span class="kw">let </span>seq_preallocated_cache = <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).do_preallocated_cache()
+            {
                 <span class="kw">let </span>metadata = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_metadata();
                 <span class="kw">let </span>model_metadata = metadata
                     .model_metadata

@@ -771,7 +771,19 @@
 <a href="#770" id="770">770</a>
 <a href="#771" id="771">771</a>
 <a href="#772" id="772">772</a>
-<a href="#773" id="773">773</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
+<a href="#773" id="773">773</a>
+<a href="#774" id="774">774</a>
+<a href="#775" id="775">775</a>
+<a href="#776" id="776">776</a>
+<a href="#777" id="777">777</a>
+<a href="#778" id="778">778</a>
+<a href="#779" id="779">779</a>
+<a href="#780" id="780">780</a>
+<a href="#781" id="781">781</a>
+<a href="#782" id="782">782</a>
+<a href="#783" id="783">783</a>
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor, D};
 
@@ -1042,29 +1054,30 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         pipeline: <span class="kw-2">&amp;</span>T,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
-        _modify_draft_cache: bool,
+        modify_draft_cache: bool,
     ) {
         <span class="kw">let </span><span class="kw-2">mut </span>new_k_cache = Vec::new();
         <span class="kw">let </span><span class="kw-2">mut </span>new_v_cache = Vec::new();
+        <span class="kw">let </span>seq0_cache = <span class="kw">if </span>modify_draft_cache {
+            seqs[<span class="number">0</span>].normal_draft_cache()
+        } <span class="kw">else </span>{
+            seqs[<span class="number">0</span>].normal_cache()
+        };
         <span class="comment">// Use this for the various parameters. Assumes all seqs are from one model.
-        </span><span class="kw">let </span>template_cache_dim = seqs[<span class="number">0</span>].normal_cache()[<span class="number">0</span>].as_ref().unwrap().k.dim;
-        <span class="kw">let </span>template_cache_csl = seqs[<span class="number">0</span>].normal_cache()[<span class="number">0</span>]
-            .as_ref()
-            .unwrap()
-            .k
-            .current_seq_len;
-        <span class="kw">let </span>template_cache_msl = seqs[<span class="number">0</span>].normal_cache()[<span class="number">0</span>].as_ref().unwrap().k.max_seq_len;
-        <span class="kw">let </span>template_cache_capsl = seqs[<span class="number">0</span>].normal_cache()[<span class="number">0</span>]
-            .as_ref()
-            .unwrap()
-            .k
-            .capacity_seq_len;
+        </span><span class="kw">let </span>template_cache_dim = seq0_cache[<span class="number">0</span>].as_ref().unwrap().k.dim;
+        <span class="kw">let </span>template_cache_csl = seq0_cache[<span class="number">0</span>].as_ref().unwrap().k.current_seq_len;
+        <span class="kw">let </span>template_cache_msl = seq0_cache[<span class="number">0</span>].as_ref().unwrap().k.max_seq_len;
+        <span class="kw">let </span>template_cache_capsl = seq0_cache[<span class="number">0</span>].as_ref().unwrap().k.capacity_seq_len;
 
         <span class="lifetime">'outer</span>: <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
             <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
             <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
-                <span class="kw">let </span>src_cache = seq.normal_cache();
+                <span class="kw">let </span>src_cache = <span class="kw">if </span>modify_draft_cache {
+                    seq.normal_draft_cache()
+                } <span class="kw">else </span>{
+                    seq.normal_cache()
+                };
                 <span class="kw">let </span>cache = src_cache.get(layer).unwrap();
                 <span class="comment">// This case for llama 3.2 vision cross attn
                 </span><span class="kw">if </span>cache.is_none() {
@@ -1110,7 +1123,7 @@
         }
         <span class="kw-2">*</span>pipeline.cache().normal() = NormalCache(caches);
     }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;</span>T, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], _modify_draft_cache: bool) {
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;</span>T, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
         <span class="kw">let </span>all_cache = pipeline.cache().normal();
         <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
             <span class="kw">let </span>cache = all_cache.<span class="number">0</span>.get(layer).unwrap();
@@ -1128,7 +1141,11 @@
             <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
 
             <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
-                <span class="kw">let </span>output_cache = seq.normal_cache();
+                <span class="kw">let </span>output_cache = <span class="kw">if </span>modify_draft_cache {
+                    seq.normal_draft_cache()
+                } <span class="kw">else </span>{
+                    seq.normal_cache()
+                };
                 <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;mut </span>output_cache[layer];
                 <span class="kw">let </span>k = k_caches.get(seq_i).unwrap().clone();
                 <span class="kw">let </span>v = v_caches.get(seq_i).unwrap().clone();
@@ -1158,6 +1175,13 @@
         _modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
+        <span class="kw">if </span>seqs.iter().any(|seq| seq.preallocated_cache().is_none()) {
+            <span class="kw">for </span>layer <span class="kw">in </span>pipeline.cache().normal().<span class="number">0</span>.iter_mut() {
+                layer.reset();
+            }
+            <span class="kw">return</span>;
+        }
+
         <span class="comment">// Use this for the various parameters. Assumes all seqs are from one model.
         </span><span class="kw">let </span>template_cache_dim = pipeline.cache().normal().<span class="number">0</span>[<span class="number">0</span>].k.dim;
         <span class="kw">let </span>template_cache_msl = pipeline.cache().normal().<span class="number">0</span>[<span class="number">0</span>].k.max_seq_len;

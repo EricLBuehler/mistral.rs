@@ -215,12 +215,14 @@
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
-<a href="#217" id="217">217</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{num::NonZeroUsize, path::PathBuf};
 
 <span class="kw">use crate</span>::{best_device, Model};
 
-<span class="doccomment">/// Configure a vision model with the various parameters for loading, running, and other inference behaviors.
+<span class="attr">#[derive(Clone)]
+</span><span class="doccomment">/// Configure a vision model with the various parameters for loading, running, and other inference behaviors.
 </span><span class="kw">pub struct </span>VisionModelBuilder {
     <span class="comment">// Loading model
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) model_id: String,

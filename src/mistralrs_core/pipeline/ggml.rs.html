@@ -583,7 +583,8 @@
 <a href="#582" id="582">582</a>
 <a href="#583" id="583">583</a>
 <a href="#584" id="584">584</a>
-<a href="#585" id="585">585</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -1042,17 +1043,18 @@
 }
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>GGMLPipeline {
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
+        FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
     }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, modify_draft_cache)
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
+        FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
     }
     <span class="kw">fn </span>set_none_cache(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         reset_non_granular: bool,
         modify_draft_cache: bool,
+
         load_preallocated_cache: bool,
     ) {
         FullCacheManager.set_none_cache(<span class="self">self</span>, seqs, modify_draft_cache, load_preallocated_cache);

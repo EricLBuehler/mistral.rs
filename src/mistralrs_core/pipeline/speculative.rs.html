@@ -691,7 +691,9 @@
 <a href="#690" id="690">690</a>
 <a href="#691" id="691">691</a>
 <a href="#692" id="692">692</a>
-<a href="#693" id="693">693</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#693" id="693">693</a>
+<a href="#694" id="694">694</a>
+<a href="#695" id="695">695</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     iter::zip,
     sync::{Arc, Mutex},
@@ -720,7 +722,7 @@
 };
 
 <span class="kw">use super</span>::{
-    cache_manager::FullCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
+    cache_manager::NormalCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
     AdapterActivationMixin, AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction,
     CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata,
     IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths, PreProcessingMixin,
@@ -936,15 +938,14 @@
     }
 }
 
-<span class="comment">// TODO: correct handling of cloning in and out for normal cache
-</span><span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>SpeculativePipeline {
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_in_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft), seqs, modify_draft_cache);
-        FullCacheManager.clone_in_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
+<span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>SpeculativePipeline {
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
+        NormalCacheManager.clone_in_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft), seqs, <span class="bool-val">true</span>);
+        NormalCacheManager.clone_in_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
     }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_out_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft), seqs, modify_draft_cache);
-        FullCacheManager.clone_out_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
+        NormalCacheManager.clone_out_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft), seqs, <span class="bool-val">true</span>);
+        NormalCacheManager.clone_out_cache(<span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target), seqs, <span class="bool-val">false</span>);
     }
     <span class="kw">fn </span>set_none_cache(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
@@ -953,13 +954,13 @@
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        FullCacheManager.set_none_cache(
+        NormalCacheManager.set_none_cache(
             <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft),
             seqs,
             modify_draft_cache,
             load_preallocated_cache,
         );
-        FullCacheManager.set_none_cache(
+        NormalCacheManager.set_none_cache(
             <span class="kw-2">&amp;*</span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target),
             seqs,
             <span class="bool-val">false</span>,
@@ -972,6 +973,10 @@
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="macro">unreachable!</span>()
     }
+    <span class="kw">fn </span>do_preallocated_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="comment">// KV cache size is not the same (necessarily)
+        </span><span class="bool-val">false
+    </span>}
 }
 
 <span class="kw">impl </span>AdapterActivationMixin <span class="kw">for </span>SpeculativePipeline {
@@ -1056,7 +1061,7 @@
                             </span>}
                             AdapterInstruction::None =&gt; <span class="number">0</span>,
                         };
-                        <span class="self">self</span>.clone_in_cache(input_seqs, <span class="bool-val">false</span>)
+                        <span class="self">self</span>.clone_in_cache(input_seqs)
                     }
                     CacheInstruction::Nothing(adapter_inst) =&gt; {
                         <span class="kw">match </span>adapter_inst {
@@ -1092,7 +1097,7 @@
                         <span class="self">self</span>.set_none_cache(
                             input_seqs,
                             reset_non_granular,
-                            <span class="bool-val">false</span>,
+                            <span class="bool-val">true</span>,
                             load_preallocated_cache,
                         )
                     }
@@ -1126,13 +1131,13 @@
                             <span class="prelude-val">None</span>,
                             <span class="prelude-val">None</span>, <span class="comment">// TODO: get block tables/handle it
                             </span><span class="prelude-val">None</span>, <span class="comment">// TODO: do we support???
-                            </span><span class="prelude-val">None</span>, <span class="comment">// TODO: device mapping
-                        </span>)
+                            </span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).device_mapper(),
+                        )
                         .nth(<span class="number">0</span>)
                         .unwrap()
-                        .unwrap();
-                    <span class="kw">let </span>logits =
-                        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).forward_inputs(Box::new(inputs), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+                        .unwrap()
+                        .inputs;
+                    <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft).forward_inputs(inputs, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
                     <span class="attr">#[allow(irrefutable_let_patterns)]
                     </span><span class="kw">let </span>ForwardInputsResult::CausalGeneration { logits } = logits
                     <span class="kw">else </span>{
@@ -1199,14 +1204,14 @@
                         <span class="prelude-val">None</span>,
                         <span class="prelude-val">None</span>, <span class="comment">// TODO: get block tables/handle it
                         </span><span class="prelude-val">None</span>, <span class="comment">// TODO: do we support???
-                        </span><span class="prelude-val">None</span>, <span class="comment">// TODO: device mapping
-                    </span>)
+                        </span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).device_mapper(),
+                    )
                     .nth(<span class="number">0</span>)
                     .unwrap()
-                    .unwrap();
+                    .unwrap()
+                    .inputs;
 
-                <span class="kw">let </span>logits =
-                    <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).forward_inputs(Box::new(inputs), <span class="bool-val">false</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>logits = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).forward_inputs(inputs, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
                 <span class="attr">#[allow(irrefutable_let_patterns)]
                 </span><span class="kw">let </span>ForwardInputsResult::CausalGeneration { logits } = logits
                 <span class="kw">else </span>{
@@ -1342,7 +1347,7 @@
 
                 <span class="kw">match </span>post_op {
                     CacheInstruction::Out =&gt; {
-                        <span class="self">self</span>.clone_out_cache(input_seqs, <span class="bool-val">true</span>);
+                        <span class="self">self</span>.clone_out_cache(input_seqs);
                     }
                     CacheInstruction::Nothing(<span class="kw">_</span>) =&gt; (),
                     CacheInstruction::Reset {
@@ -1382,6 +1387,5 @@
     }
 }
 
-<span class="comment">// TODO
-</span><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>SpeculativePipeline {}
+<span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>SpeculativePipeline {}
 </code></pre></div></section></main></body></html>

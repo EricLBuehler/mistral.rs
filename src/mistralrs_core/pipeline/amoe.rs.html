@@ -789,11 +789,11 @@
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
         <span class="macro">unreachable!</span>()
     }
-    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).clone_in_cache(seqs, modify_draft_cache)
+    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).clone_in_cache(seqs)
     }
-    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).clone_out_cache(seqs, modify_draft_cache)
+    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
+        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.target).clone_out_cache(seqs)
     }
     <span class="kw">fn </span>set_none_cache(
         <span class="kw-2">&amp;</span><span class="self">self</span>,

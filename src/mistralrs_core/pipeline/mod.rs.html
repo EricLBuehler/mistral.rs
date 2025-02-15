@@ -936,7 +936,10 @@
 <a href="#935" id="935">935</a>
 <a href="#936" id="936">936</a>
 <a href="#937" id="937">937</a>
-<a href="#938" id="938">938</a></pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a></pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
 <span class="kw">mod </span>diffusion;
@@ -1060,10 +1063,10 @@
 <span class="kw">pub trait </span>CacheManagerMixin {
     <span class="doccomment">/// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
     /// It is not a guarantee that this will be called for each completion step.
-    </span><span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool);
+    </span><span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]);
     <span class="doccomment">/// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
     /// It is not a guarantee that this will be called for each step.
-    </span><span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool);
+    </span><span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]);
     <span class="doccomment">/// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
@@ -1075,6 +1078,9 @@
         load_preallocated_cache: bool,
     );
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache;
+    <span class="kw">fn </span>do_preallocated_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="macro">matches!</span>(<span class="self">self</span>.cache(), EitherCache::Normal(<span class="kw">_</span>))
+    }
 }
 
 <span class="kw">pub trait </span>AdapterActivationMixin {
@@ -1305,7 +1311,7 @@
                                     </span>}
                                     AdapterInstruction::None =&gt; <span class="number">0</span>,
                                 };
-                                <span class="self">self</span>.clone_in_cache(input_seqs, <span class="bool-val">false</span>)
+                                <span class="self">self</span>.clone_in_cache(input_seqs)
                             }
                             CacheInstruction::Nothing(<span class="kw-2">ref </span>adapter_inst) =&gt; {
                                 <span class="kw">match </span>adapter_inst {
@@ -1365,7 +1371,7 @@
                 }
 
                 <span class="kw">match </span>post_op {
-                    CacheInstruction::Out =&gt; <span class="self">self</span>.clone_out_cache(input_seqs, <span class="bool-val">false</span>),
+                    CacheInstruction::Out =&gt; <span class="self">self</span>.clone_out_cache(input_seqs),
                     CacheInstruction::Nothing(<span class="kw">_</span>) =&gt; (),
                     CacheInstruction::Reset {
                         load_preallocated_cache,
