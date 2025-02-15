@@ -561,6 +561,10 @@ impl Sampler {
 
     fn apply_dry_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
         if let Some(ref params) = self.dry_params {
+            if params.multiplier == 0. {
+                return Ok(());
+            }
+
             let match_indices = context
                 .par_iter()
                 .enumerate()
