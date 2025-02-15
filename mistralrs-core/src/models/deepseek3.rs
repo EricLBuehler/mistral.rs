@@ -16,7 +16,7 @@ use crate::{
     device_map::DeviceMapper,
     layers::{
         embedding, Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
-        DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
+        DeepSeekV2RotaryEmbedding, Mlp, RmsNorm, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
     ops::{BincountOp, NonZeroOp, SplitOp, TopKLastDimOp, TopKOutput},
@@ -390,69 +390,6 @@ impl Attention {
     }
 }
 
-struct Mlp {
-    gate: Arc<dyn QuantMethod>,
-    up: Arc<dyn QuantMethod>,
-    down: Arc<dyn QuantMethod>,
-    act: Activation,
-}
-
-impl Mlp {
-    fn new(
-        cfg: &DeepSeekV3Config,
-        vb: ShardedVarBuilder,
-        hidden_size: Option<usize>,
-        intermediate_size: Option<usize>,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<Self> {
-        let hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
-        let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
-
-        Ok(Self {
-            gate: ColumnParallelLayer::new(
-                hidden_size,
-                intermediate_size,
-                &cfg.quantization_config,
-                false,
-                comm,
-                vb.pp("gate_proj"),
-            )?,
-            up: ColumnParallelLayer::new(
-                hidden_size,
-                intermediate_size,
-                &cfg.quantization_config,
-                false,
-                comm,
-                vb.pp("up_proj"),
-            )?,
-            down: RowParallelLayer::new(
-                intermediate_size,
-                hidden_size,
-                &cfg.quantization_config,
-                false,
-                comm,
-                vb.pp("down_proj"),
-            )?,
-            act: cfg.hidden_act,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let lhs = self.gate.forward(&xs)?.apply(&self.act)?;
-        let rhs = self.up.forward(&xs)?;
-        let mut res = self.down.forward(&(&lhs * &rhs)?)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
-    }
-}
-
 struct Expert {
     gate: Arc<dyn QuantMethod>,
     up: Arc<dyn QuantMethod>,
@@ -502,9 +439,13 @@ impl Expert {
         if let Some(t) = self.gate.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let lhs = self.gate.forward(&xs)?.apply(&self.act)?;
+        let lhs = self.gate.forward(&xs)?;
         let rhs = self.up.forward(&xs)?;
-        let mut res = self.down.forward(&(&lhs * &rhs)?)?;
+        let mut res = self.down.forward(&candle_nn::ops::mul_and_act(
+            &lhs,
+            &rhs,
+            self.act.try_into()?,
+        )?)?;
         if self.gate.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
@@ -685,10 +626,11 @@ impl Moe {
         let shared_experts = if let Some(n_shared_experts) = n_shared_experts {
             let intermediate_size = cfg.moe_intermediate_size * n_shared_experts;
             Some(Mlp::new(
-                cfg,
                 mapper.set_device(layer_idx, vb.pp("shared_experts"), loading_isq),
-                None,
-                Some(intermediate_size),
+                cfg.hidden_size,
+                intermediate_size,
+                &cfg.quantization_config,
+                cfg.hidden_act,
                 comm,
             )?)
         } else {
@@ -838,10 +780,11 @@ impl DecoderLayer {
             )?)
         } else {
             MoeOrMlp::Mlp(Mlp::new(
-                cfg,
                 mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-                None,
-                None,
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                &cfg.quantization_config,
+                cfg.hidden_act,
                 comm,
             )?)
         };
