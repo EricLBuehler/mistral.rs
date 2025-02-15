@@ -1184,64 +1184,7 @@
 <a href="#1183" id="1183">1183</a>
 <a href="#1184" id="1184">1184</a>
 <a href="#1185" id="1185">1185</a>
-<a href="#1186" id="1186">1186</a>
-<a href="#1187" id="1187">1187</a>
-<a href="#1188" id="1188">1188</a>
-<a href="#1189" id="1189">1189</a>
-<a href="#1190" id="1190">1190</a>
-<a href="#1191" id="1191">1191</a>
-<a href="#1192" id="1192">1192</a>
-<a href="#1193" id="1193">1193</a>
-<a href="#1194" id="1194">1194</a>
-<a href="#1195" id="1195">1195</a>
-<a href="#1196" id="1196">1196</a>
-<a href="#1197" id="1197">1197</a>
-<a href="#1198" id="1198">1198</a>
-<a href="#1199" id="1199">1199</a>
-<a href="#1200" id="1200">1200</a>
-<a href="#1201" id="1201">1201</a>
-<a href="#1202" id="1202">1202</a>
-<a href="#1203" id="1203">1203</a>
-<a href="#1204" id="1204">1204</a>
-<a href="#1205" id="1205">1205</a>
-<a href="#1206" id="1206">1206</a>
-<a href="#1207" id="1207">1207</a>
-<a href="#1208" id="1208">1208</a>
-<a href="#1209" id="1209">1209</a>
-<a href="#1210" id="1210">1210</a>
-<a href="#1211" id="1211">1211</a>
-<a href="#1212" id="1212">1212</a>
-<a href="#1213" id="1213">1213</a>
-<a href="#1214" id="1214">1214</a>
-<a href="#1215" id="1215">1215</a>
-<a href="#1216" id="1216">1216</a>
-<a href="#1217" id="1217">1217</a>
-<a href="#1218" id="1218">1218</a>
-<a href="#1219" id="1219">1219</a>
-<a href="#1220" id="1220">1220</a>
-<a href="#1221" id="1221">1221</a>
-<a href="#1222" id="1222">1222</a>
-<a href="#1223" id="1223">1223</a>
-<a href="#1224" id="1224">1224</a>
-<a href="#1225" id="1225">1225</a>
-<a href="#1226" id="1226">1226</a>
-<a href="#1227" id="1227">1227</a>
-<a href="#1228" id="1228">1228</a>
-<a href="#1229" id="1229">1229</a>
-<a href="#1230" id="1230">1230</a>
-<a href="#1231" id="1231">1231</a>
-<a href="#1232" id="1232">1232</a>
-<a href="#1233" id="1233">1233</a>
-<a href="#1234" id="1234">1234</a>
-<a href="#1235" id="1235">1235</a>
-<a href="#1236" id="1236">1236</a>
-<a href="#1237" id="1237">1237</a>
-<a href="#1238" id="1238">1238</a>
-<a href="#1239" id="1239">1239</a>
-<a href="#1240" id="1240">1240</a>
-<a href="#1241" id="1241">1241</a>
-<a href="#1242" id="1242">1242</a>
-<a href="#1243" id="1243">1243</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1186" id="1186">1186</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1259,7 +1202,7 @@
     device_map::DeviceMapper,
     layers::{
         embedding, Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
-        DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
+        DeepSeekV2RotaryEmbedding, Mlp, RmsNorm, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
     ops::{BincountOp, NonZeroOp, SplitOp, TopKLastDimOp, TopKOutput},
@@ -1629,69 +1572,6 @@
     }
 }
 
-<span class="kw">struct </span>Mlp {
-    gate: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    up: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    down: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    act: Activation,
-}
-
-<span class="kw">impl </span>Mlp {
-    <span class="kw">fn </span>new(
-        cfg: <span class="kw-2">&amp;</span>DeepSeekV2Config,
-        vb: ShardedVarBuilder,
-        hidden_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-        intermediate_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
-    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
-        <span class="kw">let </span>intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
-
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            gate: ColumnParallelLayer::new(
-                hidden_size,
-                intermediate_size,
-                <span class="kw-2">&amp;</span>cfg.quantization_config,
-                <span class="bool-val">false</span>,
-                comm,
-                vb.pp(<span class="string">"gate_proj"</span>),
-            )<span class="question-mark">?</span>,
-            up: ColumnParallelLayer::new(
-                hidden_size,
-                intermediate_size,
-                <span class="kw-2">&amp;</span>cfg.quantization_config,
-                <span class="bool-val">false</span>,
-                comm,
-                vb.pp(<span class="string">"up_proj"</span>),
-            )<span class="question-mark">?</span>,
-            down: RowParallelLayer::new(
-                intermediate_size,
-                hidden_size,
-                <span class="kw-2">&amp;</span>cfg.quantization_config,
-                <span class="bool-val">false</span>,
-                comm,
-                vb.pp(<span class="string">"down_proj"</span>),
-            )<span class="question-mark">?</span>,
-            act: cfg.hidden_act,
-        })
-    }
-
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span>original_dtype = xs.dtype();
-        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)<span class="question-mark">?</span>;
-        }
-        <span class="kw">let </span>lhs = <span class="self">self</span>.gate.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act)<span class="question-mark">?</span>;
-        <span class="kw">let </span>rhs = <span class="self">self</span>.up.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self</span>.down.forward(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span>lhs * <span class="kw-2">&amp;</span>rhs)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-        <span class="kw">if </span><span class="self">self</span>.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
-        }
-        <span class="prelude-val">Ok</span>(res)
-    }
-}
-
 <span class="kw">struct </span>Expert {
     gate: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     up: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
@@ -1741,9 +1621,13 @@
         <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.gate.quantized_act_type() {
             xs = xs.to_dtype(t)<span class="question-mark">?</span>;
         }
-        <span class="kw">let </span>lhs = <span class="self">self</span>.gate.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act)<span class="question-mark">?</span>;
+        <span class="kw">let </span>lhs = <span class="self">self</span>.gate.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
         <span class="kw">let </span>rhs = <span class="self">self</span>.up.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self</span>.down.forward(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span>lhs * <span class="kw-2">&amp;</span>rhs)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self</span>.down.forward(<span class="kw-2">&amp;</span>candle_nn::ops::mul_and_act(
+            <span class="kw-2">&amp;</span>lhs,
+            <span class="kw-2">&amp;</span>rhs,
+            <span class="self">self</span>.act.try_into()<span class="question-mark">?</span>,
+        )<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">if </span><span class="self">self</span>.gate.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
         }
@@ -1871,10 +1755,11 @@
         <span class="kw">let </span>shared_experts = <span class="kw">if let </span><span class="prelude-val">Some</span>(n_shared_experts) = n_shared_experts {
             <span class="kw">let </span>intermediate_size = cfg.moe_intermediate_size * n_shared_experts;
             <span class="prelude-val">Some</span>(Mlp::new(
-                cfg,
                 mapper.set_device(layer_idx, vb.pp(<span class="string">"shared_experts"</span>), loading_isq),
-                <span class="prelude-val">None</span>,
-                <span class="prelude-val">Some</span>(intermediate_size),
+                cfg.hidden_size,
+                intermediate_size,
+                <span class="kw-2">&amp;</span>cfg.quantization_config,
+                cfg.hidden_act,
                 comm,
             )<span class="question-mark">?</span>)
         } <span class="kw">else </span>{
@@ -2024,10 +1909,11 @@
             )<span class="question-mark">?</span>)
         } <span class="kw">else </span>{
             MoeOrMlp::Mlp(Mlp::new(
-                cfg,
                 mapper.set_device(layer_idx, vb.pp(<span class="string">"mlp"</span>), loading_isq),
-                <span class="prelude-val">None</span>,
-                <span class="prelude-val">None</span>,
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                <span class="kw-2">&amp;</span>cfg.quantization_config,
+                cfg.hidden_act,
                 comm,
             )<span class="question-mark">?</span>)
         };
