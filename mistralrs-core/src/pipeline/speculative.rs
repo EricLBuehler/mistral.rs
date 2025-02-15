@@ -244,20 +244,12 @@ impl IsqPipelineMixin for SpeculativePipeline {
 }
 
 impl CacheManagerMixin for SpeculativePipeline {
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        NormalCacheManager.clone_in_cache(
-            &*get_mut_arcmutex!(self.draft),
-            seqs,
-            modify_draft_cache,
-        );
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
+        NormalCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.draft), seqs, true);
         NormalCacheManager.clone_in_cache(&*get_mut_arcmutex!(self.target), seqs, false);
     }
-    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        NormalCacheManager.clone_out_cache(
-            &*get_mut_arcmutex!(self.draft),
-            seqs,
-            modify_draft_cache,
-        );
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
+        NormalCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.draft), seqs, true);
         NormalCacheManager.clone_out_cache(&*get_mut_arcmutex!(self.target), seqs, false);
     }
     fn set_none_cache(
@@ -286,8 +278,9 @@ impl CacheManagerMixin for SpeculativePipeline {
     fn cache(&self) -> &EitherCache {
         unreachable!()
     }
-    fn cache_is_normal(&self) -> bool {
-        true
+    fn do_preallocated_cache(&self) -> bool {
+        // KV cache size is not the same (necessarily)
+        false
     }
 }
 
@@ -373,7 +366,7 @@ impl Pipeline for SpeculativePipeline {
                             }
                             AdapterInstruction::None => 0,
                         };
-                        self.clone_in_cache(input_seqs, false)
+                        self.clone_in_cache(input_seqs)
                     }
                     CacheInstruction::Nothing(adapter_inst) => {
                         match adapter_inst {
@@ -409,7 +402,7 @@ impl Pipeline for SpeculativePipeline {
                         self.set_none_cache(
                             input_seqs,
                             reset_non_granular,
-                            false,
+                            true,
                             load_preallocated_cache,
                         )
                     }
@@ -516,7 +509,7 @@ impl Pipeline for SpeculativePipeline {
                         None,
                         None, // TODO: get block tables/handle it
                         None, // TODO: do we support???
-                        get_mut_arcmutex!(self.draft).device_mapper(),
+                        get_mut_arcmutex!(self.target).device_mapper(),
                     )
                     .nth(0)
                     .unwrap()
@@ -659,7 +652,7 @@ impl Pipeline for SpeculativePipeline {
 
                 match post_op {
                     CacheInstruction::Out => {
-                        self.clone_out_cache(input_seqs, true);
+                        self.clone_out_cache(input_seqs);
                     }
                     CacheInstruction::Nothing(_) => (),
                     CacheInstruction::Reset {

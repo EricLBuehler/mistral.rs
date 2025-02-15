@@ -457,17 +457,18 @@ impl IsqPipelineMixin for GGMLPipeline {
 }
 
 impl CacheManagerMixin for GGMLPipeline {
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
+        FullCacheManager.clone_in_cache(self, seqs, false)
     }
-    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
+        FullCacheManager.clone_out_cache(self, seqs, false)
     }
     fn set_none_cache(
         &self,
         seqs: &mut [&mut Sequence],
         reset_non_granular: bool,
         modify_draft_cache: bool,
+
         load_preallocated_cache: bool,
     ) {
         FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);

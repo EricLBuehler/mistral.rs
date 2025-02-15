@@ -5,4 +5,4 @@ model_id = "../hf_models/llama3.2_3b"
 gamma = 4
 
 [speculative.draft_model]
-model_id = "../hf_models/llama3.2_3b"
+model_id = "../hf_models/llama3.2_1b"

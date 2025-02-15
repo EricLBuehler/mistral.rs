@@ -122,10 +122,10 @@ pub trait IsqPipelineMixin {
 pub trait CacheManagerMixin {
     /// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
     /// It is not a guarantee that this will be called for each completion step.
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]);
     /// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
     /// It is not a guarantee that this will be called for each step.
-    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool);
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence]);
     /// Set the model cache to all None. Only called for prompt seqs.
     /// It is not a guarantee that this will be called for each prompt step.
     /// This may also reset the non granular state if applicable.
@@ -137,7 +137,7 @@ pub trait CacheManagerMixin {
         load_preallocated_cache: bool,
     );
     fn cache(&self) -> &EitherCache;
-    fn cache_is_normal(&self) -> bool {
+    fn do_preallocated_cache(&self) -> bool {
         matches!(self.cache(), EitherCache::Normal(_))
     }
 }
@@ -370,7 +370,7 @@ pub trait Pipeline:
                                     }
                                     AdapterInstruction::None => 0,
                                 };
-                                self.clone_in_cache(input_seqs, false)
+                                self.clone_in_cache(input_seqs)
                             }
                             CacheInstruction::Nothing(ref adapter_inst) => {
                                 match adapter_inst {
@@ -430,7 +430,7 @@ pub trait Pipeline:
                 }
 
                 match post_op {
-                    CacheInstruction::Out => self.clone_out_cache(input_seqs, false),
+                    CacheInstruction::Out => self.clone_out_cache(input_seqs),
                     CacheInstruction::Nothing(_) => (),
                     CacheInstruction::Reset {
                         load_preallocated_cache,

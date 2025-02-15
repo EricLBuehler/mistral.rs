@@ -650,18 +650,18 @@ impl IsqPipelineMixin for VisionPipeline {
 }
 
 impl CacheManagerMixin for VisionPipeline {
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+            FullCacheManager.clone_in_cache(self, seqs, false)
         } else {
-            NormalCacheManager.clone_in_cache(self, seqs, modify_draft_cache)
+            NormalCacheManager.clone_in_cache(self, seqs, false)
         }
     }
-    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
-            FullCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+            FullCacheManager.clone_out_cache(self, seqs, false)
         } else {
-            NormalCacheManager.clone_out_cache(self, seqs, modify_draft_cache)
+            NormalCacheManager.clone_out_cache(self, seqs, false)
         }
     }
     fn set_none_cache(
@@ -669,6 +669,7 @@ impl CacheManagerMixin for VisionPipeline {
         seqs: &mut [&mut Sequence],
         reset_non_granular: bool,
         modify_draft_cache: bool,
+
         load_preallocated_cache: bool,
     ) {
         if matches!(self.model.cache(), EitherCache::Full(_)) {
