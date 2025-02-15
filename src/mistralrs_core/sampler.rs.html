@@ -733,7 +733,11 @@
 <a href="#732" id="732">732</a>
 <a href="#733" id="733">733</a>
 <a href="#734" id="734">734</a>
-<a href="#735" id="735">735</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#735" id="735">735</a>
+<a href="#736" id="736">736</a>
+<a href="#737" id="737">737</a>
+<a href="#738" id="738">738</a>
+<a href="#739" id="739">739</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
     collections::{HashMap, HashSet},
@@ -1296,6 +1300,10 @@
 
     <span class="kw">fn </span>apply_dry_penalty(<span class="kw-2">&amp;</span><span class="self">self</span>, logits: <span class="kw-2">&amp;mut </span>[f32], context: <span class="kw-2">&amp;</span>[u32]) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>params) = <span class="self">self</span>.dry_params {
+            <span class="kw">if </span>params.multiplier == <span class="number">0. </span>{
+                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+            }
+
             <span class="kw">let </span>match_indices = context
                 .par_iter()
                 .enumerate()
