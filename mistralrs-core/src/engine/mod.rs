@@ -16,7 +16,7 @@ use crate::{
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
-        AdapterInstruction, CacheBackendMetadata, CacheInstruction, EitherCache, NormalCache,
+        AdapterInstruction, CacheBackendMetadata, CacheInstruction, NormalCache,
     },
     prefix_cacher_v2::PrefixCacheManagerV2,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},

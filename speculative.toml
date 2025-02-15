@@ -2,7 +2,7 @@
 model_id = "../hf_models/llama3.2_3b"
 
 [speculative]
-gamma = 32
+gamma = 4
 
 [speculative.draft_model]
 model_id = "../hf_models/llama3.2_3b"
