@@ -4,10 +4,12 @@
 // https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{embedding, linear_no_bias, Activation, Embedding, Linear, VarBuilder};
-use float8::F8E4M3;
+use candle_nn::{Activation, Embedding, Linear};
+use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use std::sync::Arc;
+
+use crate::layers::{clamp_for_f16, embedding, linear_no_bias, MatMul};
 
 fn default_relative_attention_max_distance() -> usize {
     128
@@ -136,7 +138,7 @@ struct T5LayerNorm {
 }
 
 impl T5LayerNorm {
-    fn load(h: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+    fn load(h: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         let weight = vb.get(h, "weight")?;
         Ok(Self {
             weight,
@@ -166,7 +168,7 @@ struct T5DenseActDense {
 }
 
 impl T5DenseActDense {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let wi = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi"))?;
         let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
         Ok(Self {
@@ -195,7 +197,7 @@ struct T5DenseGatedActDense {
 }
 
 impl T5DenseGatedActDense {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let wi_0 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_0"))?;
         let wi_1 = linear_no_bias(cfg.d_model, cfg.d_ff, vb.pp("wi_1"))?;
         let wo = linear_no_bias(cfg.d_ff, cfg.d_model, vb.pp("wo"))?;
@@ -226,7 +228,7 @@ struct T5LayerFF {
 }
 
 impl T5LayerFF {
-    fn load(vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
         let (dense_act, gated_dense_act) = if cfg.feed_forward_proj.gated {
@@ -311,7 +313,7 @@ impl T5Attention {
     fn load(
         has_relative_attention_bias: bool,
         decoder: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
     ) -> Result<Self> {
         let inner_dim = cfg.num_heads * cfg.d_kv;
@@ -376,7 +378,7 @@ impl T5Attention {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
         // TODO: Use flash_attn.
-        let scores = { q.matmul(&k.t()?)? };
+        let scores = { MatMul.matmul(&q, &k.t()?)? };
         let scores = match mask {
             None => scores,
             Some(mask) => masked_fill(
@@ -449,7 +451,7 @@ impl T5Attention {
         };
 
         let attn_weights = { candle_nn::ops::softmax_last_dim(&scores)? };
-        let attn_output = attn_weights.matmul(&v)?;
+        let attn_output = MatMul.matmul(&attn_weights, &v)?;
         let attn_output = attn_output
             .transpose(1, 2)?
             .reshape((b_sz, q_len, self.inner_dim))?;
@@ -465,7 +467,7 @@ struct T5LayerSelfAttention {
 }
 
 impl T5LayerSelfAttention {
-    fn load(h: bool, d: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(h: bool, d: bool, vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let self_attention = T5Attention::load(h, d, vb.pp("SelfAttention"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
@@ -536,7 +538,7 @@ struct T5LayerCrossAttention {
 }
 
 impl T5LayerCrossAttention {
-    fn load(decoder: bool, vb: VarBuilder, cfg: &Config) -> Result<Self> {
+    fn load(decoder: bool, vb: ShardedVarBuilder, cfg: &Config) -> Result<Self> {
         let cross_attention = T5Attention::load(false, decoder, vb.pp("EncDecAttention"), cfg)?;
         let layer_norm =
             T5LayerNorm::load(cfg.d_model, cfg.layer_norm_epsilon, vb.pp("layer_norm"))?;
@@ -603,54 +605,6 @@ impl T5LayerCrossAttention {
     }
 }
 
-trait TensorInfExtend {
-    fn is_inf(&self) -> Result<Self>
-    where
-        Self: Sized;
-    fn any(&self) -> Result<bool>;
-}
-
-impl TensorInfExtend for Tensor {
-    fn is_inf(&self) -> Result<Self> {
-        self.broadcast_eq(&Tensor::new(f64::INFINITY, self.device())?.to_dtype(self.dtype())?)
-    }
-
-    fn any(&self) -> Result<bool> {
-        let sum = self.sum_all()?;
-        match self.dtype() {
-            DType::U8 => Ok(sum.to_scalar::<u8>()? == 0),
-            DType::U32 => Ok(sum.to_scalar::<u32>()? == 0),
-            DType::I16 => Ok(sum.to_scalar::<i16>()? == 0),
-            DType::I32 => Ok(sum.to_scalar::<i32>()? == 0),
-            DType::I64 => Ok(sum.to_scalar::<i64>()? == 0),
-            DType::F16 => Ok(sum.to_scalar::<half::f16>()? == half::f16::from_f32_const(0.)),
-            DType::BF16 => Ok(sum.to_scalar::<half::bf16>()? == half::bf16::from_f32_const(0.)),
-            DType::F32 => Ok(sum.to_scalar::<f32>()? == 0.),
-            DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
-            DType::F8E4M3 => Ok(sum.to_scalar::<F8E4M3>()? == F8E4M3::ZERO),
-        }
-    }
-}
-
-fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
-    let mut max = match xs.dtype() {
-        DType::U8 => u8::MAX as f64 - 1000.,
-        DType::U32 => u32::MAX as f64 - 1000.,
-        DType::I16 => i16::MAX as f64 - 1000.,
-        DType::I32 => i32::MAX as f64 - 1000.,
-        DType::I64 => i64::MAX as f64 - 1000.,
-        DType::F16 => half::f16::MAX.to_f64_const() - 1000.,
-        DType::BF16 => half::bf16::MAX.to_f64_const() - 1000.,
-        DType::F32 => f32::MAX as f64 - 1000.,
-        DType::F64 => f64::MAX - 1000.,
-        DType::F8E4M3 => F8E4M3::MAX.to_f64() - 1000.,
-    };
-    if xs.is_inf()?.any()? {
-        max -= 1000.;
-    }
-    xs.clamp(-max, max)
-}
-
 #[derive(Debug, Clone)]
 struct T5Block {
     self_attn: T5LayerSelfAttention,
@@ -662,7 +616,7 @@ impl T5Block {
     fn load(
         has_relative_attention_bias: bool,
         decoder: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         cfg: &Config,
     ) -> Result<Self> {
         let vb = vb.pp("layer");
@@ -744,7 +698,7 @@ struct T5Stack {
 impl T5Stack {
     fn load(
         decoder: bool,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         shared: &Arc<Embedding>,
         cfg: &Config,
         device: &Device,
@@ -798,7 +752,12 @@ pub struct T5EncoderModel {
 }
 
 impl T5EncoderModel {
-    pub fn load(vb: VarBuilder, cfg: &Config, device: &Device, offloaded: bool) -> Result<Self> {
+    pub fn load(
+        vb: ShardedVarBuilder,
+        cfg: &Config,
+        device: &Device,
+        offloaded: bool,
+    ) -> Result<Self> {
         let shared_vb = if vb.contains_tensor("shared.weight") {
             vb.pp("shared")
         } else if vb.contains_tensor("decoder.embed_tokens") {

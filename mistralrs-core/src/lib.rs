@@ -31,11 +31,13 @@ mod engine;
 mod lora;
 mod model_loader;
 mod ops;
-pub use model_loader::{get_model_dtype, get_tgt_non_granular_index, LoaderBuilder};
+pub use model_loader::{
+    get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
+};
 
 mod model_selected;
 pub use model_selected::ModelSelected;
-pub use toml_selector::get_toml_selected_model_dtype;
+pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 mod amoe;
 mod cublaslt;
@@ -68,20 +70,23 @@ mod vision_models;
 mod xlora_models;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
-pub use device_map::{DeviceLayerMapMetadata, DeviceMapMetadata, LayerDeviceMapper};
+pub use device_map::{
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
+};
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
 pub use mistralrs_quant::IsqType;
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
     chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline,
-    DiffusionGenerationParams, DiffusionLoader, DiffusionLoaderBuilder, DiffusionLoaderType,
-    DiffusionSpecificConfig, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader,
-    GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization,
-    LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
-    MixtralLoader, ModelKind, ModelPaths, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, SpeculativeConfig,
-    SpeculativeLoader, SpeculativePipeline, Starcoder2Loader, TokenSource, VisionLoader,
-    VisionLoaderBuilder, VisionLoaderType, VisionPromptPrefixer, VisionSpecificConfig,
+    AutoDeviceMapParams, DiffusionGenerationParams, DiffusionLoader, DiffusionLoaderBuilder,
+    DiffusionLoaderType, DiffusionSpecificConfig, GGMLLoader, GGMLLoaderBuilder,
+    GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader,
+    Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader, Loader,
+    LocalModelPaths, MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
+    Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
+    Starcoder2Loader, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
+    VisionPromptPrefixer, VisionSpecificConfig,
 };
 pub use request::{
     Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
@@ -102,7 +107,7 @@ pub use topology::{LayerTopology, Topology};
 pub use utils::debug::initialize_logging;
 pub use utils::memory_usage::MemoryUsage;
 pub use utils::normal::{ModelDType, TryIntoDType};
-pub use utils::paged_attn_supported;
+pub use utils::{paged_attn_supported, using_flash_attn};
 
 // re-export llguidance for easier LlguidanceGrammar construction
 pub use llguidance;
@@ -241,10 +246,10 @@ impl MistralRsBuilder {
     }
 }
 
-pub(crate) static INHIBIT_GEMM_F16: AtomicBool = AtomicBool::new(false);
-
 #[cfg(feature = "cuda")]
 fn set_gemm_reduced_precision_f16() {
+    use mistralrs_quant::INHIBIT_GEMM_F16;
+
     use candle_core::{DType, Device, Tensor};
 
     // NOTE(EricLBuehler): When we support multi-GPU inference, we should check for each gpu here
@@ -364,8 +369,14 @@ impl MistralRs {
 
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
 
+        // Determine if the current runtime is multi-threaded, as blocking operations are not allowed in single-threaded mode
+        let is_multi_threaded = tokio::runtime::Handle::try_current()
+            .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
+
         // Do a dummy run
-        if matches!(category, ModelCategory::Text | ModelCategory::Vision { .. }) {
+        if is_multi_threaded
+            && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
+        {
             let clone_sender = sender.read().unwrap().clone();
             tokio::task::block_in_place(|| {
                 let (tx, mut rx) = channel(1);

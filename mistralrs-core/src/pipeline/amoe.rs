@@ -12,6 +12,7 @@ use candle_nn::{AdamW, Optimizer, ParamsAdamW};
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use indicatif::MultiProgress;
 use mistralrs_quant::IsqType;
 use rand::{seq::SliceRandom, thread_rng};
 use rand_isaac::Isaac64Rng;
@@ -25,8 +26,8 @@ use crate::{
     sampler::Sampler,
     sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,
-    DeviceMapMetadata, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig,
-    Pipeline, Response, TokenSource, TryIntoDType,
+    DeviceMapSetting, Loader, ModelCategory, ModelKind, ModelPaths, PagedAttentionConfig, Pipeline,
+    Response, TokenSource, TryIntoDType,
 };
 
 use super::{
@@ -58,7 +59,7 @@ impl Loader for AnyMoeLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
@@ -100,7 +101,7 @@ impl Loader for AnyMoeLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
@@ -391,7 +392,9 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
         let mut latest_loss = vec![0.0; optimizers.len()];
         let mut all_losses = Vec::new();
 
-        for _ in NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers") {
+        for _ in
+            NiceProgressBar::<_, 'g'>(0..epochs, "Training gating layers", &MultiProgress::new())
+        {
             samples.as_mut_slice().shuffle(&mut rng);
             for batch in samples.chunks(batch_size) {
                 steps += 1;

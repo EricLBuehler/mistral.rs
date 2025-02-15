@@ -13,6 +13,9 @@
 - [Llama 3.2 Vision](VLLAMA.md)
 - [Qwen2-VL](QWEN2VL.md)
 - [Idefics 3 and Smol VLM](IDEFICS3.md)
+- [DeepSeek V2](DEEPSEEKV2.md)
+- [DeepSeek V3](DEEPSEEKV3.md)
+- [MiniCPM-O 2.6](MINICPMO_2_6.md)
 
 ## Adapters
 - [Docs](ADAPTER_MODELS.md)

@@ -7,6 +7,7 @@ use candle_core::quantized::ggml_file;
 use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
+use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 use crate::attention::SdpaParams;
@@ -23,8 +24,6 @@ use crate::pipeline::NormalCache;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 use crate::utils::progress::NiceProgressBar;
-use crate::DeviceMapMetadata;
-use crate::Topology;
 const MAX_SEQ_LEN: u32 = 4096;
 
 struct Mlp {
@@ -144,11 +143,10 @@ impl LayerWeights {
         x: &Tensor,
         mask: Option<&Tensor>,
         start_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
-        let (b_sz, seq_len, n_embd) = x.dims3()?;
+        let (b_sz, seq_len, _) = x.dims3()?;
 
         let q = MatMul
             .qmethod_matmul(x, &*self.attention_wq)?
@@ -160,37 +158,25 @@ impl LayerWeights {
             .qmethod_matmul(x, &*self.attention_wv)?
             .to_dtype(self.dtype)?;
 
-        let mut q = q.reshape((b_sz * seq_len, self.n_head, self.head_dim))?;
-        let mut k = k.reshape((b_sz * seq_len, self.n_kv_head, self.head_dim))?;
-        let v = if seq_len != 1 {
-            v.reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
+        let (q, k, v) = if seq_len != 1 {
+            let q = q
+                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
         } else {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
+            let q = q.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
+            (q, k, v)
         };
 
-        self.rotary
-            .forward(start_offsets, &start_offsets_kernel, &mut q, &mut k, b_sz)?;
-
-        if q.rank() == 3 && seq_len != 1 {
-            q = q
-                .reshape((b_sz, seq_len, self.n_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, seq_len, self.n_kv_head, self.head_dim))?
-                .transpose(1, 2)?
-                .contiguous()?;
-        } else if q.rank() == 3 {
-            // Optimization for seqlen = 1, avoid transpose and just modify reshape dims
-            q = q
-                .reshape((b_sz, self.n_head, seq_len, self.head_dim))?
-                .contiguous()?;
-            k = k
-                .reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?
-                .contiguous()?;
-        }
+        let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
 
         let y = match &self.paged_attn {
             Some(paged_attn) => {
@@ -203,6 +189,7 @@ impl LayerWeights {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
+                    &self.sdpa_params,
                     None,
                 )?
             }
@@ -214,9 +201,9 @@ impl LayerWeights {
         };
 
         let y = if mask.is_some() {
-            y.transpose(1, 2)?.reshape(&[b_sz, seq_len, n_embd])?
+            y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
-            y.reshape(&[b_sz, seq_len, n_embd])?
+            y.reshape((b_sz, seq_len, ()))?
         };
 
         let y = MatMul.qmethod_matmul(&y.to_dtype(x.dtype())?, &*self.attention_wo)?;
@@ -241,7 +228,6 @@ impl ModelConfig::FromGGML for ModelWeights {
         let head_dim = (ct.hparams.n_embd / ct.hparams.n_head) as usize;
         let rotary = RotaryEmbedding::new_partial(
             10000.,
-            head_dim,
             ct.hparams.n_rot as usize,
             MAX_SEQ_LEN as usize,
             &ct.device,
@@ -253,9 +239,11 @@ impl ModelConfig::FromGGML for ModelWeights {
         let norm = QRmsNorm::new(ct.remove("norm.weight")?, 1e-5)?;
         let output = ct.remove("output.weight")?;
         let mut layers = Vec::with_capacity(ct.hparams.n_layer as usize);
-        for layer_idx in
-            NiceProgressBar::<_, 'b'>(0..ct.hparams.n_layer, "Loading repeating layers")
-        {
+        for layer_idx in NiceProgressBar::<_, 'b'>(
+            0..ct.hparams.n_layer,
+            "Loading repeating layers",
+            &MultiProgress::new(),
+        ) {
             let prefix = format!("layers.{layer_idx}");
             let attention_wq = ct.remove(&format!("{prefix}.attention.wq.weight"))?;
             let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
@@ -412,8 +400,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
     fn from_gguf<R: std::io::Seek + std::io::Read>(
         mut ct: Content<'_, R>,
         device: &Device,
-        mapper: DeviceMapMetadata,
-        topology: Option<&'_ Topology>,
+        mapper: Box<dyn DeviceMapper + Send + Sync>,
         attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self> {
@@ -447,8 +434,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
         };
         let mut layers = Vec::with_capacity(block_count);
 
-        let mapper = mapper.into_mapper(block_count, device, topology)?;
-
         let head_dim = key_length;
         if key_length != value_length {
             candle_core::bail!(
@@ -472,7 +457,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
             );
         }
 
-        for layer_idx in NiceProgressBar::<_, 'b'>(0..block_count, "Loading repeating layers") {
+        for layer_idx in NiceProgressBar::<_, 'b'>(
+            0..block_count,
+            "Loading repeating layers",
+            &MultiProgress::new(),
+        ) {
             let prefix = format!("blk.{layer_idx}");
             let device = mapper.device_for(layer_idx, false).unwrap_or(device);
             let rotary = ropes
@@ -601,15 +590,9 @@ impl ModelConfig::FromGGUF for ModelWeights {
             let ffn_norm = ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?;
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => Some(PagedAttention::new(
-                    head_count,
-                    head_dim,
-                    (1.0 / (head_dim as f64).sqrt()) as f32,
-                    Some(head_count_kv),
-                    None,
-                    device,
-                    None,
-                )?),
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
             };
             layers.push(LayerWeights {
                 attention_wq: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
@@ -668,9 +651,8 @@ impl ModelWeights {
         &self,
         x: &Tensor,
         start_offsets: &[usize],
-        start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
-        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
     ) -> Result<Tensor> {
         let mut layer_in = self.tok_embeddings.forward(x)?;
         let cache = &mut self.cache.normal().0;
@@ -683,6 +665,13 @@ impl ModelWeights {
             self.dtype,
             self.layers[0].n_head,
         )?;
+        // PagedAttention prompt chunking
+        let mask = mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
         for (i, layer) in self.layers.iter().enumerate() {
             if let Some(ref mapper) = self.mapper {
                 layer_in = mapper.map(layer_in, i)?;
@@ -696,11 +685,10 @@ impl ModelWeights {
                     .map(|m| m.to_device(x.device()).unwrap())
                     .as_ref(),
                 start_offsets,
-                start_offsets_kernel.clone(),
                 &mut cache[i],
                 metadata
-                    .as_mut()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
+                    .as_ref()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
             )?;
             let x = (attn + residual)?;
 

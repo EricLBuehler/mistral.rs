@@ -1,8 +1,9 @@
-use std::{cmp::Ordering, fs::File};
+use std::{cmp::Ordering, fs::File, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Module, VarBuilder};
+use candle_nn::Module;
 use hf_hub::api::sync::{Api, ApiError};
+use mistralrs_quant::ShardedVarBuilder;
 use tokenizers::Tokenizer;
 use tracing::info;
 
@@ -14,7 +15,7 @@ use crate::{
         DiffusionGenerationParams,
     },
     pipeline::DiffusionModel,
-    utils::varbuilder_utils::from_mmaped_safetensors,
+    utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
 };
 
 use super::{autoencoder::AutoEncoder, model::Flux};
@@ -104,9 +105,11 @@ fn get_t5_model(
         vec![],
         Some(dtype),
         device,
+        vec![None],
         silent,
         None,
         |_| true,
+        Arc::new(|_| DeviceForLoadTensor::Base),
     )?;
     let config_filename = repo.get("config.json").map_err(candle_core::Error::msg)?;
     let config = std::fs::read_to_string(config_filename)?;
@@ -125,9 +128,17 @@ fn get_clip_model_and_tokenizer(
     ));
 
     let model_file = repo.get("model.safetensors")?;
-    let vb = from_mmaped_safetensors(vec![model_file], vec![], None, device, silent, None, |_| {
-        true
-    })?;
+    let vb = from_mmaped_safetensors(
+        vec![model_file],
+        vec![],
+        None,
+        device,
+        vec![None],
+        silent,
+        None,
+        |_| true,
+        Arc::new(|_| DeviceForLoadTensor::Base),
+    )?;
     let config_file = repo.get("config.json")?;
     let config: ClipConfig = serde_json::from_reader(File::open(config_file)?)?;
     let config = config.text_config;
@@ -153,8 +164,8 @@ fn get_tokenization(tok: &Tokenizer, prompts: Vec<String>, device: &Device) -> R
 impl FluxStepper {
     pub fn new(
         cfg: FluxStepperConfig,
-        (flux_vb, flux_cfg): (VarBuilder, &flux::model::Config),
-        (flux_ae_vb, flux_ae_cfg): (VarBuilder, &flux::autoencoder::Config),
+        (flux_vb, flux_cfg): (ShardedVarBuilder, &flux::model::Config),
+        (flux_ae_vb, flux_ae_cfg): (ShardedVarBuilder, &flux::autoencoder::Config),
         dtype: DType,
         device: &Device,
         silent: bool,

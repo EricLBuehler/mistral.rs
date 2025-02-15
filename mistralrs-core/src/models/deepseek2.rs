@@ -2,9 +2,12 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{embedding, Embedding, Module, VarBuilder};
-use mistralrs_quant::{QuantMethod, QuantMethodConfig, QuantizedConfig, UnquantLinear};
+use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
+use candle_nn::{Embedding, Module};
+use mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder, SumAllReduce,
+};
 use serde::Deserialize;
 
 use crate::{
@@ -12,11 +15,11 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{
-        Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
+        embedding, Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
         DeepSeekV2RotaryEmbedding, RmsNorm, Sdpa,
     },
-    layers_masker::PastKvLenCache,
-    ops::{SplitOp, TopKLastDimOp, TopKOutput},
+    layers_masker::{masked_fill, PastKvLenCache},
+    ops::{BincountOp, NonZeroOp, SplitOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -53,49 +56,51 @@ enum ScoringFunc {
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct DeepSeekV2Config {
-    vocab_size: usize,
-    hidden_size: usize,
-    intermediate_size: usize,
-    moe_intermediate_size: usize,
+    pub(crate) vocab_size: usize,
+    pub(crate) hidden_size: usize,
+    pub(crate) intermediate_size: usize,
+    pub(crate) moe_intermediate_size: usize,
     pub(crate) num_hidden_layers: usize,
-    num_attention_heads: usize,
+    pub(crate) num_attention_heads: usize,
     pub(crate) n_shared_experts: Option<usize>,
     pub(crate) n_routed_experts: Option<usize>,
     #[serde(default = "routed_scaling_factor")]
-    routed_scaling_factor: f64,
+    pub(crate) routed_scaling_factor: f64,
     #[serde(default = "topk_method")]
     topk_method: TopkMethod,
-    num_experts_per_tok: Option<usize>,
+    pub(crate) num_experts_per_tok: Option<usize>,
     #[serde(default = "moe_layer_freq")]
     pub(crate) moe_layer_freq: usize,
     #[serde(default = "first_k_dense_replace")]
     pub(crate) first_k_dense_replace: usize,
     // k dense layers
     #[serde(default = "norm_topk_prob")]
-    norm_topk_prob: bool,
+    pub(crate) norm_topk_prob: bool,
     #[serde(default = "scoring_func")]
     scoring_func: ScoringFunc,
     #[serde(default = "hidden_act")]
-    hidden_act: Activation,
-    max_position_embeddings: usize,
-    rms_norm_eps: f64,
+    pub(crate) hidden_act: Activation,
+    pub(crate) max_position_embeddings: usize,
+    pub(crate) rms_norm_eps: f64,
     #[serde(default = "tie_word_embeddings")]
-    tie_word_embeddings: bool,
-    rope_theta: f32,
-    rope_scaling: Option<DeepSeekV2RopeScaling>,
-    attention_bias: bool,
+    pub(crate) tie_word_embeddings: bool,
+    pub(crate) rope_theta: f32,
+    pub(crate) rope_scaling: Option<DeepSeekV2RopeScaling>,
+    pub(crate) attention_bias: bool,
     pub(crate) q_lora_rank: Option<usize>,
-    qk_rope_head_dim: usize,
-    kv_lora_rank: usize,
-    v_head_dim: usize,
-    qk_nope_head_dim: usize,
+    pub(crate) qk_rope_head_dim: usize,
+    pub(crate) kv_lora_rank: usize,
+    pub(crate) v_head_dim: usize,
+    pub(crate) qk_nope_head_dim: usize,
     #[serde(default = "use_flash_attn_default")]
     pub(crate) use_flash_attn: bool,
-    quantization_config: Option<QuantizedConfig>,
+    pub(crate) quantization_config: Option<QuantizedConfig>,
+    pub(crate) n_group: usize,
+    pub(crate) topk_group: usize,
 }
 
 impl DeepSeekV2Config {
-    fn q_head_dim(&self) -> usize {
+    pub(crate) fn q_head_dim(&self) -> usize {
         self.qk_rope_head_dim + self.qk_nope_head_dim
     }
 
@@ -145,26 +150,29 @@ struct Attention {
     q_head_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+    num_attention_heads: usize,
 }
 
 impl Attention {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let q_head_dim = cfg.q_head_dim();
         let q = match cfg.q_lora_rank {
             Some(lora_rank) => {
-                let a = mistralrs_quant::linear_b(
+                let a = ReplicatedLayer::new(
                     cfg.hidden_size,
                     lora_rank,
-                    cfg.attention_bias,
                     &cfg.quantization_config,
+                    cfg.attention_bias,
                     mapper.set_device(layer_idx, vb.pp("q_a_proj"), loading_isq),
                 )?;
                 let norm = RmsNorm::new(
@@ -172,27 +180,31 @@ impl Attention {
                     cfg.rms_norm_eps,
                     mapper.set_device(layer_idx, vb.pp("q_a_layernorm"), false),
                 )?;
-                let b = mistralrs_quant::linear_no_bias(
+                let b = ColumnParallelLayer::new(
                     lora_rank,
                     cfg.num_attention_heads * q_head_dim,
                     &cfg.quantization_config,
+                    false,
+                    comm,
                     mapper.set_device(layer_idx, vb.pp("q_b_proj"), loading_isq),
                 )?;
                 QProj::Lora { a, norm, b }
             }
-            None => QProj::Plain(mistralrs_quant::linear_no_bias(
+            None => QProj::Plain(ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * q_head_dim,
                 &cfg.quantization_config,
+                false,
+                comm,
                 mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
             )?),
         };
 
-        let kv_a_proj_with_mqa = mistralrs_quant::linear_b(
+        let kv_a_proj_with_mqa = ReplicatedLayer::new(
             cfg.hidden_size,
             cfg.kv_lora_rank + cfg.qk_rope_head_dim,
-            cfg.attention_bias,
             &cfg.quantization_config,
+            cfg.attention_bias,
             mapper.set_device(layer_idx, vb.pp("kv_a_proj_with_mqa"), loading_isq),
         )?;
         let kv_a_layernorm = RmsNorm::new(
@@ -200,18 +212,21 @@ impl Attention {
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("kv_a_layernorm"), false),
         )?;
-        let kv_b_proj = mistralrs_quant::linear_no_bias(
+        let kv_b_proj = ColumnParallelLayer::new(
             cfg.kv_lora_rank,
             cfg.num_attention_heads * (q_head_dim - cfg.qk_rope_head_dim + cfg.v_head_dim),
             &cfg.quantization_config,
+            false,
+            comm,
             mapper.set_device(layer_idx, vb.pp("kv_b_proj"), loading_isq),
         )?;
 
-        let o_proj = mistralrs_quant::linear_b(
+        let o_proj = RowParallelLayer::new(
             cfg.num_attention_heads * cfg.v_head_dim,
             cfg.hidden_size,
-            cfg.attention_bias,
             &cfg.quantization_config,
+            cfg.attention_bias,
+            comm,
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
 
@@ -225,6 +240,7 @@ impl Attention {
             cfg: cfg.clone(),
             q_head_dim,
             paged_attn,
+            num_attention_heads: cfg.num_attention_heads / comm.world_size(),
             sdpa_params: SdpaParams {
                 n_kv_groups: 1,
                 use_flash_attn: cfg.use_flash_attn,
@@ -241,14 +257,14 @@ impl Attention {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (bs, seq_len, _) = xs.dims3()?;
 
         let mut q = self.q.forward(xs)?;
         q = q
-            .reshape((bs, seq_len, self.cfg.num_attention_heads, self.q_head_dim))?
+            .reshape((bs, seq_len, self.num_attention_heads, self.q_head_dim))?
             .transpose(1, 2)?;
         let q_split = q.split(
             &[self.cfg.qk_nope_head_dim, self.cfg.qk_rope_head_dim],
@@ -274,7 +290,7 @@ impl Attention {
             .reshape((
                 bs,
                 seq_len,
-                self.cfg.num_attention_heads,
+                self.num_attention_heads,
                 self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
             ))?
             .transpose(1, 2)?;
@@ -286,7 +302,7 @@ impl Attention {
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
 
         let mut q = Tensor::zeros(
-            (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
+            (bs, self.num_attention_heads, seq_len, self.q_head_dim),
             q_pe.dtype(),
             q_pe.device(),
         )?;
@@ -294,7 +310,7 @@ impl Attention {
         q = q.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
 
         let mut k = Tensor::zeros(
-            (bs, self.cfg.num_attention_heads, seq_len, self.q_head_dim),
+            (bs, self.num_attention_heads, seq_len, self.q_head_dim),
             k_pe.dtype(),
             k_pe.device(),
         )?;
@@ -304,32 +320,46 @@ impl Attention {
 
         let mut attn_out = match &self.paged_attn {
             Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    None,
-                )?,
+                Some(((key_cache, value_cache), input_metadata)) => {
+                    let v = v
+                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+                        .contiguous()?;
+                    paged_attn
+                        .forward(
+                            &q,
+                            &k,
+                            &v,
+                            attention_mask,
+                            Some(key_cache),
+                            Some(value_cache),
+                            input_metadata,
+                            &self.sdpa_params,
+                            Some(flash_params),
+                        )?
+                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+                }
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
                     // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    let mut input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
                     // Sanity check.
                     assert!(attention_mask.is_some());
-                    paged_attn.forward(
-                        &q,
-                        &k,
-                        &v,
-                        attention_mask,
-                        None,
-                        None,
-                        &mut input_metadata,
-                        None,
-                    )?
+                    let v = v
+                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+                        .contiguous()?;
+                    paged_attn
+                        .forward(
+                            &q,
+                            &k,
+                            &v,
+                            attention_mask,
+                            None,
+                            None,
+                            &input_metadata,
+                            &self.sdpa_params,
+                            Some(flash_params),
+                        )?
+                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
                 }
             },
             None => {
@@ -366,7 +396,70 @@ struct Mlp {
 impl Mlp {
     fn new(
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
+        hidden_size: Option<usize>,
+        intermediate_size: Option<usize>,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let hidden_size = hidden_size.unwrap_or(cfg.hidden_size);
+        let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
+
+        Ok(Self {
+            gate: ColumnParallelLayer::new(
+                hidden_size,
+                intermediate_size,
+                &cfg.quantization_config,
+                false,
+                comm,
+                vb.pp("gate_proj"),
+            )?,
+            up: ColumnParallelLayer::new(
+                hidden_size,
+                intermediate_size,
+                &cfg.quantization_config,
+                false,
+                comm,
+                vb.pp("up_proj"),
+            )?,
+            down: RowParallelLayer::new(
+                intermediate_size,
+                hidden_size,
+                &cfg.quantization_config,
+                false,
+                comm,
+                vb.pp("down_proj"),
+            )?,
+            act: cfg.hidden_act,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.gate.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let lhs = self.gate.forward(&xs)?.apply(&self.act)?;
+        let rhs = self.up.forward(&xs)?;
+        let mut res = self.down.forward(&(&lhs * &rhs)?)?;
+        if self.gate.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
+    }
+}
+
+struct Expert {
+    gate: Arc<dyn QuantMethod>,
+    up: Arc<dyn QuantMethod>,
+    down: Arc<dyn QuantMethod>,
+    act: Activation,
+}
+
+impl Expert {
+    fn new(
+        cfg: &DeepSeekV2Config,
+        vb: ShardedVarBuilder,
         hidden_size: Option<usize>,
         intermediate_size: Option<usize>,
     ) -> Result<Self> {
@@ -374,22 +467,25 @@ impl Mlp {
         let intermediate_size = intermediate_size.unwrap_or(cfg.intermediate_size);
 
         Ok(Self {
-            gate: mistralrs_quant::linear_no_bias(
+            gate: ReplicatedLayer::new(
                 hidden_size,
                 intermediate_size,
                 &cfg.quantization_config,
+                false,
                 vb.pp("gate_proj"),
             )?,
-            up: mistralrs_quant::linear_no_bias(
+            up: ReplicatedLayer::new(
                 hidden_size,
                 intermediate_size,
                 &cfg.quantization_config,
+                false,
                 vb.pp("up_proj"),
             )?,
-            down: mistralrs_quant::linear_no_bias(
+            down: ReplicatedLayer::new(
                 intermediate_size,
                 hidden_size,
                 &cfg.quantization_config,
+                false,
                 vb.pp("down_proj"),
             )?,
             act: cfg.hidden_act,
@@ -416,24 +512,28 @@ struct MoeGate {
     weight: Tensor,
     cfg: DeepSeekV2Config,
     top_k: usize,
+    n_routed_experts: usize,
 }
 
 impl MoeGate {
-    fn new(cfg: &DeepSeekV2Config, vb: VarBuilder, n_routed_experts: usize) -> Result<Self> {
+    fn new(cfg: &DeepSeekV2Config, vb: ShardedVarBuilder, n_routed_experts: usize) -> Result<Self> {
         let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
         Ok(Self {
             weight,
             cfg: cfg.clone(),
             top_k: cfg.num_experts_per_tok.unwrap(),
+            n_routed_experts,
         })
     }
 
     /// (topk_idx, topk_weight)
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
-        let (_bs, _seq_len, h) = xs.dims3()?;
+        let (bs, seq_len, h) = xs.dims3()?;
         // Compute gating score
         let xs = xs.reshape(((), h))?;
-        let logits = xs.broadcast_matmul(&self.weight.t()?)?;
+        let logits = xs
+            .to_dtype(DType::F32)?
+            .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
         let scores = match self.cfg.scoring_func {
             ScoringFunc::Softmax => candle_nn::ops::softmax_last_dim(&logits)?,
         };
@@ -441,11 +541,38 @@ impl MoeGate {
         // Select top-k experts
         let (mut topk_weight, topk_idx) = match self.cfg.topk_method {
             TopkMethod::Greedy => {
-                let TopKOutput { values, indices } = scores.topk(self.top_k)?;
+                let TopKOutput { values, indices } = scores.topk_unsorted(self.top_k)?;
                 (values, indices)
             }
             TopkMethod::GroupLimitedGreedy => {
-                candle_core::bail!("GroupLimitedGreedy is not yet implemented!")
+                // (n, n_group)
+                let group_scores = scores
+                    .reshape((bs * seq_len, self.cfg.n_group, ()))?
+                    .max(D::Minus1)?;
+                // (n, topk_group)
+                let group_idx = scores.topk_unsorted(self.cfg.topk_group)?.indices;
+                // (n, n_group)
+                let mut group_mask = group_scores.zeros_like()?;
+                // (n, n_group)
+                group_mask = group_mask.scatter_add(
+                    &group_idx,
+                    &group_idx.ones_like()?.to_dtype(group_mask.dtype())?,
+                    1,
+                )?;
+                // (n, e)
+                let score_mask = group_mask
+                    .unsqueeze(D::Minus1)?
+                    .expand((
+                        bs * seq_len,
+                        self.cfg.n_group,
+                        self.n_routed_experts / self.cfg.n_group,
+                    ))?
+                    .reshape((bs, seq_len, ()))?;
+                // (n, e)
+                // Invert the mask
+                let tmp_scores = masked_fill(&score_mask, &(1. - &score_mask.ne(0.)?)?, 0.)?;
+                let TopKOutput { values, indices } = tmp_scores.topk_unsorted(self.top_k)?;
+                (values, indices)
             }
         };
 
@@ -460,30 +587,43 @@ impl MoeGate {
 }
 
 struct Moe {
-    experts: Vec<Mlp>,
+    experts: Vec<Option<Expert>>,
     shared_experts: Option<Mlp>,
     gate: MoeGate,
+    all_reduce: SumAllReduce,
+    experts_start_idx: usize,
+    experts_end_idx: usize,
+    world_size: usize,
 }
 
 impl Moe {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         n_shared_experts: Option<usize>,
         n_routed_experts: usize,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let mut experts = Vec::with_capacity(n_routed_experts);
+        let n_local_experts = n_routed_experts / comm.world_size();
+        let experts_start_idx = comm.rank() * n_local_experts;
+        let experts_end_idx = experts_start_idx + n_local_experts;
         for i in 0..n_routed_experts {
-            let vb_e = vb.pp("experts").pp(i);
-            experts.push(Mlp::new(
-                cfg,
-                mapper.set_device(layer_idx, vb_e, loading_isq),
-                None,
-                Some(cfg.moe_intermediate_size),
-            )?);
+            if i >= experts_start_idx && i < experts_end_idx {
+                let vb_e = vb.pp("experts").pp(i);
+                experts.push(Some(Expert::new(
+                    cfg,
+                    mapper.set_device(layer_idx, vb_e, loading_isq),
+                    None,
+                    Some(cfg.moe_intermediate_size),
+                )?));
+            } else {
+                experts.push(None);
+            }
         }
         let shared_experts = if let Some(n_shared_experts) = n_shared_experts {
             let intermediate_size = cfg.moe_intermediate_size * n_shared_experts;
@@ -492,6 +632,7 @@ impl Moe {
                 mapper.set_device(layer_idx, vb.pp("shared_experts"), loading_isq),
                 None,
                 Some(intermediate_size),
+                comm,
             )?)
         } else {
             None
@@ -505,49 +646,54 @@ impl Moe {
             experts,
             shared_experts,
             gate,
+            all_reduce: SumAllReduce::new(comm),
+            experts_end_idx,
+            experts_start_idx,
+            world_size: comm.world_size(),
         })
     }
 
     fn moe_infer(&self, xs: &Tensor, topk_ids: &Tensor, topk_weight: &Tensor) -> Result<Tensor> {
-        let mut cnts: Tensor = Tensor::zeros(
-            (topk_ids.dim(0)?, self.experts.len()),
-            DType::F32,
-            topk_ids.device(),
-        )?;
-        cnts = cnts
-            .scatter_add(topk_ids, &topk_ids.ones_like()?.to_dtype(DType::F32)?, 1)?
-            .to_dtype(topk_ids.dtype())?;
-        let tokens_per_expert = cnts.sum(0)?.to_vec1::<u32>()?;
-        let idxs = topk_ids.flatten_all()?.arg_sort_last_dim(true)?;
-        let sorted_tokens = xs.index_select(&(&idxs / topk_ids.dim(1)? as f64)?, 0)?;
-
-        let mut outputs = Vec::with_capacity(tokens_per_expert.len());
-        let mut start_idx = 0;
-        for (i, num_tokens) in tokens_per_expert.into_iter().enumerate() {
-            let end_idx = start_idx + num_tokens;
-            if num_tokens == 0 {
+        let mut y = xs.zeros_like()?;
+        let counts = topk_ids
+            .flatten_all()?
+            .bincount(self.experts.len() as u32)?;
+        for (i, count) in counts
+            .iter()
+            .enumerate()
+            .take(self.experts_end_idx)
+            .skip(self.experts_start_idx)
+        {
+            if *count == 0 {
                 continue;
             }
-            let expert = &self.experts[i];
-            let tokens_for_this_expert = sorted_tokens.i(start_idx as usize..end_idx as usize)?;
-            let expert_out = expert.forward(&tokens_for_this_expert)?;
-            outputs.push(expert_out);
-            start_idx = end_idx;
+            let idx_top = topk_ids.eq(i as f64)?.nonzero()?.t()?;
+            let idx = &idx_top.i(0)?.contiguous()?;
+            let top = &idx_top.i(1)?.contiguous()?;
+
+            let expert = self.experts[i]
+                .as_ref()
+                .context("Expert is not present for this rank.")?;
+
+            y = y.index_add(
+                idx,
+                &expert.forward(&xs.index_select(idx, 0)?)?.broadcast_mul(
+                    &topk_weight
+                        .index_select(idx, 0)?
+                        .gather(&top.unsqueeze(1)?, 1)?
+                        .squeeze(1)?
+                        .unsqueeze(D::Minus1)?
+                        .to_dtype(xs.dtype())?,
+                )?,
+                0,
+            )?;
         }
 
-        let outs = Tensor::cat(&outputs, 0)?;
+        if self.world_size > 1 {
+            y = self.all_reduce.apply(&y)?;
+        }
 
-        let mut new_x = outs.zeros_like()?;
-        new_x = new_x.index_add(&idxs, &outs, 0)?;
-
-        let hole = new_x.elem_count() / topk_ids.elem_count();
-
-        new_x
-            .reshape([topk_ids.dims().to_vec(), vec![hole]].concat())?
-            .broadcast_mul(&topk_weight.unsqueeze(D::Minus1)?)?
-            .to_dtype(DType::F32)?
-            .sum(1)?
-            .to_dtype(new_x.dtype())
+        Ok(y)
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
@@ -588,14 +734,16 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let attn = Attention::new(
             rotary_emb,
@@ -605,6 +753,7 @@ impl DecoderLayer {
             layer_idx,
             loading_isq,
             paged_attn,
+            comm,
         )?;
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
@@ -628,6 +777,7 @@ impl DecoderLayer {
                 loading_isq,
                 cfg.n_shared_experts,
                 cfg.n_routed_experts.unwrap(),
+                comm,
             )?)
         } else {
             MoeOrMlp::Mlp(Mlp::new(
@@ -635,6 +785,7 @@ impl DecoderLayer {
                 mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
                 None,
                 None,
+                comm,
             )?)
         };
 
@@ -652,7 +803,7 @@ impl DecoderLayer {
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &mut PagedAttentionInputMetadata)>,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
@@ -689,7 +840,7 @@ pub struct DeepSeekV2 {
 impl DeepSeekV2 {
     pub fn new(
         cfg: &DeepSeekV2Config,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
         _is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -704,22 +855,21 @@ impl DeepSeekV2 {
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
-            mistralrs_quant::linear_no_bias(
+            ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &None,
+                false,
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-            ))?)
+            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+                mapper.cast_nm_device(
+                    embed_tokens.embeddings(),
+                    normal_loading_metadata.loading_isq,
+                )?,
+                None,
+            ))?
         };
         let norm = RmsNorm::new(
             cfg.hidden_size,
@@ -747,17 +897,14 @@ impl DeepSeekV2 {
                 )?),
             );
         }
-        if cfg.q_head_dim() != cfg.v_head_dim
-            && matches!(attention_mechanism, AttentionImplementation::PagedAttention)
-        {
-            candle_core::bail!("Head sizes do not match (q/k: {}, v: {}), PagedAttention is incompatible with this model. Please disable PagedAttention.", cfg.q_head_dim(), cfg.v_head_dim);
-        }
 
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb_l = vb_m.pp("layers");
-        for layer_idx in
-            NiceProgressBar::<_, 'b'>(0..cfg.num_hidden_layers, "Loading repeating layers")
-        {
+        for layer_idx in NiceProgressBar::<_, 'b'>(
+            0..cfg.num_hidden_layers,
+            "Loading repeating layers",
+            &normal_loading_metadata.multi_progress,
+        ) {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
@@ -768,18 +915,11 @@ impl DeepSeekV2 {
             let paged_attn = match &attention_mechanism {
                 AttentionImplementation::Eager => None,
                 AttentionImplementation::PagedAttention => Some(
-                    PagedAttention::new(
-                        cfg.num_attention_heads,
-                        cfg.v_head_dim,
-                        cfg.softmax_scale(),
-                        Some(cfg.num_attention_heads),
-                        None,
-                        device,
-                        None,
-                    )
-                    .expect("Failed to create PagedAttention"),
+                    PagedAttention::new(cfg.v_head_dim, device, None)
+                        .expect("Failed to create PagedAttention"),
                 ),
             };
+            let comm = mapper.get_comm_for(layer_idx)?;
             let layer = DecoderLayer::new(
                 rotary_emb.clone(),
                 cfg,
@@ -788,6 +928,7 @@ impl DeepSeekV2 {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
+                &comm,
             )?;
             layers.push(layer)
         }
@@ -804,13 +945,23 @@ impl DeepSeekV2 {
             device: normal_loading_metadata.real_device.clone(),
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
+                max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: cfg.num_attention_heads,
-                num_attn_heads: cfg.num_attention_heads,
+                num_kv_heads: (cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size())
+                    .max(1),
+                num_attn_heads: (cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size())
+                    .max(1),
                 sliding_window: None,
-                k_head_dim: Some(cfg.q_head_dim()),
-                v_head_dim: Some(cfg.v_head_dim),
+                k_head_dim: cfg.q_head_dim(),
+                v_head_dim: if matches!(
+                    attention_mechanism,
+                    AttentionImplementation::PagedAttention
+                ) {
+                    cfg.q_head_dim()
+                } else {
+                    cfg.v_head_dim
+                },
             },
             mapper,
         })
@@ -822,7 +973,7 @@ impl DeepSeekV2 {
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        mut metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let mut xs = self.embed_tokens.forward(input_ids)?;
@@ -836,6 +987,13 @@ impl DeepSeekV2 {
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
+        // PagedAttention prompt chunking
+        let attention_mask = attention_mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
@@ -847,8 +1005,8 @@ impl DeepSeekV2 {
                 seqlen_offsets,
                 &mut cache[i],
                 metadata
-                    .as_mut()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), &mut **metadata)),
+                    .as_ref()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
                 flash_params,
             )?;
         }
@@ -887,7 +1045,7 @@ impl IsqModel for DeepSeekV2 {
                     tensors.push((&mut mlp.down, Some(i)));
                 }
                 MoeOrMlp::Moe(moe) => {
-                    for mlp in &mut moe.experts {
+                    for mlp in moe.experts.iter_mut().filter_map(|e| e.as_mut()) {
                         tensors.push((&mut mlp.gate, Some(i)));
                         tensors.push((&mut mlp.up, Some(i)));
                         tensors.push((&mut mlp.down, Some(i)));
@@ -919,7 +1077,7 @@ impl IsqModel for DeepSeekV2 {
                     tensors.push((&mut mlp.down, Some(i)));
                 }
                 MoeOrMlp::Moe(moe) => {
-                    for mlp in &mut moe.experts {
+                    for mlp in moe.experts.iter_mut().filter_map(|e| e.as_mut()) {
                         tensors.push((&mut mlp.gate, Some(i)));
                         tensors.push((&mut mlp.up, Some(i)));
                         tensors.push((&mut mlp.down, Some(i)));
@@ -1034,10 +1192,9 @@ impl NormalModel for DeepSeekV2 {
         &self,
         input_ids: &Tensor,
         seqlen_offsets: &[usize],
-        _start_offsets_kernel: Tensor,
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &mut PagedAttentionInputMetadata)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         self.forward(
@@ -1054,8 +1211,6 @@ impl NormalModel for DeepSeekV2 {
         _input_ids_full: &Tensor,
         _seqlen_offsets: &[usize],
         _seqlen_offsets_full: &[usize],
-        _start_offsets_kernel: Tensor,
-        _start_offsets_kernel_full: Tensor,
         _no_kv_cache: bool,
         _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
         _context_lens: Vec<(usize, usize)>,

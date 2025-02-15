@@ -1,0 +1,57 @@
+# Distributed inference in mistral.rs: Tensor parallelism and Multi-node support
+
+Mistral.rs supports distributed inference on CUDA with Tensor Parallelism via NCCL.
+
+> Note: Multi-node support is coming! Distributed inference on Apple hardware is also being investigated.
+
+Tensor Parallelism (TP) is automatically used to accelerate distributed inference when more than one CUDA GPUs are detected. The tensor parallelism size is always automatically set to the total number of GPUs.
+
+TP splits the model into shards and benefits from fast single-node interconnects like NVLink (if the interconnects are a bottleneck, check out `MISTRALRS_PIPELINE_PARALLEL`).
+
+> Note: In mistral.rs, if NCCL is enabled, then automatic device mapping *will not* be used.
+
+**Important**: To build for NCCL, be sure to add the `nccl` feature flag (for example: `--features nccl,cuda`).
+
+See the following environment variables:
+
+|Name|Function|Usage|
+|--|--|--|
+|`MISTRALRS_NO_NCCL=1`|Disable TP and NCCL|If the model does not fit on the available CUDA devices, disabling NCCL will re-enable automatic device mapping|
+|`MISTRALRS_PIPELINE_PARALLEL=<number> (default: 1 = disabled)`|Parallelize the model along the layers in addition to the GPUs|Increasing this value is useful for tuning performance on a model-specific basis. It does not change the number of GPUs required, but can help when the single-node interconnects are a bottleneck.|
+
+## Multi-node support
+
+```
+# Head node:
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_HEAD_NUM_WORKERS=1 MISTRALRS_MN_HEAD_PORT=<PORT> cargo run --release --features cuda -- -i plain -m ...
+
+# For the worker nodes:
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=0 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> cargo run --release --features cuda -- -i plain -m ...
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=1 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> cargo run --release --features cuda -- -i plain -m ...
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=32 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_WORKER_SERVER_ADDR=<HEAD ADDR>:<PORT> cargo run --release --features cuda -- -i plain -m ...
+```
+
+Multi-node support in mistral.rs divides the nodes into two groups: a "head" node, and multiple "worker" nodes. Head node choice is arbitrary.
+For example, if a system has 8 nodes, there will be 1 "head" node, and 7 "worker" nodes. 
+
+To enable multi-node, set the `MISTRALRS_MN_GLOBAL_WORLD_SIZE=<number>` environment variable to the total number of GPUs in all nodes, including "head" and "worker"s.
+
+> Note: `MISTRALRS_PIPELINE_PARALLEL` is incompatible with multi-node (setting `MISTRALRS_MN_GLOBAL_WORLD_SIZE`)
+
+It is recommended to use server mode with mistral.rs when in multi-node. **Currently, you must send requests to every node!**
+
+The following environment variables must be set for each node:
+
+**Head node:**
+
+|Name|Function|Usage|
+|--|--|--|
+|`MISTRALRS_MN_HEAD_NUM_WORKERS=<number>`|The number of worker nodes which will be connected.|This should be the number of nodes in the system, minus 1 for the head node.|
+|`MISTRALRS_MN_HEAD_PORT=<PORT>`|The port on which to communicate with the worker nodes.|Worker nodes will connect to this port via TCP sockets|
+
+**Worker node:**
+
+|Name|Function|Usage|
+|--|--|--|
+|`MISTRALRS_MN_WORKER_ID=<number>`|The 0-indexed worker ID for this worker node.|If there are 4 nodes (1 head, 3 workers), then the worker ids will be 0, 1, and 2|
+|`MISTRALRS_MN_WORKER_SERVER_ADDR=<ADDR>:<PORT>`|The IP address and port to connect to the server.|This is used to establish communication with the head node.|

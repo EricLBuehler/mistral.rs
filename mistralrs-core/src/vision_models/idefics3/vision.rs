@@ -1,12 +1,10 @@
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{
-    conv2d, embedding, layer_norm, Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module,
-    VarBuilder,
-};
+use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Linear, Module};
+use mistralrs_quant::ShardedVarBuilder;
 use std::ops::Mul;
 
 use crate::{
-    layers::{Activation, CausalMasker},
+    layers::{self, conv2d, embedding, layer_norm, Activation, CausalMasker, MatMul},
     utils::unvarbuilder::UnVarBuilder,
 };
 
@@ -17,11 +15,11 @@ pub(crate) struct Idefics3SimpleMLP {
 }
 
 impl Idefics3SimpleMLP {
-    pub fn new(cfg: &Idefics3Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Idefics3Config, vb: ShardedVarBuilder) -> Result<Self> {
         let in_dim = cfg.vision_config.hidden_size * cfg.scale_factor.pow(2);
         let out_dim = cfg.text_config.hidden_size;
         Ok(Self {
-            proj: candle_nn::linear_no_bias(in_dim, out_dim, vb.pp("proj"))?,
+            proj: layers::linear_no_bias(in_dim, out_dim, vb.pp("proj"))?,
         })
     }
 
@@ -36,7 +34,7 @@ pub struct Idefics3Connector {
 }
 
 impl Idefics3Connector {
-    pub fn new(cfg: &Idefics3Config, vb: VarBuilder) -> Result<Self> {
+    pub fn new(cfg: &Idefics3Config, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
             scale_factor: cfg.scale_factor,
             modality_projection: Idefics3SimpleMLP::new(cfg, vb.pp("modality_projection"))?,
@@ -80,31 +78,36 @@ struct VisionEmbeddings {
 /// torch.bucketize with right=True
 /// Returns a 1d tensor of shape (xs.len(),) on the CPU
 fn bucketize_right(xs: &[f32], boundaries: &[f32], device: &Device) -> Result<Tensor> {
-    // Initialize a vector to store the bucket indices
-    let mut indices = vec![0; xs.len()];
+    use std::cmp::Ordering;
 
-    // Iterate over each element in `xs`
-    for (i, &x) in xs.iter().enumerate() {
-        // Find the index of the bucket for the current element
-        let mut index = 0;
-        for (j, &boundary) in boundaries.iter().enumerate() {
-            if x < boundary {
-                index = j;
-                break;
-            }
-        }
-        // If the value is greater than or equal to all boundaries, set the index to the length of boundaries
-        if index == 0 && x >= boundaries[boundaries.len() - 1] {
-            index = boundaries.len();
-        }
-        indices[i] = index as u32;
+    let mut result = Vec::with_capacity(xs.len());
+
+    for &x in xs {
+        // binary_search_by returns:
+        //   Ok(i)   if boundaries[i] == x
+        //   Err(i)  if x would be inserted at i
+        //
+        // The returned i is the "insertion point" for x to keep
+        // boundaries sorted. That i is the smallest position
+        // where boundaries[i] >= x (i.e. bisect_left).
+
+        let idx = match boundaries.binary_search_by(|&val| {
+            // Use partial_cmp here; assume no NaNs.
+            // For robust handling of NaNs, you might need a custom comparison.
+            val.partial_cmp(&x).unwrap_or(Ordering::Less)
+        }) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+
+        result.push(idx as u32);
     }
 
-    Tensor::from_vec(indices, (xs.len(),), device)
+    Tensor::from_vec(result, (xs.len(),), device)
 }
 
 impl VisionEmbeddings {
-    fn new(config: &Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let conv_config = Conv2dConfig {
             stride: config.patch_size,
             ..Default::default()
@@ -182,14 +185,29 @@ impl VisionEmbeddings {
                 .unsqueeze(D::Minus1)?
                 .mul(self.num_patches_per_side as f64)?
                 .broadcast_add(&bucket_coords_w)?
-                .flatten_all()?;
+                .flatten_all()?
+                .to_vec1::<u32>()?;
 
+            let true_indices = p_attn_mask
+                .flatten_all()?
+                .to_vec1::<u8>()?
+                .iter()
+                .enumerate()
+                .filter_map(|(i, x)| if *x != 0 { Some(i) } else { None })
+                .collect::<Vec<_>>();
             let position_ids_b = position_ids.i(b_idx)?;
-            new_position_ids.push(
-                p_attn_mask
-                    .flatten_all()?
-                    .where_cond(&pos_ids, &position_ids_b)?,
-            );
+
+            let mut new_position_ids_b = position_ids_b.to_vec1::<u32>()?;
+            let new_position_ids_b_len = new_position_ids_b.len();
+            for (i, true_idx) in true_indices.into_iter().enumerate() {
+                new_position_ids_b[true_idx] = pos_ids[i];
+            }
+
+            new_position_ids.push(Tensor::from_vec(
+                new_position_ids_b,
+                new_position_ids_b_len,
+                pixel_values.device(),
+            )?);
         }
         let position_ids = Tensor::stack(&new_position_ids, 0)?;
         let position_ids = position_ids.to_device(self.position_embedding.embeddings().device())?;
@@ -219,16 +237,16 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(config: Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let embed_dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let head_dim = embed_dim / num_heads;
         let scale = 1.0 / (head_dim as f64).sqrt();
 
-        let q_proj = candle_nn::linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
-        let k_proj = candle_nn::linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
-        let v_proj = candle_nn::linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
-        let o_proj = candle_nn::linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
+        let q_proj = layers::linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
+        let k_proj = layers::linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
+        let v_proj = layers::linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
+        let o_proj = layers::linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
 
         Ok(Self {
             embed_dim,
@@ -261,7 +279,7 @@ impl Attention {
             .transpose(1, 2)?;
 
         let attn_weights =
-            (q.contiguous()?.matmul(&k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
+            (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
 
         let mut attn_weights = CausalMasker.apply_mask_one_and_zero(
             &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
@@ -269,7 +287,7 @@ impl Attention {
             &self.neg_inf,
         )?;
         attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let attn_output = attn_weights.matmul(&v.contiguous()?)?;
+        let attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
 
         attn_output
             .transpose(1, 2)?
@@ -296,9 +314,9 @@ struct VisionMLP {
 }
 
 impl VisionMLP {
-    fn new(config: Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
-        let fc1 = candle_nn::linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
-        let fc2 = candle_nn::linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
+    fn new(config: Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        let fc1 = layers::linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
+        let fc2 = layers::linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
         Ok(Self {
             activation: config.hidden_act,
             fc1,
@@ -330,7 +348,7 @@ struct EncoderLayer {
 }
 
 impl EncoderLayer {
-    fn new(config: Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mlp = VisionMLP::new(config.clone(), vb.pp("mlp"))?;
         let attn = Attention::new(config.clone(), vb.pp("self_attn"))?;
         let layer_norm_1 = layer_norm(
@@ -370,7 +388,7 @@ struct Encoder {
 }
 
 impl Encoder {
-    fn new(config: &Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
+    fn new(config: &Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mut layers = Vec::new();
         let vb_l = vb.pp("layers");
         for i in 0..config.num_hidden_layers {
@@ -396,7 +414,7 @@ pub struct Idefics3VisionTransformer {
 }
 
 impl Idefics3VisionTransformer {
-    pub fn new(config: &Idefics3VisionConfig, vb: VarBuilder) -> Result<Self> {
+    pub fn new(config: &Idefics3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let embeddings = VisionEmbeddings::new(config, vb.pp("embeddings"))?;
         let post_layernorm = layer_norm(
             config.hidden_size,

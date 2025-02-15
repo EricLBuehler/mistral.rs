@@ -15,7 +15,7 @@ macro_rules! get_delta_from_lora_ab {
         } else {
             1.0
         };
-        (proj_b.matmul(&proj_a)? * scale)?
+        (MatMul.matmul(&proj_b, &proj_a)? * scale)?
     }};
 }
 

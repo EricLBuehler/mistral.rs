@@ -2,11 +2,15 @@ use std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
+use blockwise_fp8::blockwise_fp8_linear_b;
 use candle_core::{
-    quantized::{GgmlDType, QTensor},
+    quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
 
@@ -14,31 +18,47 @@ use candle_core::{
 mod metal_kernels;
 
 mod bitsandbytes;
+mod blockwise_fp8;
 mod cublaslt;
+mod distributed;
 mod dummy;
 mod fp8;
 mod gguf;
 mod gptq;
 mod hqq;
 mod imatrix;
+pub mod safetensors;
 mod unquantized;
 mod utils;
 
+use gptq::gptq_linear;
+pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
+
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
+pub use distributed::{
+    layers::{
+        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, ReplicatedLayer,
+        RowParallelLayer,
+    },
+    socket::{Client, Server},
+    BarrierLike, Comm, Id, SumAllReduce,
+};
 pub use dummy::DummyLayer;
 pub use fp8::FP8Linear;
 pub use gguf::GgufMatMul;
-use gptq::gptq_linear;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
-pub use imatrix::ImatrixLayerStats;
+pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
 pub use unquantized::UnquantLinear;
+pub use utils::UQFF_QUANT_TYPE_OFFSET;
 
-use candle_nn::{Linear, Module, VarBuilder};
+use candle_nn::{Linear, Module};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub enum QuantMethodType {
+    #[serde(rename = "fp8")]
+    Fp8,
     #[serde(rename = "gptq")]
     Gptq,
     #[serde(rename = "unreachable")]
@@ -51,7 +71,8 @@ pub enum QuantMethodType {
 impl Display for QuantMethodType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Gptq => write!(f, "GPTQ"),
+            Self::Gptq => write!(f, "gptq"),
+            Self::Fp8 => write!(f, "fp8"),
             Self::Bitsandbytes => write!(f, "bnb"),
             Self::Unreachable => write!(f, "unreachable",),
         }
@@ -68,11 +89,14 @@ pub struct QuantizedConfig {
     // BNB
     pub bnb_4bit_quant_type: Option<String>,
 
+    // FP8
+    pub weight_block_size: Option<Vec<usize>>,
+
     pub quant_method: QuantMethodType,
 }
 
 impl QuantizedConfig {
-    pub fn get_bits_name(&self, _vb: &VarBuilder) -> String {
+    pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
         match self.bits {
             Some(bits) => format!("{bits} bits"),
             None => {
@@ -124,6 +148,93 @@ pub enum QuantMethodConfig {
         params: BnbQuantParmas,
         quant_ty: BnbQuantType,
     },
+    BlockwiseFP8 {
+        weight: Tensor,
+        weight_scale_inv: Tensor,
+        bias: Option<Tensor>,
+        dequant_dtype: DType,
+        weight_block_size: Vec<usize>,
+    },
+}
+
+/// Device/configurable intelligent matrix multiplication
+/// - Configurable to be via f16 (to use the faster GEMM kernels) optionally.
+/// - Handles limitation of `accelerate` which requires f32
+pub struct MatMul;
+
+pub static INHIBIT_GEMM_F16: AtomicBool = AtomicBool::new(false);
+
+/// Set the matmuls to go via f16
+pub(crate) static USE_MATMUL_VIA_F16: AtomicBool = AtomicBool::new(false);
+
+pub fn set_use_matmul_via_f16(via_f16: bool) {
+    if !INHIBIT_GEMM_F16.load(Ordering::Relaxed) {
+        USE_MATMUL_VIA_F16.store(via_f16, Ordering::Relaxed)
+    }
+}
+pub fn get_use_matmul_via_f16() -> bool {
+    USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
+}
+
+impl MatMul {
+    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    pub fn matmul(&self, a: &Tensor, b: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "accelerate")]
+        {
+            let original_dtype = a.dtype();
+            a.to_dtype(DType::F32)?
+                .matmul(&b.to_dtype(DType::F32)?)?
+                .to_dtype(original_dtype)
+        }
+        #[cfg(not(feature = "accelerate"))]
+        {
+            if a.device().is_cpu() {
+                let original_dtype = a.dtype();
+                return a
+                    .to_dtype(DType::F16)?
+                    .matmul(&b.to_dtype(DType::F16)?)?
+                    .to_dtype(original_dtype);
+            } else if !get_use_matmul_via_f16() {
+                return a.matmul(b);
+            }
+            let original_dtype = a.dtype();
+            a.to_dtype(DType::F16)?
+                .matmul(&b.to_dtype(DType::F16)?)?
+                .to_dtype(original_dtype)
+        }
+    }
+
+    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    /// The result will be divided by the `scale` parameter in an affine division.
+    pub fn matmul_affine_div(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
+        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
+        self.matmul(a, b)? / scale
+    }
+
+    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    /// The result will be divided by the `scale` parameter in an affine multiplication.
+    pub fn matmul_affine_mul(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
+        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
+        self.matmul(a, b)? * scale
+    }
+
+    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
+        if get_use_matmul_via_f16() {
+            matmul.forward_via_f16(x)
+        } else {
+            matmul.forward(x)
+        }
+    }
+
+    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
+        if get_use_matmul_via_f16() {
+            matmul.forward_via_half(x)
+        } else {
+            matmul.forward(x)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
@@ -146,6 +257,55 @@ pub enum IsqType {
     // HQQ2,
     // HQQ1,
     F8E4M3,
+}
+
+impl IsqType {
+    /// Factor by which the weight size is reduced over the given dtype.
+    /// original size / pack factor = quantized size
+    pub fn pack_factor(&self, dtype: DType) -> usize {
+        match self {
+            Self::Q4_0 => {
+                (dtype.size_in_bytes() * GgmlDType::Q4_0.block_size()) / GgmlDType::Q4_0.type_size()
+            }
+            Self::Q4_1 => {
+                (dtype.size_in_bytes() * GgmlDType::Q4_1.block_size()) / GgmlDType::Q4_1.type_size()
+            }
+            Self::Q5_0 => {
+                (dtype.size_in_bytes() * GgmlDType::Q5_0.block_size()) / GgmlDType::Q5_0.type_size()
+            }
+            Self::Q5_1 => {
+                (dtype.size_in_bytes() * GgmlDType::Q5_1.block_size()) / GgmlDType::Q5_1.type_size()
+            }
+            Self::Q8_0 => {
+                (dtype.size_in_bytes() * GgmlDType::Q8_0.block_size()) / GgmlDType::Q8_0.type_size()
+            }
+            Self::Q8_1 => {
+                (dtype.size_in_bytes() * GgmlDType::Q8_1.block_size()) / GgmlDType::Q8_1.type_size()
+            }
+            Self::Q2K => {
+                (dtype.size_in_bytes() * GgmlDType::Q2K.block_size()) / GgmlDType::Q2K.type_size()
+            }
+            Self::Q3K => {
+                (dtype.size_in_bytes() * GgmlDType::Q3K.block_size()) / GgmlDType::Q3K.type_size()
+            }
+            Self::Q4K => {
+                (dtype.size_in_bytes() * GgmlDType::Q4K.block_size()) / GgmlDType::Q4K.type_size()
+            }
+            Self::Q5K => {
+                (dtype.size_in_bytes() * GgmlDType::Q5K.block_size()) / GgmlDType::Q5K.type_size()
+            }
+            Self::Q6K => {
+                (dtype.size_in_bytes() * GgmlDType::Q6K.block_size()) / GgmlDType::Q6K.type_size()
+            }
+            Self::Q8K => {
+                (dtype.size_in_bytes() * GgmlDType::Q8K.block_size()) / GgmlDType::Q8K.type_size()
+            }
+            // Estimates
+            Self::HQQ4 => 4,
+            Self::HQQ8 => 2,
+            Self::F8E4M3 => 2,
+        }
+    }
 }
 
 impl TryFrom<IsqType> for GgmlDType {
@@ -189,6 +349,30 @@ impl TryFrom<IsqType> for GgmlDType {
     }
 }
 
+impl TryFrom<GgmlDType> for IsqType {
+    type Error = candle_core::Error;
+
+    fn try_from(value: GgmlDType) -> Result<Self> {
+        match value {
+            GgmlDType::Q2K => Ok(Self::Q2K),
+            GgmlDType::Q3K => Ok(Self::Q3K),
+            GgmlDType::Q4K => Ok(Self::Q4K),
+            GgmlDType::Q5K => Ok(Self::Q5K),
+            GgmlDType::Q6K => Ok(Self::Q6K),
+            GgmlDType::Q4_0 => Ok(Self::Q4_0),
+            GgmlDType::Q4_1 => Ok(Self::Q4_1),
+            GgmlDType::Q5_0 => Ok(Self::Q5_0),
+            GgmlDType::Q5_1 => Ok(Self::Q5_1),
+            GgmlDType::Q8_0 => Ok(Self::Q8_0),
+            GgmlDType::Q8_1 => Ok(Self::Q8_1),
+            GgmlDType::Q8K => Ok(Self::Q8K),
+            GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 => {
+                candle_core::bail!("Expected valid GGML ISQ type.")
+            }
+        }
+    }
+}
+
 pub enum QuantizedSerdeType {
     Gguf = 0,
     Unquant = 1,
@@ -222,6 +406,10 @@ pub trait QuantizedSerde {
         Self: Sized,
     {
         candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
+    }
+    /// NOT meant for external calling
+    fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<[u8]>> {
+        candle_core::bail!("`QuantizedSerde::serialize_with_bias` is not supported.")
     }
 }
 
@@ -272,12 +460,6 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         imatrix_weight: Option<Vec<f32>>,
     ) -> Result<Arc<dyn QuantMethod>>;
 
-    /// Convert to an equivalent gguf quantization, if applicable.
-    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>>;
-
-    /// If the quant is backed by a qmatmul.
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor>;
-
     fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
@@ -305,11 +487,14 @@ pub fn linear_no_bias(
     in_dim: usize,
     out_dim: usize,
     config: &Option<QuantizedConfig>,
-    vb: VarBuilder,
+    vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Fp8 => {
+                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
+            }
             QuantMethodType::Bitsandbytes => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
@@ -321,9 +506,11 @@ pub fn linear_no_bias(
             let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
-            let layer = candle_nn::linear_no_bias(in_dim, out_dim, vb)?;
+            let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
 
-            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, None),
+            ))?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
@@ -334,11 +521,14 @@ pub fn linear(
     in_dim: usize,
     out_dim: usize,
     config: &Option<QuantizedConfig>,
-    vb: VarBuilder,
+    vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let layer = if let Some(quant_conf) = &config {
         match quant_conf.quant_method {
             QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantMethodType::Fp8 => {
+                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
+            }
             QuantMethodType::Bitsandbytes => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
             }
@@ -350,9 +540,12 @@ pub fn linear(
             let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
-            let layer = candle_nn::linear(in_dim, out_dim, vb)?;
+            let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+            let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
-            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(layer))?;
+            let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, Some(bias)),
+            ))?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
@@ -364,7 +557,7 @@ pub fn linear_b(
     out_dim: usize,
     bias: bool,
     config: &Option<QuantizedConfig>,
-    vb: VarBuilder,
+    vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     if bias {
         linear(in_dim, out_dim, config, vb)

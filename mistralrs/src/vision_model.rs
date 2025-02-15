@@ -12,14 +12,15 @@ pub struct VisionModelBuilder {
     pub(crate) write_uqff: Option<PathBuf>,
     pub(crate) from_uqff: Option<PathBuf>,
     pub(crate) calibration_file: Option<PathBuf>,
+    pub(crate) imatrix: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
-    pub(crate) device_mapping: Option<DeviceMapMetadata>,
+    pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) max_edge: Option<u32>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
-    pub(crate) prompt_batchsize: Option<NonZeroUsize>,
+    pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) topology: Option<Topology>,
     pub(crate) loader_type: VisionLoaderType,
     pub(crate) dtype: ModelDType,
@@ -35,6 +36,7 @@ impl VisionModelBuilder {
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
+    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
     pub fn new(model_id: impl ToString, loader_type: VisionLoaderType) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -42,7 +44,7 @@ impl VisionModelBuilder {
             topology: None,
             write_uqff: None,
             from_uqff: None,
-            prompt_batchsize: None,
+            prompt_chunksize: None,
             chat_template: None,
             tokenizer_json: None,
             max_edge: None,
@@ -56,12 +58,13 @@ impl VisionModelBuilder {
             with_logging: false,
             device_mapping: None,
             calibration_file: None,
+            imatrix: None,
         }
     }
 
     /// Set the prompt batchsize to use for inference.
-    pub fn with_prompt_batchsize(mut self, prompt_batchsize: NonZeroUsize) -> Self {
-        self.prompt_batchsize = Some(prompt_batchsize);
+    pub fn with_prompt_chunksize(mut self, prompt_chunksize: NonZeroUsize) -> Self {
+        self.prompt_chunksize = Some(prompt_chunksize);
         self
     }
 
@@ -131,9 +134,8 @@ impl VisionModelBuilder {
         self
     }
 
-    /// Provide metadata to initialize the device mapper. Generally, it is more programmatic and easier to use
-    /// the [`Topology`], see [`Self::with_topology`].
-    pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
+    /// Provide metadata to initialize the device mapper.
+    pub fn with_device_mapping(mut self, device_mapping: DeviceMapSetting) -> Self {
         self.device_mapping = Some(device_mapping);
         self
     }
@@ -167,12 +169,13 @@ impl VisionModelBuilder {
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = VisionSpecificConfig {
             use_flash_attn: self.use_flash_attn,
-            prompt_batchsize: self.prompt_batchsize,
+            prompt_chunksize: self.prompt_chunksize,
             topology: self.topology,
             write_uqff: self.write_uqff,
             from_uqff: self.from_uqff,
             max_edge: self.max_edge,
             calibration_file: self.calibration_file,
+            imatrix: self.imatrix,
         };
 
         if self.with_logging {
@@ -194,7 +197,8 @@ impl VisionModelBuilder {
             &self.dtype,
             &best_device(self.force_cpu)?,
             !self.with_logging,
-            self.device_mapping.unwrap_or(DeviceMapMetadata::dummy()),
+            self.device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_vision())),
             self.isq,
             None,
         )?;

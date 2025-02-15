@@ -1,6 +1,6 @@
-# Deepseek V2: [`deepseek-ai/DeepSeek-V2-Lite`](https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite)
+# DeepSeek V2: [`deepseek-ai/DeepSeek-V2-Lite`](https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite)
 
-The Deepseek V2 is a mixture of expert (MoE) model featuring ["Multi-head Latent Attention"](https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite#5-model-architecture).
+The DeepSeek V2 is a mixture of expert (MoE) model featuring ["Multi-head Latent Attention"](https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite#5-model-architecture).
 
 - Context length of **32k tokens** (Lite model), **128k tokens** (full model)
 - 64 routed experts (Lite model), 160 routed experts (full model)

@@ -12,6 +12,8 @@ Mistral.rs supports enhancing the performance of models quantized with ISQ by co
 
 Using an imatrix causes the quantization process to take longer as the data must be collected, but there is no inference-time performance decrease.
 
+> Note: mistral.rs will automatically generate a **.cimatrix** file which can be used within mistral.rs as a replacement for a .imatrix file. The primary advantage is the in-situ generation within mistral.rs. The format is incompatible with llama.cpp.
+
 To use this, simply specify the calibration data file in the various APIs as detailed below.
 
 ## With the CLI

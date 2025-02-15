@@ -8,13 +8,15 @@ use half::{bf16, f16};
 // v0.1.1: add i16 dtype
 // v0.1.2: add F8E4M3
 
-const HQFF_VERSION_MAJOR: u32 = 0;
-const HQFF_VERSION_MINOR: u32 = 1;
-const HQFF_VERSION_PATCH: u32 = 2;
+const UQFF_VERSION_MAJOR: u32 = 0;
+const UQFF_VERSION_MINOR: u32 = 1;
+const UQFF_VERSION_PATCH: u32 = 2;
 
 /// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
-pub(crate) const HQFF_VERSION: u32 =
-    (HQFF_VERSION_MAJOR << (8 * 2)) | (HQFF_VERSION_MINOR << 8) | HQFF_VERSION_PATCH;
+pub(crate) const UQFF_VERSION: u32 =
+    (UQFF_VERSION_MAJOR << (8 * 2)) | (UQFF_VERSION_MINOR << 8) | UQFF_VERSION_PATCH;
+/// Offset for the quant type. UQFF always serializes the version first.
+pub const UQFF_QUANT_TYPE_OFFSET: usize = std::mem::size_of::<u32>();
 
 /// Check if major version matches: is backwards compatible
 pub(crate) fn version_is_compatible(version: u32) -> Result<()> {
@@ -22,8 +24,8 @@ pub(crate) fn version_is_compatible(version: u32) -> Result<()> {
     let _minor = version >> 8;
     let _patch = version;
 
-    if major != HQFF_VERSION_MAJOR {
-        candle_core::bail!("Major version of ISQ artifact file ({major}) does not match the implementation in this build ({HQFF_VERSION_MAJOR})");
+    if major != UQFF_VERSION_MAJOR {
+        candle_core::bail!("Major version of ISQ artifact file ({major}) does not match the implementation in this build ({UQFF_VERSION_MAJOR})");
     }
 
     Ok(())
@@ -145,6 +147,28 @@ pub(crate) fn deserialize_tensor<R: std::io::Read>(
         DType::U8 => bytes_to_data::<u8>(&tensor_data, &dims, device),
         DType::F8E4M3 => bytes_to_data::<F8E4M3>(&tensor_data, &dims, device),
     }
+}
+
+/// Just seek the reader ahead.
+pub(crate) fn fake_deserialize_tensor<R: std::io::Read + std::io::Seek>(
+    buffer: &mut R,
+) -> Result<()> {
+    let data_len = buffer.read_u32::<LittleEndian>()? as usize;
+
+    // DType
+    let _dtype = read_dtype(buffer)?;
+
+    let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
+
+    let mut dims = Vec::with_capacity(n_dims);
+    for _ in 0..n_dims {
+        dims.push(buffer.read_u32::<LittleEndian>()? as usize)
+    }
+
+    // Fake read the data in bytes
+    buffer.seek_relative(data_len as i64)?;
+
+    Ok(())
 }
 
 fn data_to_bytes<T: WithDType>(mut vs: Vec<T>) -> Vec<u8> {

@@ -667,13 +667,21 @@ impl Sequence {
     pub fn get_delta(
         &mut self,
     ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+        let new_decoded = self.peek_delta();
+        if matches!(new_decoded, Ok(Some(_))) {
+            self.stream_idx = self.completion_bytes.len();
+        }
+        new_decoded
+    }
+
+    /// Peeks at the delta between the last two decoded sequences, but does not advance the stream index.
+    pub fn peek_delta(&self) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
         let is_first = self.stream_idx == 0;
         let new_decoded = String::from_utf8_lossy(&self.completion_bytes[self.stream_idx..]);
         // Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
         if new_decoded.ends_with('�') {
             return Ok(None);
         }
-        self.stream_idx = self.completion_bytes.len();
 
         // The first token usually starts with a space. We don't want to add that to the delta.
         // Since we're using the completion_bytes, we need to take care of that ourselves.
@@ -705,8 +713,8 @@ impl Sequence {
 
         get_mut_group!(self).total_time += now - self.timestamp;
 
-        get_mut_group!(self).total_prompt_toks += self.prompt_len;
-        get_mut_group!(self).total_toks += self.len();
+        get_mut_group!(self).total_prompt_toks = self.prompt_len;
+        get_mut_group!(self).total_toks = self.len();
     }
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
@@ -749,6 +757,7 @@ impl Sequence {
 
     pub fn add_streaming_chunk_choice_to_group(&self, chunk: ChunkChoice) {
         get_mut_group!(self).chat_streaming_chunks.push(chunk);
+        self.update_time_info();
     }
 
     pub fn add_streaming_completion_chunk_choice_to_group(&self, chunk: CompletionChunkChoice) {
@@ -920,6 +929,7 @@ impl SequenceGroup {
         &mut self,
         seq: &Sequence,
         model: String,
+        usage_opt: Option<Usage>,
     ) -> Result<(), Box<SendError<Response>>> {
         if self.chat_streaming_chunks.len() == self.n_choices && self.is_streaming {
             let mut swap_streaming_chunks = vec![];
@@ -934,6 +944,7 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
+                    usage: usage_opt,
                 }))
                 .await?;
         } else if self.completion_streaming_chunks.len() == self.n_choices && self.is_streaming {

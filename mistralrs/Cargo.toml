@@ -12,7 +12,7 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-mistralrs-core = { version = "0.3.5", path = "../mistralrs-core" }
+mistralrs-core = { version = "0.4.0", path = "../mistralrs-core" }
 anyhow.workspace = true
 tokio.workspace = true
 candle-core.workspace = true
@@ -34,6 +34,7 @@ metal = ["mistralrs-core/metal"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]
 accelerate = ["mistralrs-core/accelerate"]
 mkl = ["mistralrs-core/mkl"]
+nccl = ["mistralrs-core/nccl"]
 
 [[example]]
 name = "simple"
@@ -157,4 +158,20 @@ required-features = []
 
 [[example]]
 name = "deepseekv2"
+required-features = []
+
+[[example]]
+name = "text_auto_device_map"
+required-features = []
+
+[[example]]
+name = "vision_auto_device_map"
+required-features = []
+
+[[example]]
+name = "deepseekr1"
+required-features = []
+
+[[example]]
+name = "minicpmo_2_6"
 required-features = []

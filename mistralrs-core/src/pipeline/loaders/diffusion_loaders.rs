@@ -7,9 +7,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
-use candle_nn::VarBuilder;
 
 use hf_hub::api::sync::ApiRepo;
+use mistralrs_quant::ShardedVarBuilder;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -56,7 +56,7 @@ pub trait DiffusionModelLoader: Send + Sync {
         &self,
         configs: Vec<String>,
         use_flash_attn: bool,
-        vbs: Vec<VarBuilder>,
+        vbs: Vec<ShardedVarBuilder>,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
         silent: bool,
@@ -176,7 +176,7 @@ impl DiffusionModelLoader for FluxLoader {
         &self,
         mut configs: Vec<String>,
         _use_flash_attn: bool,
-        mut vbs: Vec<VarBuilder>,
+        mut vbs: Vec<ShardedVarBuilder>,
         normal_loading_metadata: NormalLoadingMetadata,
         _attention_mechanism: AttentionImplementation,
         silent: bool,

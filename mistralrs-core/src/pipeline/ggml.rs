@@ -13,6 +13,7 @@ use crate::device_map::DeviceMapper;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::get_chat_template;
+use crate::pipeline::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
@@ -22,7 +23,7 @@ use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths, DeviceMapMetadata, PagedAttentionConfig, Pipeline, Topology,
+    get_mut_arcmutex, get_paths, DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType, DEBUG,
 };
 use crate::{
@@ -37,7 +38,7 @@ use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
-use std::num::NonZeroUsize;
+use std::num::{NonZero, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -79,7 +80,7 @@ pub struct GGMLLoader {
 /// Config for a GGML loader.
 pub struct GGMLSpecificConfig {
     pub gqa: usize,
-    pub prompt_batchsize: Option<NonZeroUsize>,
+    pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
 }
 
@@ -242,7 +243,7 @@ impl Loader for GGMLLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -251,33 +252,25 @@ impl Loader for GGMLLoader {
                 "You are trying to in-situ quantize a GGML model. This will not do anything."
             );
         }
-        if !(mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map())))
-        {
-            warn!("GGML models do not support device mapping. Device mapping will not work. Please consider using a GGUF model.");
+
+        if matches!(mapper, DeviceMapSetting::Map(_)) {
+            anyhow::bail!("Device mapping is not supported for diffusion models.")
         }
-        if !(mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map())))
-            && paged_attn_config.is_some()
-        {
-            warn!("Device mapping or device topology and PagedAttention are incompatible, disabling PagedAttention.");
+
+        if paged_attn_config.is_some() {
+            warn!("PagedAttention is not supported for GGML models, disabling it.");
+
             paged_attn_config = None;
         }
 
-        if !mapper.is_dummy() && paged_attn_config.is_some() {
-            warn!("Device mapping and PagedAttention are incompatible, disabling PagedAttention.");
-            paged_attn_config = None;
-        }
+        // Apply default prompt size here
+        let prompt_chunksize = self
+            .config
+            .prompt_chunksize
+            .unwrap_or(DEFAULT_PROMPT_CHUNK_SIZE.try_into().unwrap())
+            .get();
+
+        info!("Prompt chunk size is {prompt_chunksize}.",);
 
         info!(
             "Loading model `{}` on {}.",
@@ -331,10 +324,7 @@ impl Loader for GGMLLoader {
                 )?);
             }
 
-            ModelConfig::ModelParams::builder()
-                .quant(quant)
-                .and_adapter(adapter)
-                .build()
+            ModelConfig::ModelParams::new(quant, adapter)
         };
 
         // Config into model:
@@ -397,8 +387,8 @@ impl Loader for GGMLLoader {
                 activation_dtype: internal_dtype,
                 sliding_window: None,
                 cache_config: None,
-                cache_engine: None,
-                prompt_batchsize: self.config.prompt_batchsize,
+                cache_engines: None,
+                prompt_chunksize: Some(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: None,
             }),
         })))
@@ -412,7 +402,7 @@ impl Loader for GGMLLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -548,8 +538,6 @@ impl Pipeline for GGMLPipeline {
             input_ids_full,
             seqlen_offsets,
             seqlen_offsets_full,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full,
             context_lens,
             position_ids: _,    // NOTE(EricLBuehler): ignore, it is for phi3
             paged_attn_meta: _, // NOTE(EricLBuehler): ignore it for ggml
@@ -557,20 +545,14 @@ impl Pipeline for GGMLPipeline {
             flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
         } = *inputs.downcast().expect("Downcast failed.");
         let logits = match self.model {
-            Model::Llama(ref model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                None,
-            )?,
+            Model::Llama(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, None)?
+            }
             Model::XLoraLlama(ref model) => model.forward(
                 &input_ids,
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,

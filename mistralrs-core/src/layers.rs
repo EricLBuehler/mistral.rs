@@ -1,21 +1,17 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{
-    f32::consts::PI,
-    ops::Mul,
-    str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
 use candle_core::{
     quantized::{QMatMul, QTensor},
     Context, DType, Device, IndexOp, Result, Tensor, D,
 };
-use candle_nn::{Conv2d, Conv2dConfig, Linear, Module, VarBuilder};
-use mistralrs_quant::QuantMethod;
+use candle_nn::{
+    Conv2d, Conv2dConfig, Embedding, GroupNorm, LayerNorm, LayerNormConfig, Linear, Module,
+};
+use float8::F8E4M3;
+use half::{bf16, f16};
+use mistralrs_quant::{get_use_matmul_via_f16, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 
 pub use crate::attention::Sdpa;
@@ -26,8 +22,103 @@ use crate::{
     models::llama,
     ops::SplitOp,
     vision_models::mllama::{MLlamaRopeScaling, MLlamaRopeType, MLlamaTextConfig},
-    INHIBIT_GEMM_F16,
 };
+
+pub use mistralrs_quant::MatMul;
+
+pub fn embedding(in_size: usize, out_size: usize, vb: ShardedVarBuilder) -> Result<Embedding> {
+    let embeddings = vb.get_with_hints((in_size, out_size), "weight", Default::default())?;
+    Ok(Embedding::new(embeddings, out_size))
+}
+
+pub fn layer_norm<C: Into<LayerNormConfig>>(
+    size: usize,
+    config: C,
+    vb: ShardedVarBuilder,
+) -> Result<LayerNorm> {
+    let config = config.into();
+    let weight = vb.get(size, "weight")?;
+    if config.affine {
+        let bias = vb.get(size, "bias")?;
+        Ok(LayerNorm::new(weight, bias, config.eps))
+    } else {
+        Ok(LayerNorm::new_no_bias(weight, config.eps))
+    }
+}
+
+pub fn group_norm(
+    num_groups: usize,
+    num_channels: usize,
+    eps: f64,
+    vb: ShardedVarBuilder,
+) -> Result<GroupNorm> {
+    let weight = vb.get(num_channels, "weight")?;
+    let bias = vb.get(num_channels, "bias")?;
+    GroupNorm::new(weight, bias, num_channels, num_groups, eps)
+}
+
+pub fn conv2d(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv2dConfig,
+    vb: ShardedVarBuilder,
+) -> Result<Conv2d> {
+    let ws = vb.get(
+        (
+            out_channels,
+            in_channels / cfg.groups,
+            kernel_size,
+            kernel_size,
+        ),
+        "weight",
+    )?;
+    let bs = vb.get(out_channels, "bias")?;
+    Ok(Conv2d::new(ws, Some(bs), cfg))
+}
+
+pub fn conv2d_no_bias(
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    cfg: Conv2dConfig,
+    vb: ShardedVarBuilder,
+) -> Result<Conv2d> {
+    let ws = vb.get(
+        (
+            out_channels,
+            in_channels / cfg.groups,
+            kernel_size,
+            kernel_size,
+        ),
+        "weight",
+    )?;
+    Ok(Conv2d::new(ws, None, cfg))
+}
+
+pub fn linear(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -> Result<Linear> {
+    let ws = vb.get((out_dim, in_dim), "weight")?;
+    let bs = vb.get(out_dim, "bias")?;
+    Ok(Linear::new(ws, Some(bs)))
+}
+
+pub fn linear_no_bias(in_dim: usize, out_dim: usize, vb: ShardedVarBuilder) -> Result<Linear> {
+    let ws = vb.get((out_dim, in_dim), "weight")?;
+    Ok(Linear::new(ws, None))
+}
+
+pub fn linear_b(
+    in_dim: usize,
+    out_dim: usize,
+    bias: bool,
+    vb: ShardedVarBuilder,
+) -> Result<Linear> {
+    if bias {
+        linear(in_dim, out_dim, vb)
+    } else {
+        linear_no_bias(in_dim, out_dim, vb)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct RmsNorm {
@@ -36,16 +127,15 @@ pub struct RmsNorm {
 }
 
 impl RmsNorm {
-    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        let w = inner.inner().weight().clone();
+    pub fn new(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
+        let w = vb.get(size, "weight")?;
         Ok(Self { eps, weight: w })
     }
 
     /// Gemma uses weight + 1.0
-    pub fn new_gemma(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
-        let inner = candle_nn::rms_norm_non_quant(size, eps, vb)?;
-        let w = (inner.inner().weight().clone() + 1.0)?;
+    pub fn new_gemma(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
+        let w = vb.get(size, "weight")?;
+        let w = (w + 1.0)?;
         Ok(Self { eps, weight: w })
     }
 
@@ -79,7 +169,7 @@ pub struct F32RmsNorm {
 }
 
 impl F32RmsNorm {
-    pub fn new(size: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+    pub fn new(size: usize, eps: f64, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
             w: vb.get((size,), "weight")?,
             eps,
@@ -433,14 +523,7 @@ impl PhiRotaryEmbedding {
 
 /// RoPE for Llama3
 #[derive(Debug, Clone)]
-pub enum Llama3RotaryEmbedding {
-    Llama3 {
-        sin: Tensor,
-        cos: Tensor,
-        is_gptx: bool,
-    },
-    Default(RotaryEmbedding),
-}
+pub struct Llama3RotaryEmbedding(RotaryEmbedding);
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub enum Llama3RopeType {
@@ -481,7 +564,7 @@ impl Llama3RotaryEmbedding {
             | Some(Llama3RopeConfig {
                 rope_type: Llama3RopeType::Default,
                 ..
-            }) => Ok(Self::Default(RotaryEmbedding::new(
+            }) => Ok(Self(RotaryEmbedding::new(
                 cfg.rope_theta,
                 cfg.hidden_size / cfg.num_attention_heads,
                 cfg.max_position_embeddings,
@@ -521,11 +604,11 @@ impl Llama3RotaryEmbedding {
                 let freqs = t.matmul(&inv_freq)?;
                 let sin = freqs.sin()?.to_dtype(dtype)?;
                 let cos = freqs.cos()?.to_dtype(dtype)?;
-                Ok(Self::Llama3 {
+                Ok(Self(RotaryEmbedding {
                     sin,
                     cos,
-                    is_gptx: is_gpt_neox,
-                })
+                    is_gpt_neox,
+                }))
             }
         }
     }
@@ -541,7 +624,7 @@ impl Llama3RotaryEmbedding {
             | Some(MLlamaRopeScaling {
                 rope_type: MLlamaRopeType::Default,
                 ..
-            }) => Ok(Self::Default(RotaryEmbedding::new(
+            }) => Ok(Self(RotaryEmbedding::new(
                 cfg.rope_theta,
                 cfg.hidden_size / cfg.num_attention_heads,
                 cfg.max_position_embeddings,
@@ -598,11 +681,11 @@ impl Llama3RotaryEmbedding {
                 let freqs = t.matmul(&inv_freq)?;
                 let sin = freqs.sin()?.to_dtype(dtype)?;
                 let cos = freqs.cos()?.to_dtype(dtype)?;
-                Ok(Self::Llama3 {
+                Ok(Self(RotaryEmbedding {
                     sin,
                     cos,
-                    is_gptx: is_gpt_neox,
-                })
+                    is_gpt_neox,
+                }))
             }
             Some(MLlamaRopeScaling {
                 rope_type: other, ..
@@ -616,48 +699,11 @@ impl Llama3RotaryEmbedding {
 
     pub fn forward(
         &self,
-        positions: &[usize],
-        positions_kernel: &Tensor,
-        q: &mut Tensor,
-        k: &mut Tensor,
-        b_sz: usize,
-    ) -> Result<()> {
-        // Needed for device mapping
-        let positions_kernel = positions_kernel.to_device(q.device())?;
-
-        match self {
-            Self::Llama3 { sin, cos, is_gptx } => {
-                let (b_sz_seq_len, h, n_embd) = q.dims3()?;
-                *q = q
-                    .reshape((b_sz, b_sz_seq_len / b_sz, h, n_embd))?
-                    .transpose(1, 2)?;
-                let (b_sz_seq_len, h, n_embd) = k.dims3()?;
-                *k = k
-                    .reshape((b_sz, b_sz_seq_len / b_sz, h, n_embd))?
-                    .transpose(1, 2)?;
-
-                let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-                let mut q_embeds = Vec::new();
-                let mut k_embeds = Vec::new();
-                for (i, offset) in positions.iter().enumerate() {
-                    let cos = cos.narrow(0, *offset, seq_len)?;
-                    let sin = sin.narrow(0, *offset, seq_len)?;
-                    let rope = if *is_gptx {
-                        candle_nn::rotary_emb::rope
-                    } else {
-                        candle_nn::rotary_emb::rope_i
-                    };
-                    let q_embed = rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                    let k_embed = rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                    q_embeds.push(q_embed);
-                    k_embeds.push(k_embed);
-                }
-                *q = Tensor::cat(&q_embeds, 0)?;
-                *k = Tensor::cat(&k_embeds, 0)?;
-                Ok(())
-            }
-            Self::Default(rope) => rope.forward(positions, &positions_kernel, q, k, b_sz),
-        }
+        q: &Tensor,
+        k: &Tensor,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        self.0.forward(q, k, seqlen_offsets)
     }
 }
 
@@ -787,6 +833,7 @@ impl DeepSeekV2RotaryEmbedding {
             .to_dtype(DType::F32)?
             .reshape((max_seq_len, 1))?;
         let freqs = t.matmul(&inv_freq)?;
+
         let sin = freqs.sin()?.to_dtype(dtype)?;
         let cos = freqs.cos()?.to_dtype(dtype)?;
 
@@ -938,66 +985,6 @@ impl DeepSeekV2RotaryEmbedding {
     }
 }
 
-/// Matrix multiplication, configurable to be via f16 (to use the faster GEMM kernels) optionally.
-pub struct MatMul;
-
-/// Set the matmuls to go via f16
-pub(crate) static USE_MATMUL_VIA_F16: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn set_use_matmul_via_f16(via_f16: bool) {
-    if !INHIBIT_GEMM_F16.load(Ordering::Relaxed) {
-        USE_MATMUL_VIA_F16.store(via_f16, Ordering::Relaxed)
-    }
-}
-pub fn get_use_matmul_via_f16() -> bool {
-    USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
-}
-
-impl MatMul {
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    pub fn matmul(&self, a: &Tensor, b: &Tensor) -> Result<Tensor> {
-        if !get_use_matmul_via_f16() {
-            return a.matmul(b);
-        }
-        let original_dtype = a.dtype();
-        a.to_dtype(DType::F16)?
-            .matmul(&b.to_dtype(DType::F16)?)?
-            .to_dtype(original_dtype)
-    }
-
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    /// The result will be divided by the `scale` parameter in an affine division.
-    pub fn matmul_affine_div(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
-        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
-        self.matmul(a, b)? / scale
-    }
-
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    /// The result will be divided by the `scale` parameter in an affine multiplication.
-    pub fn matmul_affine_mul(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
-        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
-        self.matmul(a, b)? * scale
-    }
-
-    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
-        if get_use_matmul_via_f16() {
-            matmul.forward_via_f16(x)
-        } else {
-            matmul.forward(x)
-        }
-    }
-
-    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
-    pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
-        if get_use_matmul_via_f16() {
-            matmul.forward_via_half(x)
-        } else {
-            matmul.forward(x)
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct QLinear {
     inner: QMatMul,
@@ -1102,7 +1089,11 @@ impl Module for QLinear {
 }
 
 #[derive(Debug, Clone)]
-pub struct RotaryEmbedding(candle_nn::RotaryEmbedding);
+pub struct RotaryEmbedding {
+    cos: Tensor,
+    sin: Tensor,
+    is_gpt_neox: bool,
+}
 
 impl RotaryEmbedding {
     pub fn new(
@@ -1113,48 +1104,77 @@ impl RotaryEmbedding {
         is_gpt_neox: bool,
         dtype: DType,
     ) -> Result<Self> {
-        Ok(Self(candle_nn::RotaryEmbedding::new(
-            base,
-            head_dim,
-            max_position_embeddings,
-            device,
+        let inv_freq: Vec<_> = (0..head_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / head_dim as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?;
+        let t = Tensor::arange(0u32, max_position_embeddings as u32, device)?
+            .to_dtype(DType::F32)?
+            .reshape((max_position_embeddings, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let sin = freqs.sin()?.to_dtype(dtype)?;
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+
+        Ok(Self {
+            cos,
+            sin,
             is_gpt_neox,
-            dtype,
-        )?))
+        })
     }
 
     pub fn new_partial(
         base: f32,
-        head_dim: usize,
         rot_dim: usize,
         max_position_embeddings: usize,
         device: &Device,
         is_gpt_neox: bool,
         dtype: DType,
     ) -> Result<Self> {
-        Ok(Self(candle_nn::RotaryEmbedding::new_partial(
-            base,
-            head_dim,
-            rot_dim,
-            max_position_embeddings,
-            device,
+        let inv_freq: Vec<_> = (0..rot_dim)
+            .step_by(2)
+            .map(|i| 1f32 / base.powf(i as f32 / rot_dim as f32))
+            .collect();
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?;
+        let t = Tensor::arange(0u32, max_position_embeddings as u32, device)?
+            .to_dtype(DType::F32)?
+            .reshape((max_position_embeddings, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let sin = freqs.sin()?.to_dtype(dtype)?;
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+
+        Ok(Self {
+            cos,
+            sin,
             is_gpt_neox,
-            dtype,
-        )?))
+        })
     }
 
     pub fn forward(
         &self,
-        positions: &[usize],
-        positions_kernel: &Tensor,
-        q: &mut Tensor,
-        k: &mut Tensor,
-        b_sz: usize,
-    ) -> Result<()> {
-        // Needed for device mapping
-        let positions_kernel = positions_kernel.to_device(q.device())?;
-
-        self.0.forward(positions, &positions_kernel, q, k, b_sz)
+        q: &Tensor,
+        k: &Tensor,
+        seqlen_offsets: &[usize],
+    ) -> Result<(Tensor, Tensor)> {
+        let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
+        let mut q_embeds = Vec::new();
+        let mut k_embeds = Vec::new();
+        for (i, offset) in seqlen_offsets.iter().enumerate() {
+            let cos = self.cos.narrow(0, *offset, seq_len)?;
+            let sin = self.sin.narrow(0, *offset, seq_len)?;
+            let rope = if self.is_gpt_neox {
+                candle_nn::rotary_emb::rope
+            } else {
+                candle_nn::rotary_emb::rope_i
+            };
+            let q_embed = rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            let k_embed = rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+            q_embeds.push(q_embed);
+            k_embeds.push(k_embed);
+        }
+        Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
     }
 }
 
@@ -1235,7 +1255,7 @@ impl Conv3dNoBias {
         out_channels: usize,
         kernel_sizes: [usize; 3],
         cfg: Conv3dConfig,
-        vb: VarBuilder,
+        vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let ws = vb.get(
             (
@@ -1274,5 +1294,108 @@ impl Module for Conv3dNoBias {
         let xs2 = xs.i((.., .., 1, .., ..))?;
 
         (self.conv2d_1.forward(&xs1)? + self.conv2d_2.forward(&xs2)?)?.unsqueeze(2)
+    }
+}
+
+pub trait TensorInfExtend {
+    fn is_inf(&self) -> Result<Self>
+    where
+        Self: Sized;
+    fn any(&self) -> Result<bool>;
+}
+
+impl TensorInfExtend for Tensor {
+    fn is_inf(&self) -> Result<Self> {
+        self.broadcast_eq(&Tensor::new(f32::INFINITY, self.device())?.to_dtype(self.dtype())?)
+    }
+
+    fn any(&self) -> Result<bool> {
+        let sum = self.sum_all()?;
+        match self.dtype() {
+            DType::U8 => Ok(sum.to_scalar::<u8>()? == 0),
+            DType::U32 => Ok(sum.to_scalar::<u32>()? == 0),
+            DType::I16 => Ok(sum.to_scalar::<i16>()? == 0),
+            DType::I32 => Ok(sum.to_scalar::<i32>()? == 0),
+            DType::I64 => Ok(sum.to_scalar::<i64>()? == 0),
+            DType::F16 => Ok(sum.to_scalar::<half::f16>()? == half::f16::from_f32_const(0.)),
+            DType::BF16 => Ok(sum.to_scalar::<half::bf16>()? == half::bf16::from_f32_const(0.)),
+            DType::F32 => Ok(sum.to_scalar::<f32>()? == 0.),
+            DType::F64 => Ok(sum.to_scalar::<f64>()? == 0.),
+            DType::F8E4M3 => Ok(sum.to_scalar::<F8E4M3>()? == F8E4M3::ZERO),
+        }
+    }
+}
+
+pub fn clamp_for_f16(xs: &Tensor) -> Result<Tensor> {
+    let mut max = match xs.dtype() {
+        DType::U8 => u8::MAX as f32 - 1000.,
+        DType::U32 => u32::MAX as f32 - 1000.,
+        DType::I16 => i16::MAX as f32 - 1000.,
+        DType::I32 => i32::MAX as f32 - 1000.,
+        DType::I64 => i64::MAX as f32 - 1000.,
+        DType::F16 => half::f16::MAX.to_f32_const() - 1000.,
+        DType::BF16 => half::bf16::MAX.to_f32_const() - 1000.,
+        DType::F32 => f32::MAX - 1000.,
+        DType::F64 => f64::MAX as f32 - 1000.,
+        DType::F8E4M3 => F8E4M3::MAX.to_f32() - 1000.,
+    };
+    if xs.is_inf()?.any()? {
+        max -= 1000.;
+    }
+    xs.clamp(-max, max)
+}
+
+pub struct FloatInfo {
+    /// Minimum representable value.
+    pub min: f64,
+    /// Maximum representable value.
+    pub max: f64,
+    /// The difference between 1.0 and the next smallest representable float larger than 1.0.
+    pub eps: f64,
+    pub dtype: DType,
+}
+
+pub trait GetFloatInfo {
+    fn finfo(&self) -> Result<FloatInfo>;
+}
+
+impl GetFloatInfo for DType {
+    fn finfo(&self) -> Result<FloatInfo> {
+        let finfo = match self {
+            Self::BF16 => FloatInfo {
+                min: bf16::MIN.to_f64(),
+                max: bf16::MAX.to_f64(),
+                eps: bf16::EPSILON.to_f64(),
+                dtype: DType::BF16,
+            },
+            Self::F16 => FloatInfo {
+                min: f16::MIN.to_f64(),
+                max: f16::MAX.to_f64(),
+                eps: f16::EPSILON.to_f64(),
+                dtype: DType::F16,
+            },
+            Self::F32 => FloatInfo {
+                min: f32::MIN as f64,
+                max: f32::MAX as f64,
+                eps: f32::EPSILON as f64,
+                dtype: DType::F32,
+            },
+            Self::F64 => FloatInfo {
+                min: f64::MIN,
+                max: f64::MAX,
+                eps: f64::EPSILON,
+                dtype: DType::F64,
+            },
+            Self::F8E4M3 => FloatInfo {
+                min: F8E4M3::MIN.to_f64(),
+                max: F8E4M3::MAX.to_f64(),
+                eps: F8E4M3::EPSILON.to_f64(),
+                dtype: DType::F8E4M3,
+            },
+            other => {
+                candle_core::bail!("Expected a float type for `GetFloatInfo`, got {other:?}");
+            }
+        };
+        Ok(finfo)
     }
 }

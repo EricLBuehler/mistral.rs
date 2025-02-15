@@ -8,10 +8,11 @@ use axum::{
 use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
-    get_model_dtype, get_tgt_non_granular_index, initialize_logging, paged_attn_supported,
-    parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, IsqType,
-    Loader, LoaderBuilder, MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected,
-    PagedAttentionConfig, Request, SchedulerConfig, TokenSource,
+    get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
+    paged_attn_supported, parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata,
+    DeviceMapMetadata, DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
+    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
+    TokenSource,
 };
 use openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
@@ -104,13 +105,14 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     prefix_cache_n: usize,
 
+    /// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
     num_device_layers: Option<Vec<String>>,
 
-    /// In-situ quantization to apply. You may specify one of the GGML data type (except F32 or F16): formatted like this: `Q4_0` or `Q4K`.
+    /// In-situ quantization to apply.
     #[arg(long = "isq", value_parser = parse_isq_value)]
     in_situ_quant: Option<IsqType>,
 
@@ -152,7 +154,7 @@ struct Args {
 
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
-    prompt_batchsize: Option<usize>,
+    prompt_chunksize: Option<usize>,
 
     /// Use CPU only
     #[arg(long)]
@@ -292,21 +294,19 @@ async fn main() -> Result<()> {
         None
     };
 
-    #[cfg(not(feature = "flash-attn"))]
-    let use_flash_attn = false;
-    #[cfg(feature = "flash-attn")]
-    let use_flash_attn = true;
+    let use_flash_attn = mistralrs_core::using_flash_attn();
 
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let dtype = get_model_dtype(&args.model)?;
+    let auto_device_map_params = get_auto_device_map_params(&args.model)?;
 
     if tgt_non_granular_index.is_some() {
         args.max_seqs = 1;
     }
 
-    let prompt_batchsize = match args.prompt_batchsize {
+    let prompt_chunksize = match args.prompt_chunksize {
         Some(0) => {
-            anyhow::bail!("`prompt_batchsize` must be a strictly positive integer, got 0.",)
+            anyhow::bail!("`prompt_chunksize` must be a strictly positive integer, got 0.",)
         }
         Some(x) => Some(NonZeroUsize::new(x).unwrap()),
         None => None,
@@ -316,7 +316,7 @@ async fn main() -> Result<()> {
         .with_no_kv_cache(args.no_kv_cache)
         .with_chat_template(args.chat_template)
         .with_use_flash_attn(use_flash_attn)
-        .with_prompt_batchsize(prompt_batchsize)
+        .with_prompt_chunksize(prompt_chunksize)
         .build()?;
 
     #[cfg(feature = "metal")]
@@ -353,10 +353,9 @@ async fn main() -> Result<()> {
     let mapper = if let Some(device_layers) = args.num_device_layers {
         if device_layers.len() == 1 && device_layers[0].parse::<usize>().is_ok() {
             let layers = device_layers[0].parse::<usize>().unwrap();
-            DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
-                ordinal: 0,
-                layers,
-            }])
+            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
+                DeviceLayerMapMetadata { ordinal: 0, layers },
+            ]))
         } else {
             let mut mapping = Vec::new();
             for layer in device_layers {
@@ -380,10 +379,10 @@ async fn main() -> Result<()> {
                     layers: num,
                 });
             }
-            DeviceMapMetadata::from_num_device_layers(mapping)
+            DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(mapping))
         }
     } else {
-        DeviceMapMetadata::dummy()
+        DeviceMapSetting::Auto(auto_device_map_params)
     };
 
     let no_paged_attn = if device.is_cuda() {
@@ -422,7 +421,7 @@ async fn main() -> Result<()> {
         (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            MemoryGpuConfig::Amount(m),
+            MemoryGpuConfig::MbAmount(m),
         )?),
         (block_size, Some(_m), Some(f), None, true, false) => {
             info!("Both memory size, and usage were specified, defaulting to the usage value.");
@@ -485,7 +484,9 @@ async fn main() -> Result<()> {
         .with_opt_log(args.log)
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
-        .with_prefix_cache_n(args.prefix_cache_n);
+        .with_prefix_cache_n(args.prefix_cache_n)
+        .with_gemm_full_precision_f16(args.cpu)
+        .with_gemm_full_precision_f16(args.cpu); // Required to allow `cuda` build to use `--cpu`, #1056
 
     if args.interactive_mode {
         interactive_mode(builder.build(), args.throughput_log).await;

@@ -1,8 +1,11 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm, VarBuilder};
+use candle_nn::{layer_norm::RmsNormNonQuantized, LayerNorm, Linear, RmsNorm};
+use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
+
+use crate::layers::{self, MatMul};
 
 const MLP_RATIO: f64 = 4.;
 const HIDDEN_SIZE: usize = 3072;
@@ -20,7 +23,7 @@ pub struct Config {
     pub guidance_embeds: bool,
 }
 
-fn layer_norm(dim: usize, vb: VarBuilder) -> Result<LayerNorm> {
+fn layer_norm(dim: usize, vb: ShardedVarBuilder) -> Result<LayerNorm> {
     let ws = Tensor::ones(dim, vb.dtype(), vb.device())?;
     Ok(LayerNorm::new_no_bias(ws, 1e-6))
 }
@@ -34,8 +37,8 @@ fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Te
     let q = q.flatten_to(batch_dims.len() - 1)?;
     let k = k.flatten_to(batch_dims.len() - 1)?;
     let v = v.flatten_to(batch_dims.len() - 1)?;
-    let attn_weights = (q.matmul(&k.t()?)? * scale_factor)?;
-    let attn_scores = candle_nn::ops::softmax_last_dim(&attn_weights)?.matmul(&v)?;
+    let attn_weights = (MatMul.matmul(&q, &k.t()?)? * scale_factor)?;
+    let attn_scores = MatMul.matmul(&candle_nn::ops::softmax_last_dim(&attn_weights)?, &v)?;
     batch_dims.push(attn_scores.dim(D::Minus2)?);
     batch_dims.push(attn_scores.dim(D::Minus1)?);
     attn_scores.reshape(batch_dims)
@@ -141,9 +144,9 @@ pub struct MlpEmbedder {
 }
 
 impl MlpEmbedder {
-    fn new(in_sz: usize, h_sz: usize, vb: VarBuilder) -> Result<Self> {
-        let in_layer = candle_nn::linear(in_sz, h_sz, vb.pp("in_layer"))?;
-        let out_layer = candle_nn::linear(h_sz, h_sz, vb.pp("out_layer"))?;
+    fn new(in_sz: usize, h_sz: usize, vb: ShardedVarBuilder) -> Result<Self> {
+        let in_layer = layers::linear(in_sz, h_sz, vb.pp("in_layer"))?;
+        let out_layer = layers::linear(h_sz, h_sz, vb.pp("out_layer"))?;
         Ok(Self {
             in_layer,
             out_layer,
@@ -164,7 +167,7 @@ pub struct QkNorm {
 }
 
 impl QkNorm {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
+    fn new(dim: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let query_norm = vb.get(dim, "query_norm.scale")?;
         let query_norm = RmsNorm::<RmsNormNonQuantized>::new(query_norm, 1e-6);
         let key_norm = vb.get(dim, "key_norm.scale")?;
@@ -199,8 +202,8 @@ struct Modulation1 {
 }
 
 impl Modulation1 {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let lin = candle_nn::linear(dim, 3 * dim, vb.pp("lin"))?;
+    fn new(dim: usize, vb: ShardedVarBuilder) -> Result<Self> {
+        let lin = layers::linear(dim, 3 * dim, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
@@ -227,8 +230,8 @@ struct Modulation2 {
 }
 
 impl Modulation2 {
-    fn new(dim: usize, vb: VarBuilder) -> Result<Self> {
-        let lin = candle_nn::linear(dim, 6 * dim, vb.pp("lin"))?;
+    fn new(dim: usize, vb: ShardedVarBuilder) -> Result<Self> {
+        let lin = layers::linear(dim, 6 * dim, vb.pp("lin"))?;
         Ok(Self { lin })
     }
 
@@ -264,11 +267,16 @@ pub struct SelfAttention {
 }
 
 impl SelfAttention {
-    fn new(dim: usize, num_attention_heads: usize, qkv_bias: bool, vb: VarBuilder) -> Result<Self> {
+    fn new(
+        dim: usize,
+        num_attention_heads: usize,
+        qkv_bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let head_dim = dim / num_attention_heads;
-        let qkv = candle_nn::linear_b(dim, dim * 3, qkv_bias, vb.pp("qkv"))?;
+        let qkv = layers::linear_b(dim, dim * 3, qkv_bias, vb.pp("qkv"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
-        let proj = candle_nn::linear(dim, dim, vb.pp("proj"))?;
+        let proj = layers::linear(dim, dim, vb.pp("proj"))?;
         Ok(Self {
             qkv,
             norm,
@@ -325,9 +333,9 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(in_sz: usize, mlp_sz: usize, vb: VarBuilder) -> Result<Self> {
-        let lin1 = candle_nn::linear(in_sz, mlp_sz, vb.pp("0"))?;
-        let lin2 = candle_nn::linear(mlp_sz, in_sz, vb.pp("2"))?;
+    fn new(in_sz: usize, mlp_sz: usize, vb: ShardedVarBuilder) -> Result<Self> {
+        let lin1 = layers::linear(in_sz, mlp_sz, vb.pp("0"))?;
+        let lin2 = layers::linear(mlp_sz, in_sz, vb.pp("2"))?;
         Ok(Self { lin1, lin2 })
     }
 
@@ -365,7 +373,7 @@ pub struct DoubleStreamBlock {
 }
 
 impl DoubleStreamBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let h_sz = HIDDEN_SIZE;
         let mlp_sz = (h_sz as f64 * MLP_RATIO) as usize;
         let img_mod = Modulation2::new(h_sz, vb.pp("img_mod"))?;
@@ -444,17 +452,9 @@ impl DoubleStreamBlock {
                 .bias()
                 .map(|x| x.to_device(device).unwrap()),
         );
-        self.img_norm1 = LayerNorm::new(
-            self.img_norm1.weight().to_device(device)?,
-            self.img_norm1.bias().to_device(device)?,
-            1e-6,
-        );
+        self.img_norm1 = LayerNorm::new_no_bias(self.img_norm1.weight().to_device(device)?, 1e-6);
         self.img_attn.cast_to(device)?;
-        self.img_norm2 = LayerNorm::new(
-            self.img_norm2.weight().to_device(device)?,
-            self.img_norm2.bias().to_device(device)?,
-            1e-6,
-        );
+        self.img_norm2 = LayerNorm::new_no_bias(self.img_norm2.weight().to_device(device)?, 1e-6);
         self.img_mlp.cast_to(device)?;
 
         self.txt_mod.lin = Linear::new(
@@ -464,17 +464,9 @@ impl DoubleStreamBlock {
                 .bias()
                 .map(|x| x.to_device(device).unwrap()),
         );
-        self.txt_norm1 = LayerNorm::new(
-            self.txt_norm1.weight().to_device(device)?,
-            self.txt_norm1.bias().to_device(device)?,
-            1e-6,
-        );
+        self.txt_norm1 = LayerNorm::new_no_bias(self.txt_norm1.weight().to_device(device)?, 1e-6);
         self.txt_attn.cast_to(device)?;
-        self.txt_norm2 = LayerNorm::new(
-            self.txt_norm2.weight().to_device(device)?,
-            self.txt_norm2.bias().to_device(device)?,
-            1e-6,
-        );
+        self.txt_norm2 = LayerNorm::new_no_bias(self.txt_norm2.weight().to_device(device)?, 1e-6);
         self.txt_mlp.cast_to(device)?;
 
         Ok(())
@@ -494,12 +486,12 @@ pub struct SingleStreamBlock {
 }
 
 impl SingleStreamBlock {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
         let h_sz = HIDDEN_SIZE;
         let mlp_sz = (h_sz as f64 * MLP_RATIO) as usize;
         let head_dim = h_sz / cfg.num_attention_heads;
-        let linear1 = candle_nn::linear(h_sz, h_sz * 3 + mlp_sz, vb.pp("linear1"))?;
-        let linear2 = candle_nn::linear(h_sz + mlp_sz, h_sz, vb.pp("linear2"))?;
+        let linear1 = layers::linear(h_sz, h_sz * 3 + mlp_sz, vb.pp("linear1"))?;
+        let linear2 = layers::linear(h_sz + mlp_sz, h_sz, vb.pp("linear2"))?;
         let norm = QkNorm::new(head_dim, vb.pp("norm"))?;
         let pre_norm = layer_norm(h_sz, vb.pp("pre_norm"))?;
         let modulation = Modulation1::new(h_sz, vb.pp("modulation"))?;
@@ -552,11 +544,7 @@ impl SingleStreamBlock {
                 1e-6,
             ),
         };
-        self.pre_norm = LayerNorm::new(
-            self.pre_norm.weight().to_device(device)?,
-            self.pre_norm.bias().to_device(device)?,
-            1e-6,
-        );
+        self.pre_norm = LayerNorm::new_no_bias(self.pre_norm.weight().to_device(device)?, 1e-6);
         self.modulation.lin = Linear::new(
             self.modulation.lin.weight().to_device(device)?,
             self.modulation
@@ -576,10 +564,10 @@ pub struct LastLayer {
 }
 
 impl LastLayer {
-    fn new(h_sz: usize, p_sz: usize, out_c: usize, vb: VarBuilder) -> Result<Self> {
+    fn new(h_sz: usize, p_sz: usize, out_c: usize, vb: ShardedVarBuilder) -> Result<Self> {
         let norm_final = layer_norm(h_sz, vb.pp("norm_final"))?;
-        let linear = candle_nn::linear(h_sz, p_sz * p_sz * out_c, vb.pp("linear"))?;
-        let ada_ln_modulation = candle_nn::linear(h_sz, 2 * h_sz, vb.pp("adaLN_modulation.1"))?;
+        let linear = layers::linear(h_sz, p_sz * p_sz * out_c, vb.pp("linear"))?;
+        let ada_ln_modulation = layers::linear(h_sz, 2 * h_sz, vb.pp("adaLN_modulation.1"))?;
         Ok(Self {
             norm_final,
             linear,
@@ -614,13 +602,18 @@ pub struct Flux {
 }
 
 impl Flux {
-    pub fn new(cfg: &Config, vb: VarBuilder, device: Device, offloaded: bool) -> Result<Self> {
-        let img_in = candle_nn::linear(
+    pub fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        device: Device,
+        offloaded: bool,
+    ) -> Result<Self> {
+        let img_in = layers::linear(
             cfg.in_channels,
             HIDDEN_SIZE,
             vb.pp("img_in").set_device(device.clone()),
         )?;
-        let txt_in = candle_nn::linear(
+        let txt_in = layers::linear(
             cfg.joint_attention_dim,
             HIDDEN_SIZE,
             vb.pp("txt_in").set_device(device.clone()),

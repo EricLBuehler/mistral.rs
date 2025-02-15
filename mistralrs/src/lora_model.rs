@@ -25,7 +25,7 @@ impl LoraModelBuilder {
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             use_flash_attn: self.text_model.use_flash_attn,
-            prompt_batchsize: self.text_model.prompt_batchsize,
+            prompt_chunksize: self.text_model.prompt_chunksize,
             topology: self.text_model.topology,
             organization: self.text_model.organization,
             write_uqff: self.text_model.write_uqff,
@@ -55,7 +55,9 @@ impl LoraModelBuilder {
             &self.text_model.dtype,
             &best_device(self.text_model.force_cpu)?,
             !self.text_model.with_logging,
-            DeviceMapMetadata::dummy(),
+            self.text_model
+                .device_mapping
+                .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
             self.text_model.isq,
             self.text_model.paged_attn_cfg,
         )?;

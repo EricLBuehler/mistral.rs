@@ -10,17 +10,17 @@ use std::{
 
 use anyhow::Result;
 use candle_core::{quantized, Context, Device, Tensor};
-use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use mistralrs_quant::{
-    FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde, QuantizedSerdeType,
-    UnquantLinear,
+    CollectedImatrixData, FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde,
+    QuantizedSerdeType, UnquantLinear,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
 use serde::Deserialize;
 use tokenizers::Tokenizer;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
 
@@ -125,6 +125,7 @@ pub struct UqffFullSer<'a> {
     pub preprocessor_filename: &'a Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum ImatrixDataSource<'a> {
     File(&'a PathBuf),
     Collected,
@@ -155,7 +156,7 @@ pub trait IsqModel {
     }
 
     /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
         let layers = self
             .get_layers()
             .0
@@ -167,7 +168,7 @@ pub trait IsqModel {
         for (i, layer) in layers {
             data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
         }
-        Ok(data)
+        Ok(CollectedImatrixData(data))
     }
 
     /// Corresponds to `IsqOrganization::MoeExpertsOnly`
@@ -201,7 +202,7 @@ pub trait IsqModel {
     /// End stats tracking and return the imatrix data
     fn extract_imatrix_data_moe_experts_only(
         &mut self,
-    ) -> candle_core::Result<HashMap<usize, Option<Vec<f32>>>> {
+    ) -> candle_core::Result<CollectedImatrixData> {
         let layers = self
             .get_layers()
             .0
@@ -213,7 +214,7 @@ pub trait IsqModel {
         for (i, layer) in layers {
             data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
         }
-        Ok(data)
+        Ok(CollectedImatrixData(data))
     }
 
     /// Corresponding to the specific order the model produces ISQ layers (None means
@@ -250,33 +251,81 @@ pub trait IsqModel {
         organization: IsqOrganization,
         write_artifacts: Option<&PathBuf>,
         full_ser: UqffFullSer<'_>,
+        multi_progress: Arc<MultiProgress>,
     ) -> candle_core::Result<()> {
         {
             let imatrix_to_weight = match imatrix_source {
                 Some(ImatrixDataSource::File(imatrix)) => {
-                    let mut imatrix_data = quantized::imatrix_file::load_imatrix(imatrix.clone())?;
-                    let imatrix_mapping = self
-                        .imatrix_names()?
-                        .into_iter()
-                        .enumerate()
-                        .collect::<HashMap<_, _>>();
+                    let ext = imatrix.extension().ok_or(candle_core::Error::msg(
+                        "Expected an extension for the imatrix source file.",
+                    ))?;
+                    if ext == "cimatrix" {
+                        info!(
+                            "Loading collected imatrix source file: `{}`",
+                            imatrix.display()
+                        );
+                        Some(CollectedImatrixData::load_imatrix(imatrix)?.0)
+                    } else if ext == "imatrix" {
+                        info!(
+                            "Loading GGUF-format imatrix source file: `{}`",
+                            imatrix.display()
+                        );
+                        let mut imatrix_data =
+                            quantized::imatrix_file::load_imatrix(imatrix.clone())?;
+                        let imatrix_mapping = self
+                            .imatrix_names()?
+                            .into_iter()
+                            .enumerate()
+                            .collect::<HashMap<_, _>>();
 
-                    let layer_to_weight = imatrix_mapping
-                        .into_iter()
-                        .map(|(i, name)| {
-                            if let Some(name) = name {
-                                (i, Some(imatrix_data.remove(&name).unwrap()))
-                            } else {
-                                (i, None)
-                            }
-                        })
-                        .collect::<HashMap<_, _>>();
-                    info!(
-                        "Quantizing with imatrix file `{}`, {} imatrix weights",
-                        imatrix.display(),
-                        layer_to_weight.iter().filter(|(_, x)| x.is_some()).count()
-                    );
-                    Some(layer_to_weight)
+                        let layer_to_weight = imatrix_mapping
+                            .into_iter()
+                            .map(|(i, name)| {
+                                if let Some(name) = name {
+                                    (i, Some(imatrix_data.remove(&name).unwrap()))
+                                } else {
+                                    (i, None)
+                                }
+                            })
+                            .collect::<HashMap<_, _>>();
+                        info!(
+                            "Quantizing with imatrix file `{}`, {} imatrix weights",
+                            imatrix.display(),
+                            layer_to_weight.iter().filter(|(_, x)| x.is_some()).count()
+                        );
+                        Some(layer_to_weight)
+                    } else {
+                        warn!("Imatrix source file extension is {ext:?}, expected .imatrix/.cimatrix. Assuming GGUF specification");
+                        info!(
+                            "Loading GGUF-format imatrix source file: `{}`",
+                            imatrix.display()
+                        );
+
+                        let mut imatrix_data =
+                            quantized::imatrix_file::load_imatrix(imatrix.clone())?;
+                        let imatrix_mapping = self
+                            .imatrix_names()?
+                            .into_iter()
+                            .enumerate()
+                            .collect::<HashMap<_, _>>();
+
+                        let layer_to_weight = imatrix_mapping
+                            .into_iter()
+                            .map(|(i, name)| {
+                                if let Some(name) = name {
+                                    (i, Some(imatrix_data.remove(&name).unwrap()))
+                                } else {
+                                    (i, None)
+                                }
+                            })
+                            .collect::<HashMap<_, _>>();
+                        info!(
+                            "Quantizing with imatrix file `{}`, {} imatrix weights",
+                            imatrix.display(),
+                            layer_to_weight.iter().filter(|(_, x)| x.is_some()).count()
+                        );
+                        Some(layer_to_weight)
+                    }
                 }
                 Some(ImatrixDataSource::Collected) => {
                     let data = match organization {
@@ -285,11 +334,13 @@ pub trait IsqModel {
                             self.extract_imatrix_data_moe_experts_only()?
                         }
                     };
-                    info!(
-                        "Quantizing with collected imatrix data, {} imatrix weights",
-                        data.iter().filter(|(_, x)| x.is_some()).count()
-                    );
-                    Some(data)
+                    // Save the collected imatrix data so users can reuse it
+                    let count = data.0.iter().filter(|(_, x)| x.is_some()).count();
+                    let save_path = format!("collected-{count}.cimatrix");
+                    info!("Saving collected imatrix data to `{save_path}`");
+                    data.save_imatrix(save_path)?;
+                    info!("Quantizing with collected imatrix data, {count} imatrix weights");
+                    Some(data.0)
                 }
                 None => {
                     // Dummy, just for zip
@@ -341,6 +392,7 @@ pub trait IsqModel {
                     .unwrap()
                     .progress_chars("#>-"),
             );
+            multi_progress.add(bar.clone());
 
             let layers = topology.map(|x| {
                 x.0.iter()
@@ -685,7 +737,7 @@ pub trait IsqModel {
                     if let Some(artifact) = artifact_isqs.get(&i) {
                         let artifact = artifact.data();
                         // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-                        let isq_type = artifact[4];
+                        let isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
                         let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
                             QuantizedSerdeType::Gguf => {
                                 GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?

@@ -875,7 +875,7 @@ inline Float8_ fma(Half8_ a, Half8_ b, Float8_ c) {
 inline Half8_ fma(Half8_ a, Half8_ b, Half8_ c) {
   Half8_ res;
   res.x = fma(a.x, b.x, c.x);
-  res.y = fma(a.y, b.x, c.y);
+  res.y = fma(a.y, b.y, c.y);
   return c;
 }
 
@@ -1445,6 +1445,7 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES, int PA
   instantiate_paged_attention_inner(type, 96, block_size, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_inner(type, 112, block_size, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_inner(type, 128, block_size, num_threads, num_simd_lanes, partition_size)         \
+  instantiate_paged_attention_inner(type, 192, block_size, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_inner(type, 256, block_size, num_threads, num_simd_lanes, partition_size)
 
 #define instantiate_paged_attention_v2_reduce_heads(type, num_threads, num_simd_lanes, partition_size) \
@@ -1453,6 +1454,7 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES, int PA
   instantiate_paged_attention_v2_reduce_inner(type, 96, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_v2_reduce_inner(type, 112, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_v2_reduce_inner(type, 128, num_threads, num_simd_lanes, partition_size)         \
+  instantiate_paged_attention_v2_reduce_inner(type, 192, num_threads, num_simd_lanes, partition_size)         \
   instantiate_paged_attention_v2_reduce_inner(type, 256, num_threads, num_simd_lanes, partition_size)
 
 #define instantiate_paged_attention_block_size(type, num_threads, num_simd_lanes, partition_size) \

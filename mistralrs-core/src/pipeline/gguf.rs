@@ -9,7 +9,7 @@ use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
     ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
-use crate::device_map::DeviceMapper;
+use crate::device_map::{self, DeviceMapper};
 use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
@@ -20,16 +20,18 @@ use crate::paged_attention::{
 };
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 use crate::pipeline::get_chat_template;
+use crate::pipeline::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
+use crate::pipeline::loaders::DeviceMappedModelLoader;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher_v2::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::debug::DeviceRepr;
+use crate::utils::gguf_metadata::{ContentConfig, GgufDeviceMapLoaderInner};
 use crate::utils::model_config as ModelConfig;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths_gguf, DeviceMapMetadata, LocalModelPaths, PagedAttentionConfig,
+    get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths, PagedAttentionConfig,
     Pipeline, Topology, TryIntoDType,
 };
 use crate::{
@@ -49,7 +51,7 @@ use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
 use std::fs;
-use std::num::NonZeroUsize;
+use std::num::{NonZero, NonZeroUsize};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -95,7 +97,7 @@ pub struct GGUFLoader {
 #[derive(Clone, Default)]
 /// Config for a GGUF loader.
 pub struct GGUFSpecificConfig {
-    pub prompt_batchsize: Option<NonZeroUsize>,
+    pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
 }
 
@@ -250,48 +252,6 @@ impl GGUFLoader {
     }
 }
 
-struct ContentConfig {
-    hidden_size: usize,
-    num_attn_heads: usize,
-    num_kv_heads: usize,
-    num_layers: usize,
-}
-
-#[allow(clippy::cast_possible_truncation)]
-impl<'a, R: std::io::Seek + std::io::Read> From<&Content<'a, R>> for ContentConfig {
-    fn from(value: &Content<'a, R>) -> Self {
-        let metadata = value.get_metadata();
-        let arch = metadata["general.architecture"].to_string().unwrap();
-        Self {
-            hidden_size: metadata[&format!("{arch}.embedding_length")]
-                .to_u64()
-                .unwrap() as usize,
-            num_attn_heads: metadata[&format!("{arch}.attention.head_count")]
-                .to_u64()
-                .unwrap() as usize,
-            num_kv_heads: metadata[&format!("{arch}.attention.head_count_kv")]
-                .to_u64()
-                .unwrap() as usize,
-            num_layers: metadata[&format!("{arch}.block_count")].to_u64().unwrap() as usize,
-        }
-    }
-}
-
-impl ModelConfigLike for ContentConfig {
-    fn hidden_size(&self) -> usize {
-        self.hidden_size
-    }
-    fn num_attn_heads(&self) -> usize {
-        self.num_attn_heads
-    }
-    fn num_kv_heads(&self) -> usize {
-        self.num_kv_heads
-    }
-    fn num_layers(&self) -> usize {
-        self.num_layers
-    }
-}
-
 impl Loader for GGUFLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
@@ -301,7 +261,7 @@ impl Loader for GGUFLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -332,30 +292,24 @@ impl Loader for GGUFLoader {
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
-        mapper: DeviceMapMetadata,
+        mut mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         if in_situ_quant.is_some() {
             anyhow::bail!(
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
             );
         }
-        // Otherwise, the device mapper will print it
-        if mapper.is_dummy()
-            && (self.config.topology.is_none()
-                || self
-                    .config
-                    .topology
-                    .as_ref()
-                    .is_some_and(|t| t.is_dummy_device_map()))
-        {
-            info!(
-                "Loading model `{}` on {}.",
-                self.get_id(),
-                device.device_pretty_repr()
-            );
-        }
+
+        // Apply default prompt size here
+        let prompt_chunksize = self
+            .config
+            .prompt_chunksize
+            .unwrap_or(DEFAULT_PROMPT_CHUNK_SIZE.try_into().unwrap())
+            .get();
+
+        info!("Prompt chunk size is {prompt_chunksize}.",);
 
         let mut readers = Vec::new();
         for filename in paths.get_weight_filenames() {
@@ -364,8 +318,61 @@ impl Loader for GGUFLoader {
         let mut readers = readers.iter_mut().collect::<Vec<_>>();
 
         let model = Content::from_readers(&mut readers)?;
-        model.print_metadata()?;
+        if !silent {
+            model.print_metadata()?;
+        }
         let arch = model.arch();
+
+        // If auto, convert to Map
+        let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
+        if let DeviceMapSetting::Auto(params) = mapper.clone() {
+            let devices = device_map::get_all_similar_devices(device)?;
+            // Initial dtype
+            let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
+
+            let model = GgufDeviceMapLoaderInner {
+                model: &model,
+                arch,
+            };
+
+            let layer_sizes_in_bytes =
+                model.layer_sizes_in_bytes("this is a dummy config!", dtype, 1)?;
+            let non_mapped_size_in_bytes =
+                model.non_mapped_size_in_bytes("this is a dummy config!", dtype, 1)?;
+            let total_model_size_in_bytes =
+                layer_sizes_in_bytes.iter().sum::<usize>() + non_mapped_size_in_bytes;
+
+            let new = model.get_device_layers(
+                "this is a dummy config!",
+                num_layers,
+                layer_sizes_in_bytes,
+                non_mapped_size_in_bytes,
+                total_model_size_in_bytes,
+                &devices,
+                dtype,
+                &params,
+                prompt_chunksize,
+                paged_attn_config.as_ref(),
+            )?;
+            mapper = DeviceMapSetting::Map(new);
+        }
+
+        let pipeline_mapper =
+            mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
+        let mapper = mapper.into_mapper(num_layers, device, self.config.topology.as_ref())?;
+        let mut layer_devices = Vec::new();
+        for layer in 0..num_layers {
+            let device = mapper.device_for(layer, false).cloned();
+            layer_devices.push(device);
+        }
+
+        // TODO: PagedAttention is not supported with CPU for now.
+        // This check is not really necessary because `get_device_layers` should prevent it.
+        let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
+        if mapping_uses_cpu {
+            warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
+            paged_attn_config = None;
+        }
 
         let GgufTokenizerConversion {
             tokenizer,
@@ -402,13 +409,13 @@ impl Loader for GGUFLoader {
         };
 
         let model_config_metadata: ContentConfig = (&model).into();
-        let internal_dtype = dtype.try_into_dtype(&[device]).unwrap();
+        let internal_dtype = mapper.get_min_dtype(dtype)?;
 
         let model_config = {
             // Base config (quantization only):
             let quant = ModelConfig::ParamsGGUF(
                 model,
-                (device, mapper.clone(), self.config.topology.as_ref()).into(),
+                (device, mapper).into(),
                 if paged_attn_config.is_some() {
                     AttentionImplementation::PagedAttention
                 } else {
@@ -425,10 +432,7 @@ impl Loader for GGUFLoader {
                 )?);
             }
 
-            ModelConfig::ModelParams::builder()
-                .quant(quant)
-                .and_adapter(adapter)
-                .build()
+            ModelConfig::ModelParams::new(quant, adapter)
         };
 
         // Config into model:
@@ -454,24 +458,6 @@ impl Loader for GGUFLoader {
             _ => unreachable!(),
         };
 
-        let num_hidden_layers = match model {
-            Model::Llama(ref model) => model.cache.normal().0.len(),
-            Model::Phi2(ref model) => model.cache.normal().0.len(),
-            Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
-            Model::Phi3(ref model) => model.cache.normal().0.len(),
-            Model::XLoraPhi3(ref model) => model.cache.full().lock().len(),
-            Model::Starcoder2(ref model) => model.cache.normal().0.len(),
-            Model::Qwen2(ref model) => model.cache.normal().0.len(),
-        };
-
-        let mapper =
-            mapper.into_mapper(num_hidden_layers, device, self.config.topology.as_ref())?;
-        let mut layer_devices = Vec::new();
-        for layer in 0..num_hidden_layers {
-            let device = mapper.device_for(layer, false).cloned();
-            layer_devices.push(device);
-        }
-
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let model_config: &dyn ModelConfigLike = &model_config_metadata;
             let cache_config = calculate_cache_config(
@@ -481,6 +467,8 @@ impl Loader for GGUFLoader {
                 internal_dtype,
                 model_config,
                 device,
+                &layer_devices,
+                silent,
             )?;
             let cache_engine = CacheEngine::new(
                 model_config,
@@ -567,11 +555,11 @@ impl Loader for GGUFLoader {
                 activation_dtype: internal_dtype,
                 sliding_window: None,
                 cache_config,
-                cache_engine,
-                prompt_batchsize: self.config.prompt_batchsize,
+                cache_engines: cache_engine.map(|x| vec![x]),
+                prompt_chunksize: Some(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: Some(Arc::new(model_config_metadata)),
             }),
-            mapper,
+            mapper: pipeline_mapper,
         })))
     }
 
@@ -716,19 +704,23 @@ impl Pipeline for GGUFPipeline {
             input_ids_full,
             seqlen_offsets,
             seqlen_offsets_full,
-            seqlen_offsets_kernel,
-            seqlen_offsets_kernel_full,
             context_lens,
             position_ids: _, // NOTE(EricLBuehler): ignore, it is for phi3
-            mut paged_attn_meta,
+            paged_attn_meta,
             flash_meta,
             flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
-        let paged_attn_meta = match (
-            self.get_metadata().cache_engine.as_ref(),
-            &mut paged_attn_meta,
-        ) {
-            (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
+        let metadata = self.get_metadata();
+        assert_eq!(
+            metadata
+                .cache_engines
+                .as_ref()
+                .map(|x| x.len())
+                .unwrap_or(1),
+            1
+        );
+        let paged_attn_meta = match (&metadata.cache_engines, &paged_attn_meta) {
+            (Some(engine), Some(meta)) => Some((engine[0].get_kv_cache().clone(), meta)),
             (Some(_), None) => {
                 // This can happen if Rust-side user code is wrong
                 candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")
@@ -740,13 +732,9 @@ impl Pipeline for GGUFPipeline {
             (None, None) => None,
         };
         let logits = match self.model {
-            Model::Llama(ref model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                paged_attn_meta,
-            )?,
+            Model::Llama(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
             Model::Phi2(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
@@ -755,8 +743,6 @@ impl Pipeline for GGUFPipeline {
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
@@ -771,27 +757,18 @@ impl Pipeline for GGUFPipeline {
                 input_ids_full.as_ref().unwrap_or(&input_ids),
                 &seqlen_offsets,
                 seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                seqlen_offsets_kernel.clone(),
-                seqlen_offsets_kernel_full.unwrap_or(seqlen_offsets_kernel),
                 self.no_kv_cache,
                 &self.non_granular_state,
                 context_lens,
                 &flash_meta,
                 flash_meta_full.as_ref().unwrap_or(&flash_meta),
             )?,
-            Model::Starcoder2(ref model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                paged_attn_meta,
-            )?,
-            Model::Qwen2(ref model) => model.forward(
-                &input_ids,
-                &seqlen_offsets,
-                seqlen_offsets_kernel,
-                context_lens,
-                paged_attn_meta,
-            )?,
+            Model::Starcoder2(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, paged_attn_meta)?
+            }
+            Model::Qwen2(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
         };
         if return_raw_logits {
             Ok(ForwardInputsResult::RawLogits { logits })

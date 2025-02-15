@@ -14,7 +14,6 @@ use candle_core::{
     },
     from_storage_no_op, Context, CudaStorage, DType, Device, Result, Shape, Storage, Tensor, D,
 };
-use candle_nn::VarBuilder;
 use half::f16;
 use lazy_static::lazy_static;
 
@@ -22,6 +21,7 @@ use crate::{
     gptq::marlin_backend::{gptq_marlin_matmul, gptq_weight_repack},
     utils::{get_cuda_device, get_cuda_slice},
     DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
+    ShardedVarBuilder,
 };
 
 use super::{
@@ -262,7 +262,8 @@ impl QuantMethod for GptqLayer {
             | QuantMethodConfig::Hqq { .. }
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
-            | QuantMethodConfig::Bnb { .. } => {
+            | QuantMethodConfig::Bnb { .. }
+            | QuantMethodConfig::BlockwiseFP8 { .. } => {
                 unreachable!()
             }
         }
@@ -330,10 +331,6 @@ impl QuantMethod for GptqLayer {
         (self.gptq_scales.dtype(), self.gptq_scales.device().clone())
     }
 
-    fn get_bias_mut(&mut self) -> Option<&mut Tensor> {
-        None
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         _dtype: Option<IsqType>,
@@ -346,10 +343,6 @@ impl QuantMethod for GptqLayer {
 
     fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         None
-    }
-
-    fn maybe_to_gguf_quant(self: Arc<Self>) -> Result<Arc<dyn QuantMethod>> {
-        Ok(self.clone())
     }
 }
 
@@ -369,7 +362,7 @@ pub fn gptq_linear(
     in_dim: usize,
     out_dim: usize,
     config: &QuantizedConfig,
-    vb: VarBuilder,
+    vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("qweight")
