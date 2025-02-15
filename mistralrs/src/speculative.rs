@@ -89,7 +89,7 @@ impl TextSpeculativeBuilder {
         let pipeline = Arc::new(Mutex::new(SpeculativePipeline::new(
             target,
             draft,
-            self.speculative_config.clone(),
+            self.speculative_config,
         )?));
 
         let runner =
