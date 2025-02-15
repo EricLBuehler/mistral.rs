@@ -3,6 +3,7 @@ use std::{num::NonZeroUsize, path::PathBuf};
 
 use crate::{best_device, Model};
 
+#[derive(Clone)]
 /// Configure a vision model with the various parameters for loading, running, and other inference behaviors.
 pub struct VisionModelBuilder {
     // Loading model

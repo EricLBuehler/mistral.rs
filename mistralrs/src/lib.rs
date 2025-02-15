@@ -107,6 +107,7 @@ mod gguf_xlora_model;
 mod lora_model;
 mod messages;
 mod model;
+mod speculative;
 mod text_model;
 mod vision_model;
 mod xlora_model;
@@ -123,6 +124,7 @@ pub mod v0_4_api {
         RequestBuilder, RequestLike, TextMessageRole, TextMessages, VisionMessages,
     };
     pub use super::model::{best_device, Model};
+    pub use super::speculative::TextSpeculativeBuilder;
     pub use super::text_model::{PagedAttentionMetaBuilder, TextModelBuilder};
     pub use super::vision_model::VisionModelBuilder;
     pub use super::xlora_model::XLoraModelBuilder;
