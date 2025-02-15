@@ -190,11 +190,11 @@ impl CacheManagerMixin for AnyMoePipeline {
     fn cache(&self) -> &EitherCache {
         unreachable!()
     }
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        get_mut_arcmutex!(self.target).clone_in_cache(seqs, modify_draft_cache)
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
+        get_mut_arcmutex!(self.target).clone_in_cache(seqs)
     }
-    fn clone_out_cache(&self, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        get_mut_arcmutex!(self.target).clone_out_cache(seqs, modify_draft_cache)
+    fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
+        get_mut_arcmutex!(self.target).clone_out_cache(seqs)
     }
     fn set_none_cache(
         &self,

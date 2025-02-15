@@ -16,7 +16,7 @@ use crate::{
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
-        AdapterInstruction, CacheBackendMetadata, CacheInstruction, EitherCache, NormalCache,
+        AdapterInstruction, CacheBackendMetadata, CacheInstruction, NormalCache,
     },
     prefix_cacher_v2::PrefixCacheManagerV2,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
@@ -824,8 +824,8 @@ impl Engine {
                 .clone()
                 .map(|conf| conf.block_size);
 
-            let cache = get_mut_arcmutex!(self.pipeline).cache().clone();
-            let seq_preallocated_cache = if let EitherCache::Normal(_cache) = cache {
+            let seq_preallocated_cache = if get_mut_arcmutex!(self.pipeline).do_preallocated_cache()
+            {
                 let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
                 let model_metadata = metadata
                     .model_metadata

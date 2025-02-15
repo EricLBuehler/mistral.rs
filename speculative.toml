@@ -1,0 +1,8 @@
+[model]
+model_id = "../hf_models/llama3.1_8b"
+
+[speculative]
+gamma = 12
+
+[speculative.draft_model]
+model_id = "../hf_models/llama3.2_1b"
