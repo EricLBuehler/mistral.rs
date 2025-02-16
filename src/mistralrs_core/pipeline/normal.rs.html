@@ -2810,7 +2810,7 @@
                             <span class="kw">let </span>seqlen_offsets = seqlen_offsets.clone();
                             <span class="kw">let </span>context_lens = context_lens.clone();
                             <span class="kw">let </span>position_ids = position_ids.clone();
-                            <span class="kw">let </span>flash_meta = flash_meta.to_device(model.device())<span class="question-mark">?</span>;
+                            <span class="kw">let </span>flash_meta = flash_meta.clone();
 
                             handles.push(std::thread::spawn(<span class="kw">move </span>|| {
                                 model.forward(
