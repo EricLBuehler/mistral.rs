@@ -3,6 +3,7 @@ fn main() {
     {
         use std::{fs::read_to_string, path::PathBuf, process::Command, vec};
         const MARLIN_FFI_PATH: &str = "src/gptq/marlin_ffi.rs";
+        const BLOCKWISE_FP8_FFI_PATH: &str = "src/blockwise_fp8/ffi.rs";
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
@@ -37,24 +38,45 @@ fn main() {
         };
 
         // ======== Handle optional marlin kernel compilation
-        let compile_marlin = compute_cap >= 800;
-        let mut marlin_ffi_ct = read_to_string(MARLIN_FFI_PATH).unwrap();
-        let have_marlin = match compile_marlin {
+        let cc_over_800 = compute_cap >= 800;
+        let cc_is_over_800 = match cc_over_800 {
             true => "true",
             false => "false",
         };
+
+        let mut marlin_ffi_ct = read_to_string(MARLIN_FFI_PATH).unwrap();
         if marlin_ffi_ct.contains("pub(crate) const HAVE_MARLIN_KERNELS: bool = true;") {
             marlin_ffi_ct = marlin_ffi_ct.replace(
                 "pub(crate) const HAVE_MARLIN_KERNELS: bool = true;",
-                &format!("pub(crate) const HAVE_MARLIN_KERNELS: bool = {have_marlin};"),
+                &format!("pub(crate) const HAVE_MARLIN_KERNELS: bool = {cc_is_over_800};"),
             );
         } else {
             marlin_ffi_ct = marlin_ffi_ct.replace(
                 "pub(crate) const HAVE_MARLIN_KERNELS: bool = false;",
-                &format!("pub(crate) const HAVE_MARLIN_KERNELS: bool = {have_marlin};"),
+                &format!("pub(crate) const HAVE_MARLIN_KERNELS: bool = {cc_is_over_800};"),
             );
         }
         std::fs::write(MARLIN_FFI_PATH, marlin_ffi_ct).unwrap();
+
+        let mut blockwise_fp8_ffi_ct = read_to_string(BLOCKWISE_FP8_FFI_PATH).unwrap();
+        if blockwise_fp8_ffi_ct
+            .contains("pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = true;")
+        {
+            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = true;",
+                &format!(
+                    "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = {cc_is_over_800};"
+                ),
+            );
+        } else {
+            blockwise_fp8_ffi_ct = blockwise_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = false;",
+                &format!(
+                    "pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = {cc_is_over_800};"
+                ),
+            );
+        }
+        std::fs::write(BLOCKWISE_FP8_FFI_PATH, blockwise_fp8_ffi_ct).unwrap();
         // ========
 
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -63,12 +85,13 @@ fn main() {
             "kernels/hqq/hqq.cu",
             "kernels/ops/ops.cu",
             "kernels/bitsandbytes/dequant.cu",
-            "kernels/blockwise_fp8/blockwise_fp8.cu",
         ];
-        if compile_marlin {
+        if cc_over_800 {
             lib_files.push("kernels/marlin/marlin_kernel.cu");
+            lib_files.push("kernels/blockwise_fp8/blockwise_fp8.cu");
         } else {
             lib_files.push("kernels/marlin/dummy_marlin_kernel.cu");
+            lib_files.push("kernels/blockwise_fp8/blockwise_fp8_dummy.cu");
         }
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
