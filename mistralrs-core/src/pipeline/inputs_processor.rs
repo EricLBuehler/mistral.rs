@@ -262,8 +262,8 @@ pub mod text_models_inputs_processor {
 
         let devices = mapper.unwrap().get_unique_devices();
         for device in devices {
-            seqlens_q_map.insert(device.location(), seqlens_q.clone());
-            seqlens_k_map.insert(device.location(), seqlens_k.clone());
+            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
+            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
         }
 
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
@@ -441,8 +441,8 @@ pub mod text_models_inputs_processor {
 
         let devices = mapper.unwrap().get_unique_devices();
         for device in devices {
-            seqlens_q_map.insert(device.location(), seqlens_q.clone());
-            seqlens_k_map.insert(device.location(), seqlens_k.clone());
+            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
+            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
         }
 
         set_use_matmul_via_f16(false);
