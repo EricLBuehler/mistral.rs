@@ -642,7 +642,22 @@
 <a href="#641" id="641">641</a>
 <a href="#642" id="642">642</a>
 <a href="#643" id="643">643</a>
-<a href="#644" id="644">644</a></pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
+<a href="#644" id="644">644</a>
+<a href="#645" id="645">645</a>
+<a href="#646" id="646">646</a>
+<a href="#647" id="647">647</a>
+<a href="#648" id="648">648</a>
+<a href="#649" id="649">649</a>
+<a href="#650" id="650">650</a>
+<a href="#651" id="651">651</a>
+<a href="#652" id="652">652</a>
+<a href="#653" id="653">653</a>
+<a href="#654" id="654">654</a>
+<a href="#655" id="655">655</a>
+<a href="#656" id="656">656</a>
+<a href="#657" id="657">657</a>
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a></pre></div><pre class="rust"><code><span class="attr">#[doc(hidden)]
 #[macro_export]
 </span><span class="macro">macro_rules!</span> api_dir_list {
     (<span class="macro-nonterminal">$api</span>:expr, <span class="macro-nonterminal">$model_id</span>:expr) =&gt; {
@@ -710,10 +725,15 @@
         <span class="macro-nonterminal">$silent</span>:expr,
         <span class="macro-nonterminal">$loading_uqff</span>:expr
     ) =&gt; {{
-        <span class="kw">let </span>api = ApiBuilder::new()
-            .with_progress(!<span class="macro-nonterminal">$silent</span>)
-            .with_token(get_token(<span class="macro-nonterminal">$token_source</span>)<span class="question-mark">?</span>)
-            .build()<span class="question-mark">?</span>;
+        <span class="kw">let </span>api = {
+            <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::new()
+                .with_progress(!<span class="macro-nonterminal">$silent</span>)
+                .with_token(get_token(<span class="macro-nonterminal">$token_source</span>)<span class="question-mark">?</span>);
+            <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
+                api = api.with_cache_dir(x.into());
+            }
+            api.build()<span class="question-mark">?
+        </span>};
         <span class="kw">let </span>revision = <span class="macro-nonterminal">$revision</span>.unwrap_or(<span class="string">"main"</span>.to_string());
         <span class="kw">let </span>api = api.repo(Repo::with_revision(
             <span class="macro-nonterminal">$this</span>.model_id.clone(),
@@ -835,17 +855,22 @@
 #[macro_export]
 </span><span class="macro">macro_rules!</span> get_uqff_paths {
     (<span class="macro-nonterminal">$from_uqff</span>:expr, <span class="macro-nonterminal">$this</span>:expr, <span class="macro-nonterminal">$silent</span>:expr) =&gt; {{
-        <span class="kw">let </span>api = ApiBuilder::new()
-            .with_progress(!<span class="macro-nonterminal">$silent</span>)
-            .with_token(get_token(
-                <span class="kw-2">&amp;</span><span class="macro-nonterminal">$this
-                    </span>.token_source
-                    .read()
-                    .expect(<span class="string">"Failed to read token source"</span>)
-                    .clone()
-                    .unwrap_or(TokenSource::None),
-            )<span class="question-mark">?</span>)
-            .build()<span class="question-mark">?</span>;
+        <span class="kw">let </span>api = {
+            <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::new()
+                .with_progress(!<span class="macro-nonterminal">$silent</span>)
+                .with_token(get_token(
+                    <span class="kw-2">&amp;</span><span class="macro-nonterminal">$this
+                        </span>.token_source
+                        .read()
+                        .expect(<span class="string">"Failed to read token source"</span>)
+                        .clone()
+                        .unwrap_or(TokenSource::None),
+                )<span class="question-mark">?</span>);
+            <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
+                api = api.with_cache_dir(x.into());
+            }
+            api.build()<span class="question-mark">?
+        </span>};
         <span class="kw">let </span>revision = <span class="macro-nonterminal">$this
             </span>.revision
             .read()
@@ -876,10 +901,15 @@
         <span class="macro-nonterminal">$quantized_filenames</span>:expr,
         <span class="macro-nonterminal">$silent</span>:expr
     ) =&gt; {{
-        <span class="kw">let </span>api = ApiBuilder::new()
-            .with_progress(!<span class="macro-nonterminal">$silent</span>)
-            .with_token(get_token(<span class="macro-nonterminal">$token_source</span>)<span class="question-mark">?</span>)
-            .build()<span class="question-mark">?</span>;
+        <span class="kw">let </span>api = {
+            <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::new()
+                .with_progress(!<span class="macro-nonterminal">$silent</span>)
+                .with_token(get_token(<span class="macro-nonterminal">$token_source</span>)<span class="question-mark">?</span>);
+            <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
+                api = api.with_cache_dir(x.into());
+            }
+            api.build()<span class="question-mark">?
+        </span>};
         <span class="kw">let </span>revision = <span class="macro-nonterminal">$revision</span>.unwrap_or(<span class="string">"main"</span>.to_string());
         <span class="kw">let </span>this_model_id = <span class="macro-nonterminal">$this</span>.model_id.clone().unwrap_or(<span class="macro-nonterminal">$this</span>.quantized_model_id.clone());
         <span class="kw">let </span>api = api.repo(Repo::with_revision(

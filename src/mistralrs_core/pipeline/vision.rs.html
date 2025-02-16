@@ -938,7 +938,15 @@
 <a href="#937" id="937">937</a>
 <a href="#938" id="938">938</a>
 <a href="#939" id="939">939</a>
-<a href="#940" id="940">940</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a>
+<a href="#942" id="942">942</a>
+<a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -1778,11 +1786,15 @@
             <span class="kw">let </span>model_id_str = <span class="kw-2">&amp;</span>model_id;
             <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>model_id);
 
-            <span class="kw">let </span>api = ApiBuilder::new()
-                .with_progress(!silent)
-                .with_token(get_token(token).map_err(candle_core::Error::msg)<span class="question-mark">?</span>)
-                .build()
-                .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+            <span class="kw">let </span>api = {
+                <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::new()
+                    .with_progress(!silent)
+                    .with_token(get_token(token).map_err(candle_core::Error::msg)<span class="question-mark">?</span>);
+                <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
+                    api = api.with_cache_dir(x.into());
+                }
+                api.build().map_err(candle_core::Error::msg)<span class="question-mark">?
+            </span>};
             <span class="kw">let </span>revision = revision.clone().unwrap_or(<span class="string">"main"</span>.to_string());
             <span class="kw">let </span>api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -1829,11 +1841,15 @@
             <span class="kw">let </span>model_id_str = <span class="kw-2">&amp;</span>gate_model_id;
             <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>gate_model_id);
 
-            <span class="kw">let </span>api = ApiBuilder::new()
-                .with_progress(!silent)
-                .with_token(get_token(token).map_err(candle_core::Error::msg)<span class="question-mark">?</span>)
-                .build()
-                .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+            <span class="kw">let </span>api = {
+                <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::new()
+                    .with_progress(!silent)
+                    .with_token(get_token(token).map_err(candle_core::Error::msg)<span class="question-mark">?</span>);
+                <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
+                    api = api.with_cache_dir(x.into());
+                }
+                api.build().map_err(candle_core::Error::msg)<span class="question-mark">?
+            </span>};
             <span class="kw">let </span>revision = revision.clone().unwrap_or(<span class="string">"main"</span>.to_string());
             <span class="kw">let </span>api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
