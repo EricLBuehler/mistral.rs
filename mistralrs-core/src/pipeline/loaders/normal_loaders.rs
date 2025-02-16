@@ -857,6 +857,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
 
 #[derive(Deserialize)]
 struct LlamaBasicConfig {
+    hidden_act: Activation,
     hidden_size: usize,
     intermediate_size: usize,
     vocab_size: usize,
@@ -896,6 +897,7 @@ impl LlamaBasicConfig {
             rope_scaling: basic_config.rope_scaling,
             quantization_config: basic_config.quantization_config,
             tie_word_embeddings: basic_config.tie_word_embeddings,
+            hidden_act: basic_config.hidden_act,
         })
     }
 }

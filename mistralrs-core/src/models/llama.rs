@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
@@ -10,15 +10,13 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    amoe::{
-        AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainableLayer, MlpLayer,
-        MoeMlp,
-    },
+    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        embedding, CausalMasker, Llama3RopeConfig, Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa,
+        embedding, Activation, CausalMasker, Llama3RopeConfig, Llama3RotaryEmbedding, MatMul, Mlp,
+        RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -36,6 +34,7 @@ serde_default_fn!(bool, use_flash_attn_default, false);
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Config {
+    pub hidden_act: Activation,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub vocab_size: usize,
@@ -250,112 +249,6 @@ impl CausalSelfAttention {
     }
 }
 
-#[derive(Clone)]
-struct Mlp {
-    c_fc1: Arc<dyn QuantMethod>,
-    c_fc2: Arc<dyn QuantMethod>,
-    c_proj: Arc<dyn QuantMethod>,
-    params: Vec<usize>,
-}
-
-impl Mlp {
-    fn load(
-        vb: ShardedVarBuilder,
-        cfg: &Config,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<Self> {
-        let h_size = cfg.hidden_size;
-        let i_size = cfg.intermediate_size;
-        let c_fc1 = ColumnParallelLayer::new(
-            h_size,
-            i_size,
-            &cfg.quantization_config,
-            false,
-            comm,
-            vb.pp("gate_proj"),
-        )?;
-        let c_fc2 = ColumnParallelLayer::new(
-            h_size,
-            i_size,
-            &cfg.quantization_config,
-            false,
-            comm,
-            vb.pp("up_proj"),
-        )?;
-        let c_proj = RowParallelLayer::new(
-            i_size,
-            h_size,
-            &cfg.quantization_config,
-            false,
-            comm,
-            vb.pp("down_proj"),
-        )?;
-        Ok(Self {
-            c_fc1,
-            c_fc2,
-            c_proj,
-            params: vec![h_size, i_size],
-        })
-    }
-}
-
-impl AnyMoeTrainableLayer for Mlp {}
-
-impl MlpLayer for Mlp {
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.c_fc1.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let x = (candle_nn::ops::silu(&MatMul.qmethod_matmul(&x, &*self.c_fc1)?)?
-            * MatMul.qmethod_matmul(&x, &*self.c_fc2)?)?;
-        let mut res = MatMul.qmethod_matmul(&x, &*self.c_proj)?;
-        if self.c_fc1.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
-    }
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.c_fc1, &mut self.c_fc2, &mut self.c_proj]
-    }
-    fn clone(&self) -> Box<dyn MlpLayer> {
-        Box::new(Clone::clone(self))
-    }
-    fn get_params(&self) -> &[usize] {
-        &self.params
-    }
-    // c_fc1, c_fc2, c_proj
-    fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
-        let new_c_fc1 = if let Some(ref delta) = deltas[0] {
-            self.c_fc1.add_delta_w(delta)?
-        } else {
-            self.c_fc1.clone()
-        };
-        let new_c_fc2 = if let Some(ref delta) = deltas[1] {
-            self.c_fc2.add_delta_w(delta)?
-        } else {
-            self.c_fc2.clone()
-        };
-        let new_c_proj = if let Some(ref delta) = deltas[2] {
-            self.c_proj.add_delta_w(delta)?
-        } else {
-            self.c_proj.clone()
-        };
-
-        Ok(Box::new(Self {
-            c_fc1: new_c_fc1,
-            c_fc2: new_c_fc2,
-            c_proj: new_c_proj,
-            params: self.params.clone(),
-        }))
-    }
-
-    fn dtype_device(&self) -> (DType, Device) {
-        self.c_fc1.dtype_and_device()
-    }
-}
-
 struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
@@ -407,9 +300,12 @@ impl Block {
             paged_attn,
             comm,
         )?;
-        let mlp = Mlp::load(
+        let mlp = Mlp::new(
             mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-            cfg,
+            cfg.hidden_size,
+            cfg.intermediate_size,
+            &cfg.quantization_config,
+            cfg.hidden_act,
             comm,
         )?;
         let rms_1 = RmsNorm::new(
@@ -811,13 +707,10 @@ impl AnyMoeBaseModelMixin for Llama {
                 match expert_type {
                     AnyMoeExpertType::FineTuned => {
                         let (dtype, device) = self.blocks[layer].mlp.dtype_device();
-                        row.push(Box::new(Mlp::load(
+                        row.push(Box::new(Mlp::replicate(
+                            &self.blocks[layer].mlp.get_params(),
                             vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
-                            &Config {
-                                intermediate_size: self.blocks[layer].mlp.get_params()[1],
-                                hidden_size: self.blocks[layer].mlp.get_params()[0],
-                                ..Default::default()
-                            },
+                            self.blocks[layer].mlp.hidden_act(),
                             &self.mapper.get_comm_for(layer)?,
                         )?));
                     }

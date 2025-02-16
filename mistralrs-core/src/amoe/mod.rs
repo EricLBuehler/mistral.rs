@@ -16,7 +16,7 @@ pub use inputs::{AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingRes
 use tracing::info;
 
 use crate::{
-    layers::linear,
+    layers::{linear, Activation},
     ops::{TopKLastDimOp, TopKOutput},
     serde_default_fn,
 };
@@ -99,6 +99,7 @@ pub trait MlpLayer: Send + Sync + AnyMoeTrainableLayer {
     /// WARNING: The deltas are not a struct but are instead assumed to
     /// be correctly ordered! for that model and it's implementation details
     fn get_params(&self) -> &[usize];
+    fn hidden_act(&self) -> Activation;
     fn is_moe_layer(&self) -> bool {
         false
     }
@@ -313,6 +314,10 @@ impl MlpLayer for MoeMlp {
 
     fn get_params(&self) -> &[usize] {
         self.experts[0].get_params()
+    }
+
+    fn hidden_act(&self) -> Activation {
+        self.experts[0].hidden_act()
     }
 
     fn is_moe_layer(&self) -> bool {

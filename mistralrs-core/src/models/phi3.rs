@@ -314,6 +314,9 @@ impl MlpLayer for Mlp {
     fn get_params(&self) -> &[usize] {
         &self.params
     }
+    fn hidden_act(&self) -> Activation {
+        self.act_fn
+    }
     // gate_up, down
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
         let new_gate_up = if let Some(ref delta) = deltas[0] {

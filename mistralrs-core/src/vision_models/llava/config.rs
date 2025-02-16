@@ -81,6 +81,7 @@ impl Config {
             rope_scaling: self.text_config.rope_scaling.clone(),
             quantization_config: None,
             tie_word_embeddings: false,
+            hidden_act: Activation::Silu,
         }
     }
 

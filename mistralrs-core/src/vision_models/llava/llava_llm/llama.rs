@@ -19,7 +19,9 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{embedding, linear_no_bias as linear, CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{
+        embedding, linear_no_bias as linear, Activation, CausalMasker, MatMul, RmsNorm, Sdpa,
+    },
     layers_masker::PastKvLenCache,
     models::llama::Config,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -297,6 +299,9 @@ impl MlpLayer for Mlp {
     }
     fn get_params(&self) -> &[usize] {
         &self.params
+    }
+    fn hidden_act(&self) -> Activation {
+        Activation::Silu
     }
     // c_fc1, c_fc2, c_proj
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
