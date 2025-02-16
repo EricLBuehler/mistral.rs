@@ -19,9 +19,6 @@ __global__ void dequant_fp8_blockwise_kernel(
   int start_y = grid_y * weight_block_size_y;
   int start_x = grid_x * weight_block_size_x;
 
-  // Each tile uses a single scale factor.
-  float block_scale = scale[grid_y * scale_stride + grid_x];
-
   // Use threadIdx to cover elements in the tile.
   int local_y = threadIdx.y;
   int local_x = threadIdx.x;
@@ -30,12 +27,19 @@ __global__ void dequant_fp8_blockwise_kernel(
   int weight_y = start_y + local_y;
   int weight_x = start_x + local_x;
 
+  // Load the block's scale factor into shared memory.
+  __shared__ float block_scale;
+  if (threadIdx.x == 0 && threadIdx.y == 0) {
+    block_scale = scale[grid_y * scale_stride + grid_x];
+  }
+  __syncthreads(); // Ensure all threads see the loaded value.
+
   // Bounds check: if within the dimensions of the weight matrix.
   if (weight_y < weight_height && weight_x < weight_width) {
     int pos = weight_y * weight_row_stride + weight_x;
     float w_val =
         __half2float(__nv_cvt_fp8_to_halfraw(weight[pos].__x, __NV_E4M3));
-    // Convert to the target type T.
+    // Use the shared scale factor.
     output[pos] = static_cast<T>(w_val * block_scale);
   }
 }
