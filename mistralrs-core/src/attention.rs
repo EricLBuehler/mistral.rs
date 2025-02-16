@@ -40,6 +40,9 @@ fn flash_attn(
         let window_size_left = sdpa_params.sliding_window;
         let window_size_right = if causal { Some(0) } else { None };
 
+        let cumulative_seqlens_q = &cumulative_seqlens_q[&q.device().location()];
+        let cumulative_seqlens_k = &cumulative_seqlens_k[&q.device().location()];
+
         candle_flash_attn::flash_attn_varlen_windowed_softcap(
             &q,
             &k,
@@ -93,6 +96,9 @@ fn flash_attn(
 
         let window_size_left = sdpa_params.sliding_window;
         let window_size_right = if causal { Some(0) } else { None };
+
+        let cumulative_seqlens_q = &cumulative_seqlens_q[&q.device().location()];
+        let cumulative_seqlens_k = &cumulative_seqlens_k[&q.device().location()];
 
         candle_flash_attn_v3::flash_attn_varlen_windowed(
             &q,
