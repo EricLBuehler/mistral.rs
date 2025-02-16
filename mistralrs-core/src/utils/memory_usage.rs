@@ -25,6 +25,7 @@ impl MemoryUsage {
                 let original_ctx = dev.cu_primary_ctx();
 
                 let avail_mem = {
+                    #[allow(clippy::cast_possible_truncation)]
                     let cu_device = cudarc::driver::result::device::get(gpu_id as i32).w()?;
 
                     // primary context initialization, can fail with OOM
@@ -84,6 +85,7 @@ impl MemoryUsage {
                 let original_ctx = dev.cu_primary_ctx();
 
                 let total_mem = {
+                    #[allow(clippy::cast_possible_truncation)]
                     let cu_device = cudarc::driver::result::device::get(gpu_id as i32).w()?;
 
                     // primary context initialization, can fail with OOM
