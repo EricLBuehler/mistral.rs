@@ -829,7 +829,7 @@ mod tests {
         let range = 3e-01;
         assert!(abs_diff
             .iter()
-            .all(|x| x.into_iter().all(|y| y.into_iter().all(|x| *x <= range))));
+            .all(|x| x.iter().all(|y| y.iter().all(|x| *x <= range))));
         Ok(())
     }
 
@@ -881,7 +881,7 @@ mod tests {
         let range = 3e-01;
         assert!(abs_diff
             .iter()
-            .all(|x| x.into_iter().all(|y| y.into_iter().all(|x| *x <= range))));
+            .all(|x| x.iter().all(|y| y.iter().all(|x| *x <= range))));
         Ok(())
     }
 
@@ -933,7 +933,7 @@ mod tests {
         let range = 3e-01;
         assert!(abs_diff
             .iter()
-            .all(|x| x.into_iter().all(|y| y.into_iter().all(|x| *x <= range))));
+            .all(|x| x.iter().all(|y| y.iter().all(|x| *x <= range))));
         Ok(())
     }
 }

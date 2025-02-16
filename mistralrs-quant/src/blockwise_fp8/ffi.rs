@@ -1,6 +1,8 @@
 use float8::F8E4M3;
 use half::{bf16, f16};
 
+pub(crate) const HAVE_BLOCKWISE_DEQUANT_KERNELS: bool = true;
+
 extern "C" {
     pub(crate) fn launch_dequant_fp8_blockwise_kernel_f32(
         d_weight: *const F8E4M3,

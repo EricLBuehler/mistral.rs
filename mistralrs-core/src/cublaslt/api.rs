@@ -905,7 +905,7 @@ mod tests {
 
         let abs_diff = (res - expected)?.abs()?.to_vec2::<f32>()?;
         let range = 1e-02;
-        assert!(abs_diff.iter().all(|x| x.into_iter().all(|y| *y <= range)));
+        assert!(abs_diff.iter().all(|x| x.iter().all(|y| *y <= range)));
         Ok(())
     }
 
@@ -936,7 +936,7 @@ mod tests {
         let range = 1e-02;
         assert!(abs_diff
             .iter()
-            .all(|x| x.into_iter().all(|y| y.into_iter().all(|x| *x <= range))));
+            .all(|x| x.iter().all(|y| y.iter().all(|x| *x <= range))));
         Ok(())
     }
 }

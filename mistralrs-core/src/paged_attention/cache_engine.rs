@@ -65,8 +65,11 @@ impl CacheEngine {
             Self::calculate_value_block_shape(model_config, cache_config.block_size);
         let mut gpu_cache = Vec::new();
 
-        for i in 0..model_config.num_layers() {
-            let device = layer_devices[i].as_ref().unwrap_or(device);
+        for device in layer_devices
+            .iter()
+            .take(model_config.num_layers())
+            .map(|x| x.as_ref().unwrap_or(device))
+        {
             let key_blocks = unsafe {
                 Tensor::empty(
                     (

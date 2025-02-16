@@ -126,6 +126,10 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
 
         use crate::blockwise_fp8::ffi;
 
+        if !ffi::HAVE_BLOCKWISE_DEQUANT_KERNELS {
+            candle_core::bail!("Do not have blockwise FP8 dequant kernels.");
+        }
+
         if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
             candle_core::bail!("Expected weight to have start offset 0, continuous");
         }
