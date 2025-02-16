@@ -506,7 +506,11 @@ pub fn compute_kv_shard(total_num_kv_heads: usize, head_dim: usize, comm: &Comm)
     let kv_replicate = if comm.world_size() > total_num_kv_heads {
         comm.world_size() / total_num_kv_heads
     } else {
-        1
+        return Shard::Simple {
+            dim: 0,
+            rank: comm.rank(),
+            world_size: comm.world_size(),
+        };
     };
 
     let num_kv_heads = (total_num_kv_heads / comm.world_size()).max(1);
