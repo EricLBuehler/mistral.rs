@@ -684,7 +684,7 @@ impl AnyMoeBaseModelMixin for Model {
                     AnyMoeExpertType::FineTuned => {
                         let (dtype, device) = self.layers[layer].mlp.dtype_device();
                         row.push(Box::new(Mlp::replicate(
-                            &self.layers[layer].mlp.get_params(),
+                            self.layers[layer].mlp.get_params(),
                             vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
                             self.layers[layer].mlp.hidden_act(),
                             &self.mapper.get_comm_for(layer)?,

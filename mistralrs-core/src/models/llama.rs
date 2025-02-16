@@ -708,7 +708,7 @@ impl AnyMoeBaseModelMixin for Llama {
                     AnyMoeExpertType::FineTuned => {
                         let (dtype, device) = self.blocks[layer].mlp.dtype_device();
                         row.push(Box::new(Mlp::replicate(
-                            &self.blocks[layer].mlp.get_params(),
+                            self.blocks[layer].mlp.get_params(),
                             vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
                             self.blocks[layer].mlp.hidden_act(),
                             &self.mapper.get_comm_for(layer)?,
