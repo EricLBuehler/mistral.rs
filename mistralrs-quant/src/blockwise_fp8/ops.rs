@@ -108,13 +108,123 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
             other => candle_core::bail!("unexpected out type of fp8 blockwise dequant {other:?}"),
         }
     }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        scale_s: &candle_core::CudaStorage,
+        scale_l: &candle_core::Layout,
+        weight_s: &candle_core::CudaStorage,
+        weight_l: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        use candle_core::{
+            backend::BackendStorage,
+            cuda::{cudarc::driver::DevicePtr, WrapErr},
+            CudaStorage,
+        };
+        use half::{bf16, f16};
+
+        use crate::blockwise_fp8::ffi;
+
+        if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
+            candle_core::bail!("Expected weight to have start offset 0, continuous");
+        }
+        if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
+            candle_core::bail!("Expected scales to have start offset 0, continuous");
+        }
+        if weight_l.dims().len() != 2 {
+            candle_core::bail!("Expected weight to be rank 2");
+        }
+        if scale_l.dims().len() != 2 || self.weight_block_size.len() != 2 {
+            candle_core::bail!("Expected scale to be rank 2");
+        }
+
+        let weight = weight_s
+            .as_cuda_slice::<F8E4M3>()?
+            .slice(weight_l.start_offset()..);
+        let scale = scale_s
+            .as_cuda_slice::<f32>()?
+            .slice(scale_l.start_offset()..);
+
+        let weight_height = weight_l.dim(0)? as i32;
+        let weight_block_size_x = self.weight_block_size[0] as i32;
+        let weight_width = weight_l.dim(1)? as i32;
+        let weight_block_size_y = self.weight_block_size[1] as i32;
+        let scale_stride = scale_l.stride()[0] as i32;
+        let weight_row_stride = weight_l.stride()[0] as i32;
+
+        let res = match self.out_ty {
+            DType::F32 => {
+                let output = weight_s
+                    .device()
+                    .alloc_zeros::<f32>(weight_l.shape().elem_count())
+                    .w()?;
+                unsafe {
+                    ffi::launch_dequant_fp8_blockwise_kernel_f32(
+                        (*weight.device_ptr()) as *const _,
+                        (*scale.device_ptr()) as *const _,
+                        (*output.device_ptr()) as *mut _,
+                        weight_height,
+                        weight_width,
+                        weight_row_stride,
+                        scale_stride,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                    )
+                };
+                CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
+            }
+            DType::F16 => {
+                let output = weight_s
+                    .device()
+                    .alloc_zeros::<f16>(weight_l.shape().elem_count())
+                    .w()?;
+                unsafe {
+                    ffi::launch_dequant_fp8_blockwise_kernel_f16(
+                        (*weight.device_ptr()) as *const _,
+                        (*scale.device_ptr()) as *const _,
+                        (*output.device_ptr()) as *mut _,
+                        weight_height,
+                        weight_width,
+                        weight_row_stride,
+                        scale_stride,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                    )
+                };
+                CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
+            }
+            DType::BF16 => {
+                let output = weight_s
+                    .device()
+                    .alloc_zeros::<bf16>(weight_l.shape().elem_count())
+                    .w()?;
+                unsafe {
+                    ffi::launch_dequant_fp8_blockwise_kernel_bf16(
+                        (*weight.device_ptr()) as *const _,
+                        (*scale.device_ptr()) as *const _,
+                        (*output.device_ptr()) as *mut _,
+                        weight_height,
+                        weight_width,
+                        weight_row_stride,
+                        scale_stride,
+                        weight_block_size_y,
+                        weight_block_size_x,
+                    )
+                };
+                CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
+            }
+            other => candle_core::bail!("unexpected out type of fp8 blockwise dequant {other:?}"),
+        };
+
+        Ok((res, weight_l.shape().clone()))
+    }
 }
 
 /// FP8 blockwise dequantize.
 /// - Expects weight to be fp8
 /// - Expects inv_scales to be f32
 /// - weight * inv_scale = dequantized
-/// - Only works on the CPU
 pub fn fp8_blockwise_dequantize(
     weight: &Tensor,
     inv_scales: &Tensor,
@@ -133,6 +243,7 @@ pub fn fp8_blockwise_dequantize(
 #[cfg(test)]
 mod tests {
     use candle_core::{DType, Device, Result, Tensor};
+    use half::bf16;
 
     use crate::blockwise_fp8::ops;
 
@@ -155,6 +266,181 @@ mod tests {
                 vec![3., 3., 4., 4., 5.],
                 vec![3., 3., 4., 4., 5.],
                 vec![6., 6., 7., 7., 8.],
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fp8_blockwise_dequant_cuda() -> Result<()> {
+        let truth = {
+            let dev = &Device::Cpu;
+            let weight = Tensor::ones((5, 5), DType::F8E4M3, dev)?;
+            let weight_block_size = vec![2, 2];
+            let inv_scales = Tensor::arange(0f32, (3 * 3) as f32, dev)?.reshape((3, 3))?;
+
+            let dequant =
+                ops::fp8_blockwise_dequantize(&weight, &inv_scales, weight_block_size, DType::F32)?;
+
+            dequant.to_vec2::<f32>()?
+        };
+        let test = {
+            let dev = &Device::new_cuda(0)?;
+            let weight = Tensor::ones((5, 5), DType::F8E4M3, dev)?;
+            let weight_block_size = vec![2, 2];
+            let inv_scales = Tensor::arange(0f32, (3 * 3) as f32, dev)?.reshape((3, 3))?;
+
+            let dequant =
+                ops::fp8_blockwise_dequantize(&weight, &inv_scales, weight_block_size, DType::F32)?;
+
+            dequant.to_vec2::<f32>()?
+        };
+
+        assert_eq!(test, truth);
+        assert_eq!(
+            test,
+            vec![
+                vec![0., 0., 1., 1., 2.],
+                vec![0., 0., 1., 1., 2.],
+                vec![3., 3., 4., 4., 5.],
+                vec![3., 3., 4., 4., 5.],
+                vec![6., 6., 7., 7., 8.],
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fp8_blockwise_dequant_bf16() -> Result<()> {
+        let dev = &Device::Cpu;
+        let weight = Tensor::ones((5, 5), DType::F8E4M3, dev)?;
+        let weight_block_size = vec![2, 2];
+        let inv_scales = Tensor::arange(0f32, (3 * 3) as f32, dev)?.reshape((3, 3))?;
+
+        let dequant =
+            ops::fp8_blockwise_dequantize(&weight, &inv_scales, weight_block_size, DType::BF16)?;
+
+        let res = dequant.to_vec2::<bf16>()?;
+        assert_eq!(
+            res,
+            vec![
+                vec![
+                    bf16::from_f32(0.),
+                    bf16::from_f32(0.),
+                    bf16::from_f32(1.),
+                    bf16::from_f32(1.),
+                    bf16::from_f32(2.)
+                ],
+                vec![
+                    bf16::from_f32(0.),
+                    bf16::from_f32(0.),
+                    bf16::from_f32(1.),
+                    bf16::from_f32(1.),
+                    bf16::from_f32(2.)
+                ],
+                vec![
+                    bf16::from_f32(3.),
+                    bf16::from_f32(3.),
+                    bf16::from_f32(4.),
+                    bf16::from_f32(4.),
+                    bf16::from_f32(5.)
+                ],
+                vec![
+                    bf16::from_f32(3.),
+                    bf16::from_f32(3.),
+                    bf16::from_f32(4.),
+                    bf16::from_f32(4.),
+                    bf16::from_f32(5.)
+                ],
+                vec![
+                    bf16::from_f32(6.),
+                    bf16::from_f32(6.),
+                    bf16::from_f32(7.),
+                    bf16::from_f32(7.),
+                    bf16::from_f32(8.)
+                ],
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fp8_blockwise_dequant_cuda_bf16() -> Result<()> {
+        let truth = {
+            let dev = &Device::Cpu;
+            let weight = Tensor::ones((5, 5), DType::F8E4M3, dev)?;
+            let weight_block_size = vec![2, 2];
+            let inv_scales = Tensor::arange(0f32, (3 * 3) as f32, dev)?.reshape((3, 3))?;
+
+            let dequant = ops::fp8_blockwise_dequantize(
+                &weight,
+                &inv_scales,
+                weight_block_size,
+                DType::BF16,
+            )?;
+
+            dequant.to_vec2::<bf16>()?
+        };
+        let test = {
+            let dev = &Device::new_cuda(0)?;
+            let weight = Tensor::ones((5, 5), DType::F8E4M3, dev)?;
+            let weight_block_size = vec![2, 2];
+            let inv_scales = Tensor::arange(0f32, (3 * 3) as f32, dev)?.reshape((3, 3))?;
+
+            let dequant = ops::fp8_blockwise_dequantize(
+                &weight,
+                &inv_scales,
+                weight_block_size,
+                DType::BF16,
+            )?;
+
+            dequant.to_vec2::<bf16>()?
+        };
+
+        assert_eq!(test, truth);
+        assert_eq!(
+            test,
+            vec![
+                vec![
+                    bf16::from_f32(0.),
+                    bf16::from_f32(0.),
+                    bf16::from_f32(1.),
+                    bf16::from_f32(1.),
+                    bf16::from_f32(2.)
+                ],
+                vec![
+                    bf16::from_f32(0.),
+                    bf16::from_f32(0.),
+                    bf16::from_f32(1.),
+                    bf16::from_f32(1.),
+                    bf16::from_f32(2.)
+                ],
+                vec![
+                    bf16::from_f32(3.),
+                    bf16::from_f32(3.),
+                    bf16::from_f32(4.),
+                    bf16::from_f32(4.),
+                    bf16::from_f32(5.)
+                ],
+                vec![
+                    bf16::from_f32(3.),
+                    bf16::from_f32(3.),
+                    bf16::from_f32(4.),
+                    bf16::from_f32(4.),
+                    bf16::from_f32(5.)
+                ],
+                vec![
+                    bf16::from_f32(6.),
+                    bf16::from_f32(6.),
+                    bf16::from_f32(7.),
+                    bf16::from_f32(7.),
+                    bf16::from_f32(8.)
+                ],
             ]
         );
 
