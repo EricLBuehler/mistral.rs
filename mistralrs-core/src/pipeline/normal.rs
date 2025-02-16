@@ -507,7 +507,7 @@ impl Loader for NormalLoader {
                 .map(|_| mistralrs_quant::Id::new())
                 .collect::<Vec<_>>();
 
-            if ids.len() != 1 {
+            if ids.len() != 1 && use_multi_node {
                 anyhow::bail!(
                     "MISTRALRS_PIPELINE_PARALLEL cannot be set at the same time as MISTRALRS_MN_GLOBAL_WORLD_SIZE; multi-node is incompatible with pipeline parallel."
                 );
