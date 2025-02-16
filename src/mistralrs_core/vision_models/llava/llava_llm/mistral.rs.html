@@ -838,7 +838,10 @@
 <a href="#837" id="837">837</a>
 <a href="#838" id="838">838</a>
 <a href="#839" id="839">839</a>
-<a href="#840" id="840">840</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
@@ -944,6 +947,9 @@
     }
     <span class="kw">fn </span>get_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[usize] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.params
+    }
+    <span class="kw">fn </span>hidden_act(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Activation {
+        <span class="self">self</span>.act_fn
     }
     <span class="comment">// gate, up, down
     </span><span class="kw">fn </span>new_added_delta(<span class="kw-2">&amp;</span><span class="self">self</span>, deltas: Vec&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {

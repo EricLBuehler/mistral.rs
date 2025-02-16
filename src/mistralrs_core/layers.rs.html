@@ -1556,7 +1556,19 @@
 <a href="#1555" id="1555">1555</a>
 <a href="#1556" id="1556">1556</a>
 <a href="#1557" id="1557">1557</a>
-<a href="#1558" id="1558">1558</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1558" id="1558">1558</a>
+<a href="#1559" id="1559">1559</a>
+<a href="#1560" id="1560">1560</a>
+<a href="#1561" id="1561">1561</a>
+<a href="#1562" id="1562">1562</a>
+<a href="#1563" id="1563">1563</a>
+<a href="#1564" id="1564">1564</a>
+<a href="#1565" id="1565">1565</a>
+<a href="#1566" id="1566">1566</a>
+<a href="#1567" id="1567">1567</a>
+<a href="#1568" id="1568">1568</a>
+<a href="#1569" id="1569">1569</a>
+<a href="#1570" id="1570">1570</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
@@ -3034,6 +3046,15 @@
         })
     }
 
+    <span class="kw">pub fn </span>replicate(
+        params: <span class="kw-2">&amp;</span>[usize],
+        vb: ShardedVarBuilder,
+        act: Activation,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="self">Self</span>::new(vb, params[<span class="number">0</span>], params[<span class="number">1</span>], <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, act, comm)
+    }
+
     <span class="kw">pub fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>original_dtype = xs.dtype();
         <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
@@ -3082,6 +3103,9 @@
     }
     <span class="kw">fn </span>get_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[usize] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.params
+    }
+    <span class="kw">fn </span>hidden_act(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Activation {
+        <span class="self">self</span>.act
     }
     <span class="comment">// gate, up, down
     </span><span class="kw">fn </span>new_added_delta(<span class="kw-2">&amp;</span><span class="self">self</span>, deltas: Vec&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {

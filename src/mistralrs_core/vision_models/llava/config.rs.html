@@ -117,7 +117,8 @@
 <a href="#116" id="116">116</a>
 <a href="#117" id="117">117</a>
 <a href="#118" id="118">118</a>
-<a href="#119" id="119">119</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde::Deserialize;
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde::Deserialize;
 
 <span class="kw">use </span><span class="kw">crate</span>::layers::{Activation, Llama3RopeConfig};
 <span class="kw">use </span><span class="kw">crate</span>::serde_default_fn;
@@ -200,6 +201,7 @@
             rope_scaling: <span class="self">self</span>.text_config.rope_scaling.clone(),
             quantization_config: <span class="prelude-val">None</span>,
             tie_word_embeddings: <span class="bool-val">false</span>,
+            hidden_act: Activation::Silu,
         }
     }
 

@@ -789,7 +789,12 @@
 <a href="#788" id="788">788</a>
 <a href="#789" id="789">789</a>
 <a href="#790" id="790">790</a>
-<a href="#791" id="791">791</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
+<a href="#791" id="791">791</a>
+<a href="#792" id="792">792</a>
+<a href="#793" id="793">793</a>
+<a href="#794" id="794">794</a>
+<a href="#795" id="795">795</a>
+<a href="#796" id="796">796</a></pre></div><pre class="rust"><code><span class="comment">//LLaMA without fused RoPE
 </span><span class="attr">#![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -810,7 +815,9 @@
     attention::SdpaParams,
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
-    layers::{embedding, linear_no_bias <span class="kw">as </span>linear, CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{
+        embedding, linear_no_bias <span class="kw">as </span>linear, Activation, CausalMasker, MatMul, RmsNorm, Sdpa,
+    },
     layers_masker::PastKvLenCache,
     models::llama::Config,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -1088,6 +1095,9 @@
     }
     <span class="kw">fn </span>get_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[usize] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.params
+    }
+    <span class="kw">fn </span>hidden_act(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Activation {
+        Activation::Silu
     }
     <span class="comment">// c_fc1, c_fc2, c_proj
     </span><span class="kw">fn </span>new_added_delta(<span class="kw-2">&amp;</span><span class="self">self</span>, deltas: Vec&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {

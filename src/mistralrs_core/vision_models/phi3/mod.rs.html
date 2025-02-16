@@ -1340,7 +1340,12 @@
 <a href="#1339" id="1339">1339</a>
 <a href="#1340" id="1340">1340</a>
 <a href="#1341" id="1341">1341</a>
-<a href="#1342" id="1342">1342</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1342" id="1342">1342</a>
+<a href="#1343" id="1343">1343</a>
+<a href="#1344" id="1344">1344</a>
+<a href="#1345" id="1345">1345</a>
+<a href="#1346" id="1346">1346</a>
+<a href="#1347" id="1347">1347</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3_inputs_processor;
 
@@ -1359,8 +1364,8 @@
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        <span class="self">self</span>, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding,
-        RmsNorm, Sdpa,
+        <span class="self">self</span>, Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig,
+        PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, NonZeroOp},
@@ -1372,9 +1377,11 @@
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
-    vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
+    vision_models::clip::{ClipConfig, ClipVisionTransformer},
     AnyMoeConfig, AnyMoeExpertType,
 };
+
+<span class="kw">use </span><span class="kw">super</span>::clip;
 
 <span class="attr">#[derive(Debug, Clone, serde::Deserialize, Default)]
 </span><span class="kw">pub struct </span>EmbedLayerConfig {
@@ -1399,7 +1406,7 @@
 <span class="attr">#[derive(Debug, Clone, serde::Deserialize, Default)]
 </span><span class="kw">pub struct </span>Config {
     <span class="kw">pub </span>vocab_size: usize,
-    <span class="kw">pub </span>hidden_act: candle_nn::Activation,
+    <span class="kw">pub </span>hidden_act: Activation,
     <span class="kw">pub </span>hidden_size: usize,
     <span class="kw">pub </span>intermediate_size: usize,
     <span class="kw">pub </span>num_hidden_layers: usize,
@@ -1673,7 +1680,7 @@
 </span><span class="kw">struct </span>Mlp {
     gate_up_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     down_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
     i_size: usize,
     params: Vec&lt;usize&gt;,
 }
@@ -1735,6 +1742,9 @@
     }
     <span class="kw">fn </span>get_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[usize] {
         <span class="kw-2">&amp;</span><span class="self">self</span>.params
+    }
+    <span class="kw">fn </span>hidden_act(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Activation {
+        <span class="self">self</span>.act_fn
     }
     <span class="comment">// gate_up, down
     </span><span class="kw">fn </span>new_added_delta(<span class="kw-2">&amp;</span><span class="self">self</span>, deltas: Vec&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {
@@ -1876,7 +1886,7 @@
 }
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>PHI3V_CLIP_CONFIG: ClipConfig = ClipConfig {
-    hidden_act: Activation::QuickGelu,
+    hidden_act: clip::Activation::QuickGelu,
     hidden_size: <span class="number">1024</span>,
     image_size: <span class="number">336</span>,
     intermediate_size: <span class="number">4096</span>,

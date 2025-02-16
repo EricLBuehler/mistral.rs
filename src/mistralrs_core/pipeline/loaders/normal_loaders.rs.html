@@ -3374,7 +3374,9 @@
 <a href="#3373" id="3373">3373</a>
 <a href="#3374" id="3374">3374</a>
 <a href="#3375" id="3375">3375</a>
-<a href="#3376" id="3376">3376</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#3376" id="3376">3376</a>
+<a href="#3377" id="3377">3377</a>
+<a href="#3378" id="3378">3378</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
@@ -4233,6 +4235,7 @@
 
 </span><span class="attr">#[derive(Deserialize)]
 </span><span class="kw">struct </span>LlamaBasicConfig {
+    hidden_act: Activation,
     hidden_size: usize,
     intermediate_size: usize,
     vocab_size: usize,
@@ -4272,6 +4275,7 @@
             rope_scaling: basic_config.rope_scaling,
             quantization_config: basic_config.quantization_config,
             tie_word_embeddings: basic_config.tie_word_embeddings,
+            hidden_act: basic_config.hidden_act,
         })
     }
 }
