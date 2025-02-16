@@ -447,7 +447,11 @@
 <a href="#446" id="446">446</a>
 <a href="#447" id="447">447</a>
 <a href="#448" id="448">448</a>
-<a href="#449" id="449">449</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{CpuStorage, CustomOp2, DType, <span class="prelude-ty">Result</span>, Tensor, WithDType};
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{CpuStorage, CustomOp2, DType, <span class="prelude-ty">Result</span>, Tensor, WithDType};
 <span class="kw">use </span>float8::F8E4M3;
 <span class="kw">use </span>rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -574,6 +578,10 @@
         <span class="kw">use </span>half::{bf16, f16};
 
         <span class="kw">use </span><span class="kw">crate</span>::blockwise_fp8::ffi;
+
+        <span class="kw">if </span>!ffi::HAVE_BLOCKWISE_DEQUANT_KERNELS {
+            <span class="macro">candle_core::bail!</span>(<span class="string">"Do not have blockwise FP8 dequant kernels."</span>);
+        }
 
         <span class="kw">if </span>weight_l.start_offset() != <span class="number">0 </span>|| !weight_l.is_contiguous() {
             <span class="macro">candle_core::bail!</span>(<span class="string">"Expected weight to have start offset 0, continuous"</span>);

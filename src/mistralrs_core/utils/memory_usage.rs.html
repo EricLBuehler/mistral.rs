@@ -116,7 +116,9 @@
 <a href="#115" id="115">115</a>
 <a href="#116" id="116">116</a>
 <a href="#117" id="117">117</a>
-<a href="#118" id="118">118</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
+<a href="#118" id="118">118</a>
+<a href="#119" id="119">119</a>
+<a href="#120" id="120">120</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>sysinfo::System;
 
 <span class="kw">pub struct </span>MemoryUsage;
@@ -143,7 +145,8 @@
                 <span class="kw">let </span>original_ctx = dev.cu_primary_ctx();
 
                 <span class="kw">let </span>avail_mem = {
-                    <span class="kw">let </span>cu_device = cudarc::driver::result::device::get(gpu_id <span class="kw">as </span>i32).w()<span class="question-mark">?</span>;
+                    <span class="attr">#[allow(clippy::cast_possible_truncation)]
+                    </span><span class="kw">let </span>cu_device = cudarc::driver::result::device::get(gpu_id <span class="kw">as </span>i32).w()<span class="question-mark">?</span>;
 
                     <span class="comment">// primary context initialization, can fail with OOM
                     </span><span class="kw">let </span>cu_primary_ctx =
@@ -202,7 +205,8 @@
                 <span class="kw">let </span>original_ctx = dev.cu_primary_ctx();
 
                 <span class="kw">let </span>total_mem = {
-                    <span class="kw">let </span>cu_device = cudarc::driver::result::device::get(gpu_id <span class="kw">as </span>i32).w()<span class="question-mark">?</span>;
+                    <span class="attr">#[allow(clippy::cast_possible_truncation)]
+                    </span><span class="kw">let </span>cu_device = cudarc::driver::result::device::get(gpu_id <span class="kw">as </span>i32).w()<span class="question-mark">?</span>;
 
                     <span class="comment">// primary context initialization, can fail with OOM
                     </span><span class="kw">let </span>cu_primary_ctx =
