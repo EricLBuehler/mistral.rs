@@ -860,7 +860,7 @@ impl Loader for NormalLoader {
                             inputs.context_lens.clone(),
                             inputs.position_ids.clone(),
                             None,
-                            &inputs.flash_meta.to_device(model.device())?,
+                            &inputs.flash_meta.clone(),
                         )
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
@@ -1314,7 +1314,7 @@ impl Pipeline for NormalPipeline {
                         let seqlen_offsets = seqlen_offsets.clone();
                         let context_lens = context_lens.clone();
                         let position_ids = position_ids.clone();
-                        let flash_meta = flash_meta.to_device(model.device())?;
+                        let flash_meta = flash_meta.clone();
 
                         handles.push(std::thread::spawn(move || {
                             #[cfg(feature = "cuda")]

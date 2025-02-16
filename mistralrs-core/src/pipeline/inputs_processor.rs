@@ -120,19 +120,8 @@ pub mod text_models_inputs_processor {
     pub struct FlashParams {
         pub max_q: u32,
         pub max_k: u32,
-        pub cumulative_seqlens_q: Tensor,
-        pub cumulative_seqlens_k: Tensor,
-    }
-
-    impl FlashParams {
-        pub fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
-            Ok(Self {
-                max_k: self.max_k,
-                max_q: self.max_q,
-                cumulative_seqlens_k: self.cumulative_seqlens_k.to_device(device)?,
-                cumulative_seqlens_q: self.cumulative_seqlens_q.to_device(device)?,
-            })
-        }
+        pub cumulative_seqlens_q: HashMap<DeviceLocation, Tensor>,
+        pub cumulative_seqlens_k: HashMap<DeviceLocation, Tensor>,
     }
 
     pub struct InputMetadata {
@@ -268,6 +257,15 @@ pub mod text_models_inputs_processor {
             .cumsum(0)?
             .to_dtype(DType::U32)?;
 
+        let mut seqlens_q_map = HashMap::new();
+        let mut seqlens_k_map = HashMap::new();
+
+        let devices = mapper.unwrap().get_unique_devices();
+        for device in devices {
+            seqlens_q_map.insert(device.location(), seqlens_q.clone());
+            seqlens_k_map.insert(device.location(), seqlens_k.clone());
+        }
+
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
         // Only use matmul via f16 if prompt and seqlen > 512
         if input.dim(1)? > VIA_F16_TOK_THRESHOLD {
@@ -345,8 +343,8 @@ pub mod text_models_inputs_processor {
             flash_meta: FlashParams {
                 max_k,
                 max_q,
-                cumulative_seqlens_k: seqlens_k,
-                cumulative_seqlens_q: seqlens_q,
+                cumulative_seqlens_k: seqlens_k_map,
+                cumulative_seqlens_q: seqlens_q_map,
             },
         })
     }
@@ -438,6 +436,15 @@ pub mod text_models_inputs_processor {
             .cumsum(0)?
             .to_dtype(DType::U32)?;
 
+        let mut seqlens_q_map = HashMap::new();
+        let mut seqlens_k_map = HashMap::new();
+
+        let devices = mapper.unwrap().get_unique_devices();
+        for device in devices {
+            seqlens_q_map.insert(device.location(), seqlens_q.clone());
+            seqlens_k_map.insert(device.location(), seqlens_k.clone());
+        }
+
         set_use_matmul_via_f16(false);
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
@@ -502,8 +509,8 @@ pub mod text_models_inputs_processor {
             flash_meta: FlashParams {
                 max_k,
                 max_q,
-                cumulative_seqlens_k: seqlens_k,
-                cumulative_seqlens_q: seqlens_q,
+                cumulative_seqlens_k: seqlens_k_map,
+                cumulative_seqlens_q: seqlens_q_map,
             },
         })
     }
