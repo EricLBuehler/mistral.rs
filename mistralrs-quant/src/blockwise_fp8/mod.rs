@@ -8,6 +8,9 @@ use candle_nn::{Linear, Module};
 
 mod ops;
 
+#[cfg(feature = "cuda")]
+mod ffi;
+
 use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
