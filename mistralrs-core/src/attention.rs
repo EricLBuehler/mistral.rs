@@ -3,7 +3,10 @@
 #[cfg(feature = "metal")]
 use std::sync::atomic::AtomicUsize;
 
-use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::text_models_inputs_processor::FlashParams};
+use crate::{
+    cublaslt::{setup_cublas_lt_wrapper, CUBLASLT_HANDLE},
+    pipeline::text_models_inputs_processor::FlashParams,
+};
 
 use candle_core::{Device, Result, Tensor};
 use mistralrs_quant::{get_use_matmul_via_f16, MatMul};
@@ -314,6 +317,14 @@ impl Sdpa {
         return naive_sdpa(q, &k, &v, mask, sdpa_params);
 
         // TODO: bench?
+        #[allow(unused)]
+        setup_cublas_lt_wrapper(
+            q.device()
+                .as_cuda_device()
+                .map(|dev| dev.ordinal())
+                .unwrap_or(0),
+        );
+
         #[allow(unused)]
         if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
             if !get_use_matmul_via_f16() {
