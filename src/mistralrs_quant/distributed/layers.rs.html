@@ -535,7 +535,11 @@
 <a href="#534" id="534">534</a>
 <a href="#535" id="535">535</a>
 <a href="#536" id="536">536</a>
-<a href="#537" id="537">537</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{Context, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::Linear;
@@ -1043,8 +1047,12 @@
     </span><span class="kw">let </span>kv_replicate = <span class="kw">if </span>comm.world_size() &gt; total_num_kv_heads {
         comm.world_size() / total_num_kv_heads
     } <span class="kw">else </span>{
-        <span class="number">1
-    </span>};
+        <span class="kw">return </span>Shard::Simple {
+            dim: <span class="number">0</span>,
+            rank: comm.rank(),
+            world_size: comm.world_size(),
+        };
+    };
 
     <span class="kw">let </span>num_kv_heads = (total_num_kv_heads / comm.world_size()).max(<span class="number">1</span>);
     <span class="kw">let </span>kv_shard_id = (comm.rank() / kv_replicate) * num_kv_heads;
