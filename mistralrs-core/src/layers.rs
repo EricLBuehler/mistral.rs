@@ -1476,6 +1476,15 @@ impl Mlp {
         })
     }
 
+    pub fn replicate(
+        params: &[usize],
+        vb: ShardedVarBuilder,
+        act: Activation,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        Self::new(vb, params[0], params[1], &None, act, comm)
+    }
+
     pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let mut xs = xs.clone();
@@ -1524,6 +1533,9 @@ impl MlpLayer for Mlp {
     }
     fn get_params(&self) -> &[usize] {
         &self.params
+    }
+    fn hidden_act(&self) -> Activation {
+        self.act
     }
     // gate, up, down
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {

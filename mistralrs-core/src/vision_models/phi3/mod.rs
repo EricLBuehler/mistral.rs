@@ -17,8 +17,8 @@ use crate::{
     device_map::DeviceMapper,
     get_delta_from_lora_ab,
     layers::{
-        self, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig, PhiRotaryEmbedding,
-        RmsNorm, Sdpa,
+        self, Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig,
+        PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, NonZeroOp},
@@ -30,9 +30,11 @@ use crate::{
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
-    vision_models::clip::{Activation, ClipConfig, ClipVisionTransformer},
+    vision_models::clip::{ClipConfig, ClipVisionTransformer},
     AnyMoeConfig, AnyMoeExpertType,
 };
+
+use super::clip;
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct EmbedLayerConfig {
@@ -57,7 +59,7 @@ serde_default_fn!(bool, word_emb_default, false);
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct Config {
     pub vocab_size: usize,
-    pub hidden_act: candle_nn::Activation,
+    pub hidden_act: Activation,
     pub hidden_size: usize,
     pub intermediate_size: usize,
     pub num_hidden_layers: usize,
@@ -331,7 +333,7 @@ impl Attention {
 struct Mlp {
     gate_up_proj: Arc<dyn QuantMethod>,
     down_proj: Arc<dyn QuantMethod>,
-    act_fn: candle_nn::Activation,
+    act_fn: Activation,
     i_size: usize,
     params: Vec<usize>,
 }
@@ -393,6 +395,9 @@ impl MlpLayer for Mlp {
     }
     fn get_params(&self) -> &[usize] {
         &self.params
+    }
+    fn hidden_act(&self) -> Activation {
+        self.act_fn
     }
     // gate_up, down
     fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
@@ -534,7 +539,7 @@ pub struct ImageEmbedding {
 }
 
 pub(crate) const PHI3V_CLIP_CONFIG: ClipConfig = ClipConfig {
-    hidden_act: Activation::QuickGelu,
+    hidden_act: clip::Activation::QuickGelu,
     hidden_size: 1024,
     image_size: 336,
     intermediate_size: 4096,
