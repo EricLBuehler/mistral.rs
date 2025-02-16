@@ -2421,7 +2421,7 @@
                             inputs.context_lens.clone(),
                             inputs.position_ids.clone(),
                             <span class="prelude-val">None</span>,
-                            <span class="kw-2">&amp;</span>inputs.flash_meta.to_device(model.device())<span class="question-mark">?</span>,
+                            <span class="kw-2">&amp;</span>inputs.flash_meta.clone(),
                         )
                     })
                     .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
@@ -2875,7 +2875,7 @@
                         <span class="kw">let </span>seqlen_offsets = seqlen_offsets.clone();
                         <span class="kw">let </span>context_lens = context_lens.clone();
                         <span class="kw">let </span>position_ids = position_ids.clone();
-                        <span class="kw">let </span>flash_meta = flash_meta.to_device(model.device())<span class="question-mark">?</span>;
+                        <span class="kw">let </span>flash_meta = flash_meta.clone();
 
                         handles.push(std::thread::spawn(<span class="kw">move </span>|| {
                             <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]

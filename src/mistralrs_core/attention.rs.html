@@ -379,7 +379,13 @@
 <a href="#378" id="378">378</a>
 <a href="#379" id="379">379</a>
 <a href="#380" id="380">380</a>
-<a href="#381" id="381">381</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -420,6 +426,9 @@
 
         <span class="kw">let </span>window_size_left = sdpa_params.sliding_window;
         <span class="kw">let </span>window_size_right = <span class="kw">if </span>causal { <span class="prelude-val">Some</span>(<span class="number">0</span>) } <span class="kw">else </span>{ <span class="prelude-val">None </span>};
+
+        <span class="kw">let </span>cumulative_seqlens_q = <span class="kw-2">&amp;</span>cumulative_seqlens_q[<span class="kw-2">&amp;</span>q.device().location()];
+        <span class="kw">let </span>cumulative_seqlens_k = <span class="kw-2">&amp;</span>cumulative_seqlens_k[<span class="kw-2">&amp;</span>q.device().location()];
 
         candle_flash_attn::flash_attn_varlen_windowed_softcap(
             <span class="kw-2">&amp;</span>q,
@@ -474,6 +483,9 @@
 
         <span class="kw">let </span>window_size_left = sdpa_params.sliding_window;
         <span class="kw">let </span>window_size_right = <span class="kw">if </span>causal { <span class="prelude-val">Some</span>(<span class="number">0</span>) } <span class="kw">else </span>{ <span class="prelude-val">None </span>};
+
+        <span class="kw">let </span>cumulative_seqlens_q = <span class="kw-2">&amp;</span>cumulative_seqlens_q[<span class="kw-2">&amp;</span>q.device().location()];
+        <span class="kw">let </span>cumulative_seqlens_k = <span class="kw-2">&amp;</span>cumulative_seqlens_k[<span class="kw-2">&amp;</span>q.device().location()];
 
         candle_flash_attn_v3::flash_attn_varlen_windowed(
             <span class="kw-2">&amp;</span>q,

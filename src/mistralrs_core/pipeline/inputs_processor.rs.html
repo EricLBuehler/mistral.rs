@@ -872,7 +872,14 @@
 <a href="#871" id="871">871</a>
 <a href="#872" id="872">872</a>
 <a href="#873" id="873">873</a>
-<a href="#874" id="874">874</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
+<a href="#874" id="874">874</a>
+<a href="#875" id="875">875</a>
+<a href="#876" id="876">876</a>
+<a href="#877" id="877">877</a>
+<a href="#878" id="878">878</a>
+<a href="#879" id="879">879</a>
+<a href="#880" id="880">880</a>
+<a href="#881" id="881">881</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -994,19 +1001,8 @@
     </span><span class="kw">pub struct </span>FlashParams {
         <span class="kw">pub </span>max_q: u32,
         <span class="kw">pub </span>max_k: u32,
-        <span class="kw">pub </span>cumulative_seqlens_q: Tensor,
-        <span class="kw">pub </span>cumulative_seqlens_k: Tensor,
-    }
-
-    <span class="kw">impl </span>FlashParams {
-        <span class="kw">pub fn </span>to_device(<span class="kw-2">&amp;</span><span class="self">self</span>, device: <span class="kw-2">&amp;</span>Device) -&gt; candle_core::Result&lt;<span class="self">Self</span>&gt; {
-            <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-                max_k: <span class="self">self</span>.max_k,
-                max_q: <span class="self">self</span>.max_q,
-                cumulative_seqlens_k: <span class="self">self</span>.cumulative_seqlens_k.to_device(device)<span class="question-mark">?</span>,
-                cumulative_seqlens_q: <span class="self">self</span>.cumulative_seqlens_q.to_device(device)<span class="question-mark">?</span>,
-            })
-        }
+        <span class="kw">pub </span>cumulative_seqlens_q: HashMap&lt;DeviceLocation, Tensor&gt;,
+        <span class="kw">pub </span>cumulative_seqlens_k: HashMap&lt;DeviceLocation, Tensor&gt;,
     }
 
     <span class="kw">pub struct </span>InputMetadata {
@@ -1142,6 +1138,15 @@
             </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
             </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q_map = HashMap::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k_map = HashMap::new();
+
+        <span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
+        <span class="kw">for </span>device <span class="kw">in </span>devices {
+            seqlens_q_map.insert(device.location(), seqlens_q.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+            seqlens_k_map.insert(device.location(), seqlens_k.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+        }
+
         <span class="kw">let </span>input = Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap();
         <span class="comment">// Only use matmul via f16 if prompt and seqlen &gt; 512
         </span><span class="kw">if </span>input.dim(<span class="number">1</span>)<span class="question-mark">? </span>&gt; VIA_F16_TOK_THRESHOLD {
@@ -1219,8 +1224,8 @@
             flash_meta: FlashParams {
                 max_k,
                 max_q,
-                cumulative_seqlens_k: seqlens_k,
-                cumulative_seqlens_q: seqlens_q,
+                cumulative_seqlens_k: seqlens_k_map,
+                cumulative_seqlens_q: seqlens_q_map,
             },
         })
     }
@@ -1312,6 +1317,15 @@
             </span>.cumsum(<span class="number">0</span>)<span class="question-mark">?
             </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_q_map = HashMap::new();
+        <span class="kw">let </span><span class="kw-2">mut </span>seqlens_k_map = HashMap::new();
+
+        <span class="kw">let </span>devices = mapper.unwrap().get_unique_devices();
+        <span class="kw">for </span>device <span class="kw">in </span>devices {
+            seqlens_q_map.insert(device.location(), seqlens_q.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+            seqlens_k_map.insert(device.location(), seqlens_k.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
+        }
+
         set_use_matmul_via_f16(<span class="bool-val">false</span>);
 
         <span class="kw">let </span>paged_attn_meta = <span class="kw">if </span>paged_attn_metadata.is_some() {
@@ -1376,8 +1390,8 @@
             flash_meta: FlashParams {
                 max_k,
                 max_q,
-                cumulative_seqlens_k: seqlens_k,
-                cumulative_seqlens_q: seqlens_q,
+                cumulative_seqlens_k: seqlens_k_map,
+                cumulative_seqlens_q: seqlens_q_map,
             },
         })
     }
