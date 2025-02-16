@@ -2068,7 +2068,7 @@
                 .map(|<span class="kw">_</span>| mistralrs_quant::Id::new())
                 .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
-            <span class="kw">if </span>ids.len() != <span class="number">1 </span>{
+            <span class="kw">if </span>ids.len() != <span class="number">1 </span>&amp;&amp; use_multi_node {
                 <span class="macro">anyhow::bail!</span>(
                     <span class="string">"MISTRALRS_PIPELINE_PARALLEL cannot be set at the same time as MISTRALRS_MN_GLOBAL_WORLD_SIZE; multi-node is incompatible with pipeline parallel."
                 </span>);
