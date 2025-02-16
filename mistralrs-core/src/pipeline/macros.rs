@@ -66,10 +66,15 @@ macro_rules! get_paths {
         $silent:expr,
         $loading_uqff:expr
     ) => {{
-        let api = ApiBuilder::new()
-            .with_progress(!$silent)
-            .with_token(get_token($token_source)?)
-            .build()?;
+        let api = {
+            let mut api = ApiBuilder::new()
+                .with_progress(!$silent)
+                .with_token(get_token($token_source)?);
+            if let Ok(x) = std::env::var("HF_HUB_CACHE") {
+                api = api.with_cache_dir(x.into());
+            }
+            api.build()?
+        };
         let revision = $revision.unwrap_or("main".to_string());
         let api = api.repo(Repo::with_revision(
             $this.model_id.clone(),
@@ -191,17 +196,22 @@ macro_rules! get_paths {
 #[macro_export]
 macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
-        let api = ApiBuilder::new()
-            .with_progress(!$silent)
-            .with_token(get_token(
-                &$this
-                    .token_source
-                    .read()
-                    .expect("Failed to read token source")
-                    .clone()
-                    .unwrap_or(TokenSource::None),
-            )?)
-            .build()?;
+        let api = {
+            let mut api = ApiBuilder::new()
+                .with_progress(!$silent)
+                .with_token(get_token(
+                    &$this
+                        .token_source
+                        .read()
+                        .expect("Failed to read token source")
+                        .clone()
+                        .unwrap_or(TokenSource::None),
+                )?);
+            if let Ok(x) = std::env::var("HF_HUB_CACHE") {
+                api = api.with_cache_dir(x.into());
+            }
+            api.build()?
+        };
         let revision = $this
             .revision
             .read()
@@ -232,10 +242,15 @@ macro_rules! get_paths_gguf {
         $quantized_filenames:expr,
         $silent:expr
     ) => {{
-        let api = ApiBuilder::new()
-            .with_progress(!$silent)
-            .with_token(get_token($token_source)?)
-            .build()?;
+        let api = {
+            let mut api = ApiBuilder::new()
+                .with_progress(!$silent)
+                .with_token(get_token($token_source)?);
+            if let Ok(x) = std::env::var("HF_HUB_CACHE") {
+                api = api.with_cache_dir(x.into());
+            }
+            api.build()?
+        };
         let revision = $revision.unwrap_or("main".to_string());
         let this_model_id = $this.model_id.clone().unwrap_or($this.quantized_model_id.clone());
         let api = api.repo(Repo::with_revision(

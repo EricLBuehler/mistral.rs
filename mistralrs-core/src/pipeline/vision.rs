@@ -838,11 +838,15 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let model_id_str = &model_id;
             let model_id = Path::new(&model_id);
 
-            let api = ApiBuilder::new()
-                .with_progress(!silent)
-                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
-                .build()
-                .map_err(candle_core::Error::msg)?;
+            let api = {
+                let mut api = ApiBuilder::new()
+                    .with_progress(!silent)
+                    .with_token(get_token(token).map_err(candle_core::Error::msg)?);
+                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
+                    api = api.with_cache_dir(x.into());
+                }
+                api.build().map_err(candle_core::Error::msg)?
+            };
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
@@ -889,11 +893,15 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let model_id_str = &gate_model_id;
             let model_id = Path::new(&gate_model_id);
 
-            let api = ApiBuilder::new()
-                .with_progress(!silent)
-                .with_token(get_token(token).map_err(candle_core::Error::msg)?)
-                .build()
-                .map_err(candle_core::Error::msg)?;
+            let api = {
+                let mut api = ApiBuilder::new()
+                    .with_progress(!silent)
+                    .with_token(get_token(token).map_err(candle_core::Error::msg)?);
+                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
+                    api = api.with_cache_dir(x.into());
+                }
+                api.build().map_err(candle_core::Error::msg)?
+            };
             let revision = revision.clone().unwrap_or("main".to_string());
             let api = api.repo(Repo::with_revision(
                 model_id_str.clone(),
