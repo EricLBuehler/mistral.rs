@@ -84,6 +84,7 @@ metal = { workspace = true, optional = true }
 candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "3bd7d552", optional = true }
 safetensors.workspace = true
 serde-big-array = "0.5.1"
+interprocess = "2.2.2"
 
 [features]
 pyo3_macros = ["pyo3"]

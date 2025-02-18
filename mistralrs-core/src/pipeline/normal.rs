@@ -42,6 +42,10 @@ use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
+use interprocess::local_socket::traits::{Listener, Stream};
+use interprocess::local_socket::{
+    GenericNamespaced, ListenerOptions, Stream as LocalStream, ToNsName,
+};
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
@@ -53,6 +57,7 @@ use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::any::Any;
 use std::borrow::Cow;
+use std::io::{BufRead, BufReader, Write};
 use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -290,38 +295,6 @@ impl Loader for NormalLoader {
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        #[derive(Serialize, Deserialize, Debug)]
-        #[serde(transparent)]
-        struct BigI8Array(#[serde(with = "BigArray")] [i8; 128]);
-
-        #[derive(Serialize, Deserialize, Debug)]
-        struct WorkerTransferData {
-            ids: Vec<BigI8Array>,
-            worker_rank: usize,
-        }
-
-        if let Ok(payload) = env::var(FLAG) {
-            let payload: WorkerTransferData = serde_json::from_str(&payload)?;
-        } else {
-            for worker_rank in 0..8 {
-                let exe_path = env::current_exe().expect("Failed to get current exe");
-
-                let args: Vec<String> = env::args().collect();
-
-                let mut cmd = Command::new(exe_path);
-                cmd.args(&args[1..]);
-
-                let data = WorkerTransferData {
-                    ids: vec![BigI8Array([0i8; 128])],
-                    worker_rank,
-                };
-
-                cmd.env(FLAG, serde_json::to_string(&data)?);
-
-                cmd.spawn().expect("Failed to spawn process");
-            }
-        }
-
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
         // Apply default prompt size here
@@ -340,6 +313,7 @@ impl Loader for NormalLoader {
             && (std::env::var("MISTRALRS_NO_NCCL").is_err()
                 || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"))
             && cfg!(feature = "nccl");
+        let use_nccl = true;
 
         // If auto, convert to Map if not using nccl
         if use_nccl {
@@ -544,6 +518,84 @@ impl Loader for NormalLoader {
                 .map(|_| mistralrs_quant::Id::new())
                 .collect::<Vec<_>>();
 
+            // TODO!!!
+            assert_eq!(pipeline_parallel_size, 1);
+
+            #[derive(Serialize, Deserialize, Debug)]
+            #[serde(transparent)]
+            struct BigI8Array(#[serde(with = "BigArray")] [i8; 128]);
+
+            #[derive(Serialize, Deserialize, Debug)]
+            enum WorkerTransferData {
+                Init {
+                    ids: Vec<BigI8Array>,
+                    worker_rank: usize,
+                },
+            }
+
+            let printname = "example.sock";
+            let name = printname.to_ns_name::<GenericNamespaced>()?;
+
+            let local_rank = if let Ok(payload) = env::var(FLAG) {
+                let payload: WorkerTransferData = serde_json::from_str(&payload)?;
+                let WorkerTransferData::Init {
+                    ids: new_ids,
+                    worker_rank,
+                } = payload
+                else {
+                    anyhow::bail!("Should only be getting an Init...")
+                };
+                ids = new_ids
+                    .into_iter()
+                    .map(|x| mistralrs_quant::Id::uninit(x.0))
+                    .collect();
+
+                let mut stream = LocalStream::connect(name)?;
+                stream.write_all(b"ready\n")?;
+                worker_rank + 1
+            } else {
+                let num_workers = 3;
+                for worker_rank in 0..num_workers {
+                    let exe_path = env::current_exe().expect("Failed to get current exe");
+
+                    let args: Vec<String> = env::args().collect();
+
+                    let mut cmd = Command::new(exe_path);
+                    cmd.args(&args[1..]);
+
+                    let data = WorkerTransferData::Init {
+                        ids: ids
+                            .iter()
+                            .map(|id| id.internal().to_owned())
+                            .map(BigI8Array)
+                            .collect(),
+                        worker_rank,
+                    };
+
+                    cmd.env(FLAG, serde_json::to_string(&data)?);
+
+                    cmd.spawn().expect("Failed to spawn process");
+                }
+
+                let listener = ListenerOptions::new().name(name).create_sync()?;
+                let mut ready_count = 0;
+
+                while ready_count < num_workers {
+                    let stream = listener.accept()?;
+                    let mut reader = BufReader::new(stream);
+                    let mut message = String::new();
+                    reader.read_line(&mut message)?;
+                    if message.trim() == "ready" {
+                        ready_count += 1;
+                    }
+                }
+                info!("All workers have received the ids!");
+
+                0
+            };
+            // TODO!!!
+            let available_devices = vec![available_devices[local_rank].clone()];
+
             if ids.len() != 1 && use_multi_node {
                 anyhow::bail!(
                     "MISTRALRS_PIPELINE_PARALLEL cannot be set at the same time as MISTRALRS_MN_GLOBAL_WORLD_SIZE; multi-node is incompatible with pipeline parallel."
@@ -601,6 +653,9 @@ impl Loader for NormalLoader {
             } else {
                 0
             };
+
+            let rank_offset = local_rank;
+            let local_world_size = 1;
 
             // Transpose
             let mut comms_all = Vec::new();
