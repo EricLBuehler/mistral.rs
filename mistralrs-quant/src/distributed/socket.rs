@@ -57,6 +57,7 @@ impl Server {
 
 impl BarrierLike for Server {
     fn wait(&self) -> Result<()> {
+        panic!();
         // First, synchronize locally.
         let res = self.barrier_all.wait();
 
@@ -130,6 +131,7 @@ impl Client {
 
 impl BarrierLike for Client {
     fn wait(&self) -> Result<()> {
+        panic!();
         // Synchronize locally.
         let res = self.barrier_all.wait();
 
