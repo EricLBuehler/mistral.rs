@@ -483,7 +483,8 @@ impl Loader for NormalLoader {
                 anyhow::bail!("MISTRALRS_PIPELINE_PARALLEL must be nonzero")
             }
 
-            let local_world_size = available_devices.len() / pipeline_parallel_size;
+            // let local_world_size = available_devices.len() / pipeline_parallel_size;
+            let local_world_size = 4;
             let global_world_size = if let Ok(x) = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE") {
                 usize::from_str(&x).context("MISTRALRS_MN_GLOBAL_WORLD_SIZE")?
             } else {
