@@ -484,7 +484,7 @@ impl Loader for NormalLoader {
             }
 
             // let local_world_size = available_devices.len() / pipeline_parallel_size;
-            let local_world_size = 4;
+            let local_world_size = 1;
             let global_world_size = if let Ok(x) = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE") {
                 usize::from_str(&x).context("MISTRALRS_MN_GLOBAL_WORLD_SIZE")?
             } else {
@@ -533,27 +533,13 @@ impl Loader for NormalLoader {
                     )?;
 
                     server.broadcast_id(id)?;
-                    available_devices = available_devices[0..4].iter().cloned().collect();
                 } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
                     info!("Worker node connecting to {addr}.");
                     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
 
                     *id = client.receive_id()?;
-                    available_devices = available_devices[4..8].iter().cloned().collect();
                 }
             }
-
-            if available_devices.len() % ids.len() != 0 {
-                anyhow::bail!(
-                    "Pipeline parallel size {} must divide the number of available devices {}",
-                    pipeline_parallel_size,
-                    available_devices.len()
-                );
-            }
-
-            let split_available_devices = available_devices
-                .chunks(available_devices.len() / pipeline_parallel_size)
-                .collect::<Vec<_>>();
 
             let rank_offset = if env::var("MISTRALRS_MN_WORKER_SERVER_ADDR").is_ok() {
                 let Ok(node_id) = env::var("MISTRALRS_MN_WORKER_ID") else {
@@ -567,6 +553,22 @@ impl Loader for NormalLoader {
             } else {
                 0
             };
+            available_devices = available_devices[rank_offset..rank_offset + local_world_size]
+                .iter()
+                .cloned()
+                .collect();
+
+            if available_devices.len() % ids.len() != 0 {
+                anyhow::bail!(
+                    "Pipeline parallel size {} must divide the number of available devices {}",
+                    pipeline_parallel_size,
+                    available_devices.len()
+                );
+            }
+
+            let split_available_devices = available_devices
+                .chunks(available_devices.len() / pipeline_parallel_size)
+                .collect::<Vec<_>>();
 
             // Transpose
             let mut comms_all = Vec::new();
