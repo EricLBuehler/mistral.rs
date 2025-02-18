@@ -296,7 +296,7 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-        let available_devices = device_map::get_all_similar_devices(device)?;
+        let mut available_devices = device_map::get_all_similar_devices(device)?;
 
         let use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
             && available_devices.len() > 1
@@ -533,11 +533,13 @@ impl Loader for NormalLoader {
                     )?;
 
                     server.broadcast_id(id)?;
+                    available_devices = available_devices[0..4].iter().cloned().collect();
                 } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
                     info!("Worker node connecting to {addr}.");
                     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
 
                     *id = client.receive_id()?;
+                    available_devices = available_devices[4..8].iter().cloned().collect();
                 }
             }
 
