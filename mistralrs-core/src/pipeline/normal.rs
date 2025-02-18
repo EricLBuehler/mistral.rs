@@ -49,10 +49,13 @@ use rayon::iter::{
     IntoParallelRefMutIterator, ParallelIterator,
 };
 use regex_automata::meta::Regex;
+use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 use std::any::Any;
 use std::borrow::Cow;
 use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, Barrier, RwLock};
 use std::time::Instant;
@@ -60,6 +63,8 @@ use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
+
+const FLAG: &str = "__MISTRALRS_WORKER_INTERNAL";
 
 pub struct NormalPipeline {
     parallel_models: Vec<Arc<dyn NormalModel + Send + Sync>>,
@@ -285,6 +290,38 @@ impl Loader for NormalLoader {
         in_situ_quant: Option<IsqType>,
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        #[derive(Serialize, Deserialize, Debug)]
+        #[serde(transparent)]
+        struct BigI8Array(#[serde(with = "BigArray")] [i8; 128]);
+
+        #[derive(Serialize, Deserialize, Debug)]
+        struct WorkerTransferData {
+            ids: Vec<BigI8Array>,
+            worker_rank: usize,
+        }
+
+        if let Ok(payload) = env::var(FLAG) {
+            let payload: WorkerTransferData = serde_json::from_str(&payload)?;
+        } else {
+            for worker_rank in 0..8 {
+                let exe_path = env::current_exe().expect("Failed to get current exe");
+
+                let args: Vec<String> = env::args().collect();
+
+                let mut cmd = Command::new(exe_path);
+                cmd.args(&args[1..]);
+
+                let data = WorkerTransferData {
+                    ids: vec![BigI8Array([0i8; 128])],
+                    worker_rank,
+                };
+
+                cmd.env(FLAG, serde_json::to_string(&data)?);
+
+                cmd.spawn().expect("Failed to spawn process");
+            }
+        }
+
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
         // Apply default prompt size here
