@@ -591,6 +591,7 @@ pub trait Pipeline:
                         }
                     }
                 }
+                println!("exec_duration {:.2}", exec_duration.as_secs_f32() * 1000.);
 
                 if raw_out_logits[0][0].is_some() {
                     let start = Instant::now();
