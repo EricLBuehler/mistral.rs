@@ -566,132 +566,132 @@
                     this.reset_non_granular_state();
                 }
             }
-        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(reason) = is_done {
-            <span class="comment">/*
-            ***********************
-            Finish the sequence now
-            ***********************
-            */
-            </span>{
-                seq.set_state(<span class="kw">crate</span>::sequence::SequenceState::Done(reason));
-                <span class="kw">let </span>(tokenizer, pipeline_name) = {
-                    <span class="kw">let </span>pipeline_name = this.name();
-                    <span class="kw">let </span>tokenizer = this.tokenizer();
-                    (tokenizer, pipeline_name)
-                };
+        }
+    } <span class="kw">else if let </span><span class="prelude-val">Some</span>(reason) = is_done {
+        <span class="comment">/*
+        ***********************
+        Finish the sequence now
+        ***********************
+        */
+        </span>{
+            seq.set_state(<span class="kw">crate</span>::sequence::SequenceState::Done(reason));
+            <span class="kw">let </span>(tokenizer, pipeline_name) = {
+                <span class="kw">let </span>pipeline_name = this.name();
+                <span class="kw">let </span>tokenizer = this.tokenizer();
+                (tokenizer, pipeline_name)
+            };
 
-                <span class="kw">let </span>logprobs = <span class="kw">if </span>seq.return_logprobs() {
-                    <span class="kw">let </span><span class="kw-2">mut </span>logprobs = Vec::new();
-                    <span class="kw">for </span>logprob <span class="kw">in </span>seq.logprobs() {
-                        <span class="kw">let </span>resp_logprob = <span class="kw">crate</span>::ResponseLogprob {
+            <span class="kw">let </span>logprobs = <span class="kw">if </span>seq.return_logprobs() {
+                <span class="kw">let </span><span class="kw-2">mut </span>logprobs = Vec::new();
+                <span class="kw">for </span>logprob <span class="kw">in </span>seq.logprobs() {
+                    <span class="kw">let </span>resp_logprob = <span class="kw">crate</span>::ResponseLogprob {
                         token: <span class="macro">crate::handle_seq_error_ok!</span>(
-                            tokenizer
-                            .as_ref()
-                            .ok_or(candle_core::Error::Msg(
-                                <span class="string">"`finish_or_add_toks_to_seq` requires the pipeline to have a tokenizer"
-                                    </span>.to_string(),
-                            ))<span class="question-mark">?</span>.decode(<span class="kw-2">&amp;</span>[logprob.token], <span class="bool-val">false</span>),
-                            seq.responder()
-                        ),
+                        tokenizer
+                        .as_ref()
+                        .ok_or(candle_core::Error::Msg(
+                            <span class="string">"`finish_or_add_toks_to_seq` requires the pipeline to have a tokenizer"
+                                </span>.to_string(),
+                        ))<span class="question-mark">?</span>.decode(<span class="kw-2">&amp;</span>[logprob.token], <span class="bool-val">false</span>),
+                        seq.responder()
+                    ),
                         bytes: logprob.bytes.clone().map(|b| b.into_bytes()),
                         logprob: logprob.logprob,
                         top_logprobs: logprob.top_logprobs.clone().unwrap(),
                     };
-                        logprobs.push(resp_logprob);
-                    }
-                    <span class="prelude-val">Some</span>(logprobs)
-                } <span class="kw">else </span>{
-                    <span class="prelude-val">None
-                </span>};
+                    logprobs.push(resp_logprob);
+                }
+                <span class="prelude-val">Some</span>(logprobs)
+            } <span class="kw">else </span>{
+                <span class="prelude-val">None
+            </span>};
 
-                <span class="kw">let </span>text = <span class="kw">match </span>reason {
-                    <span class="kw">crate</span>::sequence::StopReason::Length(<span class="kw">_</span>)
-                    | <span class="kw">crate</span>::sequence::StopReason::ModelLength(<span class="kw">_</span>)
-                    | <span class="kw">crate</span>::sequence::StopReason::Eos
-                    | <span class="kw">crate</span>::sequence::StopReason::StopTok(<span class="kw">_</span>)
-                    | <span class="kw">crate</span>::sequence::StopReason::Canceled =&gt; {
-                        String::from_utf8_lossy(seq.completion_bytes())
-                            .trim_start()
-                            .to_string()
-                    }
-                    <span class="kw">crate</span>::sequence::StopReason::StopString {
-                        completion_bytes_pos,
-                        ..
-                    } =&gt; {
-                        <span class="kw">let </span>txt = String::from_utf8_lossy(seq.completion_bytes());
-                        txt[..completion_bytes_pos].trim_start().to_string()
-                    }
-                    <span class="kw">crate</span>::sequence::StopReason::GeneratedImage =&gt; {
-                        <span class="macro">candle_core::bail!</span>(<span class="string">"Stop reason was `GeneratedImage`."</span>)
-                    }
+            <span class="kw">let </span>text = <span class="kw">match </span>reason {
+                <span class="kw">crate</span>::sequence::StopReason::Length(<span class="kw">_</span>)
+                | <span class="kw">crate</span>::sequence::StopReason::ModelLength(<span class="kw">_</span>)
+                | <span class="kw">crate</span>::sequence::StopReason::Eos
+                | <span class="kw">crate</span>::sequence::StopReason::StopTok(<span class="kw">_</span>)
+                | <span class="kw">crate</span>::sequence::StopReason::Canceled =&gt; {
+                    String::from_utf8_lossy(seq.completion_bytes())
+                        .trim_start()
+                        .to_string()
+                }
+                <span class="kw">crate</span>::sequence::StopReason::StopString {
+                    completion_bytes_pos,
+                    ..
+                } =&gt; {
+                    <span class="kw">let </span>txt = String::from_utf8_lossy(seq.completion_bytes());
+                    txt[..completion_bytes_pos].trim_start().to_string()
+                }
+                <span class="kw">crate</span>::sequence::StopReason::GeneratedImage =&gt; {
+                    <span class="macro">candle_core::bail!</span>(<span class="string">"Stop reason was `GeneratedImage`."</span>)
+                }
+            };
+
+            <span class="kw">if </span>seq.get_mut_group().is_chat {
+                <span class="kw">let </span>(text_new, tool_calls) = parse_text_tools(text.as_str(), seq.tools.clone())
+                    .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+                <span class="kw">let </span>choice = <span class="kw">crate</span>::Choice {
+                    finish_reason: reason.to_string(),
+                    index: seq.get_response_index(),
+                    message: <span class="kw">crate</span>::ResponseMessage {
+                        content: text_new.map(ToString::to_string),
+                        role: <span class="string">"assistant"</span>.to_string(),
+                        tool_calls,
+                    },
+                    logprobs: logprobs.map(|l| <span class="kw">crate</span>::Logprobs { content: <span class="prelude-val">Some</span>(l) }),
                 };
-
-                <span class="kw">if </span>seq.get_mut_group().is_chat {
-                    <span class="kw">let </span>(text_new, tool_calls) = parse_text_tools(text.as_str(), seq.tools.clone())
-                        .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>choice = <span class="kw">crate</span>::Choice {
-                        finish_reason: reason.to_string(),
-                        index: seq.get_response_index(),
-                        message: <span class="kw">crate</span>::ResponseMessage {
-                            content: text_new.map(ToString::to_string),
-                            role: <span class="string">"assistant"</span>.to_string(),
-                            tool_calls,
-                        },
-                        logprobs: logprobs.map(|l| <span class="kw">crate</span>::Logprobs { content: <span class="prelude-val">Some</span>(l) }),
-                    };
-                    seq.add_choice_to_group(choice);
-                } <span class="kw">else </span>{
-                    <span class="kw">let </span>choice = <span class="kw">crate</span>::CompletionChoice {
-                        finish_reason: reason.to_string(),
-                        index: seq.get_response_index(),
-                        text,
-                        logprobs: <span class="prelude-val">None</span>,
-                    };
-                    seq.add_completion_choice_to_group(choice);
-                }
-
-                <span class="kw">if </span>use_prefix_cacher {
-                    prefix_cacher.add_sequence(seq);
-                    prefix_cacher.evict_to_cpu()<span class="question-mark">?</span>;
-                }
-
-                <span class="kw">let </span>group = seq.get_mut_group();
-                <span class="kw">if </span>group.is_chat {
-                    group
-                        .maybe_send_chat_done_response(
-                            <span class="kw">crate</span>::ChatCompletionResponse {
-                                id: seq.id().to_string(),
-                                choices: group.get_choices().to_vec(),
-                                created: seq.creation_time(),
-                                model: pipeline_name,
-                                system_fingerprint: <span class="kw">crate</span>::SYSTEM_FINGERPRINT.to_string(),
-                                object: <span class="string">"chat.completion"</span>.to_string(),
-                                usage: group.get_usage(),
-                            },
-                            seq.responder(),
-                        )
-                        .<span class="kw">await
-                        </span>.map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-                } <span class="kw">else </span>{
-                    group
-                        .maybe_send_completion_done_response(
-                            <span class="kw">crate</span>::CompletionResponse {
-                                id: seq.id().to_string(),
-                                choices: group.get_completion_choices().to_vec(),
-                                created: seq.creation_time(),
-                                model: pipeline_name,
-                                system_fingerprint: <span class="kw">crate</span>::SYSTEM_FINGERPRINT.to_string(),
-                                object: <span class="string">"text_completion"</span>.to_string(),
-                                usage: group.get_usage(),
-                            },
-                            seq.responder(),
-                        )
-                        .<span class="kw">await
-                        </span>.map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-                }
+                seq.add_choice_to_group(choice);
+            } <span class="kw">else </span>{
+                <span class="kw">let </span>choice = <span class="kw">crate</span>::CompletionChoice {
+                    finish_reason: reason.to_string(),
+                    index: seq.get_response_index(),
+                    text,
+                    logprobs: <span class="prelude-val">None</span>,
+                };
+                seq.add_completion_choice_to_group(choice);
             }
-            this.reset_non_granular_state();
+
+            <span class="kw">if </span>use_prefix_cacher {
+                prefix_cacher.add_sequence(seq);
+                prefix_cacher.evict_to_cpu()<span class="question-mark">?</span>;
+            }
+
+            <span class="kw">let </span>group = seq.get_mut_group();
+            <span class="kw">if </span>group.is_chat {
+                group
+                    .maybe_send_chat_done_response(
+                        <span class="kw">crate</span>::ChatCompletionResponse {
+                            id: seq.id().to_string(),
+                            choices: group.get_choices().to_vec(),
+                            created: seq.creation_time(),
+                            model: pipeline_name,
+                            system_fingerprint: <span class="kw">crate</span>::SYSTEM_FINGERPRINT.to_string(),
+                            object: <span class="string">"chat.completion"</span>.to_string(),
+                            usage: group.get_usage(),
+                        },
+                        seq.responder(),
+                    )
+                    .<span class="kw">await
+                    </span>.map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+            } <span class="kw">else </span>{
+                group
+                    .maybe_send_completion_done_response(
+                        <span class="kw">crate</span>::CompletionResponse {
+                            id: seq.id().to_string(),
+                            choices: group.get_completion_choices().to_vec(),
+                            created: seq.creation_time(),
+                            model: pipeline_name,
+                            system_fingerprint: <span class="kw">crate</span>::SYSTEM_FINGERPRINT.to_string(),
+                            object: <span class="string">"text_completion"</span>.to_string(),
+                            usage: group.get_usage(),
+                        },
+                        seq.responder(),
+                    )
+                    .<span class="kw">await
+                    </span>.map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+            }
         }
+        this.reset_non_granular_state();
     }
 
     <span class="prelude-val">Ok</span>(())
