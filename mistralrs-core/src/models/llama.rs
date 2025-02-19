@@ -7,7 +7,7 @@ use mistralrs_quant::{
     ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
@@ -79,7 +79,6 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let start = Instant::now();
         let original_dtype = x.dtype();
         let mut x = x.clone();
         if let Some(t) = self.q_proj.quantized_act_type() {
@@ -93,9 +92,7 @@ impl CausalSelfAttention {
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
         }
-        println!("qkv {:.2}", Instant::now().duration_since(start).as_secs_f32() * 1000.);
 
-        let start = Instant::now();
         let (q, k, v) = if seq_len != 1 {
             let q = q
                 .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
@@ -115,9 +112,7 @@ impl CausalSelfAttention {
         };
 
         let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
-        println!("rope {:.2}", Instant::now().duration_since(start).as_secs_f32() * 1000.);
 
-        let start = Instant::now();
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -163,9 +158,7 @@ impl CausalSelfAttention {
                 )?
             }
         };
-        println!("attn {:.2}", Instant::now().duration_since(start).as_secs_f32() * 1000.);
 
-        let start = Instant::now();
         if let Some(t) = self.q_proj.quantized_act_type() {
             y = y.to_dtype(t)?;
         }
@@ -178,7 +171,6 @@ impl CausalSelfAttention {
         if self.q_proj.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
-        println!("out {:.2}", Instant::now().duration_since(start).as_secs_f32() * 1000.);
         Ok(res)
     }
 
@@ -286,9 +278,7 @@ impl Block {
             flash_params,
         )? + residual)?;
         let residual = &x;
-        let start = Instant::now();
         let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
-        println!("mlp {:.2}", Instant::now().duration_since(start).as_secs_f32() * 1000.);
         Ok(x)
     }
 

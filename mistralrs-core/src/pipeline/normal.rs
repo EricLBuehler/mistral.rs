@@ -18,7 +18,7 @@ use super::{
     Qwen2Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
-use crate::device_map::{self, DeviceMapper};
+use crate::device_map::DeviceMapper;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
@@ -296,13 +296,18 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-        let mut available_devices = device_map::get_all_similar_devices(device)?;
+        // let mut available_devices = device_map::get_all_similar_devices(device)?;
+        let available_devices = vec![candle_core::Device::new_cuda(
+            env::var("MISTRALRS_MN_WORKER_ID")
+                .map(|x| usize::from_str(&x).unwrap() + 1)
+                .unwrap_or(0),
+        )?];
 
-        let use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
+        let use_nccl = (available_devices.iter().all(|dev| dev.is_cuda())
             && available_devices.len() > 1
             && (std::env::var("MISTRALRS_NO_NCCL").is_err()
-                || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"))
-            && cfg!(feature = "nccl");
+                || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1")))
+            || cfg!(feature = "nccl");
 
         // If auto, convert to Map if not using nccl
         if use_nccl {
@@ -553,10 +558,6 @@ impl Loader for NormalLoader {
             } else {
                 0
             };
-            available_devices = available_devices[rank_offset..rank_offset + local_world_size]
-                .iter()
-                .cloned()
-                .collect();
 
             if available_devices.len() % ids.len() != 0 {
                 anyhow::bail!(
