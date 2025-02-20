@@ -582,6 +582,7 @@ impl Loader for NormalLoader {
 
                     cmd.env(FLAG, serde_json::to_string(&data)?);
                     cmd.env("MISTRALRS_MN_WORKER_ID", worker_rank.to_string());
+                    cmd.env("RUST_LOG", "none");
 
                     cmd.spawn().expect("Failed to spawn process");
                 }
