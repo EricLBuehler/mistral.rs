@@ -441,7 +441,9 @@ impl MistralRs {
 
                             let mut receiver =
                                 request::DEFAULT_RECEIVER.get().unwrap().lock().unwrap();
+                            eprintln!("is_closed before? {} ", receiver.is_closed());
                             request_sender.send(Request::Normal(req)).await.unwrap();
+                            eprintln!("is_closed after? {} ", receiver.is_closed());
                             let resp = receiver.recv().await.unwrap();
                             assert!(resp.as_result().is_ok());
                         }

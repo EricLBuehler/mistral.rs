@@ -1336,7 +1336,7 @@ impl Pipeline for NormalPipeline {
             (None, None) => None,
         };
         // Synchronize on forward pass
-        self.forward_barrier.wait()?;
+        // self.forward_barrier.wait()?;
         #[cfg(feature = "metal")]
         let logits = objc::rc::autoreleasepool(|| -> candle_core::Result<Tensor> {
             match self.parallel_models[0].is_xlora() {
