@@ -428,7 +428,7 @@ impl MistralRs {
 
             let request_sender = sender.write().unwrap();
             loop {
-                let name = daemon::ipc_name().unwrap();    
+                let name = daemon::ipc_name().unwrap();
                 if let Ok(stream) = LocalStream::connect(name) {
                     let mut reader = BufReader::new(stream);
                     eprintln!("Reading.");
@@ -437,7 +437,7 @@ impl MistralRs {
                     eprintln!("Read.");
                     let req: NormalRequest = serde_json::from_str(&buf).unwrap();
 
-                    let mut binding = request::DEFAULT_RECEIVER;
+                    let binding = unsafe { &mut request::DEFAULT_RECEIVER };
                     let receiver = binding.get_mut().unwrap().as_mut().unwrap();
                     request_sender.blocking_send(Request::Normal(req)).unwrap();
                     let resp = receiver.blocking_recv().unwrap();
