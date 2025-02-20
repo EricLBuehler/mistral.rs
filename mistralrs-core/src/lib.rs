@@ -407,10 +407,10 @@ impl MistralRs {
                 clone_sender.blocking_send(req).unwrap();
 
                 if let Some(resp) = rx.blocking_recv() {
-                    let ResponseOk::Done(res) = resp.as_result().unwrap() else  {
+                    let ResponseOk::CompletionDone(res) = resp.as_result().unwrap() else  {
                         panic!();
                     };
-                    dbg!(&res.choices[0].message);
+                    dbg!(&res.choices[0].text);
                     let end = Instant::now();
                     info!(
                         "Dummy run completed in {}s.",
