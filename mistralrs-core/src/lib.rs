@@ -437,8 +437,7 @@ impl MistralRs {
                     eprintln!("Read.");
                     let req: NormalRequest = serde_json::from_str(&buf).unwrap();
 
-                    let binding = unsafe { &mut request::DEFAULT_RECEIVER };
-                    let receiver = binding.get_mut().unwrap().as_mut().unwrap();
+                    let mut receiver = unsafe { request::DEFAULT_RECEIVER.get_mut().unwrap() };
                     request_sender.blocking_send(Request::Normal(req)).unwrap();
                     let resp = receiver.blocking_recv().unwrap();
                     assert!(resp.as_result().is_ok());

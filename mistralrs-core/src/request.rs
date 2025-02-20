@@ -60,13 +60,11 @@ pub enum RequestMessage {
     },
 }
 
-pub(crate) static mut DEFAULT_RECEIVER: OnceLock<Option<Receiver<Response>>> = OnceLock::new();
+pub(crate) static mut DEFAULT_RECEIVER: OnceLock<Receiver<Response>> = OnceLock::new();
 
 fn default_responder() -> Sender<Response> {
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    let binding = unsafe { &mut DEFAULT_RECEIVER };
-    let out = binding.get_mut().unwrap();
-    *out = Some(receiver);
+    unsafe { DEFAULT_RECEIVER.set(receiver) };
     sender
 }
 
