@@ -520,7 +520,7 @@ impl Engine {
 
     async fn add_request(&mut self, request: NormalRequest) {
         // TODO!!!
-        {
+        if std::env::var(daemon::FLAG).is_err() {
             let name = daemon::ipc_name().unwrap();
             let num_workers = 7;
             let listener = ListenerOptions::new().name(name).create_sync().unwrap();

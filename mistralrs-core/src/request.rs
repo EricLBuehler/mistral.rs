@@ -60,11 +60,14 @@ pub enum RequestMessage {
     },
 }
 
-pub(crate) static mut DEFAULT_RECEIVER: OnceLock<Receiver<Response>> = OnceLock::new();
+pub(crate) static DEFAULT_RECEIVER: OnceLock<std::sync::Mutex<Receiver<Response>>> =
+    OnceLock::new();
 
 fn default_responder() -> Sender<Response> {
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    unsafe { DEFAULT_RECEIVER.set(receiver) };
+    // Set the receiver in the OnceLock. If it's already set, this will return an error.
+    // Depending on your needs, you can either handle the error or ignore it.
+    DEFAULT_RECEIVER.set(std::sync::Mutex::new(receiver)).ok();
     sender
 }
 

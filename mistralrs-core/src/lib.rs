@@ -374,8 +374,8 @@ impl MistralRs {
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
 
         // Determine if the current runtime is multi-threaded, as blocking operations are not allowed in single-threaded mode
-        let is_multi_threaded = tokio::runtime::Handle::try_current()
-            .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
+        // let is_multi_threaded = tokio::runtime::Handle::try_current()
+        //     .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
         // // Do a dummy run
         // if is_multi_threaded
@@ -423,30 +423,31 @@ impl MistralRs {
         // }
 
         if env::var(daemon::FLAG).is_ok() {
-            let rt = Runtime::new().unwrap();
-            rt.block_on(async move {
-                use interprocess::local_socket::traits::Stream;
-                use interprocess::local_socket::Stream as LocalStream;
+            thread::spawn(move || {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    use interprocess::local_socket::traits::Stream;
+                    use interprocess::local_socket::Stream as LocalStream;
 
-                let request_sender = sender.write().unwrap();
-                loop {
-                    let name = daemon::ipc_name().unwrap();
-                    if let Ok(stream) = LocalStream::connect(name) {
-                        let mut reader = BufReader::new(stream);
-                        eprintln!("Reading.");
-                        let mut buf = String::new();
-                        reader.read_line(&mut buf).unwrap();
-                        eprintln!("Read.");
-                        let req: NormalRequest = serde_json::from_str(&buf).unwrap();
+                    let request_sender = sender.write().unwrap();
+                    loop {
+                        let name = daemon::ipc_name().unwrap();
+                        if let Ok(stream) = LocalStream::connect(name) {
+                            let mut reader = BufReader::new(stream);
+                            let mut buf = String::new();
+                            reader.read_line(&mut buf).unwrap();
+                            let req: NormalRequest = serde_json::from_str(&buf).unwrap();
 
-                        let receiver = unsafe { request::DEFAULT_RECEIVER.get_mut().unwrap() };
-                        request_sender.send(Request::Normal(req)).await.unwrap();
-                        let resp = receiver.recv().await.unwrap();
-                        assert!(resp.as_result().is_ok());
+                            let mut receiver =
+                                request::DEFAULT_RECEIVER.get().unwrap().lock().unwrap();
+                            request_sender.send(Request::Normal(req)).await.unwrap();
+                            let resp = receiver.recv().await.unwrap();
+                            assert!(resp.as_result().is_ok());
+                        }
                     }
-                }
+                });
             });
-            unreachable!();
+            loop {}
         }
 
         Arc::new(Self {
