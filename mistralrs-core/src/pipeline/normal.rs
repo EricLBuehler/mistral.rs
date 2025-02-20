@@ -306,14 +306,13 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-
         // let available_devices = device_map::get_all_similar_devices(device)?;
         let available_devices = vec![candle_core::Device::new_cuda(
             env::var("MISTRALRS_MN_WORKER_ID")
                 .map(|x| usize::from_str(&x).unwrap() + 1)
                 .unwrap_or(0),
         )?];
-        
+
         let use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
             && available_devices.len() > 1
             && (std::env::var("MISTRALRS_NO_NCCL").is_err()
@@ -516,6 +515,8 @@ impl Loader for NormalLoader {
                 anyhow::bail!("Global world size {global_world_size} must both be at least and divide the local world size {local_world_size}");
             }
 
+            let global_world_size = 8;
+
             info!("Local tensor parallel world size is {local_world_size}");
             info!("Global tensor parallel world size is {global_world_size}");
             info!("Pipeline parallelism size is {pipeline_parallel_size}");
@@ -560,8 +561,9 @@ impl Loader for NormalLoader {
                 stream.write_all(b"ready\n")?;
                 worker_rank + 1
             } else {
-                let num_workers = 3;
+                let num_workers = 7;
                 for worker_rank in 0..num_workers {
+                    dbg!(&worker_rank);
                     let exe_path = env::current_exe().expect("Failed to get current exe");
 
                     let args: Vec<String> = env::args().collect();
@@ -579,7 +581,7 @@ impl Loader for NormalLoader {
                     };
 
                     cmd.env(FLAG, serde_json::to_string(&data)?);
-                    cmd.env("MISTRALRS_MN_WORKER_ID", (worker_rank + 1).to_string());
+                    cmd.env("MISTRALRS_MN_WORKER_ID", worker_rank.to_string());
 
                     cmd.spawn().expect("Failed to spawn process");
                 }
@@ -602,7 +604,8 @@ impl Loader for NormalLoader {
             };
             // TODO!!!
             // let available_devices = vec![available_devices[local_rank].clone()];
-            dbg!(ids.iter().map(|id| id.internal()).collect::<Vec<_>>());
+            // dbg!(ids.iter().map(|id| id.internal()).collect::<Vec<_>>());
+            dbg!(&available_devices);
 
             if ids.len() != 1 && use_multi_node {
                 anyhow::bail!(
