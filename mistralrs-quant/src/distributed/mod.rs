@@ -92,9 +92,9 @@ mod ops {
         }
 
         pub fn apply(&self, xs: &Tensor) -> Result<Tensor> {
-            use candle_core::cuda::cudarc::driver::result;
-            unsafe { result::ctx::set_current(*self.comm.comm.device().cu_primary_ctx()) }.unwrap();
-            self.comm.barrier.wait()?;
+            // use candle_core::cuda::cudarc::driver::result;
+            // unsafe { result::ctx::set_current(*self.comm.comm.device().cu_primary_ctx()) }.unwrap();
+            // self.comm.barrier.wait()?;
             xs.apply_op1_no_bwd(self)
         }
     }

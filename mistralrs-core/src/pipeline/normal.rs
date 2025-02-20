@@ -306,8 +306,14 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-        let available_devices = device_map::get_all_similar_devices(device)?;
 
+        // let available_devices = device_map::get_all_similar_devices(device)?;
+        let available_devices = vec![candle_core::Device::new_cuda(
+            env::var("MISTRALRS_MN_WORKER_ID")
+                .map(|x| usize::from_str(&x).unwrap() + 1)
+                .unwrap_or(0),
+        )?];
+        
         let use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
             && available_devices.len() > 1
             && (std::env::var("MISTRALRS_NO_NCCL").is_err()
@@ -573,6 +579,7 @@ impl Loader for NormalLoader {
                     };
 
                     cmd.env(FLAG, serde_json::to_string(&data)?);
+                    cmd.env("MISTRALRS_MN_WORKER_ID", (worker_rank + 1).to_string());
 
                     cmd.spawn().expect("Failed to spawn process");
                 }
