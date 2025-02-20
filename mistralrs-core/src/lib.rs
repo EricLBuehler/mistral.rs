@@ -377,72 +377,72 @@ impl MistralRs {
         let is_multi_threaded = tokio::runtime::Handle::try_current()
             .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
-        // Do a dummy run
-        if is_multi_threaded
-            && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
-        {
-            let clone_sender = sender.read().unwrap().clone();
-            tokio::task::block_in_place(|| {
-                let (tx, mut rx) = channel(1);
-                let req = Request::Normal(NormalRequest {
-                    id: 0,
-                    messages: RequestMessage::Completion {
-                        text: "hello".to_string(),
-                        echo_prompt: false,
-                        best_of: None,
-                    },
-                    sampling_params: SamplingParams {
-                        max_len: Some(1),
-                        ..SamplingParams::deterministic()
-                    },
-                    response: tx,
-                    return_logprobs: false,
-                    is_streaming: false,
-                    constraint: Constraint::None,
-                    suffix: None,
-                    adapters: None,
-                    tool_choice: None,
-                    tools: None,
-                    logits_processors: None,
-                    return_raw_logits: false,
-                });
-                info!("Beginning dummy run.");
-                let start = Instant::now();
-                clone_sender.blocking_send(req).unwrap();
+        // // Do a dummy run
+        // if is_multi_threaded
+        //     && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
+        // {
+        //     let clone_sender = sender.read().unwrap().clone();
+        //     tokio::task::block_in_place(|| {
+        //         let (tx, mut rx) = channel(1);
+        //         let req = Request::Normal(NormalRequest {
+        //             id: 0,
+        //             messages: RequestMessage::Completion {
+        //                 text: "hello".to_string(),
+        //                 echo_prompt: false,
+        //                 best_of: None,
+        //             },
+        //             sampling_params: SamplingParams {
+        //                 max_len: Some(1),
+        //                 ..SamplingParams::deterministic()
+        //             },
+        //             response: tx,
+        //             return_logprobs: false,
+        //             is_streaming: false,
+        //             constraint: Constraint::None,
+        //             suffix: None,
+        //             adapters: None,
+        //             tool_choice: None,
+        //             tools: None,
+        //             logits_processors: None,
+        //             return_raw_logits: false,
+        //         });
+        //         info!("Beginning dummy run.");
+        //         let start = Instant::now();
+        //         clone_sender.blocking_send(req).unwrap();
 
-                if let Some(_resp) = rx.blocking_recv() {
-                    let end = Instant::now();
-                    info!(
-                        "Dummy run completed in {}s.",
-                        end.duration_since(start).as_secs_f64()
-                    );
-                } else {
-                    warn!("Dummy run failed!");
-                }
-            });
-        }
+        //         if let Some(_resp) = rx.blocking_recv() {
+        //             let end = Instant::now();
+        //             info!(
+        //                 "Dummy run completed in {}s.",
+        //                 end.duration_since(start).as_secs_f64()
+        //             );
+        //         } else {
+        //             warn!("Dummy run failed!");
+        //         }
+        //     });
+        // }
 
         if env::var(daemon::FLAG).is_ok() {
             use interprocess::local_socket::traits::Stream;
             use interprocess::local_socket::Stream as LocalStream;
 
-            let name = daemon::ipc_name().unwrap();
-            let stream = LocalStream::connect(name).unwrap();
-            let mut reader = BufReader::new(stream);
-
             let request_sender = sender.write().unwrap();
             loop {
-                eprintln!("Reading.");
-                let mut buf = String::new();
-                reader.read_line(&mut buf).unwrap();
-                eprintln!("Read.");
-                let req: NormalRequest = serde_json::from_str(&buf).unwrap();
+                let name = daemon::ipc_name().unwrap();    
+                if let Ok(stream) = LocalStream::connect(name) {
+                    let mut reader = BufReader::new(stream);
+                    eprintln!("Reading.");
+                    let mut buf = String::new();
+                    reader.read_line(&mut buf).unwrap();
+                    eprintln!("Read.");
+                    let req: NormalRequest = serde_json::from_str(&buf).unwrap();
 
-                let mut binding = request::DEFAULT_RECEIVER;
-                let receiver = binding.get_mut().unwrap().as_mut().unwrap();
-                request_sender.blocking_send(Request::Normal(req)).unwrap();
-                let resp = receiver.blocking_recv().unwrap();
-                assert!(resp.as_result().is_ok());
+                    let mut binding = request::DEFAULT_RECEIVER;
+                    let receiver = binding.get_mut().unwrap().as_mut().unwrap();
+                    request_sender.blocking_send(Request::Normal(req)).unwrap();
+                    let resp = receiver.blocking_recv().unwrap();
+                    assert!(resp.as_result().is_ok());
+                }
             }
         }
 
