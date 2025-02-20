@@ -688,7 +688,8 @@ impl Loader for NormalLoader {
                 //         as Arc<dyn mistralrs_quant::BarrierLike>
                 // };
                 let barrier = if env::var(daemon::FLAG).is_err() {
-                    Arc::new(mistralrs_quant::Server::new(&"0.0.0.0:8700", 7, 1)?) as Arc<dyn BarrierLike>
+                    Arc::new(mistralrs_quant::Server::new(&"0.0.0.0:8700", 7, 1)?)
+                        as Arc<dyn BarrierLike>
                 } else {
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     Arc::new(mistralrs_quant::Client::new(
@@ -1109,7 +1110,6 @@ impl Loader for NormalLoader {
             .map(Arc::from)
             .collect::<Vec<_>>();
 
-        eprintln!("A");
         let barrier = if env::var(daemon::FLAG).is_err() {
             Box::new(mistralrs_quant::Server::new(&"0.0.0.0:8765", 7, 1)?) as Box<dyn BarrierLike>
         } else {
@@ -1118,7 +1118,6 @@ impl Loader for NormalLoader {
                 1,
             )?) as Box<dyn BarrierLike>
         };
-        eprintln!("B");
 
         Ok(Arc::new(Mutex::new(NormalPipeline {
             parallel_models,
@@ -1338,9 +1337,7 @@ impl Pipeline for NormalPipeline {
             (None, None) => None,
         };
         // Synchronize on forward pass
-        eprintln!("FWD start");
         self.forward_barrier.wait()?;
-        eprintln!("FWD end");
         #[cfg(feature = "metal")]
         let logits = objc::rc::autoreleasepool(|| -> candle_core::Result<Tensor> {
             match self.parallel_models[0].is_xlora() {

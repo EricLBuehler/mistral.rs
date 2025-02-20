@@ -436,7 +436,8 @@ impl MistralRs {
                             let mut reader = BufReader::new(stream);
                             let mut buf = String::new();
                             reader.read_line(&mut buf).unwrap();
-                            let req: NormalRequest = serde_json::from_str(&buf).unwrap();
+                            let mut req: NormalRequest = serde_json::from_str(&buf).unwrap();
+                            req.is_streaming = false;
 
                             let mut receiver =
                                 request::DEFAULT_RECEIVER.get().unwrap().lock().unwrap();
