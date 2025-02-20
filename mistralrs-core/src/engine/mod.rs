@@ -5,7 +5,7 @@ use llguidance::toktrie::TokEnv;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
-    io::{BufReader, BufWriter, Write},
+    io::{BufWriter, Write},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,

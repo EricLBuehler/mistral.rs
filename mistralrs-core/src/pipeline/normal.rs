@@ -61,7 +61,7 @@ use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::{Arc, Barrier, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
@@ -87,7 +87,6 @@ pub struct NormalPipeline {
     config: String,
     imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
-    forward_barrier: Box<dyn BarrierLike>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -534,10 +533,7 @@ impl Loader for NormalLoader {
                 let WorkerTransferData::Init {
                     ids: new_ids,
                     worker_rank,
-                } = payload
-                else {
-                    anyhow::bail!("Should only be getting an Init...")
-                };
+                } = payload;
                 ids = new_ids
                     .into_iter()
                     .map(|x| mistralrs_quant::Id::uninit(x.0))
@@ -1109,15 +1105,6 @@ impl Loader for NormalLoader {
             .map(Arc::from)
             .collect::<Vec<_>>();
 
-        let barrier = if env::var(daemon::FLAG).is_err() {
-            Box::new(mistralrs_quant::Server::new(&"0.0.0.0:8765", 7, 1)?) as Box<dyn BarrierLike>
-        } else {
-            Box::new(mistralrs_quant::Client::new(
-                "0.0.0.0:8765".parse().unwrap(),
-                1,
-            )?) as Box<dyn BarrierLike>
-        };
-
         Ok(Arc::new(Mutex::new(NormalPipeline {
             parallel_models,
             tokenizer: tokenizer.into(),
@@ -1154,7 +1141,6 @@ impl Loader for NormalLoader {
             config,
             imatrix: self.config.imatrix.clone(),
             mapper: pipeline_mapper,
-            forward_barrier: barrier,
         })))
     }
 
@@ -1335,8 +1321,6 @@ impl Pipeline for NormalPipeline {
             }
             (None, None) => None,
         };
-        // Synchronize on forward pass
-        // self.forward_barrier.wait()?;
         #[cfg(feature = "metal")]
         let logits = objc::rc::autoreleasepool(|| -> candle_core::Result<Tensor> {
             match self.parallel_models[0].is_xlora() {

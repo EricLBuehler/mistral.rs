@@ -10,11 +10,8 @@ use crate::{
     tools::{Tool, ToolChoice},
     CustomLogitsProcessor, DiffusionGenerationParams,
 };
-use std::{
-    fmt::Debug,
-    sync::{Arc, OnceLock},
-};
-use tokio::sync::mpsc::{Receiver, Sender};
+use std::{fmt::Debug, sync::Arc};
+use tokio::sync::mpsc::Sender;
 
 pub type LlguidanceGrammar = llguidance::api::TopLevelGrammar;
 
