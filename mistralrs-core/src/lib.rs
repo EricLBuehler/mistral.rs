@@ -383,12 +383,12 @@ impl MistralRs {
                 let req = Request::Normal(NormalRequest {
                     id: 0,
                     messages: RequestMessage::Completion {
-                        text: "dummy".to_string(),
+                        text: "Hello".to_string(),
                         echo_prompt: false,
                         best_of: None,
                     },
                     sampling_params: SamplingParams {
-                        max_len: Some(1),
+                        max_len: Some(3),
                         ..SamplingParams::deterministic()
                     },
                     response: tx,
@@ -406,7 +406,8 @@ impl MistralRs {
                 let start = Instant::now();
                 clone_sender.blocking_send(req).unwrap();
 
-                if let Some(_resp) = rx.blocking_recv() {
+                if let Some(resp) = rx.blocking_recv() {
+                    dbg!(&resp.as_result().unwrap());
                     let end = Instant::now();
                     info!(
                         "Dummy run completed in {}s.",
