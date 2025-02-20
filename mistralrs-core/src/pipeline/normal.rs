@@ -665,27 +665,35 @@ impl Loader for NormalLoader {
                 split_available_devices.iter().enumerate()
             {
                 // Each pipeline parallel gets its own barrier
-                let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
-                    let n_nodes =
-                        usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
-                    let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
-                        anyhow::bail!(
-                            "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
-                        );
-                    };
-                    let server = mistralrs_quant::Server::new(
-                        &format!("0.0.0.0:{port}"),
-                        n_nodes,
-                        local_world_size,
-                    )?;
+                // let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
+                //     let n_nodes =
+                //         usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
+                //     let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
+                //         anyhow::bail!(
+                //             "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
+                //         );
+                //     };
+                //     let server = mistralrs_quant::Server::new(
+                //         &format!("0.0.0.0:{port}"),
+                //         n_nodes,
+                //         local_world_size,
+                //     )?;
 
-                    Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
-                } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
-                    let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
-                    Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
+                //     Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
+                // } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
+                //     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
+                //     Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
+                // } else {
+                //     Arc::new(Barrier::new(local_world_size))
+                //         as Arc<dyn mistralrs_quant::BarrierLike>
+                // };
+                let barrier = if env::var(daemon::FLAG).is_err() {
+                    Arc::new(mistralrs_quant::Server::new(&"0.0.0.0:8700", 7, 1)?) as Arc<dyn BarrierLike>
                 } else {
-                    Arc::new(Barrier::new(local_world_size))
-                        as Arc<dyn mistralrs_quant::BarrierLike>
+                    Arc::new(mistralrs_quant::Client::new(
+                        "0.0.0.0:8700".parse().unwrap(),
+                        1,
+                    )?) as Arc<dyn BarrierLike>
                 };
 
                 // They each block on each other
@@ -1102,7 +1110,7 @@ impl Loader for NormalLoader {
 
         eprintln!("A");
         let barrier = if env::var(daemon::FLAG).is_err() {
-            Box::new(mistralrs_quant::Server::new(&"0.0.0.0:8765", 8, 1)?) as Box<dyn BarrierLike>
+            Box::new(mistralrs_quant::Server::new(&"0.0.0.0:8765", 7, 1)?) as Box<dyn BarrierLike>
         } else {
             Box::new(mistralrs_quant::Client::new(
                 "0.0.0.0:8765".parse().unwrap(),
