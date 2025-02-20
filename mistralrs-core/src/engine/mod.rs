@@ -531,7 +531,7 @@ impl Engine {
                 let req = format!("{}\n", serde_json::to_string(&request).unwrap());
                 writer.write_all(req.as_bytes()).unwrap();
             }
-            info!("Send to all workers!");
+            info!("Replicated request to all workers!");
         };
 
         let is_chat = matches!(
