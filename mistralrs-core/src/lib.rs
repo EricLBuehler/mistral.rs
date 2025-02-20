@@ -423,26 +423,30 @@ impl MistralRs {
         // }
 
         if env::var(daemon::FLAG).is_ok() {
-            use interprocess::local_socket::traits::Stream;
-            use interprocess::local_socket::Stream as LocalStream;
+            let rt = Runtime::new().unwrap();
+            rt.block_on(async move {
+                use interprocess::local_socket::traits::Stream;
+                use interprocess::local_socket::Stream as LocalStream;
 
-            let request_sender = sender.write().unwrap();
-            loop {
-                let name = daemon::ipc_name().unwrap();
-                if let Ok(stream) = LocalStream::connect(name) {
-                    let mut reader = BufReader::new(stream);
-                    eprintln!("Reading.");
-                    let mut buf = String::new();
-                    reader.read_line(&mut buf).unwrap();
-                    eprintln!("Read.");
-                    let req: NormalRequest = serde_json::from_str(&buf).unwrap();
+                let request_sender = sender.write().unwrap();
+                loop {
+                    let name = daemon::ipc_name().unwrap();
+                    if let Ok(stream) = LocalStream::connect(name) {
+                        let mut reader = BufReader::new(stream);
+                        eprintln!("Reading.");
+                        let mut buf = String::new();
+                        reader.read_line(&mut buf).unwrap();
+                        eprintln!("Read.");
+                        let req: NormalRequest = serde_json::from_str(&buf).unwrap();
 
-                    let mut receiver = unsafe { request::DEFAULT_RECEIVER.get_mut().unwrap() };
-                    request_sender.blocking_send(Request::Normal(req)).unwrap();
-                    let resp = receiver.blocking_recv().unwrap();
-                    assert!(resp.as_result().is_ok());
+                        let receiver = unsafe { request::DEFAULT_RECEIVER.get_mut().unwrap() };
+                        request_sender.send(Request::Normal(req)).await.unwrap();
+                        let resp = receiver.recv().await.unwrap();
+                        assert!(resp.as_result().is_ok());
+                    }
                 }
-            }
+            });
+            unreachable!();
         }
 
         Arc::new(Self {
