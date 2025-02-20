@@ -18,7 +18,7 @@ use super::{
     Qwen2Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
-use crate::device_map::{self, DeviceMapper};
+use crate::device_map::DeviceMapper;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
@@ -562,6 +562,7 @@ impl Loader for NormalLoader {
                 worker_rank + 1
             } else {
                 let num_workers = 7;
+                let mut children = Vec::new();
                 for worker_rank in 0..num_workers {
                     dbg!(&worker_rank);
                     let exe_path = env::current_exe().expect("Failed to get current exe");
@@ -582,9 +583,12 @@ impl Loader for NormalLoader {
 
                     cmd.env(FLAG, serde_json::to_string(&data)?);
                     cmd.env("MISTRALRS_MN_WORKER_ID", worker_rank.to_string());
-                    cmd.env("RUST_LOG", "none");
 
-                    cmd.spawn().expect("Failed to spawn process");
+                    cmd.stdout(std::process::Stdio::null());
+                    cmd.stderr(std::process::Stdio::null());
+                    cmd.stdin(std::process::Stdio::null());
+
+                    children.push(cmd.spawn().expect("Failed to spawn process"));
                 }
 
                 let listener = ListenerOptions::new().name(name).create_sync()?;
