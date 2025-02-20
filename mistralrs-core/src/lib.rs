@@ -407,7 +407,8 @@ impl MistralRs {
             .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
         // Do a dummy run
-        if is_multi_threaded
+        if env::var(daemon::FLAG).is_err()
+            && is_multi_threaded
             && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
         {
             let clone_sender = sender.read().unwrap().clone();
