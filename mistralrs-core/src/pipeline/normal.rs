@@ -570,9 +570,9 @@ impl Loader for NormalLoader {
                     cmd.env(FLAG, serde_json::to_string(&data)?);
                     cmd.env("MISTRALRS_MN_WORKER_ID", worker_rank.to_string());
 
-                    // cmd.stdout(std::process::Stdio::null());
-                    cmd.stderr(std::process::Stdio::null());
-                    // cmd.stdin(std::process::Stdio::null());
+                    cmd.stdout(std::process::Stdio::null());
+                    // cmd.stderr(std::process::Stdio::null());
+                    cmd.stdin(std::process::Stdio::null());
 
                     children.push(cmd.spawn().expect("Failed to spawn process"));
                 }
@@ -1100,6 +1100,7 @@ impl Loader for NormalLoader {
             .map(Arc::from)
             .collect::<Vec<_>>();
 
+        eprintln!("A");
         let barrier = if env::var(daemon::FLAG).is_err() {
             Box::new(mistralrs_quant::Server::new(&"0.0.0.0:8765", 8, 1)?) as Box<dyn BarrierLike>
         } else {
@@ -1108,6 +1109,7 @@ impl Loader for NormalLoader {
                 1,
             )?) as Box<dyn BarrierLike>
         };
+        eprintln!("B");
 
         Ok(Arc::new(Mutex::new(NormalPipeline {
             parallel_models,
