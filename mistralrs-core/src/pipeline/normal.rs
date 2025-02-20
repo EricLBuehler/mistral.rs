@@ -568,7 +568,7 @@ impl Loader for NormalLoader {
                     cmd.env("MISTRALRS_MN_WORKER_ID", worker_rank.to_string());
 
                     cmd.stdout(std::process::Stdio::null());
-                    cmd.stderr(std::process::Stdio::null());
+                    // cmd.stderr(std::process::Stdio::null()); TODO!!!
                     cmd.stdin(std::process::Stdio::null());
 
                     children.push(cmd.spawn().expect("Failed to spawn process"));

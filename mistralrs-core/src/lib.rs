@@ -432,8 +432,10 @@ impl MistralRs {
 
             let request_sender = sender.write().unwrap();
             loop {
+                eprintln!("Reading.");
                 let mut buf = String::new();
                 reader.read_line(&mut buf).unwrap();
+                eprintln!("Read.");
                 let req: NormalRequest = serde_json::from_str(&buf).unwrap();
 
                 let mut binding = request::DEFAULT_RECEIVER;

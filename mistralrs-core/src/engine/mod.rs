@@ -1,9 +1,11 @@
 use candle_core::Tensor;
 use either::Either;
+use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::toktrie::TokEnv;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
+    io::{BufReader, BufWriter, Write},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -13,6 +15,7 @@ use std::{
 use tokio::sync::{mpsc::Receiver, Mutex};
 
 use crate::{
+    daemon,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -516,6 +519,21 @@ impl Engine {
     }
 
     async fn add_request(&mut self, request: NormalRequest) {
+        // TODO!!!
+        {
+            let name = daemon::ipc_name().unwrap();
+            let num_workers = 7;
+            let listener = ListenerOptions::new().name(name).create_sync().unwrap();
+
+            for _ in 0..num_workers {
+                let stream = listener.accept().unwrap();
+                let mut writer = BufWriter::new(stream);
+                let req = format!("{}\n", serde_json::to_string(&request).unwrap());
+                writer.write_all(req.as_bytes()).unwrap();
+            }
+            info!("Send to all workers!");
+        };
+
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat(_) | RequestMessage::VisionChat { .. }
