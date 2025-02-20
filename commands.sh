@@ -1,0 +1,29 @@
+commands
+
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_HEAD_NUM_WORKERS=7 MISTRALRS_MN_HEAD_PORT=1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput --no-paged-attn plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=0 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput --no-paged-attn plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=1 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput --no-paged-attn plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput --no-paged-attn plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=3 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput --no-paged-attn plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=4 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput --no-paged-attn plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=5 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput --no-paged-attn plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=6 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput --no-paged-attn plain -m meta-llama/Llama-3.1-8B-Instruct
+
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_HEAD_NUM_WORKERS=7 MISTRALRS_MN_HEAD_PORT=1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=0 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=1 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=3 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=4 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=5 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+CUDA_LAUNCH_BLOCKING=1 MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=6 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+
+
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_HEAD_NUM_WORKERS=7 MISTRALRS_MN_HEAD_PORT=1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=0 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=1 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=2 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=3 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=4 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=5 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 MISTRALRS_MN_WORKER_ID=6 MISTRALRS_MN_WORKER_SERVER_ADDR=0.0.0.0:1234 cargo run --release --features cuda,nccl,flash-attn -- -i --throughput plain -m meta-llama/Llama-3.1-8B-Instruct

@@ -10,12 +10,15 @@ use crate::{
     tools::{Tool, ToolChoice},
     CustomLogitsProcessor, DiffusionGenerationParams,
 };
-use std::{fmt::Debug, sync::Arc};
-use tokio::sync::mpsc::Sender;
+use std::{
+    fmt::Debug,
+    sync::{Arc, OnceLock},
+};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 pub type LlguidanceGrammar = llguidance::api::TopLevelGrammar;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Control the constraint with llguidance.
 pub enum Constraint {
     Regex(String),
@@ -35,7 +38,7 @@ pub enum ImageGenerationResponseFormat {
 
 pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Message or messages for a [`Request`].
 pub enum RequestMessage {
     Chat(Vec<IndexMap<String, MessageContent>>),
@@ -46,6 +49,7 @@ pub enum RequestMessage {
     },
     CompletionTokens(Vec<u32>),
     VisionChat {
+        #[serde(skip)] // TODO!!!!
         images: Vec<image::DynamicImage>,
         messages: Vec<IndexMap<String, MessageContent>>,
     },
@@ -56,7 +60,17 @@ pub enum RequestMessage {
     },
 }
 
-#[derive(Clone)]
+pub(crate) const DEFAULT_RECEIVER: OnceLock<Option<Receiver<Response>>> = OnceLock::new();
+
+fn default_responder() -> Sender<Response> {
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    let mut binding = DEFAULT_RECEIVER;
+    let out = binding.get_mut().unwrap();
+    *out = Some(receiver);
+    sender
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 /// A normal request request to the `MistralRs`.
 /// - `messages`: Messages for the request
 /// - `sampling_params`: Sampling parameters for generation
@@ -78,6 +92,8 @@ pub enum RequestMessage {
 pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
+    #[serde(default = "default_responder")]
+    #[serde(skip)]
     pub response: Sender<Response>,
     pub return_logprobs: bool,
     pub is_streaming: bool,
@@ -87,6 +103,7 @@ pub struct NormalRequest {
     pub adapters: Option<Vec<String>>,
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
+    #[serde(skip)]
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
 }

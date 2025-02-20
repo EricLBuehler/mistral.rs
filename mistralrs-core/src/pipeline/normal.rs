@@ -18,6 +18,7 @@ use super::{
     Qwen2Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
+use crate::daemon::{self, BigI8Array, WorkerTransferData};
 use crate::device_map::DeviceMapper;
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -43,9 +44,7 @@ use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
 use interprocess::local_socket::traits::{Listener, Stream};
-use interprocess::local_socket::{
-    GenericNamespaced, ListenerOptions, Stream as LocalStream, ToNsName,
-};
+use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
@@ -53,8 +52,6 @@ use rayon::iter::{
     IntoParallelRefMutIterator, ParallelIterator,
 };
 use regex_automata::meta::Regex;
-use serde::{Deserialize, Serialize};
-use serde_big_array::BigArray;
 use std::any::Any;
 use std::borrow::Cow;
 use std::io::{BufRead, BufReader, Write};
@@ -528,21 +525,7 @@ impl Loader for NormalLoader {
             // TODO!!!
             assert_eq!(pipeline_parallel_size, 1);
 
-            #[derive(Serialize, Deserialize, Debug)]
-            #[serde(transparent)]
-            struct BigI8Array(#[serde(with = "BigArray")] [i8; 128]);
-
-            #[derive(Serialize, Deserialize, Debug)]
-            enum WorkerTransferData {
-                Init {
-                    ids: Vec<BigI8Array>,
-                    worker_rank: usize,
-                },
-            }
-
-            let printname = "example.sock";
-            let name = printname.to_ns_name::<GenericNamespaced>()?;
-
+            let name = daemon::ipc_name()?;
             let local_rank = if let Ok(payload) = env::var(FLAG) {
                 let payload: WorkerTransferData = serde_json::from_str(&payload)?;
                 let WorkerTransferData::Init {

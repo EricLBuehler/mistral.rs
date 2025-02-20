@@ -8,6 +8,9 @@ pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
+use std::env;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::time::Instant;
 use std::{
     cell::RefCell,
@@ -53,6 +56,7 @@ mod paged_attention;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 use dummy_paged_attention as paged_attention;
 mod attention;
+pub(crate) mod daemon;
 mod diffusion_models;
 mod pipeline;
 mod prefix_cacher;
@@ -416,6 +420,28 @@ impl MistralRs {
                     warn!("Dummy run failed!");
                 }
             });
+        }
+
+        if env::var(daemon::FLAG).is_ok() {
+            use interprocess::local_socket::traits::Stream;
+            use interprocess::local_socket::Stream as LocalStream;
+
+            let name = daemon::ipc_name().unwrap();
+            let stream = LocalStream::connect(name).unwrap();
+            let mut reader = BufReader::new(stream);
+
+            let request_sender = sender.write().unwrap();
+            loop {
+                let mut buf = String::new();
+                reader.read_line(&mut buf).unwrap();
+                let req: NormalRequest = serde_json::from_str(&buf).unwrap();
+
+                let mut binding = request::DEFAULT_RECEIVER;
+                let receiver = binding.get_mut().unwrap().as_mut().unwrap();
+                request_sender.blocking_send(Request::Normal(req)).unwrap();
+                let resp = receiver.blocking_recv().unwrap();
+                assert!(resp.as_result().is_ok());
+            }
         }
 
         Arc::new(Self {
