@@ -437,13 +437,12 @@ impl MistralRs {
                             let mut buf = String::new();
                             reader.read_line(&mut buf).unwrap();
                             let mut req: NormalRequest = serde_json::from_str(&buf).unwrap();
-                            req.is_streaming = false;
 
-                            let mut receiver =
-                                request::DEFAULT_RECEIVER.get().unwrap().lock().unwrap();
-                            eprintln!("is_closed before? {} ", receiver.is_closed());
+                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                            req.is_streaming = false;
+                            req.response = sender;
+
                             request_sender.send(Request::Normal(req)).await.unwrap();
-                            eprintln!("is_closed after? {} ", receiver.is_closed());
                             let resp = receiver.recv().await.unwrap();
                             assert!(resp.as_result().is_ok());
                         }
