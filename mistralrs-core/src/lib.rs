@@ -393,7 +393,7 @@ impl MistralRs {
                     },
                     response: tx,
                     return_logprobs: false,
-                    is_streaming: true,
+                    is_streaming: false,
                     constraint: Constraint::None,
                     suffix: None,
                     adapters: None,
@@ -407,7 +407,10 @@ impl MistralRs {
                 clone_sender.blocking_send(req).unwrap();
 
                 if let Some(resp) = rx.blocking_recv() {
-                    dbg!(&resp.as_result().unwrap());
+                    let ResponseOk::Done(res) = resp.as_result().unwrap() else  {
+                        panic!();
+                    };
+                    dbg!(res.choices[0].message);
                     let end = Instant::now();
                     info!(
                         "Dummy run completed in {}s.",
