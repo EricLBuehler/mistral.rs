@@ -410,7 +410,7 @@ impl MistralRs {
                     let ResponseOk::Done(res) = resp.as_result().unwrap() else  {
                         panic!();
                     };
-                    dbg!(res.choices[0].message);
+                    dbg!(&res.choices[0].message);
                     let end = Instant::now();
                     info!(
                         "Dummy run completed in {}s.",
