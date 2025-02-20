@@ -601,7 +601,8 @@ impl Loader for NormalLoader {
                 0
             };
             // TODO!!!
-            let available_devices = vec![available_devices[local_rank].clone()];
+            // let available_devices = vec![available_devices[local_rank].clone()];
+            dbg!(ids.iter().map(|id| id.internal()).collect::<Vec<_>>());
 
             if ids.len() != 1 && use_multi_node {
                 anyhow::bail!(
