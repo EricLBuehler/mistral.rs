@@ -22,6 +22,7 @@ impl Server {
     /// Binds the listener and then accepts exactly `n_nodes` persistent connections.
     pub fn new<A: ToSocketAddrs>(addr: &A, n_nodes: usize, n_local_ranks: usize) -> Result<Self> {
         let listener = TcpListener::bind(addr)?;
+        listener.set_nonblocking(false)?;
         let start = Instant::now();
         let mut connections = Vec::with_capacity(n_nodes);
         while connections.len() < n_nodes {

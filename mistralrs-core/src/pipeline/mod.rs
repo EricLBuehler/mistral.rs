@@ -570,6 +570,7 @@ pub trait Pipeline:
                     .unwrap();
                 let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
 
+                eprintln!("RUNNING start");
                 let mut exec_duration = Duration::ZERO;
                 for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
@@ -591,6 +592,7 @@ pub trait Pipeline:
                         }
                     }
                 }
+                eprintln!("RUNNING end");
 
                 if raw_out_logits[0][0].is_some() {
                     let start = Instant::now();
@@ -616,6 +618,7 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
+                eprintln!("SAMPLING start");
                 let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. } => unreachable!(),
@@ -662,6 +665,7 @@ pub trait Pipeline:
                         .await?;
                     }
                 }
+                eprintln!("SAMPLING end");
                 let end = Instant::now();
                 exec_duration += end.duration_since(start);
 
