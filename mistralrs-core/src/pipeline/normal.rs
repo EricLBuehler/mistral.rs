@@ -45,7 +45,9 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
 use interprocess::local_socket::traits::{Listener, Stream};
 use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
-use mistralrs_quant::{BarrierLike, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
+use mistralrs_quant::{
+    BarrierLike, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors,
+};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -85,6 +87,7 @@ pub struct NormalPipeline {
     config: String,
     imatrix: Option<PathBuf>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
+    forward_barrier: Box<dyn BarrierLike>,
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -1096,6 +1099,16 @@ impl Loader for NormalLoader {
             .into_iter()
             .map(Arc::from)
             .collect::<Vec<_>>();
+
+        let barrier = if env::var(daemon::FLAG).is_err() {
+            Box::new(mistralrs_quant::Server::new(&"0.0.0.0:8765", 8, 1)?) as Box<dyn BarrierLike>
+        } else {
+            Box::new(mistralrs_quant::Client::new(
+                "0.0.0.0:8765".parse().unwrap(),
+                1,
+            )?) as Box<dyn BarrierLike>
+        };
+
         Ok(Arc::new(Mutex::new(NormalPipeline {
             parallel_models,
             tokenizer: tokenizer.into(),
@@ -1132,6 +1145,7 @@ impl Loader for NormalLoader {
             config,
             imatrix: self.config.imatrix.clone(),
             mapper: pipeline_mapper,
+            forward_barrier: barrier,
         })))
     }
 
@@ -1312,18 +1326,8 @@ impl Pipeline for NormalPipeline {
             }
             (None, None) => None,
         };
-        if env::var(daemon::FLAG).is_err() {
-            let server = mistralrs_quant::Server::new(
-                &"0.0.0.0:8765",
-                8,
-                1,
-            )?;
-
-            server.wait()?;
-        } else {
-            let client = mistralrs_quant::Client::new("0.0.0.0:8765".parse().unwrap(), 1)?;
-            client.wait()?;
-        }
+        // Synchronize on forward pass
+        self.forward_barrier.wait()?;
         #[cfg(feature = "metal")]
         let logits = objc::rc::autoreleasepool(|| -> candle_core::Result<Tensor> {
             match self.parallel_models[0].is_xlora() {
