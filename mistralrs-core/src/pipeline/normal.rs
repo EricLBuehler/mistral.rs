@@ -691,7 +691,6 @@ impl Loader for NormalLoader {
                     Arc::new(mistralrs_quant::Server::new(&"0.0.0.0:8700", 7, 1)?)
                         as Arc<dyn BarrierLike>
                 } else {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
                     Arc::new(mistralrs_quant::Client::new(
                         "0.0.0.0:8700".parse().unwrap(),
                         1,
