@@ -55,7 +55,7 @@ use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::{Arc, Barrier, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
@@ -482,7 +482,7 @@ impl Loader for NormalLoader {
             let global_world_size = if let Ok(x) = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE") {
                 usize::from_str(&x).context("MISTRALRS_MN_GLOBAL_WORLD_SIZE")?
             } else {
-                local_world_size
+                mistralrs_quant::distributed::get_global_tp_size_from_devices()?
             };
 
             let use_multi_node = global_world_size != local_world_size;
@@ -493,8 +493,6 @@ impl Loader for NormalLoader {
             if global_world_size < local_world_size || global_world_size % local_world_size != 0 {
                 anyhow::bail!("Global world size {global_world_size} must both be at least and divide the local world size {local_world_size}");
             }
-
-            let global_world_size = 8;
 
             info!("Local tensor parallel world size is {local_world_size}");
             info!("Global tensor parallel world size is {global_world_size}");
@@ -515,7 +513,8 @@ impl Loader for NormalLoader {
                 stream.write_all(b"ready\n")?;
                 worker_rank + 1
             } else {
-                let num_workers = 7;
+                let num_workers =
+                    mistralrs_quant::distributed::get_global_tp_size_from_devices()? - 1;
                 let mut children = Vec::new();
                 for worker_rank in 0..num_workers {
                     let exe_path = env::current_exe().expect("Failed to get current exe");
@@ -526,7 +525,7 @@ impl Loader for NormalLoader {
                     cmd.args(&args[1..]);
 
                     let data = WorkerTransferData::Init {
-                        id: BigI8Array(id.internal().clone()),
+                        id: BigI8Array(*id.internal()),
                         worker_rank,
                     };
 
@@ -595,27 +594,6 @@ impl Loader for NormalLoader {
                 0
             };
 
-            let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
-                let n_nodes = usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
-                let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
-                    anyhow::bail!(
-                        "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
-                    );
-                };
-                let server = mistralrs_quant::Server::new(
-                    &format!("0.0.0.0:{port}"),
-                    n_nodes,
-                    local_world_size,
-                )?;
-
-                Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
-            } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
-                let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
-                Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
-            } else {
-                Arc::new(Barrier::new(local_world_size)) as Arc<dyn mistralrs_quant::BarrierLike>
-            };
-
             // They each block on each other
             // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
             let comm = mistralrs_quant::Comm::from_device(
@@ -623,7 +601,6 @@ impl Loader for NormalLoader {
                 device,
                 local_rank + rank_offset,
                 global_world_size,
-                barrier.clone(),
             )?;
 
             let make_dummy_regexes = if loading_isq && self.config.from_uqff.is_some() {

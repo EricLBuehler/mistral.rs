@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    sync::{Arc, Barrier},
-};
+use std::{fmt::Debug, sync::Arc};
 
 use crate::{
     pipeline::AutoDeviceMapParams,
@@ -354,7 +351,6 @@ impl DeviceMapper for LayerDeviceMapper {
             self.device_for(layer_idx, false).unwrap_or(&self.nm_device),
             0,
             1,
-            Arc::new(Barrier::new(1)),
         )?))
     }
 }
@@ -420,7 +416,6 @@ impl DeviceMapper for DummyDeviceMapper {
             self.device_for(layer_idx, false).unwrap_or(&self.nm_device),
             0,
             1,
-            Arc::new(Barrier::new(1)),
         )?))
     }
 }
@@ -487,7 +482,6 @@ impl DeviceMapper for NcclDeviceMapper {
             self.device_for(layer_idx, false).unwrap_or(&self.nm_device),
             0,
             1,
-            Arc::new(Barrier::new(1)),
         )?))
     }
 }

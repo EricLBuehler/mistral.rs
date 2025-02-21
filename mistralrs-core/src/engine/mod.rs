@@ -509,7 +509,8 @@ impl Engine {
     fn replicate_request_to_daemons(&mut self, request: &Request) {
         if !daemon::is_daemon() {
             let name = daemon::ipc_name().unwrap();
-            let num_workers = 7;
+            let num_workers =
+                mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - 1;
             let listener = ListenerOptions::new().name(name).create_sync().unwrap();
 
             for _ in 0..num_workers {
