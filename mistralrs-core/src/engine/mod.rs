@@ -519,8 +519,7 @@ impl Engine {
     }
 
     async fn add_request(&mut self, request: NormalRequest) {
-        // TODO!!!
-        if std::env::var(daemon::FLAG).is_err() {
+        if !daemon::is_daemon() {
             let name = daemon::ipc_name().unwrap();
             let num_workers = 7;
             let listener = ListenerOptions::new().name(name).create_sync().unwrap();
@@ -531,7 +530,6 @@ impl Engine {
                 let req = format!("{}\n", serde_json::to_string(&request).unwrap());
                 writer.write_all(req.as_bytes()).unwrap();
             }
-            info!("Replicated request to all workers!");
         };
 
         let is_chat = matches!(

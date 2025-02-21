@@ -2,7 +2,11 @@ use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-pub(crate) const FLAG: &str = "__MISTRALRS_WORKER_INTERNAL";
+pub(crate) const IS_DAEMON_FLAG: &str = "__MISTRALRS_DAEMON_INTERNAL";
+
+pub(crate) fn is_daemon() -> bool {
+    std::env::var(IS_DAEMON_FLAG).is_ok()
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(transparent)]

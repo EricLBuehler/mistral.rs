@@ -45,9 +45,7 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
 use interprocess::local_socket::traits::{Listener, Stream};
 use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
-use mistralrs_quant::{
-    BarrierLike, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors,
-};
+use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
@@ -61,7 +59,7 @@ use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Barrier, RwLock};
 use std::time::Instant;
 use std::{env, fs};
 use tokenizers::Tokenizer;
@@ -661,36 +659,28 @@ impl Loader for NormalLoader {
                 split_available_devices.iter().enumerate()
             {
                 // Each pipeline parallel gets its own barrier
-                // let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
-                //     let n_nodes =
-                //         usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
-                //     let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
-                //         anyhow::bail!(
-                //             "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
-                //         );
-                //     };
-                //     let server = mistralrs_quant::Server::new(
-                //         &format!("0.0.0.0:{port}"),
-                //         n_nodes,
-                //         local_world_size,
-                //     )?;
+                // TODO: this is unused
+                let barrier = if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
+                    let n_nodes =
+                        usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
+                    let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
+                        anyhow::bail!(
+                            "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
+                        );
+                    };
+                    let server = mistralrs_quant::Server::new(
+                        &format!("0.0.0.0:{port}"),
+                        n_nodes,
+                        local_world_size,
+                    )?;
 
-                //     Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
-                // } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
-                //     let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
-                //     Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
-                // } else {
-                //     Arc::new(Barrier::new(local_world_size))
-                //         as Arc<dyn mistralrs_quant::BarrierLike>
-                // };
-                let barrier = if env::var(daemon::FLAG).is_err() {
-                    Arc::new(mistralrs_quant::Server::new(&"0.0.0.0:8700", 7, 1)?)
-                        as Arc<dyn BarrierLike>
+                    Arc::new(server) as Arc<dyn mistralrs_quant::BarrierLike>
+                } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
+                    let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
+                    Arc::new(client) as Arc<dyn mistralrs_quant::BarrierLike>
                 } else {
-                    Arc::new(mistralrs_quant::Client::new(
-                        "0.0.0.0:8700".parse().unwrap(),
-                        1,
-                    )?) as Arc<dyn BarrierLike>
+                    Arc::new(Barrier::new(local_world_size))
+                        as Arc<dyn mistralrs_quant::BarrierLike>
                 };
 
                 // They each block on each other

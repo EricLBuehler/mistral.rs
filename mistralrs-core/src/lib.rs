@@ -8,7 +8,6 @@ pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
-use std::env;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::time::Instant;
@@ -373,7 +372,7 @@ impl MistralRs {
 
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
 
-        if env::var(daemon::FLAG).is_ok() {
+        if daemon::is_daemon() {
             let request_sender = sender.write().unwrap().clone();
             thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
@@ -407,7 +406,7 @@ impl MistralRs {
             .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
         // Do a dummy run
-        if env::var(daemon::FLAG).is_err()
+        if !daemon::is_daemon()
             && is_multi_threaded
             && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
         {
