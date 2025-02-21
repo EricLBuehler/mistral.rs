@@ -583,7 +583,7 @@ impl Loader for VisionLoader {
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,
-                cache_engines: cache_engine.map(|x| vec![x]),
+                cache_engine,
                 prompt_chunksize: self.config.prompt_chunksize,
                 model_metadata: Some(model_metadata),
             }),
@@ -734,16 +734,8 @@ impl Pipeline for VisionPipeline {
             flash_meta,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
         let metadata = self.get_metadata();
-        assert_eq!(
-            metadata
-                .cache_engines
-                .as_ref()
-                .map(|x| x.len())
-                .unwrap_or(1),
-            1
-        );
-        let paged_attn_meta = match (&metadata.cache_engines, &paged_attn_meta) {
-            (Some(engine), Some(meta)) => Some((engine[0].get_kv_cache().clone(), meta)),
+        let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {
+            (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
             (Some(_), None) => {
                 // This can happen if Rust-side user code is wrong
                 candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")

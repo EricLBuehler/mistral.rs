@@ -14,10 +14,7 @@ pub(crate) struct BigI8Array(#[serde(with = "BigArray")] pub(crate) [i8; 128]);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum WorkerTransferData {
-    Init {
-        ids: Vec<BigI8Array>,
-        worker_rank: usize,
-    },
+    Init { id: BigI8Array, worker_rank: usize },
 }
 
 pub(crate) fn ipc_name() -> anyhow::Result<Name<'static>> {

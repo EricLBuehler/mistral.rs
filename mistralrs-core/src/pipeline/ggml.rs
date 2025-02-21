@@ -387,7 +387,7 @@ impl Loader for GGMLLoader {
                 activation_dtype: internal_dtype,
                 sliding_window: None,
                 cache_config: None,
-                cache_engines: None,
+                cache_engine: None,
                 prompt_chunksize: Some(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: None,
             }),
