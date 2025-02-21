@@ -128,6 +128,11 @@ impl Engine {
                 }
                 self.handle_request(request).await;
             }
+
+            if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
+                self.replicate_request_to_daemons(&Request::TerminateAllSeqsNextStep);
+            }
+
             let run_start = Instant::now();
             let scheduled = self.scheduler.schedule();
 
@@ -533,6 +538,9 @@ impl Engine {
             Request::Tokenize(req) => self.tokenize_text(req).await,
             Request::Detokenize(req) => self.detokenize_text(req).await,
             Request::Terminate => (),
+            Request::TerminateAllSeqsNextStep => {
+                TERMINATE_ALL_NEXT_STEP.store(true, Ordering::SeqCst)
+            }
         }
     }
 

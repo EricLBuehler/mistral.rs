@@ -423,6 +423,9 @@ impl MistralRs {
                                     assert!(resp.as_result().is_ok());
                                     continue;
                                 }
+                                Request::TerminateAllSeqsNextStep => {
+                                    Request::TerminateAllSeqsNextStep
+                                }
                             };
 
                             request_sender.send(req).await.unwrap();

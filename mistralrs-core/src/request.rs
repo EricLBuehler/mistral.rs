@@ -162,6 +162,7 @@ pub enum Request {
     // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
     // and then Engine will be dropped.
     Terminate,
+    TerminateAllSeqsNextStep,
 }
 
 impl Debug for Request {
@@ -193,6 +194,7 @@ impl Debug for Request {
                 write!(f, "Tokenization Request {:?}", req.tokens)
             }
             Request::Terminate => write!(f, "Termination Request"),
+            Request::TerminateAllSeqsNextStep => write!(f, "Terminate All Seqs Next Step"),
         }
     }
 }
