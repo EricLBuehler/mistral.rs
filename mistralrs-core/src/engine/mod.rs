@@ -121,6 +121,7 @@ impl Engine {
             }
 
             while let Ok(request) = self.rx.try_recv() {
+                self.replicate_request_to_daemons(&request);
                 if matches!(request, Request::Terminate) {
                     break 'lp;
                 }
@@ -354,6 +355,7 @@ impl Engine {
                     {
                         // If there is nothing to do, sleep until a request comes in
                         if let Some(request) = self.rx.recv().await {
+                            self.replicate_request_to_daemons(&request);
                             if matches!(request, Request::Terminate) {
                                 break 'lp;
                             }
@@ -498,7 +500,7 @@ impl Engine {
         }
     }
 
-    async fn handle_request(&mut self, request: Request) {
+    fn replicate_request_to_daemons(&mut self, request: &Request) {
         if !daemon::is_daemon() {
             let name = daemon::ipc_name().unwrap();
             let num_workers = 7;
@@ -511,7 +513,9 @@ impl Engine {
                 writer.write_all(req.as_bytes()).unwrap();
             }
         };
+    }
 
+    async fn handle_request(&mut self, request: Request) {
         match request {
             Request::ActivateAdapters(adapters) => {
                 match get_mut_arcmutex!(self.pipeline).activate_adapters(adapters) {
