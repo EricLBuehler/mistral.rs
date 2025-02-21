@@ -66,8 +66,6 @@ use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-const FLAG: &str = "__MISTRALRS_WORKER_INTERNAL";
-
 pub struct NormalPipeline {
     parallel_models: Vec<Arc<dyn NormalModel + Send + Sync>>,
     tokenizer: Arc<Tokenizer>,
@@ -526,7 +524,7 @@ impl Loader for NormalLoader {
             assert_eq!(pipeline_parallel_size, 1);
 
             let name = daemon::ipc_name()?;
-            let local_rank = if let Ok(payload) = env::var(FLAG) {
+            let local_rank = if let Ok(payload) = env::var(daemon::IS_DAEMON_FLAG) {
                 let payload: WorkerTransferData = serde_json::from_str(&payload)?;
                 let WorkerTransferData::Init {
                     ids: new_ids,
@@ -560,7 +558,7 @@ impl Loader for NormalLoader {
                         worker_rank,
                     };
 
-                    cmd.env(FLAG, serde_json::to_string(&data)?);
+                    cmd.env(daemon::IS_DAEMON_FLAG, serde_json::to_string(&data)?);
                     cmd.env("MISTRALRS_MN_WORKER_ID", worker_rank.to_string());
 
                     cmd.stdout(std::process::Stdio::null());
