@@ -544,7 +544,6 @@ impl Loader for NormalLoader {
                 let num_workers = 7;
                 let mut children = Vec::new();
                 for worker_rank in 0..num_workers {
-                    dbg!(&worker_rank);
                     let exe_path = env::current_exe().expect("Failed to get current exe");
 
                     let args: Vec<String> = env::args().collect();
@@ -565,7 +564,7 @@ impl Loader for NormalLoader {
                     cmd.env("MISTRALRS_MN_WORKER_ID", worker_rank.to_string());
 
                     cmd.stdout(std::process::Stdio::null());
-                    // cmd.stderr(std::process::Stdio::null());
+                    cmd.stderr(std::process::Stdio::null());
                     cmd.stdin(std::process::Stdio::null());
 
                     children.push(cmd.spawn().expect("Failed to spawn process"));
@@ -587,10 +586,6 @@ impl Loader for NormalLoader {
 
                 0
             };
-            // TODO!!!
-            // let available_devices = vec![available_devices[local_rank].clone()];
-            // dbg!(ids.iter().map(|id| id.internal()).collect::<Vec<_>>());
-            dbg!(&available_devices);
 
             if ids.len() != 1 && use_multi_node {
                 anyhow::bail!(
