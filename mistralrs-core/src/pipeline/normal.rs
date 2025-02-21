@@ -485,9 +485,8 @@ impl Loader for NormalLoader {
                 mistralrs_quant::distributed::get_global_tp_size_from_devices()?
             };
 
-            let use_multi_node = global_world_size != local_world_size;
-            if use_multi_node {
-                info!("Global world size != local world size, entering multi-node.");
+            if std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE").is_ok() {
+                info!("MISTRALRS_MN_GLOBAL_WORLD_SIZE is set, entering multi-node.");
             }
 
             if global_world_size < local_world_size || global_world_size % local_world_size != 0 {
