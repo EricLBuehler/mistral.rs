@@ -117,6 +117,7 @@ impl Engine {
                     .get(&self.id),
                 Some(Some(EngineInstruction::Terminate))
             ) {
+                self.replicate_request_to_daemons(&Request::Terminate);
                 break 'lp;
             }
 
