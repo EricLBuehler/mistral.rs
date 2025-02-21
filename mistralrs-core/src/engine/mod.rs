@@ -499,6 +499,19 @@ impl Engine {
     }
 
     async fn handle_request(&mut self, request: Request) {
+        if !daemon::is_daemon() {
+            let name = daemon::ipc_name().unwrap();
+            let num_workers = 7;
+            let listener = ListenerOptions::new().name(name).create_sync().unwrap();
+
+            for _ in 0..num_workers {
+                let stream = listener.accept().unwrap();
+                let mut writer = BufWriter::new(stream);
+                let req = format!("{}\n", serde_json::to_string(&request).unwrap());
+                writer.write_all(req.as_bytes()).unwrap();
+            }
+        };
+
         match request {
             Request::ActivateAdapters(adapters) => {
                 match get_mut_arcmutex!(self.pipeline).activate_adapters(adapters) {
@@ -514,24 +527,11 @@ impl Engine {
             }
             Request::Tokenize(req) => self.tokenize_text(req).await,
             Request::Detokenize(req) => self.detokenize_text(req).await,
-            Request::Terminate => panic!("This is unreachable in `handle_request`. Termination is handled in the `run` loop."),
+            Request::Terminate => (),
         }
     }
 
     async fn add_request(&mut self, request: NormalRequest) {
-        if !daemon::is_daemon() {
-            let name = daemon::ipc_name().unwrap();
-            let num_workers = 7;
-            let listener = ListenerOptions::new().name(name).create_sync().unwrap();
-
-            for _ in 0..num_workers {
-                let stream = listener.accept().unwrap();
-                let mut writer = BufWriter::new(stream);
-                let req = format!("{}\n", serde_json::to_string(&request).unwrap());
-                writer.write_all(req.as_bytes()).unwrap();
-            }
-        };
-
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat(_) | RequestMessage::VisionChat { .. }

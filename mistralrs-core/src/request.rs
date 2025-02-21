@@ -57,7 +57,7 @@ pub enum RequestMessage {
     },
 }
 
-fn default_responder() -> Sender<Response> {
+fn default_responder<T>() -> Sender<T> {
     let (sender, _) = tokio::sync::mpsc::channel(1);
     sender
 }
@@ -127,7 +127,7 @@ impl NormalRequest {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Request to tokenize some messages or some text.
 /// - `add_generation_prompt` is only applicable if chat messages are provided and not a raw string.
 pub struct TokenizationRequest {
@@ -135,18 +135,22 @@ pub struct TokenizationRequest {
     pub tools: Option<Vec<Tool>>,
     pub add_generation_prompt: bool,
     pub add_special_tokens: bool,
+    #[serde(default = "default_responder")]
+    #[serde(skip)]
     pub response: Sender<anyhow::Result<Vec<u32>>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Request to detokenize some text.
 pub struct DetokenizationRequest {
     pub tokens: Vec<u32>,
     pub skip_special_tokens: bool,
+    #[serde(default = "default_responder")]
+    #[serde(skip)]
     pub response: Sender<anyhow::Result<String>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 /// A request to the Engine, encapsulating the various parameters as well as
 /// the `mpsc` response `Sender` used to return the [`Response`].
 pub enum Request {

@@ -618,21 +618,13 @@ impl Loader for NormalLoader {
 
             // They each block on each other
             // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
-            let comm = {
-                #[cfg(feature = "cuda")]
-                {
-                    use candle_core::cuda::cudarc::driver::result;
-                    unsafe { result::ctx::set_current(*device.as_cuda_device()?.cu_primary_ctx()) }
-                        .unwrap();
-                }
-                mistralrs_quant::Comm::from_device(
-                    id,
-                    device,
-                    local_rank + rank_offset,
-                    global_world_size,
-                    barrier.clone(),
-                )?
-            };
+            let comm = mistralrs_quant::Comm::from_device(
+                id,
+                device,
+                local_rank + rank_offset,
+                global_world_size,
+                barrier.clone(),
+            )?;
 
             let make_dummy_regexes = if loading_isq && self.config.from_uqff.is_some() {
                 // Dummy weights for the layers which will be overwritten...

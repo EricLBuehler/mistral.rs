@@ -386,15 +386,46 @@ impl MistralRs {
                             let mut reader = BufReader::new(stream);
                             let mut buf = String::new();
                             reader.read_line(&mut buf).unwrap();
-                            let mut req: NormalRequest = serde_json::from_str(&buf).unwrap();
+                            let mut req: Request = serde_json::from_str(&buf).unwrap();
 
-                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                            req.is_streaming = false;
-                            req.response = sender;
+                            req = match req {
+                                Request::ActivateAdapters(x) => Request::ActivateAdapters(x),
+                                Request::ReIsq(x) => Request::ReIsq(x),
+                                Request::Terminate => Request::Terminate,
+                                Request::Detokenize(mut x) => {
+                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                                    x.response = sender;
+                                    let req = Request::Detokenize(x);
 
-                            request_sender.send(Request::Normal(req)).await.unwrap();
-                            let resp = receiver.recv().await.unwrap();
-                            assert!(resp.as_result().is_ok());
+                                    request_sender.send(req).await.unwrap();
+                                    let resp = receiver.recv().await.unwrap();
+                                    assert!(resp.is_ok());
+                                    continue;
+                                }
+                                Request::Tokenize(mut x) => {
+                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                                    x.response = sender;
+                                    let req = Request::Tokenize(x);
+
+                                    request_sender.send(req).await.unwrap();
+                                    let resp = receiver.recv().await.unwrap();
+                                    assert!(resp.is_ok());
+                                    continue;
+                                }
+                                Request::Normal(mut x) => {
+                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                                    x.is_streaming = false;
+                                    x.response = sender;
+                                    let req = Request::Normal(x);
+
+                                    request_sender.send(req).await.unwrap();
+                                    let resp = receiver.recv().await.unwrap();
+                                    assert!(resp.as_result().is_ok());
+                                    continue;
+                                }
+                            };
+
+                            request_sender.send(req).await.unwrap();
                         }
                     }
                 });
