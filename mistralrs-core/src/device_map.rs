@@ -6,7 +6,6 @@ use crate::{
     Topology, TryIntoDType,
 };
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
-use itertools::Itertools;
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use tracing::info;
@@ -89,13 +88,9 @@ impl DeviceMapSetting {
     ) -> Result<Box<dyn DeviceMapper + Send + Sync>> {
         match self {
             Self::Nccl { devices } => {
-                once_log_info(format!(
-                    "Loading model using a NCCL-parellized pipeline with the following devices: {}",
-                    devices
-                        .iter()
-                        .map(|dev| dev.device_pretty_repr())
-                        .join(", ")
-                ));
+                once_log_info(
+                    "Loading model using a NCCL-parallelized pipeline with the following devices",
+                );
                 Ok(Box::new(NcclDeviceMapper {
                     nm_device: devices[0].clone(),
                     devices: devices.clone(),
