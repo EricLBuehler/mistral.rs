@@ -89,7 +89,7 @@ impl DeviceMapSetting {
         match self {
             Self::Nccl { devices } => {
                 once_log_info(
-                    "Loading model using a NCCL-parallelized pipeline with the following devices",
+                    "Loading model using a NCCL-parallelized pipeline.",
                 );
                 Ok(Box::new(NcclDeviceMapper {
                     nm_device: devices[0].clone(),
