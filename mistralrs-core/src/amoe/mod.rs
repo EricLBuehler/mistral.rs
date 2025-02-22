@@ -251,7 +251,7 @@ impl AnyMoeTrainableLayer for MoeMlp {
         self.vars.clone()
     }
     fn take_cached_gating_output(&mut self) -> Tensor {
-        self.gating_output.read().unwrap().clone().take().unwrap()
+        self.gating_output.read().unwrap().clone().unwrap()
     }
 }
 

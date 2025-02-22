@@ -228,7 +228,7 @@ impl Sampler {
         min_p: f64,
         logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     ) -> anyhow::Result<Self> {
-        let temperature = if temperature.map_or(true, |v| v < 1e-7) {
+        let temperature = if temperature.is_none_or(|v| v < 1e-7) {
             None
         } else {
             temperature
