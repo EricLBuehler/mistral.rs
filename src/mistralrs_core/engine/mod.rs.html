@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/engine/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/engine/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/engine/mod.rs`."><title>mod.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-46132b98.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.85.0 (4d91de4e4 2025-02-17)" data-channel="1.85.0" data-search-js="search-75f5ac3e.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/engine/</div>mod.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -1045,12 +1045,44 @@
 <a href="#1044" id="1044">1044</a>
 <a href="#1045" id="1045">1045</a>
 <a href="#1046" id="1046">1046</a>
-<a href="#1047" id="1047">1047</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
+<a href="#1047" id="1047">1047</a>
+<a href="#1048" id="1048">1048</a>
+<a href="#1049" id="1049">1049</a>
+<a href="#1050" id="1050">1050</a>
+<a href="#1051" id="1051">1051</a>
+<a href="#1052" id="1052">1052</a>
+<a href="#1053" id="1053">1053</a>
+<a href="#1054" id="1054">1054</a>
+<a href="#1055" id="1055">1055</a>
+<a href="#1056" id="1056">1056</a>
+<a href="#1057" id="1057">1057</a>
+<a href="#1058" id="1058">1058</a>
+<a href="#1059" id="1059">1059</a>
+<a href="#1060" id="1060">1060</a>
+<a href="#1061" id="1061">1061</a>
+<a href="#1062" id="1062">1062</a>
+<a href="#1063" id="1063">1063</a>
+<a href="#1064" id="1064">1064</a>
+<a href="#1065" id="1065">1065</a>
+<a href="#1066" id="1066">1066</a>
+<a href="#1067" id="1067">1067</a>
+<a href="#1068" id="1068">1068</a>
+<a href="#1069" id="1069">1069</a>
+<a href="#1070" id="1070">1070</a>
+<a href="#1071" id="1071">1071</a>
+<a href="#1072" id="1072">1072</a>
+<a href="#1073" id="1073">1073</a>
+<a href="#1074" id="1074">1074</a>
+<a href="#1075" id="1075">1075</a>
+<a href="#1076" id="1076">1076</a>
+<a href="#1077" id="1077">1077</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
+<span class="kw">use </span>interprocess::local_socket::{traits::Listener, ListenerOptions};
 <span class="kw">use </span>llguidance::toktrie::TokEnv;
 <span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>std::{
     collections::HashMap,
+    io::{BufWriter, Write},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -1060,6 +1092,7 @@
 <span class="kw">use </span>tokio::sync::{mpsc::Receiver, Mutex};
 
 <span class="kw">use crate</span>::{
+    daemon,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -1161,15 +1194,22 @@
                     .get(<span class="kw-2">&amp;</span><span class="self">self</span>.id),
                 <span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(EngineInstruction::Terminate))
             ) {
+                <span class="self">self</span>.replicate_request_to_daemons(<span class="kw-2">&amp;</span>Request::Terminate);
                 <span class="kw">break </span><span class="lifetime">'lp</span>;
             }
 
             <span class="kw">while let </span><span class="prelude-val">Ok</span>(request) = <span class="self">self</span>.rx.try_recv() {
+                <span class="self">self</span>.replicate_request_to_daemons(<span class="kw-2">&amp;</span>request);
                 <span class="kw">if </span><span class="macro">matches!</span>(request, Request::Terminate) {
                     <span class="kw">break </span><span class="lifetime">'lp</span>;
                 }
                 <span class="self">self</span>.handle_request(request).<span class="kw">await</span>;
             }
+
+            <span class="kw">if </span>TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
+                <span class="self">self</span>.replicate_request_to_daemons(<span class="kw-2">&amp;</span>Request::TerminateAllSeqsNextStep);
+            }
+
             <span class="kw">let </span>run_start = Instant::now();
             <span class="kw">let </span>scheduled = <span class="self">self</span>.scheduler.schedule();
 
@@ -1398,6 +1438,7 @@
                     </span>{
                         <span class="comment">// If there is nothing to do, sleep until a request comes in
                         </span><span class="kw">if let </span><span class="prelude-val">Some</span>(request) = <span class="self">self</span>.rx.recv().<span class="kw">await </span>{
+                            <span class="self">self</span>.replicate_request_to_daemons(<span class="kw-2">&amp;</span>request);
                             <span class="kw">if </span><span class="macro">matches!</span>(request, Request::Terminate) {
                                 <span class="kw">break </span><span class="lifetime">'lp</span>;
                             }
@@ -1542,6 +1583,22 @@
         }
     }
 
+    <span class="kw">fn </span>replicate_request_to_daemons(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: <span class="kw-2">&amp;</span>Request) {
+        <span class="kw">if </span>!daemon::is_daemon() {
+            <span class="kw">let </span>name = daemon::ipc_name().unwrap();
+            <span class="kw">let </span>num_workers =
+                mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - <span class="number">1</span>;
+            <span class="kw">let </span>listener = ListenerOptions::new().name(name).create_sync().unwrap();
+
+            <span class="kw">for _ in </span><span class="number">0</span>..num_workers {
+                <span class="kw">let </span>stream = listener.accept().unwrap();
+                <span class="kw">let </span><span class="kw-2">mut </span>writer = BufWriter::new(stream);
+                <span class="kw">let </span>req = <span class="macro">format!</span>(<span class="string">"{}\n"</span>, serde_json::to_string(<span class="kw-2">&amp;</span>request).unwrap());
+                writer.write_all(req.as_bytes()).unwrap();
+            }
+        };
+    }
+
     <span class="kw">async fn </span>handle_request(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: Request) {
         <span class="kw">match </span>request {
             Request::ActivateAdapters(adapters) =&gt; {
@@ -1558,7 +1615,10 @@
             }
             Request::Tokenize(req) =&gt; <span class="self">self</span>.tokenize_text(req).<span class="kw">await</span>,
             Request::Detokenize(req) =&gt; <span class="self">self</span>.detokenize_text(req).<span class="kw">await</span>,
-            Request::Terminate =&gt; <span class="macro">panic!</span>(<span class="string">"This is unreachable in `handle_request`. Termination is handled in the `run` loop."</span>),
+            Request::Terminate =&gt; (),
+            Request::TerminateAllSeqsNextStep =&gt; {
+                TERMINATE_ALL_NEXT_STEP.store(<span class="bool-val">true</span>, Ordering::SeqCst)
+            }
         }
     }
 

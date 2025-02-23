@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["compute_kv_shard","compute_n_kv_groups"],"struct":["ColumnParallelLayer","ReplicatedLayer","RowParallelLayer"]};

@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/normal.rs`."><title>normal.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-42caa33d.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.1 (e71f9a9a9 2025-01-27)" data-channel="1.84.1" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>normal.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/normal.rs`."><title>normal.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-46132b98.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.85.0 (4d91de4e4 2025-02-17)" data-channel="1.85.0" data-search-js="search-75f5ac3e.js" data-settings-js="settings-0f613d39.js" ><script src="../../../static.files/storage-59e33391.js"></script><script defer src="../../../static.files/src-script-56102188.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>normal.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap"><div data-nosnippet><pre class="src-line-numbers">
 <a href="#1" id="1">1</a>
 <a href="#2" id="2">2</a>
 <a href="#3" id="3">3</a>
@@ -1359,207 +1359,7 @@
 <a href="#1358" id="1358">1358</a>
 <a href="#1359" id="1359">1359</a>
 <a href="#1360" id="1360">1360</a>
-<a href="#1361" id="1361">1361</a>
-<a href="#1362" id="1362">1362</a>
-<a href="#1363" id="1363">1363</a>
-<a href="#1364" id="1364">1364</a>
-<a href="#1365" id="1365">1365</a>
-<a href="#1366" id="1366">1366</a>
-<a href="#1367" id="1367">1367</a>
-<a href="#1368" id="1368">1368</a>
-<a href="#1369" id="1369">1369</a>
-<a href="#1370" id="1370">1370</a>
-<a href="#1371" id="1371">1371</a>
-<a href="#1372" id="1372">1372</a>
-<a href="#1373" id="1373">1373</a>
-<a href="#1374" id="1374">1374</a>
-<a href="#1375" id="1375">1375</a>
-<a href="#1376" id="1376">1376</a>
-<a href="#1377" id="1377">1377</a>
-<a href="#1378" id="1378">1378</a>
-<a href="#1379" id="1379">1379</a>
-<a href="#1380" id="1380">1380</a>
-<a href="#1381" id="1381">1381</a>
-<a href="#1382" id="1382">1382</a>
-<a href="#1383" id="1383">1383</a>
-<a href="#1384" id="1384">1384</a>
-<a href="#1385" id="1385">1385</a>
-<a href="#1386" id="1386">1386</a>
-<a href="#1387" id="1387">1387</a>
-<a href="#1388" id="1388">1388</a>
-<a href="#1389" id="1389">1389</a>
-<a href="#1390" id="1390">1390</a>
-<a href="#1391" id="1391">1391</a>
-<a href="#1392" id="1392">1392</a>
-<a href="#1393" id="1393">1393</a>
-<a href="#1394" id="1394">1394</a>
-<a href="#1395" id="1395">1395</a>
-<a href="#1396" id="1396">1396</a>
-<a href="#1397" id="1397">1397</a>
-<a href="#1398" id="1398">1398</a>
-<a href="#1399" id="1399">1399</a>
-<a href="#1400" id="1400">1400</a>
-<a href="#1401" id="1401">1401</a>
-<a href="#1402" id="1402">1402</a>
-<a href="#1403" id="1403">1403</a>
-<a href="#1404" id="1404">1404</a>
-<a href="#1405" id="1405">1405</a>
-<a href="#1406" id="1406">1406</a>
-<a href="#1407" id="1407">1407</a>
-<a href="#1408" id="1408">1408</a>
-<a href="#1409" id="1409">1409</a>
-<a href="#1410" id="1410">1410</a>
-<a href="#1411" id="1411">1411</a>
-<a href="#1412" id="1412">1412</a>
-<a href="#1413" id="1413">1413</a>
-<a href="#1414" id="1414">1414</a>
-<a href="#1415" id="1415">1415</a>
-<a href="#1416" id="1416">1416</a>
-<a href="#1417" id="1417">1417</a>
-<a href="#1418" id="1418">1418</a>
-<a href="#1419" id="1419">1419</a>
-<a href="#1420" id="1420">1420</a>
-<a href="#1421" id="1421">1421</a>
-<a href="#1422" id="1422">1422</a>
-<a href="#1423" id="1423">1423</a>
-<a href="#1424" id="1424">1424</a>
-<a href="#1425" id="1425">1425</a>
-<a href="#1426" id="1426">1426</a>
-<a href="#1427" id="1427">1427</a>
-<a href="#1428" id="1428">1428</a>
-<a href="#1429" id="1429">1429</a>
-<a href="#1430" id="1430">1430</a>
-<a href="#1431" id="1431">1431</a>
-<a href="#1432" id="1432">1432</a>
-<a href="#1433" id="1433">1433</a>
-<a href="#1434" id="1434">1434</a>
-<a href="#1435" id="1435">1435</a>
-<a href="#1436" id="1436">1436</a>
-<a href="#1437" id="1437">1437</a>
-<a href="#1438" id="1438">1438</a>
-<a href="#1439" id="1439">1439</a>
-<a href="#1440" id="1440">1440</a>
-<a href="#1441" id="1441">1441</a>
-<a href="#1442" id="1442">1442</a>
-<a href="#1443" id="1443">1443</a>
-<a href="#1444" id="1444">1444</a>
-<a href="#1445" id="1445">1445</a>
-<a href="#1446" id="1446">1446</a>
-<a href="#1447" id="1447">1447</a>
-<a href="#1448" id="1448">1448</a>
-<a href="#1449" id="1449">1449</a>
-<a href="#1450" id="1450">1450</a>
-<a href="#1451" id="1451">1451</a>
-<a href="#1452" id="1452">1452</a>
-<a href="#1453" id="1453">1453</a>
-<a href="#1454" id="1454">1454</a>
-<a href="#1455" id="1455">1455</a>
-<a href="#1456" id="1456">1456</a>
-<a href="#1457" id="1457">1457</a>
-<a href="#1458" id="1458">1458</a>
-<a href="#1459" id="1459">1459</a>
-<a href="#1460" id="1460">1460</a>
-<a href="#1461" id="1461">1461</a>
-<a href="#1462" id="1462">1462</a>
-<a href="#1463" id="1463">1463</a>
-<a href="#1464" id="1464">1464</a>
-<a href="#1465" id="1465">1465</a>
-<a href="#1466" id="1466">1466</a>
-<a href="#1467" id="1467">1467</a>
-<a href="#1468" id="1468">1468</a>
-<a href="#1469" id="1469">1469</a>
-<a href="#1470" id="1470">1470</a>
-<a href="#1471" id="1471">1471</a>
-<a href="#1472" id="1472">1472</a>
-<a href="#1473" id="1473">1473</a>
-<a href="#1474" id="1474">1474</a>
-<a href="#1475" id="1475">1475</a>
-<a href="#1476" id="1476">1476</a>
-<a href="#1477" id="1477">1477</a>
-<a href="#1478" id="1478">1478</a>
-<a href="#1479" id="1479">1479</a>
-<a href="#1480" id="1480">1480</a>
-<a href="#1481" id="1481">1481</a>
-<a href="#1482" id="1482">1482</a>
-<a href="#1483" id="1483">1483</a>
-<a href="#1484" id="1484">1484</a>
-<a href="#1485" id="1485">1485</a>
-<a href="#1486" id="1486">1486</a>
-<a href="#1487" id="1487">1487</a>
-<a href="#1488" id="1488">1488</a>
-<a href="#1489" id="1489">1489</a>
-<a href="#1490" id="1490">1490</a>
-<a href="#1491" id="1491">1491</a>
-<a href="#1492" id="1492">1492</a>
-<a href="#1493" id="1493">1493</a>
-<a href="#1494" id="1494">1494</a>
-<a href="#1495" id="1495">1495</a>
-<a href="#1496" id="1496">1496</a>
-<a href="#1497" id="1497">1497</a>
-<a href="#1498" id="1498">1498</a>
-<a href="#1499" id="1499">1499</a>
-<a href="#1500" id="1500">1500</a>
-<a href="#1501" id="1501">1501</a>
-<a href="#1502" id="1502">1502</a>
-<a href="#1503" id="1503">1503</a>
-<a href="#1504" id="1504">1504</a>
-<a href="#1505" id="1505">1505</a>
-<a href="#1506" id="1506">1506</a>
-<a href="#1507" id="1507">1507</a>
-<a href="#1508" id="1508">1508</a>
-<a href="#1509" id="1509">1509</a>
-<a href="#1510" id="1510">1510</a>
-<a href="#1511" id="1511">1511</a>
-<a href="#1512" id="1512">1512</a>
-<a href="#1513" id="1513">1513</a>
-<a href="#1514" id="1514">1514</a>
-<a href="#1515" id="1515">1515</a>
-<a href="#1516" id="1516">1516</a>
-<a href="#1517" id="1517">1517</a>
-<a href="#1518" id="1518">1518</a>
-<a href="#1519" id="1519">1519</a>
-<a href="#1520" id="1520">1520</a>
-<a href="#1521" id="1521">1521</a>
-<a href="#1522" id="1522">1522</a>
-<a href="#1523" id="1523">1523</a>
-<a href="#1524" id="1524">1524</a>
-<a href="#1525" id="1525">1525</a>
-<a href="#1526" id="1526">1526</a>
-<a href="#1527" id="1527">1527</a>
-<a href="#1528" id="1528">1528</a>
-<a href="#1529" id="1529">1529</a>
-<a href="#1530" id="1530">1530</a>
-<a href="#1531" id="1531">1531</a>
-<a href="#1532" id="1532">1532</a>
-<a href="#1533" id="1533">1533</a>
-<a href="#1534" id="1534">1534</a>
-<a href="#1535" id="1535">1535</a>
-<a href="#1536" id="1536">1536</a>
-<a href="#1537" id="1537">1537</a>
-<a href="#1538" id="1538">1538</a>
-<a href="#1539" id="1539">1539</a>
-<a href="#1540" id="1540">1540</a>
-<a href="#1541" id="1541">1541</a>
-<a href="#1542" id="1542">1542</a>
-<a href="#1543" id="1543">1543</a>
-<a href="#1544" id="1544">1544</a>
-<a href="#1545" id="1545">1545</a>
-<a href="#1546" id="1546">1546</a>
-<a href="#1547" id="1547">1547</a>
-<a href="#1548" id="1548">1548</a>
-<a href="#1549" id="1549">1549</a>
-<a href="#1550" id="1550">1550</a>
-<a href="#1551" id="1551">1551</a>
-<a href="#1552" id="1552">1552</a>
-<a href="#1553" id="1553">1553</a>
-<a href="#1554" id="1554">1554</a>
-<a href="#1555" id="1555">1555</a>
-<a href="#1556" id="1556">1556</a>
-<a href="#1557" id="1557">1557</a>
-<a href="#1558" id="1558">1558</a>
-<a href="#1559" id="1559">1559</a>
-<a href="#1560" id="1560">1560</a>
-<a href="#1561" id="1561">1561</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1361" id="1361">1361</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
@@ -1579,6 +1379,7 @@
     Qwen2Loader, Starcoder2Loader,
 };
 <span class="kw">use </span><span class="kw">crate</span>::amoe::AnyMoeExpertType;
+<span class="kw">use </span><span class="kw">crate</span>::daemon::{<span class="self">self</span>, BigI8Array, WorkerTransferData};
 <span class="kw">use </span><span class="kw">crate</span>::device_map::{<span class="self">self</span>, DeviceMapper};
 <span class="kw">use </span><span class="kw">crate</span>::lora::Ordering;
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -1603,19 +1404,19 @@
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>indicatif::MultiProgress;
+<span class="kw">use </span>interprocess::local_socket::traits::{Listener, Stream};
+<span class="kw">use </span>interprocess::local_socket::{ListenerOptions, Stream <span class="kw">as </span>LocalStream};
 <span class="kw">use </span>mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
-<span class="kw">use </span>rayon::iter::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
-    IntoParallelRefMutIterator, ParallelIterator,
-};
 <span class="kw">use </span>regex_automata::meta::Regex;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::borrow::Cow;
+<span class="kw">use </span>std::io::{BufRead, BufReader, Write};
 <span class="kw">use </span>std::num::{NonZero, NonZeroUsize};
 <span class="kw">use </span>std::path::{Path, PathBuf};
+<span class="kw">use </span>std::process::Command;
 <span class="kw">use </span>std::str::FromStr;
-<span class="kw">use </span>std::sync::{Arc, Barrier, RwLock};
+<span class="kw">use </span>std::sync::{Arc, RwLock};
 <span class="kw">use </span>std::time::Instant;
 <span class="kw">use </span>std::{env, fs};
 <span class="kw">use </span>tokenizers::Tokenizer;
@@ -1623,7 +1424,7 @@
 <span class="kw">use </span>tracing::{info, warn};
 
 <span class="kw">pub struct </span>NormalPipeline {
-    parallel_models: Vec&lt;Arc&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt;,
+    model: Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;,
     tokenizer: Arc&lt;Tokenizer&gt;,
     no_kv_cache: bool,
     chat_template: Arc&lt;ChatTemplate&gt;,
@@ -1857,13 +1658,19 @@
 
         <span class="macro">info!</span>(<span class="string">"Prompt chunk size is {prompt_chunksize}."</span>,);
 
-        <span class="kw">let </span>available_devices = device_map::get_all_similar_devices(device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>use_nccl = (std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_err()
+            || std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| x != <span class="string">"1"</span>))
+            &amp;&amp; (<span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) &amp;&amp; <span class="macro">cfg!</span>(feature = <span class="string">"cuda"</span>));
 
-        <span class="kw">let </span>use_nccl = available_devices.iter().all(|dev| dev.is_cuda())
-            &amp;&amp; available_devices.len() &gt; <span class="number">1
-            </span>&amp;&amp; (std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_err()
-                || std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| x != <span class="string">"1"</span>))
-            &amp;&amp; <span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>);
+        <span class="kw">let </span>available_devices = <span class="kw">if let </span><span class="prelude-val">Ok</span>(payload) = env::var(daemon::IS_DAEMON_FLAG) {
+            <span class="kw">let </span>payload: WorkerTransferData = serde_json::from_str(<span class="kw-2">&amp;</span>payload)<span class="question-mark">?</span>;
+            <span class="kw">let </span>WorkerTransferData::Init { id: <span class="kw">_</span>, worker_rank } = payload;
+            <span class="macro">vec!</span>[candle_core::Device::new_cuda(worker_rank + <span class="number">1</span>)<span class="question-mark">?</span>]
+        } <span class="kw">else if </span>use_nccl {
+            <span class="macro">vec!</span>[candle_core::Device::new_cuda(<span class="number">0</span>)<span class="question-mark">?</span>]
+        } <span class="kw">else </span>{
+            device_map::get_all_similar_devices(device)<span class="question-mark">?
+        </span>};
 
         <span class="comment">// If auto, convert to Map if not using nccl
         </span><span class="kw">if </span>use_nccl {
@@ -2024,7 +1831,7 @@
 
         <span class="kw">let </span>multi_progress = Arc::new(MultiProgress::new());
 
-        <span class="kw">let </span><span class="kw-2">mut </span>parallel_models = <span class="kw">if </span>use_nccl {
+        <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">if </span>use_nccl {
             <span class="attr">#[cfg(not(feature = <span class="string">"nccl"</span>))]
             </span><span class="macro">warn!</span>(
                 <span class="string">"NCCL support was included in the build, be sure to build with `--features nccl`."
@@ -2032,28 +1839,16 @@
 
             <span class="comment">// NCCL case!
 
-            </span><span class="kw">let </span>pipeline_parallel_size = std::env::var(<span class="string">"MISTRALRS_PIPELINE_PARALLEL"</span>)
-                .map(|<span class="kw-2">ref </span>x| {
-                    usize::from_str(x).expect(
-                        <span class="string">"Invalid MISTRALRS_PIPELINE_PARALLEL setting (could not parse as integer)"</span>,
-                    )
-                })
-                .unwrap_or(<span class="number">1</span>);
-
-            <span class="kw">if </span>pipeline_parallel_size == <span class="number">0 </span>{
-                <span class="macro">anyhow::bail!</span>(<span class="string">"MISTRALRS_PIPELINE_PARALLEL must be nonzero"</span>)
-            }
-
-            <span class="kw">let </span>local_world_size = available_devices.len() / pipeline_parallel_size;
+            </span><span class="kw">let </span>local_world_size = available_devices.len();
             <span class="kw">let </span>global_world_size = <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"MISTRALRS_MN_GLOBAL_WORLD_SIZE"</span>) {
                 usize::from_str(<span class="kw-2">&amp;</span>x).context(<span class="string">"MISTRALRS_MN_GLOBAL_WORLD_SIZE"</span>)<span class="question-mark">?
             </span>} <span class="kw">else </span>{
-                local_world_size
-            };
+                mistralrs_quant::distributed::get_global_tp_size_from_devices()<span class="question-mark">?
+            </span>};
 
-            <span class="kw">let </span>use_multi_node = global_world_size != local_world_size;
+            <span class="kw">let </span>use_multi_node = std::env::var(<span class="string">"MISTRALRS_MN_GLOBAL_WORLD_SIZE"</span>).is_ok();
             <span class="kw">if </span>use_multi_node {
-                <span class="macro">info!</span>(<span class="string">"Global world size != local world size, entering multi-node."</span>);
+                <span class="macro">info!</span>(<span class="string">"MISTRALRS_MN_GLOBAL_WORLD_SIZE is set, entering multi-node."</span>);
             }
 
             <span class="kw">if </span>global_world_size &lt; local_world_size || global_world_size % local_world_size != <span class="number">0 </span>{
@@ -2062,20 +1857,66 @@
 
             <span class="macro">info!</span>(<span class="string">"Local tensor parallel world size is {local_world_size}"</span>);
             <span class="macro">info!</span>(<span class="string">"Global tensor parallel world size is {global_world_size}"</span>);
-            <span class="macro">info!</span>(<span class="string">"Pipeline parallelism size is {pipeline_parallel_size}"</span>);
 
-            <span class="kw">let </span><span class="kw-2">mut </span>ids = (<span class="number">0</span>..pipeline_parallel_size)
-                .map(|<span class="kw">_</span>| mistralrs_quant::Id::new())
-                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+            <span class="kw">let </span><span class="kw-2">mut </span>id = mistralrs_quant::Id::new();
 
-            <span class="kw">if </span>ids.len() != <span class="number">1 </span>&amp;&amp; use_multi_node {
-                <span class="macro">anyhow::bail!</span>(
-                    <span class="string">"MISTRALRS_PIPELINE_PARALLEL cannot be set at the same time as MISTRALRS_MN_GLOBAL_WORLD_SIZE; multi-node is incompatible with pipeline parallel."
-                </span>);
-            }
+            <span class="comment">// TP uses parallel pipelines.
+            </span><span class="kw">let </span>name = daemon::ipc_name()<span class="question-mark">?</span>;
+            <span class="kw">let </span>local_rank = <span class="kw">if let </span><span class="prelude-val">Ok</span>(payload) = env::var(daemon::IS_DAEMON_FLAG) {
+                <span class="kw">let </span>payload: WorkerTransferData = serde_json::from_str(<span class="kw-2">&amp;</span>payload)<span class="question-mark">?</span>;
+                <span class="kw">let </span>WorkerTransferData::Init {
+                    id: new_id,
+                    worker_rank,
+                } = payload;
+                id = mistralrs_quant::Id::uninit(new_id.<span class="number">0</span>);
+
+                <span class="kw">let </span><span class="kw-2">mut </span>stream = LocalStream::connect(name)<span class="question-mark">?</span>;
+                stream.write_all(<span class="string">b"ready\n"</span>)<span class="question-mark">?</span>;
+                worker_rank + <span class="number">1
+            </span>} <span class="kw">else </span>{
+                <span class="kw">let </span>num_workers =
+                    mistralrs_quant::distributed::get_global_tp_size_from_devices()<span class="question-mark">? </span>- <span class="number">1</span>;
+                <span class="kw">let </span><span class="kw-2">mut </span>children = Vec::new();
+                <span class="kw">for </span>worker_rank <span class="kw">in </span><span class="number">0</span>..num_workers {
+                    <span class="kw">let </span>exe_path = env::current_exe().expect(<span class="string">"Failed to get current exe"</span>);
+
+                    <span class="kw">let </span>args: Vec&lt;String&gt; = env::args().collect();
+
+                    <span class="kw">let </span><span class="kw-2">mut </span>cmd = Command::new(exe_path);
+                    cmd.args(<span class="kw-2">&amp;</span>args[<span class="number">1</span>..]);
+
+                    <span class="kw">let </span>data = WorkerTransferData::Init {
+                        id: BigI8Array(<span class="kw-2">*</span>id.internal()),
+                        worker_rank,
+                    };
+
+                    cmd.env(daemon::IS_DAEMON_FLAG, serde_json::to_string(<span class="kw-2">&amp;</span>data)<span class="question-mark">?</span>);
+
+                    cmd.stdout(std::process::Stdio::null());
+                    cmd.stderr(std::process::Stdio::null());
+                    cmd.stdin(std::process::Stdio::null());
+
+                    children.push(cmd.spawn().expect(<span class="string">"Failed to spawn process"</span>));
+                }
+
+                <span class="kw">let </span>listener = ListenerOptions::new().name(name).create_sync()<span class="question-mark">?</span>;
+                <span class="kw">let </span><span class="kw-2">mut </span>ready_count = <span class="number">0</span>;
+
+                <span class="kw">while </span>ready_count &lt; num_workers {
+                    <span class="kw">let </span>stream = listener.accept()<span class="question-mark">?</span>;
+                    <span class="kw">let </span><span class="kw-2">mut </span>reader = BufReader::new(stream);
+                    <span class="kw">let </span><span class="kw-2">mut </span>message = String::new();
+                    reader.read_line(<span class="kw-2">&amp;mut </span>message)<span class="question-mark">?</span>;
+                    <span class="kw">if </span>message.trim() == <span class="string">"ready" </span>{
+                        ready_count += <span class="number">1</span>;
+                    }
+                }
+                <span class="macro">info!</span>(<span class="string">"All workers have received the ids!"</span>);
+
+                <span class="number">0
+            </span>};
 
             <span class="kw">if </span>use_multi_node {
-                <span class="kw">let </span>id = <span class="kw-2">&amp;mut </span>ids[<span class="number">0</span>];
                 <span class="kw">if let </span><span class="prelude-val">Ok</span>(n_nodes) = env::var(<span class="string">"MISTRALRS_MN_HEAD_NUM_WORKERS"</span>) {
                     <span class="kw">let </span>n_nodes =
                         usize::from_str(<span class="kw-2">&amp;</span>n_nodes).context(<span class="string">"MISTRALRS_MN_HEAD_NUM_WORKERS"</span>)<span class="question-mark">?</span>;
@@ -2092,26 +1933,14 @@
                         local_world_size,
                     )<span class="question-mark">?</span>;
 
-                    server.broadcast_id(id)<span class="question-mark">?</span>;
+                    server.broadcast_id(<span class="kw-2">&amp;</span>id)<span class="question-mark">?</span>;
                 } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(addr) = env::var(<span class="string">"MISTRALRS_MN_WORKER_SERVER_ADDR"</span>) {
                     <span class="macro">info!</span>(<span class="string">"Worker node connecting to {addr}."</span>);
                     <span class="kw">let </span>client = mistralrs_quant::Client::new(addr.parse()<span class="question-mark">?</span>, local_world_size)<span class="question-mark">?</span>;
 
-                    <span class="kw-2">*</span>id = client.receive_id()<span class="question-mark">?</span>;
+                    id = client.receive_id()<span class="question-mark">?</span>;
                 }
             }
-
-            <span class="kw">if </span>available_devices.len() % ids.len() != <span class="number">0 </span>{
-                <span class="macro">anyhow::bail!</span>(
-                    <span class="string">"Pipeline parallel size {} must divide the number of available devices {}"</span>,
-                    pipeline_parallel_size,
-                    available_devices.len()
-                );
-            }
-
-            <span class="kw">let </span>split_available_devices = available_devices
-                .chunks(available_devices.len() / pipeline_parallel_size)
-                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
             <span class="kw">let </span>rank_offset = <span class="kw">if </span>env::var(<span class="string">"MISTRALRS_MN_WORKER_SERVER_ADDR"</span>).is_ok() {
                 <span class="kw">let </span><span class="prelude-val">Ok</span>(node_id) = env::var(<span class="string">"MISTRALRS_MN_WORKER_ID"</span>) <span class="kw">else </span>{
@@ -2126,77 +1955,14 @@
                 <span class="number">0
             </span>};
 
-            <span class="comment">// Transpose
-            </span><span class="kw">let </span><span class="kw-2">mut </span>comms_all = Vec::new();
-            <span class="kw">for </span>(pipeline_parallel_i, devices_per_pipeline_parallel) <span class="kw">in
-                </span>split_available_devices.iter().enumerate()
-            {
-                <span class="comment">// Each pipeline parallel gets its own barrier
-                </span><span class="kw">let </span>barrier = <span class="kw">if let </span><span class="prelude-val">Ok</span>(n_nodes) = env::var(<span class="string">"MISTRALRS_MN_HEAD_NUM_WORKERS"</span>) {
-                    <span class="kw">let </span>n_nodes =
-                        usize::from_str(<span class="kw-2">&amp;</span>n_nodes).context(<span class="string">"MISTRALRS_MN_HEAD_NUM_WORKERS"</span>)<span class="question-mark">?</span>;
-                    <span class="kw">let </span><span class="prelude-val">Ok</span>(port) = env::var(<span class="string">"MISTRALRS_MN_HEAD_PORT"</span>) <span class="kw">else </span>{
-                        <span class="macro">anyhow::bail!</span>(
-                            <span class="string">"Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
-                        </span>);
-                    };
-                    <span class="kw">let </span>server = mistralrs_quant::Server::new(
-                        <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"0.0.0.0:{port}"</span>),
-                        n_nodes,
-                        local_world_size,
-                    )<span class="question-mark">?</span>;
-
-                    Arc::new(server) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>mistralrs_quant::BarrierLike&gt;
-                } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(addr) = env::var(<span class="string">"MISTRALRS_MN_WORKER_SERVER_ADDR"</span>) {
-                    <span class="kw">let </span>client = mistralrs_quant::Client::new(addr.parse()<span class="question-mark">?</span>, local_world_size)<span class="question-mark">?</span>;
-                    Arc::new(client) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>mistralrs_quant::BarrierLike&gt;
-                } <span class="kw">else </span>{
-                    Arc::new(Barrier::new(local_world_size))
-                        <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>mistralrs_quant::BarrierLike&gt;
-                };
-
-                <span class="comment">// They each block on each other
-                // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
-                </span><span class="kw">let </span>comms = devices_per_pipeline_parallel
-                    .par_iter()
-                    .enumerate()
-                    .map(|(rank, device)| {
-                        <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-                        </span>{
-                            <span class="kw">use </span>candle_core::cuda::cudarc::driver::result;
-                            <span class="kw">unsafe </span>{
-                                result::ctx::set_current(<span class="kw-2">*</span>device.as_cuda_device()<span class="question-mark">?</span>.cu_primary_ctx())
-                            }
-                            .unwrap();
-                        }
-                        mistralrs_quant::Comm::from_device(
-                            ids[pipeline_parallel_i],
-                            device,
-                            rank + rank_offset,
-                            global_world_size,
-                            barrier.clone(),
-                        )
-                    })
-                    .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-                comms_all.push(
-                    comms
-                        .into_iter()
-                        .map(Arc::new)
-                        .zip(devices_per_pipeline_parallel.to_vec())
-                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-                );
-            }
-
-            <span class="comment">// row major: number of ranks x pipeline parallel
-            // Also corresponds to the device for that comm for the
-            </span><span class="kw">let </span>comms = (<span class="number">0</span>..local_world_size)
-                .map(|pipeline_parallel_i| {
-                    comms_all
-                        .iter()
-                        .map(|comms_for_rank| comms_for_rank[pipeline_parallel_i].clone())
-                        .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-                })
-                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+            <span class="comment">// They each block on each other
+            // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
+            </span><span class="kw">let </span>comm = mistralrs_quant::Comm::from_device(
+                id,
+                device,
+                local_rank + rank_offset,
+                global_world_size,
+            )<span class="question-mark">?</span>;
 
             <span class="kw">let </span>make_dummy_regexes = <span class="kw">if </span>loading_isq &amp;&amp; <span class="self">self</span>.config.from_uqff.is_some() {
                 <span class="comment">// Dummy weights for the layers which will be overwritten...
@@ -2221,81 +1987,73 @@
             </span>};
 
             <span class="macro">info!</span>(<span class="string">"Loading all ranks."</span>);
-            comms
-                .into_par_iter()
-                .map(|comm_per_pipeline_parallel| {
-                    <span class="kw">let </span>device = comm_per_pipeline_parallel[<span class="number">0</span>].<span class="number">1</span>.clone();
+            <span class="kw">let </span>device = available_devices[<span class="number">0</span>].clone();
+            <span class="comment">// The mapper is specific to this pipeline
+            </span><span class="kw">let </span>mapper = DeviceMapSetting::NcclPipelineParallel {
+                devices_and_comms: <span class="macro">vec!</span>[(Arc::new(comm), device.clone())],
+                nm_device: device.clone(),
+            }
+            .into_mapper(
+                <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;</span>device,
+                <span class="prelude-val">None</span>,
+            )<span class="question-mark">?</span>;
 
-                    <span class="comment">// The mapper is specific to this pipeline
-                    </span><span class="kw">let </span>mapper = DeviceMapSetting::NcclPipelineParallel {
-                        devices_and_comms: comm_per_pipeline_parallel.clone(),
-                        nm_device: device.clone(),
-                    }
-                    .into_mapper(
-                        <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
-                        <span class="kw-2">&amp;</span>device,
-                        <span class="prelude-val">None</span>,
-                    )<span class="question-mark">?</span>;
+            <span class="kw">let </span>sharded_vb = <span class="kw">if </span>!loading_isq {
+                sharded_vb.clone().set_device(device.clone())
+            } <span class="kw">else </span>{
+                sharded_vb.clone()
+            };
 
-                    <span class="kw">let </span>sharded_vb = <span class="kw">if </span>!loading_isq {
-                        sharded_vb.clone().set_device(device.clone())
-                    } <span class="kw">else </span>{
-                        sharded_vb.clone()
-                    };
-
-                    <span class="comment">// Special case for normal models which support nccl so should be more optimially loaded.
-                    </span><span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
-                        ModelKind::Normal =&gt; <span class="macro">normal_model_loader_sharded!</span>(
-                            sharded_vb,
-                            config,
-                            <span class="self">self</span>.inner,
-                            <span class="self">self</span>.config.use_flash_attn,
-                            mapper,
-                            loading_isq,
-                            device,
-                            attention_mechanism,
-                            multi_progress.clone(),
-                        ),
-                        ModelKind::Adapter {
-                            adapter: AdapterKind::XLora,
-                        } =&gt; <span class="macro">xlora_model_loader!</span>(
-                            paths,
-                            <span class="prelude-val">Some</span>(dtype),
-                            <span class="kw-2">&amp;</span>load_device,
-                            layer_devices.clone(),
-                            config,
-                            <span class="self">self</span>.inner,
-                            <span class="self">self</span>.config.use_flash_attn,
-                            silent,
-                            mapper,
-                            loading_isq,
-                            device,
-                            multi_progress.clone(),
-                        ),
-                        ModelKind::Adapter {
-                            adapter: AdapterKind::Lora,
-                        } =&gt; <span class="macro">lora_model_loader!</span>(
-                            paths,
-                            dtype,
-                            <span class="kw-2">&amp;</span>load_device,
-                            layer_devices.clone(),
-                            config,
-                            <span class="self">self</span>.inner,
-                            <span class="self">self</span>.config.use_flash_attn,
-                            silent,
-                            mapper,
-                            loading_isq,
-                            device,
-                            multi_progress.clone(),
-                        ),
-                        <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
-                    };
-
-                    <span class="prelude-val">Ok</span>(model)
-                })
-                .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?
-        </span>} <span class="kw">else </span>{
-            <span class="kw">let </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
+            <span class="comment">// Special case for normal models which support nccl so should be more optimially loaded.
+            </span><span class="kw">match </span><span class="self">self</span>.kind {
+                ModelKind::Normal =&gt; <span class="macro">normal_model_loader_sharded!</span>(
+                    sharded_vb,
+                    config,
+                    <span class="self">self</span>.inner,
+                    <span class="self">self</span>.config.use_flash_attn,
+                    mapper,
+                    loading_isq,
+                    device,
+                    attention_mechanism,
+                    multi_progress.clone(),
+                ),
+                ModelKind::Adapter {
+                    adapter: AdapterKind::XLora,
+                } =&gt; <span class="macro">xlora_model_loader!</span>(
+                    paths,
+                    <span class="prelude-val">Some</span>(dtype),
+                    <span class="kw-2">&amp;</span>load_device,
+                    layer_devices.clone(),
+                    config,
+                    <span class="self">self</span>.inner,
+                    <span class="self">self</span>.config.use_flash_attn,
+                    silent,
+                    mapper,
+                    loading_isq,
+                    device,
+                    multi_progress.clone(),
+                ),
+                ModelKind::Adapter {
+                    adapter: AdapterKind::Lora,
+                } =&gt; <span class="macro">lora_model_loader!</span>(
+                    paths,
+                    dtype,
+                    <span class="kw-2">&amp;</span>load_device,
+                    layer_devices.clone(),
+                    config,
+                    <span class="self">self</span>.inner,
+                    <span class="self">self</span>.config.use_flash_attn,
+                    silent,
+                    mapper,
+                    loading_isq,
+                    device,
+                    multi_progress.clone(),
+                ),
+                <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+            }
+        } <span class="kw">else </span>{
+            <span class="kw">match </span><span class="self">self</span>.kind {
                 ModelKind::Normal =&gt; <span class="macro">normal_model_loader!</span>(
                     paths,
                     <span class="prelude-val">Some</span>(dtype),
@@ -2346,8 +2104,7 @@
                     multi_progress.clone(),
                 ),
                 <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
-            };
-            <span class="macro">vec!</span>[model]
+            }
         };
 
         <span class="kw">let </span>tokenizer = get_tokenizer(paths.get_tokenizer_filename(), <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
@@ -2385,13 +2142,9 @@
                 .token_to_id(<span class="kw-2">&amp;</span>bos_toks[<span class="number">0</span>])
                 .expect(<span class="string">"Somehow the bos token is not present."</span>);
 
-            <span class="kw">for </span>model <span class="kw">in </span><span class="kw-2">&amp;mut </span>parallel_models {
-                <span class="kw">match </span><span class="self">self</span>.config.organization {
-                    IsqOrganization::Default =&gt; model.begin_track_stats()<span class="question-mark">?</span>,
-                    IsqOrganization::MoeExpertsOnly =&gt; {
-                        model.begin_track_stats_moe_experts_only()<span class="question-mark">?
-                    </span>}
-                }
+            <span class="kw">match </span><span class="self">self</span>.config.organization {
+                IsqOrganization::Default =&gt; model.begin_track_stats()<span class="question-mark">?</span>,
+                IsqOrganization::MoeExpertsOnly =&gt; model.begin_track_stats_moe_experts_only()<span class="question-mark">?</span>,
             }
 
             <span class="kw">const </span>CHUNK_SIZE: usize = <span class="number">1024</span>;
@@ -2412,33 +2165,29 @@
                     <span class="prelude-val">None</span>,
                     <span class="prelude-val">Some</span>(pipeline_mapper.as_ref()),
                 )<span class="question-mark">?</span>;
-                <span class="kw">let _ </span>= parallel_models
-                    .par_iter()
-                    .map(|model| {
-                        model.forward(
-                            <span class="kw-2">&amp;</span>inputs.input.to_device(model.device())<span class="question-mark">?</span>,
-                            <span class="kw-2">&amp;</span>inputs.positions,
-                            inputs.context_lens.clone(),
-                            inputs.position_ids.clone(),
-                            <span class="prelude-val">None</span>,
-                            <span class="kw-2">&amp;</span>inputs.flash_meta.clone(),
-                        )
-                    })
-                    .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-                <span class="kw">for </span>model <span class="kw">in </span><span class="kw-2">&amp;mut </span>parallel_models {
-                    <span class="kw">match </span>model.cache_mut() {
-                        EitherCache::Full(full) =&gt; {
-                            <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut *</span>full.lock() {
-                                <span class="kw-2">*</span>layer = <span class="prelude-val">None
-                            </span>}
-                        }
-                        EitherCache::Normal(normal) =&gt; {
-                            <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut *</span>normal.lock().unwrap().<span class="number">0 </span>{
-                                layer.set_len(<span class="number">0</span>);
-                            }
+
+                model.forward(
+                    <span class="kw-2">&amp;</span>inputs.input.to_device(model.device())<span class="question-mark">?</span>,
+                    <span class="kw-2">&amp;</span>inputs.positions,
+                    inputs.context_lens.clone(),
+                    inputs.position_ids.clone(),
+                    <span class="prelude-val">None</span>,
+                    <span class="kw-2">&amp;</span>inputs.flash_meta.clone(),
+                )<span class="question-mark">?</span>;
+
+                <span class="kw">match </span>model.cache_mut() {
+                    EitherCache::Full(full) =&gt; {
+                        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut *</span>full.lock() {
+                            <span class="kw-2">*</span>layer = <span class="prelude-val">None
+                        </span>}
+                    }
+                    EitherCache::Normal(normal) =&gt; {
+                        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut *</span>normal.lock().unwrap().<span class="number">0 </span>{
+                            layer.set_len(<span class="number">0</span>);
                         }
                     }
                 }
+
                 <span class="kw">let </span>end = Instant::now();
                 <span class="macro">info!</span>(
                     <span class="string">"Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s"</span>,
@@ -2470,41 +2219,32 @@
             <span class="macro">info!</span>(<span class="string">"Applying ISQ to all ranks."</span>);
 
             <span class="kw">let </span>multi_progress = Arc::new(MultiProgress::new());
-            parallel_models
-                .par_iter_mut()
-                .map(|model| {
-                    model.quantize(
-                        in_situ_quant,
-                        model.device().clone(),
-                        <span class="self">self</span>.config.topology.as_ref(),
-                        silent,
-                        imatrix_source,
-                        <span class="self">self</span>.config.organization,
-                        <span class="self">self</span>.config.write_uqff.as_ref(),
-                        UqffFullSer {
-                            tokenizer: <span class="kw-2">&amp;</span>tokenizer,
-                            template_filename: paths.get_template_filename(),
-                            generation_config: paths.get_gen_conf_filename(),
-                            config: config.clone(),
-                            processor_filename: <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
-                            preprocessor_filename: <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
-                        },
-                        multi_progress.clone(),
-                    )
-                })
-                .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(from_uqff) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
-            <span class="kw">let </span>world_size = parallel_models.len();
-            <span class="kw">for </span>(rank, model) <span class="kw">in </span>parallel_models.iter_mut().enumerate() {
-                <span class="macro">info!</span>(<span class="string">"Loading UFF for rank {}/{world_size}"</span>, rank + <span class="number">1</span>);
 
-                model.load_from_artifacts(
-                    device.clone(),
-                    <span class="self">self</span>.config.topology.as_ref(),
-                    silent,
-                    from_uqff,
-                )<span class="question-mark">?</span>;
-            }
+            model.quantize(
+                in_situ_quant,
+                model.device().clone(),
+                <span class="self">self</span>.config.topology.as_ref(),
+                silent,
+                imatrix_source,
+                <span class="self">self</span>.config.organization,
+                <span class="self">self</span>.config.write_uqff.as_ref(),
+                UqffFullSer {
+                    tokenizer: <span class="kw-2">&amp;</span>tokenizer,
+                    template_filename: paths.get_template_filename(),
+                    generation_config: paths.get_gen_conf_filename(),
+                    config: config.clone(),
+                    processor_filename: <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                    preprocessor_filename: <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                },
+                multi_progress.clone(),
+            )<span class="question-mark">?</span>;
+        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(from_uqff) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
+            model.load_from_artifacts(
+                device.clone(),
+                <span class="self">self</span>.config.topology.as_ref(),
+                silent,
+                from_uqff,
+            )<span class="question-mark">?</span>;
         }
 
         <span class="kw">let </span>paged_attn_config = <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::Adapter { .. }) {
@@ -2516,13 +2256,13 @@
             paged_attn_config
         };
 
-        <span class="kw">let </span>(cache_config, cache_engines) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
+        <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
             <span class="kw">let </span>cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.mem_cpu,
                 paged_attn_config.block_size,
                 dtype,
-                parallel_models[<span class="number">0</span>].config(),
+                model.config(),
                 device,
                 <span class="kw-2">&amp;</span>pipeline_mapper
                     .get_unique_devices()
@@ -2531,43 +2271,37 @@
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
                 silent,
             )<span class="question-mark">?</span>;
-            <span class="kw">let </span><span class="kw-2">mut </span>cache_engines = Vec::new();
-            <span class="kw">for </span>model <span class="kw">in </span><span class="kw-2">&amp;mut </span>parallel_models {
-                <span class="kw">let </span><span class="kw-2">mut </span>layer_devices = Vec::new();
-                <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">? </span>{
-                    <span class="kw">let </span>device = model.get_layers().<span class="number">1</span>.device_for(layer, <span class="bool-val">false</span>).cloned();
-                    layer_devices.push(device);
-                }
-                <span class="kw">let </span>cache_engine = CacheEngine::new(
-                    model.config(),
-                    <span class="kw-2">&amp;</span>cache_config,
-                    dtype,
-                    model.device(),
-                    layer_devices.clone(),
-                )<span class="question-mark">?</span>;
-                cache_engines.push(cache_engine)
+
+            <span class="kw">let </span><span class="kw-2">mut </span>layer_devices = Vec::new();
+            <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">? </span>{
+                <span class="kw">let </span>device = model.get_layers().<span class="number">1</span>.device_for(layer, <span class="bool-val">false</span>).cloned();
+                layer_devices.push(device);
             }
-            (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engines))
+            <span class="kw">let </span>cache_engine = CacheEngine::new(
+                model.config(),
+                <span class="kw-2">&amp;</span>cache_config,
+                dtype,
+                model.device(),
+                layer_devices.clone(),
+            )<span class="question-mark">?</span>;
+
+            (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
         } <span class="kw">else </span>{
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
         };
 
-        <span class="kw">let </span>max_seq_len = parallel_models[<span class="number">0</span>].max_seq_len();
+        <span class="kw">let </span>max_seq_len = model.max_seq_len();
         <span class="kw">let </span>tok_env = build_tok_env(tokenizer.clone());
-        <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>parallel_models[<span class="number">0</span>].cache() {
+        <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model.cache() {
             EitherCache::Full(full) =&gt; full.lock().len(),
             EitherCache::Normal(normal) =&gt; normal.lock().unwrap().<span class="number">0</span>.len(),
         };
         <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);
-        <span class="kw">let </span>sliding_window = parallel_models[<span class="number">0</span>].config().sliding_window;
-        <span class="kw">let </span>model_metadata = Arc::new(parallel_models[<span class="number">0</span>].config().clone());
+        <span class="kw">let </span>sliding_window = model.config().sliding_window;
+        <span class="kw">let </span>model_metadata = Arc::new(model.config().clone());
 
-        <span class="kw">let </span>parallel_models = parallel_models
-            .into_iter()
-            .map(Arc::from)
-            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(NormalPipeline {
-            parallel_models,
+            model,
             tokenizer: tokenizer.into(),
             no_kv_cache: <span class="self">self</span>.no_kv_cache,
             chat_template: Arc::new(chat_template),
@@ -2590,7 +2324,7 @@
                 activation_dtype: dtype,
                 sliding_window,
                 cache_config,
-                cache_engines,
+                cache_engine,
                 prompt_chunksize: <span class="prelude-val">Some</span>(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: <span class="prelude-val">Some</span>(model_metadata),
             }),
@@ -2630,49 +2364,38 @@
     <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
         <span class="kw">let </span>multi_progress = Arc::new(MultiProgress::new());
-        <span class="self">self</span>.parallel_models
-            .par_iter_mut()
-            .map(|model| {
-                Arc::get_mut(model).unwrap().quantize(
-                    <span class="prelude-val">Some</span>(dtype),
-                    device.clone(),
-                    <span class="self">self</span>.topology.as_ref(),
-                    <span class="self">self</span>.silent,
-                    <span class="self">self</span>.imatrix.as_ref().map(ImatrixDataSource::File),
-                    <span class="self">self</span>.organization,
-                    <span class="prelude-val">None</span>,
-                    UqffFullSer {
-                        tokenizer: <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer,
-                        template_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.template_filename,
-                        generation_config: <span class="self">self</span>.generation_config.as_ref(),
-                        config: <span class="self">self</span>.config.clone(),
-                        processor_filename: <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
-                        preprocessor_filename: <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
-                    },
-                    multi_progress.clone(),
-                )
-            })
-            .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
+        <span class="self">self</span>.model.quantize(
+            <span class="prelude-val">Some</span>(dtype),
+            device.clone(),
+            <span class="self">self</span>.topology.as_ref(),
+            <span class="self">self</span>.silent,
+            <span class="self">self</span>.imatrix.as_ref().map(ImatrixDataSource::File),
+            <span class="self">self</span>.organization,
+            <span class="prelude-val">None</span>,
+            UqffFullSer {
+                tokenizer: <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer,
+                template_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.template_filename,
+                generation_config: <span class="self">self</span>.generation_config.as_ref(),
+                config: <span class="self">self</span>.config.clone(),
+                processor_filename: <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                preprocessor_filename: <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+            },
+            multi_progress.clone(),
+        )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(())
     }
 }
 
 <span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>NormalPipeline {
     <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
-        <span class="kw">if </span><span class="self">self</span>.parallel_models.len() != <span class="number">1 </span>{
-            <span class="macro">panic!</span>(<span class="string">"Number of parallel models is not 1."</span>);
-        }
-        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.parallel_models[<span class="number">0</span>].cache(), EitherCache::Full(<span class="kw">_</span>)) {
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
             FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         } <span class="kw">else </span>{
             NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         }
     }
     <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
-        <span class="kw">if </span><span class="self">self</span>.parallel_models.len() != <span class="number">1 </span>{
-            <span class="macro">panic!</span>(<span class="string">"Number of parallel models is not 1."</span>);
-        }
-        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.parallel_models[<span class="number">0</span>].cache(), EitherCache::Full(<span class="kw">_</span>)) {
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
             FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
         } <span class="kw">else </span>{
             NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
@@ -2683,13 +2406,9 @@
         seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
         reset_non_granular: bool,
         modify_draft_cache: bool,
-
         load_preallocated_cache: bool,
     ) {
-        <span class="kw">if </span><span class="self">self</span>.parallel_models.len() != <span class="number">1 </span>{
-            <span class="macro">panic!</span>(<span class="string">"Number of parallel models is not 1."</span>);
-        }
-        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.parallel_models[<span class="number">0</span>].cache(), EitherCache::Full(<span class="kw">_</span>)) {
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
             FullCacheManager.set_none_cache(<span class="self">self</span>, seqs, modify_draft_cache, <span class="bool-val">false</span>);
         } <span class="kw">else </span>{
             NormalCacheManager.set_none_cache(
@@ -2704,32 +2423,19 @@
         }
     }
     <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
-        <span class="self">self</span>.parallel_models[<span class="number">0</span>].cache()
+        <span class="self">self</span>.model.cache()
     }
 }
 
 <span class="kw">impl </span>AdapterActivationMixin <span class="kw">for </span>NormalPipeline {
     <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; anyhow::Result&lt;usize&gt; {
-        <span class="kw">let </span>sum = <span class="self">self
-            </span>.parallel_models
-            .par_iter_mut()
-            .map(|model| {
-                Arc::get_mut(model)
-                    .unwrap()
-                    .activate_adapters(adapter_names.clone())
-                    .map_err(anyhow::Error::msg)
-            })
-            .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?
-            </span>.iter()
-            .sum();
-
-        <span class="prelude-val">Ok</span>(sum)
+        <span class="prelude-val">Ok</span>(<span class="self">self</span>.model.activate_adapters(adapter_names)<span class="question-mark">?</span>)
     }
 }
 
 <span class="kw">impl </span>MetadataMixin <span class="kw">for </span>NormalPipeline {
     <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
-        <span class="self">self</span>.parallel_models[<span class="number">0</span>].device().clone()
+        <span class="self">self</span>.model.device().clone()
     }
     <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
         <span class="prelude-val">Some</span>(<span class="self">self</span>.tokenizer.clone())
@@ -2770,8 +2476,8 @@
             flash_meta_full,
         } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
         <span class="kw">let </span>metadata = <span class="self">self</span>.get_metadata();
-        <span class="kw">let </span>paged_attn_meta = <span class="kw">match </span>(<span class="kw-2">&amp;</span>metadata.cache_engines, <span class="kw-2">&amp;</span>paged_attn_meta) {
-            (<span class="prelude-val">Some</span>(cache_engines), <span class="prelude-val">Some</span>(meta)) =&gt; <span class="prelude-val">Some</span>((cache_engines, meta)),
+        <span class="kw">let </span>paged_attn_meta = <span class="kw">match </span>(<span class="kw-2">&amp;</span>metadata.cache_engine, <span class="kw-2">&amp;</span>paged_attn_meta) {
+            (<span class="prelude-val">Some</span>(cache_engine), <span class="prelude-val">Some</span>(meta)) =&gt; <span class="prelude-val">Some</span>((cache_engine, meta)),
             (<span class="prelude-val">Some</span>(<span class="kw">_</span>), <span class="prelude-val">None</span>) =&gt; {
                 <span class="comment">// This can happen if Rust-side user code is wrong
                 </span><span class="macro">candle_core::bail!</span>(<span class="string">"Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention."</span>)
@@ -2784,58 +2490,22 @@
         };
         <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
         </span><span class="kw">let </span>logits = objc::rc::autoreleasepool(|| -&gt; candle_core::Result&lt;Tensor&gt; {
-            <span class="kw">match </span><span class="self">self</span>.parallel_models[<span class="number">0</span>].is_xlora() {
+            <span class="kw">match </span><span class="self">self</span>.model.is_xlora() {
                 <span class="bool-val">false </span>=&gt; {
-                    <span class="comment">// No NCCL
-                    </span><span class="kw">if </span><span class="self">self</span>.parallel_models.len() == <span class="number">1 </span>{
-                        <span class="kw">let </span>paged_attn_meta = paged_attn_meta
-                            .as_ref()
-                            .map(|meta| (meta.<span class="number">0</span>[<span class="number">0</span>].get_kv_cache().clone(), meta.<span class="number">1</span>.clone()));
+                    <span class="kw">let </span>paged_attn_meta = paged_attn_meta
+                        .as_ref()
+                        .map(|meta| (meta.<span class="number">0</span>.get_kv_cache().clone(), meta.<span class="number">1</span>.clone()));
 
-                        <span class="self">self</span>.parallel_models[<span class="number">0</span>].forward(
-                            <span class="kw-2">&amp;</span>input_ids,
-                            <span class="kw-2">&amp;</span>seqlen_offsets,
-                            context_lens,
-                            position_ids,
-                            paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                            <span class="kw-2">&amp;</span>flash_meta,
-                        )
-                    } <span class="kw">else </span>{
-                        <span class="kw">let </span><span class="kw-2">mut </span>handles = Vec::new();
-                        <span class="kw">for </span>(rank, model) <span class="kw">in </span><span class="self">self</span>.parallel_models.iter().cloned().enumerate() {
-                            <span class="kw">let </span>paged_attn_meta = paged_attn_meta
-                                .as_ref()
-                                .map(|meta| (meta.<span class="number">0</span>[rank].get_kv_cache().clone(), meta.<span class="number">1</span>.clone()));
-                            <span class="kw">let </span>input_ids = input_ids.to_device(model.device())<span class="question-mark">?</span>;
-                            <span class="kw">let </span>seqlen_offsets = seqlen_offsets.clone();
-                            <span class="kw">let </span>context_lens = context_lens.clone();
-                            <span class="kw">let </span>position_ids = position_ids.clone();
-                            <span class="kw">let </span>flash_meta = flash_meta.clone();
-
-                            handles.push(std::thread::spawn(<span class="kw">move </span>|| {
-                                model.forward(
-                                    <span class="kw-2">&amp;</span>input_ids,
-                                    <span class="kw-2">&amp;</span>seqlen_offsets,
-                                    context_lens,
-                                    position_ids,
-                                    paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                                    <span class="kw-2">&amp;</span>flash_meta,
-                                )
-                            }));
-                        }
-
-                        <span class="comment">// Wait until all spawned threads are done
-                        </span><span class="kw">while </span>!handles.iter().all(|h| h.is_finished()) {}
-
-                        <span class="kw">let </span>logits_vec = handles
-                            .into_iter()
-                            .map(|handle| handle.join().unwrap())
-                            .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-
-                        <span class="prelude-val">Ok</span>(logits_vec[<span class="number">0</span>].clone())
-                    }
+                    <span class="self">self</span>.model.forward(
+                        <span class="kw-2">&amp;</span>input_ids,
+                        <span class="kw-2">&amp;</span>seqlen_offsets,
+                        context_lens,
+                        position_ids,
+                        paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                        <span class="kw-2">&amp;</span>flash_meta,
+                    )
                 }
-                <span class="bool-val">true </span>=&gt; <span class="self">self</span>.parallel_models[<span class="number">0</span>].xlora_forward(
+                <span class="bool-val">true </span>=&gt; <span class="self">self</span>.model.xlora_forward(
                     <span class="kw-2">&amp;</span>input_ids,
                     input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
                     <span class="kw-2">&amp;</span>seqlen_offsets,
@@ -2850,68 +2520,22 @@
             }
         })<span class="question-mark">?</span>;
         <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
-        </span><span class="kw">let </span>logits = <span class="kw">match </span><span class="self">self</span>.parallel_models[<span class="number">0</span>].is_xlora() {
+        </span><span class="kw">let </span>logits = <span class="kw">match </span><span class="self">self</span>.model.is_xlora() {
             <span class="bool-val">false </span>=&gt; {
-                <span class="comment">// No NCCL
-                </span><span class="kw">if </span><span class="self">self</span>.parallel_models.len() == <span class="number">1 </span>{
-                    <span class="kw">let </span>paged_attn_meta = paged_attn_meta
-                        .as_ref()
-                        .map(|meta| (meta.<span class="number">0</span>[<span class="number">0</span>].get_kv_cache().clone(), meta.<span class="number">1</span>.clone()));
-                    <span class="self">self</span>.parallel_models[<span class="number">0</span>].forward(
-                        <span class="kw-2">&amp;</span>input_ids,
-                        <span class="kw-2">&amp;</span>seqlen_offsets,
-                        context_lens,
-                        position_ids,
-                        paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                        <span class="kw-2">&amp;</span>flash_meta,
-                    )<span class="question-mark">?
-                </span>} <span class="kw">else </span>{
-                    <span class="kw">let </span><span class="kw-2">mut </span>handles = Vec::new();
-                    <span class="kw">for </span>(rank, model) <span class="kw">in </span><span class="self">self</span>.parallel_models.iter().cloned().enumerate() {
-                        <span class="kw">let </span>paged_attn_meta = paged_attn_meta
-                            .as_ref()
-                            .map(|meta| (meta.<span class="number">0</span>[rank].get_kv_cache().clone(), meta.<span class="number">1</span>.clone()));
-                        <span class="kw">let </span>input_ids = input_ids.to_device(model.device())<span class="question-mark">?</span>;
-                        <span class="kw">let </span>seqlen_offsets = seqlen_offsets.clone();
-                        <span class="kw">let </span>context_lens = context_lens.clone();
-                        <span class="kw">let </span>position_ids = position_ids.clone();
-                        <span class="kw">let </span>flash_meta = flash_meta.clone();
+                <span class="kw">let </span>paged_attn_meta = paged_attn_meta
+                    .as_ref()
+                    .map(|meta| (meta.<span class="number">0</span>.get_kv_cache().clone(), meta.<span class="number">1</span>.clone()));
 
-                        handles.push(std::thread::spawn(<span class="kw">move </span>|| {
-                            <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-                            </span>{
-                                <span class="kw">use </span>candle_core::cuda::cudarc::driver::result;
-                                <span class="kw">unsafe </span>{
-                                    result::ctx::set_current(
-                                        <span class="kw-2">*</span>model.device().as_cuda_device()<span class="question-mark">?</span>.cu_primary_ctx(),
-                                    )
-                                }
-                                .unwrap();
-                            }
-
-                            model.forward(
-                                <span class="kw-2">&amp;</span>input_ids,
-                                <span class="kw-2">&amp;</span>seqlen_offsets,
-                                context_lens,
-                                position_ids,
-                                paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                                <span class="kw-2">&amp;</span>flash_meta,
-                            )
-                        }));
-                    }
-
-                    <span class="comment">// Wait until all spawned threads are done
-                    </span><span class="kw">while </span>!handles.iter().all(|h| h.is_finished()) {}
-
-                    <span class="kw">let </span>logits_vec = handles
-                        .into_iter()
-                        .map(|handle| handle.join().unwrap())
-                        .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-
-                    logits_vec[<span class="number">0</span>].clone()
-                }
-            }
-            <span class="bool-val">true </span>=&gt; <span class="self">self</span>.parallel_models[<span class="number">0</span>].xlora_forward(
+                <span class="self">self</span>.model.forward(
+                    <span class="kw-2">&amp;</span>input_ids,
+                    <span class="kw-2">&amp;</span>seqlen_offsets,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
+                    <span class="kw-2">&amp;</span>flash_meta,
+                )<span class="question-mark">?
+            </span>}
+            <span class="bool-val">true </span>=&gt; <span class="self">self</span>.model.xlora_forward(
                 <span class="kw-2">&amp;</span>input_ids,
                 input_ids_full.as_ref().unwrap_or(<span class="kw-2">&amp;</span>input_ids),
                 <span class="kw-2">&amp;</span>seqlen_offsets,
@@ -2947,33 +2571,16 @@
 
 <span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>NormalPipeline {
     <span class="kw">fn </span>amoe_finish_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>, gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;) -&gt; candle_core::Result&lt;()&gt; {
-        <span class="self">self</span>.parallel_models
-            .par_iter_mut()
-            .map(|model| {
-                Arc::get_mut(model)
-                    .unwrap()
-                    .finish_training(gate_model_id.clone())
-            })
-            .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(())
+        <span class="self">self</span>.model.finish_training(gate_model_id)
     }
     <span class="kw">fn </span>amoe_layer_vars(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Vec&lt;Var&gt;&gt; {
-        <span class="self">self</span>.parallel_models
-            .par_iter()
-            .flat_map(|model| model.get_vars())
-            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+        <span class="self">self</span>.model.get_vars()
     }
     <span class="kw">fn </span>amoe_base_model_trainable_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="self">self</span>.parallel_models
-            .par_iter()
-            .map(|model| model.trainable_params())
-            .sum()
+        <span class="self">self</span>.model.trainable_params()
     }
     <span class="kw">fn </span>amoe_take_cached_gating_outputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;Tensor&gt; {
-        <span class="self">self</span>.parallel_models
-            .par_iter_mut()
-            .flat_map(|model| Arc::get_mut(model).unwrap().take_cached_gating_outputs())
-            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+        <span class="self">self</span>.model.take_cached_gating_outputs()
     }
     <span class="kw">fn </span>amoe_create_layers(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -3098,26 +2705,19 @@
             <span class="prelude-val">None
         </span>};
 
-        <span class="self">self</span>.parallel_models
-            .iter_mut()
-            .map(|model| {
-                Arc::get_mut(model).unwrap().create_anymoe_layers(
-                    vbs.clone(),
-                    config.clone(),
-                    (prefix.clone(), mlp.clone()),
-                    layers.clone(),
-                    expert_type.clone(),
-                    gate_vb.clone(),
-                )
-            })
-            .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
+        <span class="self">self</span>.model.create_anymoe_layers(
+            vbs.clone(),
+            config.clone(),
+            (prefix.clone(), mlp.clone()),
+            layers.clone(),
+            expert_type.clone(),
+            gate_vb.clone(),
+        )<span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(())
     }
     <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-        <span class="self">self</span>.parallel_models
-            .iter()
-            .all(|model| model.amoe_supported())
+        <span class="self">self</span>.model.amoe_supported()
     }
 }
 </code></pre></div></section></main></body></html>
