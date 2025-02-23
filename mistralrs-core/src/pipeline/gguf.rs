@@ -555,7 +555,7 @@ impl Loader for GGUFLoader {
                 activation_dtype: internal_dtype,
                 sliding_window: None,
                 cache_config,
-                cache_engines: cache_engine.map(|x| vec![x]),
+                cache_engine,
                 prompt_chunksize: Some(NonZero::new(prompt_chunksize).unwrap()),
                 model_metadata: Some(Arc::new(model_config_metadata)),
             }),
@@ -711,16 +711,8 @@ impl Pipeline for GGUFPipeline {
             flash_meta_full,
         } = *inputs.downcast().expect("Downcast failed.");
         let metadata = self.get_metadata();
-        assert_eq!(
-            metadata
-                .cache_engines
-                .as_ref()
-                .map(|x| x.len())
-                .unwrap_or(1),
-            1
-        );
-        let paged_attn_meta = match (&metadata.cache_engines, &paged_attn_meta) {
-            (Some(engine), Some(meta)) => Some((engine[0].get_kv_cache().clone(), meta)),
+        let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {
+            (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
             (Some(_), None) => {
                 // This can happen if Rust-side user code is wrong
                 candle_core::bail!("Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention.")

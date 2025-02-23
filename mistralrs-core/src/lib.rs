@@ -8,6 +8,8 @@ pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::time::Instant;
 use std::{
     cell::RefCell,
@@ -53,6 +55,7 @@ mod paged_attention;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 use dummy_paged_attention as paged_attention;
 mod attention;
+pub(crate) mod daemon;
 mod diffusion_models;
 mod pipeline;
 mod prefix_cacher;
@@ -369,12 +372,76 @@ impl MistralRs {
 
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
 
+        if daemon::is_daemon() {
+            let request_sender = sender.write().unwrap().clone();
+            thread::spawn(move || {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    use interprocess::local_socket::traits::Stream;
+                    use interprocess::local_socket::Stream as LocalStream;
+
+                    loop {
+                        let name = daemon::ipc_name().unwrap();
+                        if let Ok(stream) = LocalStream::connect(name) {
+                            let mut reader = BufReader::new(stream);
+                            let mut buf = String::new();
+                            reader.read_line(&mut buf).unwrap();
+                            let mut req: Request = serde_json::from_str(&buf).unwrap();
+
+                            req = match req {
+                                Request::ActivateAdapters(x) => Request::ActivateAdapters(x),
+                                Request::ReIsq(x) => Request::ReIsq(x),
+                                Request::Terminate => Request::Terminate,
+                                Request::Detokenize(mut x) => {
+                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                                    x.response = sender;
+                                    let req = Request::Detokenize(x);
+
+                                    request_sender.send(req).await.unwrap();
+                                    let resp = receiver.recv().await.unwrap();
+                                    assert!(resp.is_ok());
+                                    continue;
+                                }
+                                Request::Tokenize(mut x) => {
+                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                                    x.response = sender;
+                                    let req = Request::Tokenize(x);
+
+                                    request_sender.send(req).await.unwrap();
+                                    let resp = receiver.recv().await.unwrap();
+                                    assert!(resp.is_ok());
+                                    continue;
+                                }
+                                Request::Normal(mut x) => {
+                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+                                    x.is_streaming = false;
+                                    x.response = sender;
+                                    let req = Request::Normal(x);
+
+                                    request_sender.send(req).await.unwrap();
+                                    let resp = receiver.recv().await.unwrap();
+                                    assert!(resp.as_result().is_ok());
+                                    continue;
+                                }
+                                Request::TerminateAllSeqsNextStep => {
+                                    Request::TerminateAllSeqsNextStep
+                                }
+                            };
+
+                            request_sender.send(req).await.unwrap();
+                        }
+                    }
+                });
+            });
+        }
+
         // Determine if the current runtime is multi-threaded, as blocking operations are not allowed in single-threaded mode
         let is_multi_threaded = tokio::runtime::Handle::try_current()
             .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
         // Do a dummy run
-        if is_multi_threaded
+        if !daemon::is_daemon()
+            && is_multi_threaded
             && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
         {
             let clone_sender = sender.read().unwrap().clone();
@@ -383,7 +450,7 @@ impl MistralRs {
                 let req = Request::Normal(NormalRequest {
                     id: 0,
                     messages: RequestMessage::Completion {
-                        text: "dummy".to_string(),
+                        text: "hello".to_string(),
                         echo_prompt: false,
                         best_of: None,
                     },
@@ -393,7 +460,7 @@ impl MistralRs {
                     },
                     response: tx,
                     return_logprobs: false,
-                    is_streaming: true,
+                    is_streaming: false,
                     constraint: Constraint::None,
                     suffix: None,
                     adapters: None,

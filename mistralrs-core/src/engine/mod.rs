@@ -1,9 +1,11 @@
 use candle_core::Tensor;
 use either::Either;
+use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::toktrie::TokEnv;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
+    io::{BufWriter, Write},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -13,6 +15,7 @@ use std::{
 use tokio::sync::{mpsc::Receiver, Mutex};
 
 use crate::{
+    daemon,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -114,15 +117,22 @@ impl Engine {
                     .get(&self.id),
                 Some(Some(EngineInstruction::Terminate))
             ) {
+                self.replicate_request_to_daemons(&Request::Terminate);
                 break 'lp;
             }
 
             while let Ok(request) = self.rx.try_recv() {
+                self.replicate_request_to_daemons(&request);
                 if matches!(request, Request::Terminate) {
                     break 'lp;
                 }
                 self.handle_request(request).await;
             }
+
+            if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
+                self.replicate_request_to_daemons(&Request::TerminateAllSeqsNextStep);
+            }
+
             let run_start = Instant::now();
             let scheduled = self.scheduler.schedule();
 
@@ -351,6 +361,7 @@ impl Engine {
                     {
                         // If there is nothing to do, sleep until a request comes in
                         if let Some(request) = self.rx.recv().await {
+                            self.replicate_request_to_daemons(&request);
                             if matches!(request, Request::Terminate) {
                                 break 'lp;
                             }
@@ -495,6 +506,22 @@ impl Engine {
         }
     }
 
+    fn replicate_request_to_daemons(&mut self, request: &Request) {
+        if !daemon::is_daemon() {
+            let name = daemon::ipc_name().unwrap();
+            let num_workers =
+                mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - 1;
+            let listener = ListenerOptions::new().name(name).create_sync().unwrap();
+
+            for _ in 0..num_workers {
+                let stream = listener.accept().unwrap();
+                let mut writer = BufWriter::new(stream);
+                let req = format!("{}\n", serde_json::to_string(&request).unwrap());
+                writer.write_all(req.as_bytes()).unwrap();
+            }
+        };
+    }
+
     async fn handle_request(&mut self, request: Request) {
         match request {
             Request::ActivateAdapters(adapters) => {
@@ -511,7 +538,10 @@ impl Engine {
             }
             Request::Tokenize(req) => self.tokenize_text(req).await,
             Request::Detokenize(req) => self.detokenize_text(req).await,
-            Request::Terminate => panic!("This is unreachable in `handle_request`. Termination is handled in the `run` loop."),
+            Request::Terminate => (),
+            Request::TerminateAllSeqsNextStep => {
+                TERMINATE_ALL_NEXT_STEP.store(true, Ordering::SeqCst)
+            }
         }
     }
 

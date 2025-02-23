@@ -17,7 +17,7 @@ macro_rules! generate_repr {
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DiffusionGenerationParams {
     pub height: usize,
     pub width: usize,

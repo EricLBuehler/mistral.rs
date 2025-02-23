@@ -1,0 +1,3 @@
+[submodule "mistralrs-quant/kernels/cutlass"]
+	path = mistralrs-quant/kernels/cutlass
+	url = https://github.com/NVIDIA/cutlass.git

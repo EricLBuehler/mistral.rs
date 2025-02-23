@@ -55,6 +55,7 @@ impl MemoryUsage {
                 let alloc = dev.current_allocated_size();
                 let avail = max.saturating_sub(alloc);
 
+                #[allow(clippy::cast_possible_truncation)]
                 Ok(avail as usize)
             }
             #[cfg(not(feature = "metal"))]
@@ -110,6 +111,7 @@ impl MemoryUsage {
                 candle_core::bail!("Cannot get total memory for CUDA device")
             }
             #[cfg(feature = "metal")]
+            #[allow(clippy::cast_possible_truncation)]
             Device::Metal(dev) => Ok(dev.recommended_max_working_set_size() as usize),
             #[cfg(not(feature = "metal"))]
             Device::Metal(_) => {

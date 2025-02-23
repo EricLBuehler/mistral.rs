@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    sync::{Arc, Barrier},
-};
+use std::{fmt::Debug, sync::Arc};
 
 use crate::{
     pipeline::AutoDeviceMapParams,
@@ -9,7 +6,6 @@ use crate::{
     Topology, TryIntoDType,
 };
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
-use itertools::Itertools;
 use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use tracing::info;
@@ -92,13 +88,7 @@ impl DeviceMapSetting {
     ) -> Result<Box<dyn DeviceMapper + Send + Sync>> {
         match self {
             Self::Nccl { devices } => {
-                once_log_info(format!(
-                    "Loading model using a NCCL-parellized pipeline with the following devices: {}",
-                    devices
-                        .iter()
-                        .map(|dev| dev.device_pretty_repr())
-                        .join(", ")
-                ));
+                once_log_info("Loading model using a NCCL-parallelized pipeline.");
                 Ok(Box::new(NcclDeviceMapper {
                     nm_device: devices[0].clone(),
                     devices: devices.clone(),
@@ -354,7 +344,6 @@ impl DeviceMapper for LayerDeviceMapper {
             self.device_for(layer_idx, false).unwrap_or(&self.nm_device),
             0,
             1,
-            Arc::new(Barrier::new(1)),
         )?))
     }
 }
@@ -420,7 +409,6 @@ impl DeviceMapper for DummyDeviceMapper {
             self.device_for(layer_idx, false).unwrap_or(&self.nm_device),
             0,
             1,
-            Arc::new(Barrier::new(1)),
         )?))
     }
 }
@@ -487,7 +475,6 @@ impl DeviceMapper for NcclDeviceMapper {
             self.device_for(layer_idx, false).unwrap_or(&self.nm_device),
             0,
             1,
-            Arc::new(Barrier::new(1)),
         )?))
     }
 }

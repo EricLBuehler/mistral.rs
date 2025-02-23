@@ -20,7 +20,7 @@ mod metal_kernels;
 mod bitsandbytes;
 mod blockwise_fp8;
 mod cublaslt;
-mod distributed;
+pub mod distributed;
 mod dummy;
 mod fp8;
 mod gguf;
@@ -237,7 +237,7 @@ impl MatMul {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq, Serialize, Deserialize)]
 pub enum IsqType {
     Q4_0,
     Q4_1,

@@ -16,6 +16,18 @@ impl BarrierLike for Barrier {
     }
 }
 
+pub fn get_global_tp_size_from_devices() -> Result<usize> {
+    #[cfg(feature = "cuda")]
+    {
+        use candle_core::cuda::WrapErr;
+        candle_core::cuda::cudarc::driver::result::device::get_count()
+            .w()
+            .map(|x| x as usize)
+    }
+    #[cfg(not(feature = "cuda"))]
+    candle_core::bail!("Expected to be compiled with CUDA.");
+}
+
 #[cfg(all(feature = "cuda", feature = "nccl"))]
 mod ops {
     use std::{fmt::Debug, ops::Deref, sync::Arc};
@@ -24,8 +36,6 @@ mod ops {
         backend::BackendStorage, cuda::cudarc, cuda_backend::WrapErr, CpuStorage, CustomOp1, DType,
         Device, Layout, Result, Shape, Tensor,
     };
-
-    use super::BarrierLike;
 
     #[derive(Debug, Clone, Copy)]
     pub struct Id(cudarc::nccl::Id);
@@ -48,23 +58,15 @@ mod ops {
     #[derive(Debug)]
     pub struct Comm {
         comm: cudarc::nccl::Comm,
-        barrier: Arc<dyn BarrierLike>,
     }
 
     impl Comm {
-        pub fn from_device(
-            id: Id,
-            dev: &Device,
-            rank: usize,
-            world_size: usize,
-            barrier: Arc<dyn BarrierLike>,
-        ) -> Result<Self> {
+        pub fn from_device(id: Id, dev: &Device, rank: usize, world_size: usize) -> Result<Self> {
             let device = dev.as_cuda_device()?.cuda_device();
             Ok(Self {
                 comm: cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
                     .map_err(|e| e.0)
                     .expect("Failed to create `Comm`, error code"),
-                barrier,
             })
         }
     }
@@ -92,9 +94,9 @@ mod ops {
         }
 
         pub fn apply(&self, xs: &Tensor) -> Result<Tensor> {
-            use candle_core::cuda::cudarc::driver::result;
-            unsafe { result::ctx::set_current(*self.comm.comm.device().cu_primary_ctx()) }.unwrap();
-            self.comm.barrier.wait()?;
+            // use candle_core::cuda::cudarc::driver::result;
+            // unsafe { result::ctx::set_current(*self.comm.comm.device().cu_primary_ctx()) }.unwrap();
+            // self.comm.barrier.wait()?;
             xs.apply_op1_no_bwd(self)
         }
     }
@@ -171,8 +173,6 @@ mod ops {
 
     use candle_core::{Device, Result, Tensor};
 
-    use super::BarrierLike;
-
     #[derive(Debug, Clone, Copy)]
     pub struct Id;
 
@@ -211,7 +211,6 @@ mod ops {
             _dev: &Device,
             _rank: usize,
             _world_size: usize,
-            _barrier: Arc<dyn BarrierLike>,
         ) -> Result<Self> {
             Ok(Self)
         }

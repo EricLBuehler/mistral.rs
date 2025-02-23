@@ -20,14 +20,14 @@ use tokenizers::Tokenizer;
 static DRY_SEQUENCE_BREAKERS: Lazy<Vec<String>> =
     Lazy::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Stop sequences or ids.
 pub enum StopTokens {
     Seqs(Vec<String>),
     Ids(Vec<u32>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Sampling params are used to control sampling.
 pub struct SamplingParams {
     pub temperature: Option<f64>,
@@ -67,7 +67,7 @@ impl SamplingParams {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DrySamplingParams {
     pub sequence_breakers: Vec<String>,
     pub multiplier: f32,
@@ -228,7 +228,7 @@ impl Sampler {
         min_p: f64,
         logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     ) -> anyhow::Result<Self> {
-        let temperature = if temperature.map_or(true, |v| v < 1e-7) {
+        let temperature = if temperature.is_none_or(|v| v < 1e-7) {
             None
         } else {
             temperature

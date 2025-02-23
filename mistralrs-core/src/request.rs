@@ -15,7 +15,7 @@ use tokio::sync::mpsc::Sender;
 
 pub type LlguidanceGrammar = llguidance::api::TopLevelGrammar;
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Control the constraint with llguidance.
 pub enum Constraint {
     Regex(String),
@@ -35,7 +35,7 @@ pub enum ImageGenerationResponseFormat {
 
 pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Message or messages for a [`Request`].
 pub enum RequestMessage {
     Chat(Vec<IndexMap<String, MessageContent>>),
@@ -46,6 +46,7 @@ pub enum RequestMessage {
     },
     CompletionTokens(Vec<u32>),
     VisionChat {
+        #[serde(skip)] // TODO!!!!
         images: Vec<image::DynamicImage>,
         messages: Vec<IndexMap<String, MessageContent>>,
     },
@@ -56,7 +57,12 @@ pub enum RequestMessage {
     },
 }
 
-#[derive(Clone)]
+fn default_responder<T>() -> Sender<T> {
+    let (sender, _) = tokio::sync::mpsc::channel(1);
+    sender
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 /// A normal request request to the `MistralRs`.
 /// - `messages`: Messages for the request
 /// - `sampling_params`: Sampling parameters for generation
@@ -78,6 +84,8 @@ pub enum RequestMessage {
 pub struct NormalRequest {
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
+    #[serde(default = "default_responder")]
+    #[serde(skip)]
     pub response: Sender<Response>,
     pub return_logprobs: bool,
     pub is_streaming: bool,
@@ -87,6 +95,7 @@ pub struct NormalRequest {
     pub adapters: Option<Vec<String>>,
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
+    #[serde(skip)]
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
 }
@@ -118,7 +127,7 @@ impl NormalRequest {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Request to tokenize some messages or some text.
 /// - `add_generation_prompt` is only applicable if chat messages are provided and not a raw string.
 pub struct TokenizationRequest {
@@ -126,18 +135,22 @@ pub struct TokenizationRequest {
     pub tools: Option<Vec<Tool>>,
     pub add_generation_prompt: bool,
     pub add_special_tokens: bool,
+    #[serde(default = "default_responder")]
+    #[serde(skip)]
     pub response: Sender<anyhow::Result<Vec<u32>>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Request to detokenize some text.
 pub struct DetokenizationRequest {
     pub tokens: Vec<u32>,
     pub skip_special_tokens: bool,
+    #[serde(default = "default_responder")]
+    #[serde(skip)]
     pub response: Sender<anyhow::Result<String>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 /// A request to the Engine, encapsulating the various parameters as well as
 /// the `mpsc` response `Sender` used to return the [`Response`].
 pub enum Request {
@@ -149,6 +162,7 @@ pub enum Request {
     // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
     // and then Engine will be dropped.
     Terminate,
+    TerminateAllSeqsNextStep,
 }
 
 impl Debug for Request {
@@ -180,6 +194,7 @@ impl Debug for Request {
                 write!(f, "Tokenization Request {:?}", req.tokens)
             }
             Request::Terminate => write!(f, "Termination Request"),
+            Request::TerminateAllSeqsNextStep => write!(f, "Terminate All Seqs Next Step"),
         }
     }
 }
