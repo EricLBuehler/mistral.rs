@@ -88,9 +88,7 @@ impl DeviceMapSetting {
     ) -> Result<Box<dyn DeviceMapper + Send + Sync>> {
         match self {
             Self::Nccl { devices } => {
-                once_log_info(
-                    "Loading model using a NCCL-parallelized pipeline.",
-                );
+                once_log_info("Loading model using a NCCL-parallelized pipeline.");
                 Ok(Box::new(NcclDeviceMapper {
                     nm_device: devices[0].clone(),
                     devices: devices.clone(),
