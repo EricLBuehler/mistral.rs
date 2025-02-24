@@ -5,7 +5,10 @@
 use candle_core::{Device, Result, Tensor};
 use candle_nn::Activation as CandleActivation;
 use once_cell::sync::Lazy;
-use std::sync::{Mutex, Once};
+use std::{
+    env,
+    sync::{Mutex, Once},
+};
 
 #[cfg(feature = "cuda")]
 mod api;
@@ -25,7 +28,11 @@ static mut CUBLASLT: Option<CublasLtWrapper> = None;
 pub static CUBLASLT_HANDLE: Lazy<Mutex<Option<&'static CublasLtWrapper>>> =
     Lazy::new(|| Mutex::new(None));
 
-pub fn maybe_init_cublas_lt_wrapper() {
+pub fn maybe_init_cublas_lt_wrapper(ordinal: usize) {
+    if env::var("MISTRALRS_NO_CUBLASLT").is_ok() {
+        return;
+    }
+
     unsafe {
         INIT.call_once(|| {
             #[cfg(not(feature = "cuda"))]
@@ -41,7 +48,7 @@ pub fn maybe_init_cublas_lt_wrapper() {
                 use candle_core::cuda_backend::cudarc::driver;
                 CUBLASLT = driver::result::init()
                     .ok()
-                    .and_then(|_| Device::cuda_if_available(0).ok())
+                    .and_then(|_| Device::cuda_if_available(ordinal).ok())
                     .and_then(|device| match device {
                         Device::Cuda(_) => Some(CublasLtWrapper {
                             cublaslt: CublasLt::new(&device).unwrap(),
