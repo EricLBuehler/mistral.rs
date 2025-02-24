@@ -283,17 +283,6 @@ async fn main() -> Result<()> {
     let mut args = Args::parse();
     initialize_logging();
 
-    let setting_server = if !args.interactive_mode {
-        let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
-        let ip = args.serve_ip.unwrap_or_else(|| "0.0.0.0".to_string());
-
-        // Create listener early to validate address before model loading
-        let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
-        Some((listener, ip, port))
-    } else {
-        None
-    };
-
     let use_flash_attn = mistralrs_core::using_flash_attn();
 
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
@@ -499,6 +488,18 @@ async fn main() -> Result<()> {
         builder
     };
     let mistralrs = builder.build();
+
+    // Needs to be after the .build call as that is where the daemon waits.
+    let setting_server = if !args.interactive_mode {
+        let port = args.port.expect("Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?");
+        let ip = args.serve_ip.unwrap_or_else(|| "0.0.0.0".to_string());
+
+        // Create listener early to validate address before model loading
+        let listener = tokio::net::TcpListener::bind(format!("{ip}:{port}")).await?;
+        Some((listener, ip, port))
+    } else {
+        None
+    };
 
     let app = get_router(mistralrs);
     if let Some((listener, ip, port)) = setting_server {
