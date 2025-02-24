@@ -433,6 +433,8 @@ impl MistralRs {
                     }
                 });
             });
+
+            loop {}
         }
 
         // Determine if the current runtime is multi-threaded, as blocking operations are not allowed in single-threaded mode
