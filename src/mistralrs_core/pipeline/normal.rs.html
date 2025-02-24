@@ -1357,9 +1357,7 @@
 <a href="#1356" id="1356">1356</a>
 <a href="#1357" id="1357">1357</a>
 <a href="#1358" id="1358">1358</a>
-<a href="#1359" id="1359">1359</a>
-<a href="#1360" id="1360">1360</a>
-<a href="#1361" id="1361">1361</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1359" id="1359">1359</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
@@ -1658,9 +1656,7 @@
 
         <span class="macro">info!</span>(<span class="string">"Prompt chunk size is {prompt_chunksize}."</span>,);
 
-        <span class="kw">let </span>use_nccl = (std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_err()
-            || std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| x != <span class="string">"1"</span>))
-            &amp;&amp; (<span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) &amp;&amp; <span class="macro">cfg!</span>(feature = <span class="string">"cuda"</span>));
+        <span class="kw">let </span>use_nccl = mistralrs_quant::distributed::use_nccl();
 
         <span class="kw">let </span>available_devices = <span class="kw">if let </span><span class="prelude-val">Ok</span>(payload) = env::var(daemon::IS_DAEMON_FLAG) {
             <span class="kw">let </span>payload: WorkerTransferData = serde_json::from_str(<span class="kw-2">&amp;</span>payload)<span class="question-mark">?</span>;

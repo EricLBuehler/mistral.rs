@@ -1584,7 +1584,7 @@
     }
 
     <span class="kw">fn </span>replicate_request_to_daemons(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: <span class="kw-2">&amp;</span>Request) {
-        <span class="kw">if </span>!daemon::is_daemon() {
+        <span class="kw">if </span>!daemon::is_daemon() &amp;&amp; mistralrs_quant::distributed::use_nccl() {
             <span class="kw">let </span>name = daemon::ipc_name().unwrap();
             <span class="kw">let </span>num_workers =
                 mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - <span class="number">1</span>;

@@ -237,7 +237,13 @@
 <a href="#236" id="236">236</a>
 <a href="#237" id="237">237</a>
 <a href="#238" id="238">238</a>
-<a href="#239" id="239">239</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Barrier};
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Barrier};
 
 <span class="kw">use </span>candle_core::Result;
 <span class="kw">pub use </span>ops::{Comm, Id, SumAllReduce};
@@ -264,7 +270,13 @@
             .map(|x| x <span class="kw">as </span>usize)
     }
     <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
-    </span><span class="macro">candle_core::bail!</span>(<span class="string">"Expected to be compiled with CUDA."</span>);
+    </span><span class="prelude-val">Ok</span>(<span class="number">1</span>)
+}
+
+<span class="kw">pub fn </span>use_nccl() -&gt; bool {
+    (std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_err()
+        || std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| x != <span class="string">"1"</span>))
+        &amp;&amp; (<span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) &amp;&amp; <span class="macro">cfg!</span>(feature = <span class="string">"cuda"</span>))
 }
 
 <span class="attr">#[cfg(all(feature = <span class="string">"cuda"</span>, feature = <span class="string">"nccl"</span>))]
