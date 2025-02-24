@@ -434,6 +434,7 @@ impl MistralRs {
                 });
             });
 
+            #[allow(clippy::empty_loop)]
             loop {}
         }
 
