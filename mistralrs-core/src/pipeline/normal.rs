@@ -297,9 +297,7 @@ impl Loader for NormalLoader {
 
         info!("Prompt chunk size is {prompt_chunksize}.",);
 
-        let use_nccl = (std::env::var("MISTRALRS_NO_NCCL").is_err()
-            || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"))
-            && (cfg!(feature = "nccl") && cfg!(feature = "cuda"));
+        let use_nccl = mistralrs_quant::distributed::use_nccl();
 
         let available_devices = if let Ok(payload) = env::var(daemon::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;

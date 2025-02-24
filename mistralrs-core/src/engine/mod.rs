@@ -507,7 +507,7 @@ impl Engine {
     }
 
     fn replicate_request_to_daemons(&mut self, request: &Request) {
-        if !daemon::is_daemon() {
+        if !daemon::is_daemon() && mistralrs_quant::distributed::use_nccl() {
             let name = daemon::ipc_name().unwrap();
             let num_workers =
                 mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - 1;

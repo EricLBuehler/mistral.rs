@@ -25,7 +25,13 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
             .map(|x| x as usize)
     }
     #[cfg(not(feature = "cuda"))]
-    candle_core::bail!("Expected to be compiled with CUDA.");
+    Ok(1)
+}
+
+pub fn use_nccl() -> bool {
+    (std::env::var("MISTRALRS_NO_NCCL").is_err()
+        || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"))
+        && (cfg!(feature = "nccl") && cfg!(feature = "cuda"))
 }
 
 #[cfg(all(feature = "cuda", feature = "nccl"))]
