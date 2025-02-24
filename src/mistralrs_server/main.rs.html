@@ -508,7 +508,8 @@
 <a href="#507" id="507">507</a>
 <a href="#508" id="508">508</a>
 <a href="#509" id="509">509</a>
-<a href="#510" id="510">510</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
@@ -793,17 +794,6 @@
     <span class="kw">let </span><span class="kw-2">mut </span>args = Args::parse();
     initialize_logging();
 
-    <span class="kw">let </span>setting_server = <span class="kw">if </span>!args.interactive_mode {
-        <span class="kw">let </span>port = args.port.expect(<span class="string">"Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?"</span>);
-        <span class="kw">let </span>ip = args.serve_ip.unwrap_or_else(|| <span class="string">"0.0.0.0"</span>.to_string());
-
-        <span class="comment">// Create listener early to validate address before model loading
-        </span><span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{port}"</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
-        <span class="prelude-val">Some</span>((listener, ip, port))
-    } <span class="kw">else </span>{
-        <span class="prelude-val">None
-    </span>};
-
     <span class="kw">let </span>use_flash_attn = mistralrs_core::using_flash_attn();
 
     <span class="kw">let </span>tgt_non_granular_index = get_tgt_non_granular_index(<span class="kw-2">&amp;</span>args.model);
@@ -1009,6 +999,18 @@
         builder
     };
     <span class="kw">let </span>mistralrs = builder.build();
+
+    <span class="comment">// Needs to be after the .build call as that is where the daemon waits.
+    </span><span class="kw">let </span>setting_server = <span class="kw">if </span>!args.interactive_mode {
+        <span class="kw">let </span>port = args.port.expect(<span class="string">"Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?"</span>);
+        <span class="kw">let </span>ip = args.serve_ip.unwrap_or_else(|| <span class="string">"0.0.0.0"</span>.to_string());
+
+        <span class="comment">// Create listener early to validate address before model loading
+        </span><span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{port}"</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
+        <span class="prelude-val">Some</span>((listener, ip, port))
+    } <span class="kw">else </span>{
+        <span class="prelude-val">None
+    </span>};
 
     <span class="kw">let </span>app = get_router(mistralrs);
     <span class="kw">if let </span><span class="prelude-val">Some</span>((listener, ip, port)) = setting_server {
