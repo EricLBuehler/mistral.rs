@@ -63,7 +63,8 @@ pub enum MemoryGpuConfig {
 }
 
 // See `pagedattention.cu` CALL_V1_LAUNCHER_BLOCK_SIZE
-const SUPPORTED_BLOCK_SIZE: &[usize] = &[8, 16, 32];
+// TODO!!!
+const SUPPORTED_BLOCK_SIZE: &[usize] = &[8, 16, 32, 64];
 
 const SIZE_IN_MB: usize = 1024 * 1024;
 
