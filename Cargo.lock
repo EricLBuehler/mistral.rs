@@ -381,7 +381,7 @@ checksum = "f61dac84819c6588b558454b194026eb1f09c293b9036ae9b159e74e73ab6cf9"
 [[package]]
 name = "candle-core"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=aed2a32a#aed2a32a8beacf90832983cdf4f989ea0689bd5a"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=778b9328#778b9328dd5c94432ad546e766fa2f2285c9981f"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -409,7 +409,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=aed2a32a#aed2a32a8beacf90832983cdf4f989ea0689bd5a"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=778b9328#778b9328dd5c94432ad546e766fa2f2285c9981f"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -420,7 +420,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=aed2a32a#aed2a32a8beacf90832983cdf4f989ea0689bd5a"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=778b9328#778b9328dd5c94432ad546e766fa2f2285c9981f"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -432,7 +432,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-mla"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=aed2a32a#aed2a32a8beacf90832983cdf4f989ea0689bd5a"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=778b9328#778b9328dd5c94432ad546e766fa2f2285c9981f"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -465,7 +465,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=aed2a32a#aed2a32a8beacf90832983cdf4f989ea0689bd5a"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=778b9328#778b9328dd5c94432ad546e766fa2f2285c9981f"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -473,7 +473,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=aed2a32a#aed2a32a8beacf90832983cdf4f989ea0689bd5a"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=778b9328#778b9328dd5c94432ad546e766fa2f2285c9981f"
 dependencies = [
  "metal",
  "once_cell",
@@ -484,7 +484,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=aed2a32a#aed2a32a8beacf90832983cdf4f989ea0689bd5a"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=778b9328#778b9328dd5c94432ad546e766fa2f2285c9981f"
 dependencies = [
  "accelerate-src",
  "candle-core",
