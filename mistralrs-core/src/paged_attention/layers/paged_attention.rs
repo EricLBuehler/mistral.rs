@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
@@ -150,8 +150,8 @@ impl PagedAttention {
             &query,
             &key_cache,
             &value_cache,
-            block_tables.clone(),
-            context_lens.clone(),
+            block_tables.to_dtype(DType::I32)?,
+            context_lens.to_dtype(DType::I32)?,
             sdpa_params.softmax_scale,
         );
 
