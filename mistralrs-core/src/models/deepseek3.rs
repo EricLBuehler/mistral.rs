@@ -509,6 +509,15 @@ impl MLAAttention {
         let k_pe = kv_split[1].clone();
         let kv_c_normed = kv_c.apply(&self.kv_a_layernorm)?;
 
+        let Some((kv_cache, metadata)) = metadata else {
+            candle_core::bail!("Expected pagedattn metadata")
+        };
+        let slot_mapping = metadata
+            .slot_mappings
+            .get(&xs.device().location())
+            .unwrap()
+            .flatten_all()?;
+
         if attention_mask.is_none() {
             let q_nope = self
                 .w_q_uk
@@ -528,7 +537,12 @@ impl MLAAttention {
 
             let (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
 
-            // Update KV cache here: concat_and_cache_mla
+            mistralrs_paged_attn::concat_and_cache_mla(
+                &kv_c_normed,
+                &k_pe.squeeze(1)?,
+                &kv_cache.0, // TODO is that true??
+                &slot_mapping,
+            )?;
 
             todo!()
         } else {
@@ -538,11 +552,17 @@ impl MLAAttention {
                 self.cfg.num_attention_heads,
                 self.cfg.q_head_dim(),
             ))?;
+
             let q_pe = q.i((.., self.cfg.qk_nope_head_dim..))?;
-
             let (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
+            let q = q.slice_assign(&[&.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
 
-            // Update KV cache here: concat_and_cache_mla
+            mistralrs_paged_attn::concat_and_cache_mla(
+                &kv_c_normed,
+                &k_pe.squeeze(1)?,
+                &kv_cache.0, // TODO is that true??
+                &slot_mapping,
+            )?;
 
             let kv = self.kv_b_proj.forward_autocast(&kv_c_normed)?.reshape((
                 bs,
