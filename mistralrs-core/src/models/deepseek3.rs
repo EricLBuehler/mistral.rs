@@ -348,6 +348,7 @@ struct MLAAttention {
     w_q_uk: Arc<dyn QuantMethod>,
     w_uv_o: Arc<dyn QuantMethod>,
     w_qr: Arc<dyn QuantMethod>,
+    comm: Arc<mistralrs_quant::Comm>,
 
     q: Arc<dyn QuantMethod>,
     kv_a_proj_with_mqa: Arc<dyn QuantMethod>,
@@ -484,6 +485,7 @@ impl MLAAttention {
                 softmax_scale: cfg.softmax_scale(),
                 sliding_window: None,
             },
+            comm: comm.clone(),
         })
     }
 
@@ -544,7 +546,38 @@ impl MLAAttention {
                 &slot_mapping,
             )?;
 
-            todo!()
+            let block_tables = metadata
+                .block_tables
+                .as_ref()
+                .unwrap()
+                .get(&xs.device().location())
+                .unwrap();
+            let context_lens = metadata
+                .context_lens
+                .as_ref()
+                .unwrap()
+                .get(&xs.device().location())
+                .unwrap();
+
+            let q = Tensor::cat(&[q_nope, q_pe], D::Minus1)?.unsqueeze(1)?;
+
+            let output = candle_flash_mla::flash_attn_mla(
+                &q,
+                &kv_cache.0.unsqueeze(D::Minus2)?,
+                &kv_cache.1, // TODO
+                block_tables.to_dtype(DType::I32)?,
+                context_lens.to_dtype(DType::I32)?,
+                self.sdpa_params.softmax_scale,
+            )?
+            .reshape((bs, seq_len, ()))?;
+
+            let out = self.w_uv_o.forward_autocast(&output)?;
+
+            if self.comm.world_size() > 1 {
+                mistralrs_quant::distributed::SumAllReduce::new(&self.comm).apply(&out)
+            } else {
+                Ok(out)
+            }
         } else {
             let q = self.q.forward_autocast(&hidden_states_or_q_c)?.reshape((
                 bs,
