@@ -409,7 +409,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=3bd7d552#3bd7d552f160dfdd2d44bb1cc0ae9a1407899b04"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=aed2a32a#aed2a32a8beacf90832983cdf4f989ea0689bd5a"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
