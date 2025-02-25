@@ -485,3 +485,134 @@ pub fn reshape_and_cache(
         }
     }
 }
+
+fn launch_concat_and_cache_mla<
+    T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+>(
+    k_c_normed: &Tensor,
+    k_pe: &Tensor,
+    kv_cache: &Tensor,
+    slot_mapping: &Tensor,
+) -> Result<()> {
+    let dtype = k_c_normed.dtype();
+
+    let internal_type = match dtype {
+        DType::F16 => 0,
+        DType::BF16 => 1,
+        DType::F32 => 2,
+        dtype => candle::bail!("dtype {dtype:?} is not supported"),
+    };
+
+    let (kcn, kcn_l) = k_c_normed.storage_and_layout();
+    let kcn = match &*kcn {
+        Storage::Cuda(k) => k,
+        _ => candle::bail!("key must be a cuda tensor"),
+    };
+
+    let (kpe, kpe_l) = k_pe.storage_and_layout();
+    let kpe = match &*kpe {
+        Storage::Cuda(kpe) => kpe,
+        _ => candle::bail!("value must be a cuda tensor"),
+    };
+
+    let (kvc, kvc_l) = kv_cache.storage_and_layout();
+    let kvc = match &*kvc {
+        Storage::Cuda(kc) => kc,
+        _ => candle::bail!("key_cache must be a cuda tensor"),
+    };
+
+    let (s, s_l) = slot_mapping.storage_and_layout();
+    let s = match &*s {
+        Storage::Cuda(s) => s,
+        _ => candle::bail!("slot_mapping must be a cuda tensor"),
+    };
+
+    let kcn_rank = kcn_l.stride().len();
+    let kpe_rank = kvc_l.stride().len();
+    let kvc_rank = kvc_l.stride().len();
+
+    if kcn_rank != 3 || kpe_rank != 3 {
+        candle::bail!("mla expects input tensors of rank 3 (kcn: {kcn_l:?}, kvc: {kvc_l:?})")
+    }
+
+    if kvc_rank != 3 {
+        candle::bail!(
+            "mla expects `key_cache` tensor to be of rank 5 \
+                (kv_cache: {kvc_l:?})"
+        )
+    }
+
+    // Get cuda slices for all tensors
+    let kcn = kcn.as_cuda_slice::<T>()?;
+    let kpe = kpe.as_cuda_slice::<T>()?;
+    let kvc = kvc.as_cuda_slice::<T>()?;
+    let s = s.as_cuda_slice::<i64>()?;
+
+    // Get cuda views for all tensors
+    let kcn = kcn.slice(kcn_l.start_offset()..);
+    let kpe = kpe.slice(kpe_l.start_offset()..);
+    let kvc = kvc.slice(kvc_l.start_offset()..);
+    let s = s.slice(s_l.start_offset()..);
+
+    let num_tokens = s_l.dims()[0] as c_int;
+    let kv_lora_rank = kcn_l.dims()[1] as c_int;
+    let pe_dim = kpe_l.dims()[1] as c_int;
+    let block_size = kvc_l.dims()[1] as c_int;
+
+    assert_eq!(kvc_l.dims()[2] as i32, kv_lora_rank + pe_dim);
+
+    let kcn_stride = kcn_l.stride()[0] as c_int;
+    let kpe_stride = kpe_l.stride()[0] as c_int;
+    let block_stride = kvc_l.stride()[0] as c_int;
+    let entry_stride = kcn_l.stride()[1] as c_int;
+
+    let kcn_ptr = *kcn.device_ptr() as *const core::ffi::c_void;
+    let kpe_ptr = *kpe.device_ptr() as *const core::ffi::c_void;
+    let kvc_ptr = *kvc.device_ptr() as *mut core::ffi::c_void;
+    let s_ptr = *s.device_ptr() as *const core::ffi::c_long;
+
+    unsafe {
+        ffi::concat_and_cache_mla(
+            kcn_ptr,
+            kpe_ptr,
+            kvc_ptr,
+            s_ptr,
+            num_tokens,
+            kv_lora_rank,
+            pe_dim,
+            block_size,
+            kcn_stride,
+            kpe_stride,
+            block_stride,
+            entry_stride,
+            internal_type as u32,
+        )
+    }
+    Ok(())
+}
+
+/// Insert key and values at the provided slot mapping inside the key value paged cache
+///
+/// # Arguments
+///
+/// * `k_c_normed` - Key tensor of shape `(num_tokens, kv_lora_rank)`.
+/// * `k_pe` - Value tensor of shape `(num_tokens, pe_dim)`.
+/// * `kv_cache` - Key cache paged tensor of shape `(num_blocks, block_size, (kv_lora_rank + pe_dim))`
+/// * `slot_mapping` - Mapping associating a slot to each token of shape `(num_tokens)`.
+pub fn concat_and_cache_mla(
+    k_c_normed: &Tensor,
+    k_pe: &Tensor,
+    kv_cache: &Tensor,
+    slot_mapping: &Tensor,
+) -> Result<()> {
+    match k_c_normed.dtype() {
+        DType::F16 => launch_concat_and_cache_mla::<f16>(k_c_normed, k_pe, kv_cache, slot_mapping),
+        DType::BF16 => {
+            launch_concat_and_cache_mla::<bf16>(k_c_normed, k_pe, kv_cache, slot_mapping)
+        }
+        DType::F32 => launch_concat_and_cache_mla::<f32>(k_c_normed, k_pe, kv_cache, slot_mapping),
+        dt => {
+            candle::bail!("reshape_and_cache is only supported for f32, f16 and bf16 ({dt:?})")
+        }
+    }
+}

@@ -3,10 +3,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, Module};
+use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder, SumAllReduce,
+    ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder, SumAllReduce, UnquantLinear,
 };
 use serde::Deserialize;
 
@@ -91,7 +91,6 @@ pub struct DeepSeekV3Config {
     pub(crate) rope_theta: f32,
     pub(crate) rope_scaling: Option<DeepSeekV2RopeScaling>,
     pub(crate) attention_bias: bool,
-    pub(crate) q_lora_rank: Option<usize>,
     pub(crate) qk_rope_head_dim: usize,
     pub(crate) kv_lora_rank: usize,
     pub(crate) v_head_dim: usize,
@@ -123,28 +122,234 @@ impl DeepSeekV3Config {
     }
 }
 
-enum QProj {
-    Plain(Arc<dyn QuantMethod>),
-    Lora {
-        a: Arc<dyn QuantMethod>,
-        norm: RmsNorm,
-        b: Arc<dyn QuantMethod>,
-    },
-}
+// struct Attention {
+//     q: Arc<dyn QuantMethod>,
+//     kv_a_proj_with_mqa: Arc<dyn QuantMethod>,
+//     kv_a_layernorm: RmsNorm,
+//     kv_b_proj: Arc<dyn QuantMethod>,
+//     o_proj: Arc<dyn QuantMethod>,
+//     rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
+//     cfg: DeepSeekV3Config,
+//     q_head_dim: usize,
+//     paged_attn: Option<PagedAttention>,
+//     sdpa_params: SdpaParams,
+//     num_attention_heads: usize,
+// }
 
-impl QProj {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        match self {
-            Self::Lora { a, norm, b } => {
-                b.forward_autocast(&norm.forward(&a.forward_autocast(xs)?)?)
-            }
-            Self::Plain(lin) => lin.forward_autocast(xs),
-        }
-    }
-}
+// impl Attention {
+//     #[allow(clippy::too_many_arguments)]
+//     fn new(
+//         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
+//         cfg: &DeepSeekV3Config,
+//         vb: ShardedVarBuilder,
+//         mapper: &dyn DeviceMapper,
+//         layer_idx: usize,
+//         loading_isq: bool,
+//         paged_attn: Option<PagedAttention>,
+//         comm: &Arc<mistralrs_quant::Comm>,
+//     ) -> Result<Self> {
+//         let q_head_dim = cfg.q_head_dim();
+//         let q = ColumnParallelLayer::new(
+//             cfg.hidden_size,
+//             cfg.num_attention_heads * q_head_dim,
+//             &cfg.quantization_config,
+//             false,
+//             comm,
+//             mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
+//         )?;
 
-struct Attention {
-    q: QProj,
+//         let kv_a_proj_with_mqa = ReplicatedLayer::new(
+//             cfg.hidden_size,
+//             cfg.kv_lora_rank + cfg.qk_rope_head_dim,
+//             &cfg.quantization_config,
+//             cfg.attention_bias,
+//             mapper.set_device(layer_idx, vb.pp("kv_a_proj_with_mqa"), loading_isq),
+//         )?;
+//         let kv_a_layernorm = RmsNorm::new(
+//             cfg.kv_lora_rank,
+//             cfg.rms_norm_eps,
+//             mapper.set_device(layer_idx, vb.pp("kv_a_layernorm"), false),
+//         )?;
+//         let kv_b_proj = ColumnParallelLayer::new(
+//             cfg.kv_lora_rank,
+//             cfg.num_attention_heads * (q_head_dim - cfg.qk_rope_head_dim + cfg.v_head_dim),
+//             &cfg.quantization_config,
+//             false,
+//             comm,
+//             mapper.set_device(layer_idx, vb.pp("kv_b_proj"), loading_isq),
+//         )?;
+
+//         let o_proj = RowParallelLayer::new(
+//             cfg.num_attention_heads * cfg.v_head_dim,
+//             cfg.hidden_size,
+//             &cfg.quantization_config,
+//             cfg.attention_bias,
+//             comm,
+//             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
+//         )?;
+
+//         Ok(Self {
+//             q,
+//             kv_a_proj_with_mqa,
+//             kv_a_layernorm,
+//             kv_b_proj,
+//             o_proj,
+//             rotary_emb,
+//             cfg: cfg.clone(),
+//             q_head_dim,
+//             paged_attn,
+//             num_attention_heads: cfg.num_attention_heads / comm.world_size(),
+//             sdpa_params: SdpaParams {
+//                 n_kv_groups: 1,
+//                 use_flash_attn: cfg.use_flash_attn,
+//                 softcap: None,
+//                 softmax_scale: cfg.softmax_scale(),
+//                 sliding_window: None,
+//             },
+//         })
+//     }
+
+//     fn forward(
+//         &self,
+//         xs: &Tensor,
+//         attention_mask: Option<&Tensor>,
+//         seqlen_offsets: &[usize],
+//         kv_cache: &mut KvCache,
+//         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+//         flash_params: &FlashParams,
+//     ) -> Result<Tensor> {
+//         let (bs, seq_len, _) = xs.dims3()?;
+
+//         let mut q = self.q.forward(xs)?;
+//         q = q
+//             .reshape((bs, seq_len, self.num_attention_heads, self.q_head_dim))?
+//             .transpose(1, 2)?;
+//         let q_split = q.split(
+//             &[self.cfg.qk_nope_head_dim, self.cfg.qk_rope_head_dim],
+//             D::Minus1,
+//         )?;
+//         let q_nope = q_split[0].clone();
+//         let mut q_pe = q_split[1].clone();
+
+//         let mut compressed_kv = self.kv_a_proj_with_mqa.forward_autocast(xs)?;
+//         let ckv_split = compressed_kv.split(
+//             &[self.cfg.kv_lora_rank, self.cfg.qk_rope_head_dim],
+//             D::Minus1,
+//         )?;
+//         compressed_kv = ckv_split[0].clone();
+//         let mut k_pe = ckv_split[1].clone();
+//         k_pe = k_pe
+//             .reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
+//             .transpose(1, 2)?;
+//         let mut kv = self
+//             .kv_b_proj
+//             .forward_autocast(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
+//         kv = kv
+//             .reshape((
+//                 bs,
+//                 seq_len,
+//                 self.num_attention_heads,
+//                 self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
+//             ))?
+//             .transpose(1, 2)?;
+
+//         let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
+//         let k_nope = kv_split[0].clone();
+//         let mut v = kv_split[1].clone();
+
+//         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
+
+//         let mut q = Tensor::zeros(
+//             (bs, self.num_attention_heads, seq_len, self.q_head_dim),
+//             q_pe.dtype(),
+//             q_pe.device(),
+//         )?;
+//         q = q.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &q_nope)?;
+//         q = q.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
+
+//         let mut k = Tensor::zeros(
+//             (bs, self.num_attention_heads, seq_len, self.q_head_dim),
+//             k_pe.dtype(),
+//             k_pe.device(),
+//         )?;
+//         k = k.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &k_nope)?;
+//         let k_pe = k_pe.repeat((1, k.dim(1)?, 1, 1))?;
+//         k = k.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &k_pe)?;
+
+//         let mut attn_out = match &self.paged_attn {
+//             Some(paged_attn) => match metadata {
+//                 Some(((key_cache, value_cache), input_metadata)) => {
+//                     let v = v
+//                         .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+//                         .contiguous()?;
+//                     paged_attn
+//                         .forward(
+//                             &q,
+//                             &k,
+//                             &v,
+//                             attention_mask,
+//                             Some(key_cache),
+//                             Some(value_cache),
+//                             input_metadata,
+//                             &self.sdpa_params,
+//                             Some(flash_params),
+//                         )?
+//                         .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+//                 }
+//                 None => {
+//                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
+//                     // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
+//                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+//                     // Sanity check.
+//                     assert!(attention_mask.is_some());
+//                     let v = v
+//                         .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+//                         .contiguous()?;
+//                     paged_attn
+//                         .forward(
+//                             &q,
+//                             &k,
+//                             &v,
+//                             attention_mask,
+//                             None,
+//                             None,
+//                             &input_metadata,
+//                             &self.sdpa_params,
+//                             Some(flash_params),
+//                         )?
+//                         .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+//                 }
+//             },
+//             None => {
+//                 (k, v) = kv_cache.append(&k, &v)?;
+
+//                 Sdpa.run_attention(
+//                     &q,
+//                     &k,
+//                     &v,
+//                     attention_mask,
+//                     Some(flash_params),
+//                     &self.sdpa_params,
+//                 )?
+//             }
+//         };
+
+//         attn_out = if attention_mask.is_some() {
+//             attn_out.transpose(1, 2)?.reshape((bs, seq_len, ()))?
+//         } else {
+//             attn_out.reshape((bs, seq_len, ()))?
+//         };
+
+//         self.o_proj.forward_autocast(&attn_out)
+//     }
+// }
+
+struct MLAAttention {
+    w_q_uk: Arc<dyn QuantMethod>,
+    w_uv_o: Arc<dyn QuantMethod>,
+    w_qr: Arc<dyn QuantMethod>,
+
+    q: Arc<dyn QuantMethod>,
     kv_a_proj_with_mqa: Arc<dyn QuantMethod>,
     kv_a_layernorm: RmsNorm,
     kv_b_proj: Arc<dyn QuantMethod>,
@@ -157,7 +362,7 @@ struct Attention {
     num_attention_heads: usize,
 }
 
-impl Attention {
+impl MLAAttention {
     #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
@@ -170,39 +375,14 @@ impl Attention {
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let q_head_dim = cfg.q_head_dim();
-        let q = match cfg.q_lora_rank {
-            Some(lora_rank) => {
-                let a = ReplicatedLayer::new(
-                    cfg.hidden_size,
-                    lora_rank,
-                    &cfg.quantization_config,
-                    cfg.attention_bias,
-                    mapper.set_device(layer_idx, vb.pp("q_a_proj"), loading_isq),
-                )?;
-                let norm = RmsNorm::new(
-                    lora_rank,
-                    cfg.rms_norm_eps,
-                    mapper.set_device(layer_idx, vb.pp("q_a_layernorm"), false),
-                )?;
-                let b = ColumnParallelLayer::new(
-                    lora_rank,
-                    cfg.num_attention_heads * q_head_dim,
-                    &cfg.quantization_config,
-                    false,
-                    comm,
-                    mapper.set_device(layer_idx, vb.pp("q_b_proj"), loading_isq),
-                )?;
-                QProj::Lora { a, norm, b }
-            }
-            None => QProj::Plain(ColumnParallelLayer::new(
-                cfg.hidden_size,
-                cfg.num_attention_heads * q_head_dim,
-                &cfg.quantization_config,
-                false,
-                comm,
-                mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
-            )?),
-        };
+        let q = ColumnParallelLayer::new(
+            cfg.hidden_size,
+            cfg.num_attention_heads * q_head_dim,
+            &cfg.quantization_config,
+            false,
+            comm,
+            mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
+        )?;
 
         let kv_a_proj_with_mqa = ReplicatedLayer::new(
             cfg.hidden_size,
@@ -234,7 +414,59 @@ impl Attention {
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
 
+        let (w_uk, w_uv) = {
+            let kv_b_proj_weight = kv_b_proj.dequantize_w()?.t()?;
+            let split = kv_b_proj_weight
+                .reshape((
+                    cfg.kv_lora_rank,
+                    cfg.num_attention_heads,
+                    cfg.qk_nope_head_dim + cfg.v_head_dim,
+                ))?
+                .split(&[cfg.qk_nope_head_dim, cfg.v_head_dim], D::Minus1)?;
+            (split[0].clone(), split[1].clone())
+        };
+
+        let (w_q, w_qr) = {
+            let q_proj_weight = q.dequantize_w()?.t()?;
+            let q_proj_weight =
+                q_proj_weight.reshape(((), cfg.num_attention_heads, cfg.q_head_dim()))?;
+            (
+                q_proj_weight.i((.., ..cfg.qk_nope_head_dim))?,
+                q_proj_weight
+                    .i((.., cfg.qk_nope_head_dim..))?
+                    .flatten_from(1)?
+                    .contiguous()?,
+            )
+        };
+
+        // Matrix absorbtion: https://github.com/flashinfer-ai/flashinfer/pull/551
+        // We absorb `W_UK` into `W_Q` resulting in W_Q_UK
+        let w_q_uk = w_q
+            .permute((1, 0, 2))?
+            .matmul(&w_uk.permute((1, 0, 2))?.t()?)?
+            .permute((1, 0, 2))?
+            .flatten_from(1)?
+            .contiguous()?;
+
+        let w_o = o_proj
+            .dequantize_w()?
+            .reshape(((), cfg.num_attention_heads, cfg.v_head_dim))?;
+        let w_uv_o = w_uv
+            .permute((1, 0, 2))?
+            .matmul(&w_o.permute((1, 0, 2))?.t()?)?
+            .flatten(0, 1)?
+            .contiguous()?;
+
         Ok(Self {
+            w_q_uk: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(w_q_uk, None),
+            ))?),
+            w_qr: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(w_qr, None),
+            ))?),
+            w_uv_o: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(w_uv_o, None),
+            ))?),
             q,
             kv_a_proj_with_mqa,
             kv_a_layernorm,
@@ -266,110 +498,92 @@ impl Attention {
     ) -> Result<Tensor> {
         let (bs, seq_len, _) = xs.dims3()?;
 
-        let mut q = self.q.forward(xs)?;
-        q = q
-            .reshape((bs, seq_len, self.num_attention_heads, self.q_head_dim))?
-            .transpose(1, 2)?;
-        let q_split = q.split(
-            &[self.cfg.qk_nope_head_dim, self.cfg.qk_rope_head_dim],
-            D::Minus1,
-        )?;
-        let q_nope = q_split[0].clone();
-        let mut q_pe = q_split[1].clone();
+        let hidden_states_or_q_c = xs;
 
-        let mut compressed_kv = self.kv_a_proj_with_mqa.forward_autocast(xs)?;
-        let ckv_split = compressed_kv.split(
+        let kv_a = self.kv_a_proj_with_mqa.forward_autocast(xs)?;
+        let kv_split = kv_a.split(
             &[self.cfg.kv_lora_rank, self.cfg.qk_rope_head_dim],
             D::Minus1,
         )?;
-        compressed_kv = ckv_split[0].clone();
-        let mut k_pe = ckv_split[1].clone();
-        k_pe = k_pe
-            .reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
-            .transpose(1, 2)?;
-        let mut kv = self
-            .kv_b_proj
-            .forward_autocast(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
-        kv = kv
-            .reshape((
+        let kv_c = kv_split[0].clone();
+        let k_pe = kv_split[1].clone();
+        let kv_c_normed = kv_c.apply(&self.kv_a_layernorm)?;
+
+        let Some((kv_cache, metadata)) = metadata else {
+            candle_core::bail!("Expected pagedattn metadata")
+        };
+        let slot_mapping = metadata
+            .slot_mappings
+            .get(&xs.device().location())
+            .unwrap()
+            .flatten_all()?;
+
+        if attention_mask.is_none() {
+            let q_nope = self
+                .w_q_uk
+                .forward_autocast(&hidden_states_or_q_c)?
+                .reshape((
+                    bs,
+                    seq_len,
+                    self.cfg.num_attention_heads,
+                    self.cfg.kv_lora_rank,
+                ))?;
+            let q_pe = self.w_qr.forward(&hidden_states_or_q_c)?.reshape((
+                bs,
+                seq_len,
+                self.cfg.num_attention_heads,
+                self.cfg.qk_nope_head_dim,
+            ))?;
+
+            let (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
+
+            mistralrs_paged_attn::concat_and_cache_mla(
+                &kv_c_normed,
+                &k_pe.squeeze(1)?,
+                &kv_cache.0, // TODO is that true??
+                &slot_mapping,
+            )?;
+
+            todo!()
+        } else {
+            let q = self.q.forward_autocast(&hidden_states_or_q_c)?.reshape((
+                bs,
+                seq_len,
+                self.cfg.num_attention_heads,
+                self.cfg.q_head_dim(),
+            ))?;
+
+            let q_pe = q.i((.., self.cfg.qk_nope_head_dim..))?;
+            let (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
+            let q = q.slice_assign(&[&.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
+
+            mistralrs_paged_attn::concat_and_cache_mla(
+                &kv_c_normed,
+                &k_pe.squeeze(1)?,
+                &kv_cache.0, // TODO is that true??
+                &slot_mapping,
+            )?;
+
+            let kv = self.kv_b_proj.forward_autocast(&kv_c_normed)?.reshape((
                 bs,
                 seq_len,
                 self.num_attention_heads,
                 self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
-            ))?
-            .transpose(1, 2)?;
+            ))?;
 
-        let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
-        let k_nope = kv_split[0].clone();
-        let mut v = kv_split[1].clone();
+            let kv_split =
+                kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
+            let k_nope = kv_split[0].clone();
+            let v = kv_split[1].clone();
 
-        (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
+            let k = Tensor::cat(&[k_nope, k_pe.repeat((1, q.dim(1)?, 1, 1))?], D::Minus1)?;
 
-        let mut q = Tensor::zeros(
-            (bs, self.num_attention_heads, seq_len, self.q_head_dim),
-            q_pe.dtype(),
-            q_pe.device(),
-        )?;
-        q = q.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &q_nope)?;
-        q = q.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
+            let v = v
+                .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+                .contiguous()?;
 
-        let mut k = Tensor::zeros(
-            (bs, self.num_attention_heads, seq_len, self.q_head_dim),
-            k_pe.dtype(),
-            k_pe.device(),
-        )?;
-        k = k.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &k_nope)?;
-        let k_pe = k_pe.repeat((1, k.dim(1)?, 1, 1))?;
-        k = k.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &k_pe)?;
-
-        let mut attn_out = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => {
-                    let v = v
-                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
-                        .contiguous()?;
-                    paged_attn
-                        .forward(
-                            &q,
-                            &k,
-                            &v,
-                            attention_mask,
-                            Some(key_cache),
-                            Some(value_cache),
-                            input_metadata,
-                            &self.sdpa_params,
-                            Some(flash_params),
-                        )?
-                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
-                }
-                None => {
-                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
-                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    // Sanity check.
-                    assert!(attention_mask.is_some());
-                    let v = v
-                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
-                        .contiguous()?;
-                    paged_attn
-                        .forward(
-                            &q,
-                            &k,
-                            &v,
-                            attention_mask,
-                            None,
-                            None,
-                            &input_metadata,
-                            &self.sdpa_params,
-                            Some(flash_params),
-                        )?
-                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
-                }
-            },
-            None => {
-                (k, v) = kv_cache.append(&k, &v)?;
-
-                Sdpa.run_attention(
+            let output = Sdpa
+                .run_attention(
                     &q,
                     &k,
                     &v,
@@ -377,16 +591,11 @@ impl Attention {
                     Some(flash_params),
                     &self.sdpa_params,
                 )?
-            }
-        };
+                .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+                .reshape((bs, seq_len, ()))?;
 
-        attn_out = if attention_mask.is_some() {
-            attn_out.transpose(1, 2)?.reshape((bs, seq_len, ()))?
-        } else {
-            attn_out.reshape((bs, seq_len, ()))?
-        };
-
-        self.o_proj.forward_autocast(&attn_out)
+            self.o_proj.forward_autocast(&output)
+        }
     }
 }
 
@@ -728,7 +937,8 @@ impl MoeOrMlp {
 struct DecoderLayer {
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
-    attn: Attention,
+    // attn: Attention,
+    attn: MLAAttention,
     moe_or_mlp: MoeOrMlp,
 }
 
@@ -744,7 +954,8 @@ impl DecoderLayer {
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let attn = Attention::new(
+        // let attn = Attention::new(
+        let attn = MLAAttention::new(
             rotary_emb,
             cfg,
             vb.pp("self_attn"),
@@ -1026,15 +1237,7 @@ impl IsqModel for DeepSeekV3 {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            match &mut layer.attn.q {
-                QProj::Plain(q) => {
-                    tensors.push((q, Some(i)));
-                }
-                QProj::Lora { a, norm: _, b } => {
-                    tensors.push((a, Some(i)));
-                    tensors.push((b, Some(i)));
-                }
-            }
+            tensors.push((&mut layer.attn.q, Some(i)));
             tensors.push((&mut layer.attn.kv_a_proj_with_mqa, Some(i)));
             tensors.push((&mut layer.attn.kv_b_proj, Some(i)));
             tensors.push((&mut layer.attn.o_proj, Some(i)));
@@ -1121,13 +1324,6 @@ impl IsqModel for DeepSeekV3 {
                 }
                 MoeOrMlp::Mlp(_) => (),
             }
-
-            match &layer.attn.q {
-                QProj::Plain(_) => (),
-                QProj::Lora { a: _, norm, b: _ } => {
-                    uvb_l.pp("self_attn").pp("q_a_layernorm").add(norm);
-                }
-            }
         }
 
         uvb.to_safetensors()
@@ -1162,16 +1358,7 @@ impl IsqModel for DeepSeekV3 {
                 MoeOrMlp::Mlp(_) => (),
             }
 
-            match &layer.attn.q {
-                QProj::Plain(q) => {
-                    uvb_l.pp("self_attn").pp("q_proj").add(q);
-                }
-                QProj::Lora { a, norm, b } => {
-                    uvb_l.pp("self_attn").pp("q_a_proj").add(a);
-                    uvb_l.pp("self_attn").pp("q_a_layernorm").add(norm);
-                    uvb_l.pp("self_attn").pp("q_b_proj").add(b);
-                }
-            }
+            uvb_l.pp("self_attn").pp("q_proj").add(&layer.attn.q);
             uvb_l
                 .pp("self_attn")
                 .pp("kv_a_proj_with_mqa")

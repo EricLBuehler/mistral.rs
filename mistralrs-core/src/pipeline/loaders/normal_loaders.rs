@@ -2955,9 +2955,12 @@ impl DeviceMappedModelLoader for DeepSeekV2Loader {
                     let a = cfg.hidden_size * lora_rank;
                     let norm = lora_rank;
                     let b = (cfg.num_attention_heads * cfg.q_head_dim()) * lora_rank;
-                    a + norm + b
+                    a / weight_pack_factor + norm + b / weight_pack_factor
                 }
-                None => (cfg.num_attention_heads * cfg.q_head_dim()) * cfg.hidden_size,
+                None => {
+                    (cfg.num_attention_heads * cfg.q_head_dim()) * cfg.hidden_size
+                        / weight_pack_factor
+                }
             };
             let kv_a_proj_with_mqa = cfg.hidden_size * (cfg.kv_lora_rank + cfg.qk_rope_head_dim)
                 / weight_pack_factor
@@ -3110,18 +3113,9 @@ impl IsqModelLoader for DeepSeekV3Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.kv_b_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
         ];
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
-        if cfg.q_lora_rank.is_some() {
-            data.extend(vec![
-                Regex::new(r"layers\.(\d+)\.self_attn\.q_a_proj\.(weight|bias)$")?,
-                Regex::new(r"layers\.(\d+)\.self_attn\.q_b_proj\.(weight|bias)$")?,
-            ]);
-        } else {
-            data.push(Regex::new(
-                r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
-            )?);
-        }
         for layer_idx in 0..cfg.num_hidden_layers {
             if cfg.n_routed_experts.is_some()
                 && layer_idx >= cfg.first_k_dense_replace
@@ -3278,15 +3272,8 @@ impl DeviceMappedModelLoader for DeepSeekV3Loader {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
 
-            let q_proj = match cfg.q_lora_rank {
-                Some(lora_rank) => {
-                    let a = cfg.hidden_size * lora_rank;
-                    let norm = lora_rank;
-                    let b = (cfg.num_attention_heads * cfg.q_head_dim()) * lora_rank;
-                    a + norm + b
-                }
-                None => (cfg.num_attention_heads * cfg.q_head_dim()) * cfg.hidden_size,
-            };
+            let q_proj =
+                (cfg.num_attention_heads * cfg.q_head_dim()) / weight_pack_factor * cfg.hidden_size;
             let kv_a_proj_with_mqa = cfg.hidden_size * (cfg.kv_lora_rank + cfg.qk_rope_head_dim)
                 / weight_pack_factor
                 + bias_if!(cfg.attention_bias, cfg.kv_lora_rank + cfg.qk_rope_head_dim);
