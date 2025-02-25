@@ -131,6 +131,15 @@ impl PagedAttention {
             return Ok(att);
         }
 
+        return candle_flash_mla::flash_attn_mla(
+            &query,
+            key_cache.as_ref().unwrap(),
+            value_cache.as_ref().unwrap(),
+            block_tables.clone(),
+            context_lens.clone(),
+            sdpa_params.softmax_scale,
+        );
+
         //  Args:
         //  output: shape = [num_generation_tokens, num_heads, head_size]
         //
