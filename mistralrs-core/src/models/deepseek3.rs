@@ -511,13 +511,13 @@ impl MLAAttention {
 
         Ok(Self {
             w_q_uk: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(w_q_uk, None),
+                Linear::new(w_q_uk.t()?, None),
             ))?),
             w_qr: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(w_qr, None),
+                Linear::new(w_qr.t()?, None),
             ))?),
             w_uv_o: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(w_uv_o, None),
+                Linear::new(w_uv_o.t()?, None),
             ))?),
             q,
             kv_a_proj_with_mqa,
@@ -574,7 +574,7 @@ impl MLAAttention {
         // TODO! the contiguous is evil
         let kv_cache = kv_cache.permute((0, 3, 1, 2))?.contiguous()?;
         let block_size = kv_cache.dim(1)?;
-        let num_heads_cache = kv_cache.dim(2)?;
+        let num_heads_cache = kv_cache.dim(3)?;
         assert_eq!(block_size, 64);
         assert_eq!(
             num_heads_cache,
@@ -601,10 +601,12 @@ impl MLAAttention {
                 bs,
                 seq_len,
                 self.cfg.num_attention_heads,
-                self.cfg.qk_nope_head_dim,
+                self.cfg.qk_rope_head_dim,
             ))?;
 
-            let (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
+            let (q_pe, k_pe) =
+                self.rotary_emb
+                    .forward(&q_pe, &k_pe.unsqueeze(1)?, seqlen_offsets)?;
 
             mistralrs_paged_attn::concat_and_cache_mla(
                 &kv_c_normed,
