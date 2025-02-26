@@ -595,7 +595,7 @@ impl MLAAttention {
         // TODO! the contiguous is evil
         let kv_cache = kv_cache.permute((0, 3, 1, 2))?.contiguous()?;
         let block_size = kv_cache.dim(1)?;
-        let num_heads_cache = kv_cache.dim(3)?;
+        let num_heads_cache = kv_cache.dim(2)?;
         assert_eq!(block_size, 64);
         assert_eq!(
             num_heads_cache,
@@ -1231,8 +1231,9 @@ impl DeepSeekV2 {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
                 hidden_size: cfg.hidden_size,
-                num_kv_heads: (cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size())
-                    .max(1),
+                // num_kv_heads: (cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size())
+                //     .max(1),
+                num_kv_heads: cfg.kv_lora_rank + cfg.qk_rope_head_dim, // TODO
                 num_attn_heads: (cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
                 sliding_window: None,
@@ -1245,7 +1246,7 @@ impl DeepSeekV2 {
                 // } else {
                 //     cfg.v_head_dim
                 // },
-                v_head_dim: cfg.kv_lora_rank + cfg.qk_rope_head_dim, // TODO
+                v_head_dim: 1, // TODO
             },
             mapper,
         })
