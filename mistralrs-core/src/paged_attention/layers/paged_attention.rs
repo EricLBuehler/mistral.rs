@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
@@ -131,55 +131,31 @@ impl PagedAttention {
             return Ok(att);
         }
 
-        let query = query.reshape((batch_size, seq_len, attention_heads, head_size))?;
-
-        let mut key_cache = key_cache.as_ref().unwrap().clone();
-        let (num_blocks, num_heads_kc, head_size_kc, block_size, x) = key_cache.dims5()?;
-        // (num_blocks, num_heads_kc, head_size_kc, block_size, x) -> (num_blocks, block_size, num_heads_kc, head_size_kc * x)
-        key_cache = key_cache.permute((0, 3, 1, 2, 4))?.reshape((
-            num_blocks,
-            block_size,
-            num_heads_kc,
-            head_size_kc * x,
-        ))?;
-
-        // (num_blocks, num_heads_vc, head_size_vc, block_size) -> (num_blocks, block_size, num_heads_vc, head_size_vc)
-        let value_cache = value_cache.as_ref().unwrap().permute((0, 3, 1, 2))?;
-
-        return candle_flash_mla::flash_attn_mla(
+        //  Args:
+        //  output: shape = [num_generation_tokens, num_heads, head_size]
+        //
+        //  query: shape = [num_generation_tokens, num_heads, head_size]
+        //
+        //  key_cache: shape = [num_blocks, num_kv_heads, head_size/x,
+        //      block_size, x]
+        //
+        //  value_cache: shape = [num_blocks, num_kv_heads, head_size,
+        //      block_size]
+        //
+        //  input_metadata: metadata for paged attention.
+        //
+        //  alibi_slopes: shape = [num_heads]
+        #[allow(clippy::cast_possible_truncation)]
+        paged_attention(
             &query,
-            &key_cache,
-            &value_cache,
-            block_tables.to_dtype(DType::I32)?,
-            context_lens.to_dtype(DType::I32)?,
+            key_cache.as_ref().unwrap(),
+            value_cache.as_ref().unwrap(),
+            block_tables,
+            context_lens,
+            alibi_slopes.as_ref(),
+            input_metadata.max_context_len.unwrap(),
             sdpa_params.softmax_scale,
-        );
-
-        // //  Args:
-        // //  output: shape = [num_generation_tokens, num_heads, head_size]
-        // //
-        // //  query: shape = [num_generation_tokens, num_heads, head_size]
-        // //
-        // //  key_cache: shape = [num_blocks, num_kv_heads, head_size/x,
-        // //      block_size, x]
-        // //
-        // //  value_cache: shape = [num_blocks, num_kv_heads, head_size,
-        // //      block_size]
-        // //
-        // //  input_metadata: metadata for paged attention.
-        // //
-        // //  alibi_slopes: shape = [num_heads]
-        // #[allow(clippy::cast_possible_truncation)]
-        // paged_attention(
-        //     &query,
-        //     key_cache.as_ref().unwrap(),
-        //     value_cache.as_ref().unwrap(),
-        //     block_tables,
-        //     context_lens,
-        //     alibi_slopes.as_ref(),
-        //     input_metadata.max_context_len.unwrap(),
-        //     sdpa_params.softmax_scale,
-        //     sdpa_params.softcap.unwrap_or(1.0f32),
-        // )
+            sdpa_params.softcap.unwrap_or(1.0f32),
+        )
     }
 }

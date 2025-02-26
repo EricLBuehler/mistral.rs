@@ -566,6 +566,7 @@ impl MLAAttention {
         let Some((kv_cache, metadata)) = metadata else {
             candle_core::bail!("Expected pagedattn metadata")
         };
+        let kv_cache = kv_cache.1;
         let slot_mapping = metadata
             .slot_mappings
             .get(&xs.device().location())
@@ -594,7 +595,7 @@ impl MLAAttention {
             mistralrs_paged_attn::concat_and_cache_mla(
                 &kv_c_normed,
                 &k_pe.squeeze(1)?,
-                &kv_cache.0, // TODO is that true??
+                &kv_cache,
                 &slot_mapping,
             )?;
 
@@ -615,11 +616,11 @@ impl MLAAttention {
 
             let output = candle_flash_mla::flash_attn_mla(
                 &q,
-                &kv_cache.0.unsqueeze(D::Minus2)?,
-                &kv_cache.1, // TODO
+                &kv_cache.unsqueeze(D::Minus2)?,
                 block_tables.to_dtype(DType::I32)?,
                 context_lens.to_dtype(DType::I32)?,
                 self.sdpa_params.softmax_scale,
+                self.cfg.v_head_dim,
             )?
             .reshape((bs, seq_len, ()))?;
 
@@ -649,7 +650,7 @@ impl MLAAttention {
             mistralrs_paged_attn::concat_and_cache_mla(
                 &kv_c_normed,
                 &k_pe.squeeze(1)?,
-                &kv_cache.0, // TODO is that true??
+                &kv_cache,
                 &slot_mapping,
             )?;
 
