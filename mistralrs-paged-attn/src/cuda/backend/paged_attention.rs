@@ -535,9 +535,9 @@ fn launch_concat_and_cache_mla<
         candle::bail!("concat_and_cache_mla expects input tensors of rank 2 (kcn: {kcn_l:?}, kpe: {kpe_rank:?})")
     }
 
-    if kvc_rank != 4 {
+    if kvc_rank != 3 {
         candle::bail!(
-            "mla expects `key_cache` tensor to be of rank 4 \
+            "mla expects `key_cache` tensor to be of rank 3 \
                 (kv_cache: {kvc_l:?})"
         )
     }

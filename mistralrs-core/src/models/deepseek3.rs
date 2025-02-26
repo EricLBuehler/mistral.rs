@@ -574,7 +574,7 @@ impl MLAAttention {
         // TODO! the contiguous is evil
         let kv_cache = kv_cache.permute((0, 3, 1, 2))?.contiguous()?;
         let block_size = kv_cache.dim(1)?;
-        let num_heads_cache = kv_cache.dim(2)?;
+        let num_heads_cache = kv_cache.dim(3)?;
         assert_eq!(block_size, 64);
         assert_eq!(
             num_heads_cache,
@@ -636,7 +636,7 @@ impl MLAAttention {
                 block_tables.to_dtype(DType::I32)?,
                 context_lens.to_dtype(DType::I32)?,
                 self.sdpa_params.softmax_scale,
-                self.cfg.v_head_dim,
+                self.cfg.kv_lora_rank,
             )?
             .reshape((bs, seq_len, ()))?;
 
