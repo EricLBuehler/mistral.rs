@@ -632,7 +632,7 @@ impl MLAAttention {
 
             let output = candle_flash_mla::flash_attn_mla(
                 &q,
-                &kv_cache.unsqueeze(D::Minus2)?,
+                &kv_cache,
                 block_tables.to_dtype(DType::I32)?,
                 context_lens.to_dtype(DType::I32)?,
                 self.sdpa_params.softmax_scale,

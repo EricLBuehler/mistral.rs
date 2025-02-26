@@ -559,7 +559,7 @@ fn launch_concat_and_cache_mla<
     let pe_dim = kpe_l.dims()[1] as c_int;
     let block_size = kvc_l.dims()[1] as c_int;
 
-    assert_eq!(kvc_l.dims()[3] as i32, kv_lora_rank + pe_dim);
+    assert_eq!(kvc_l.dims()[2] as i32, kv_lora_rank + pe_dim);
 
     let kcn_stride = kcn_l.stride()[0] as c_int;
     let kpe_stride = kpe_l.stride()[0] as c_int;
