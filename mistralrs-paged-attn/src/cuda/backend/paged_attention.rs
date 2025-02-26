@@ -528,16 +528,16 @@ fn launch_concat_and_cache_mla<
     };
 
     let kcn_rank = kcn_l.stride().len();
-    let kpe_rank = kvc_l.stride().len();
+    let kpe_rank = kpe_l.stride().len();
     let kvc_rank = kvc_l.stride().len();
 
     if kcn_rank != 3 || kpe_rank != 3 {
-        candle::bail!("mla expects input tensors of rank 3 (kcn: {kcn_l:?}, kvc: {kvc_l:?})")
+        candle::bail!("mla expects input tensors of rank 3 (kcn: {kcn_l:?}, kpe: {kpe_rank:?})")
     }
 
-    if kvc_rank != 3 {
+    if kvc_rank != 4 {
         candle::bail!(
-            "mla expects `key_cache` tensor to be of rank 5 \
+            "mla expects `key_cache` tensor to be of rank 4 \
                 (kv_cache: {kvc_l:?})"
         )
     }
