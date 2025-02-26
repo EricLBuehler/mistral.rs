@@ -481,9 +481,9 @@ impl MLAAttention {
             let q_proj_weight =
                 q_proj_weight.reshape(((), cfg.num_attention_heads, cfg.q_head_dim()))?;
             (
-                q_proj_weight.i((.., ..cfg.qk_nope_head_dim))?,
+                q_proj_weight.i((.., .., ..cfg.qk_nope_head_dim))?,
                 q_proj_weight
-                    .i((.., cfg.qk_nope_head_dim..))?
+                    .i((.., .., cfg.qk_nope_head_dim..))?
                     .flatten_from(1)?
                     .contiguous()?,
             )
