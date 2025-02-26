@@ -567,6 +567,18 @@ impl MLAAttention {
             candle_core::bail!("Expected pagedattn metadata")
         };
         let kv_cache = kv_cache.1;
+        // We have (num_blocks, num_heads_k, head_dim, page_block_size)
+        // We want (num_blocks, page_block_size, num_heads_k, head_dim)
+        // TODO! the contiguous is evil
+        let kv_cache = kv_cache.permute((0, 3, 1, 2))?.contiguous()?;
+        let block_size = kv_cache.dim(1)?;
+        let num_heads_cache = kv_cache.dim(2)?;
+        assert_eq!(block_size, 64);
+        assert_eq!(
+            num_heads_cache,
+            self.cfg.kv_lora_rank + self.cfg.qk_rope_head_dim
+        );
+
         let slot_mapping = metadata
             .slot_mappings
             .get(&xs.device().location())
@@ -1255,14 +1267,15 @@ impl DeepSeekV3 {
                     .max(1),
                 sliding_window: None,
                 k_head_dim: cfg.q_head_dim(),
-                v_head_dim: if matches!(
-                    attention_mechanism,
-                    AttentionImplementation::PagedAttention
-                ) {
-                    cfg.q_head_dim()
-                } else {
-                    cfg.v_head_dim
-                },
+                // v_head_dim: if matches!(
+                //     attention_mechanism,
+                //     AttentionImplementation::PagedAttention
+                // ) {
+                //     cfg.q_head_dim()
+                // } else {
+                //     cfg.v_head_dim
+                // },
+                v_head_dim: cfg.kv_lora_rank + cfg.qk_rope_head_dim, // TODO
             },
             mapper,
         })
