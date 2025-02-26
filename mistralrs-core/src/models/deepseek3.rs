@@ -628,7 +628,7 @@ impl MLAAttention {
                 .get(&xs.device().location())
                 .unwrap();
 
-            let q = Tensor::cat(&[q_nope, q_pe], D::Minus1)?.unsqueeze(1)?;
+            let q = Tensor::cat(&[q_nope, q_pe], D::Minus1)?;
 
             let output = candle_flash_mla::flash_attn_mla(
                 &q,
