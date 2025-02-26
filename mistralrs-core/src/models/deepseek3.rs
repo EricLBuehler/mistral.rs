@@ -91,6 +91,7 @@ pub struct DeepSeekV3Config {
     pub(crate) rope_theta: f32,
     pub(crate) rope_scaling: Option<DeepSeekV2RopeScaling>,
     pub(crate) attention_bias: bool,
+    pub(crate) q_lora_rank: Option<usize>,
     pub(crate) qk_rope_head_dim: usize,
     pub(crate) kv_lora_rank: usize,
     pub(crate) v_head_dim: usize,
@@ -119,6 +120,26 @@ impl DeepSeekV3Config {
             softmax_scale = softmax_scale * mscale * mscale;
         }
         softmax_scale
+    }
+}
+
+enum QProj {
+    Plain(Arc<dyn QuantMethod>),
+    Lora {
+        a: Arc<dyn QuantMethod>,
+        norm: RmsNorm,
+        b: Arc<dyn QuantMethod>,
+    },
+}
+
+impl QProj {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Lora { a, norm, b } => {
+                b.forward_autocast(&norm.forward(&a.forward_autocast(xs)?)?)
+            }
+            Self::Plain(lin) => lin.forward_autocast(xs),
+        }
     }
 }
 
@@ -350,7 +371,7 @@ struct MLAAttention {
     w_qr: Arc<dyn QuantMethod>,
     comm: Arc<mistralrs_quant::Comm>,
 
-    q: Arc<dyn QuantMethod>,
+    q: QProj,
     kv_a_proj_with_mqa: Arc<dyn QuantMethod>,
     kv_a_layernorm: RmsNorm,
     kv_b_proj: Arc<dyn QuantMethod>,
@@ -376,14 +397,39 @@ impl MLAAttention {
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let q_head_dim = cfg.q_head_dim();
-        let q = ColumnParallelLayer::new(
-            cfg.hidden_size,
-            cfg.num_attention_heads * q_head_dim,
-            &cfg.quantization_config,
-            false,
-            comm,
-            mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
-        )?;
+        let q = match cfg.q_lora_rank {
+            Some(lora_rank) => {
+                let a = ReplicatedLayer::new(
+                    cfg.hidden_size,
+                    lora_rank,
+                    &cfg.quantization_config,
+                    cfg.attention_bias,
+                    mapper.set_device(layer_idx, vb.pp("q_a_proj"), loading_isq),
+                )?;
+                let norm = RmsNorm::new(
+                    lora_rank,
+                    cfg.rms_norm_eps,
+                    mapper.set_device(layer_idx, vb.pp("q_a_layernorm"), false),
+                )?;
+                let b = ColumnParallelLayer::new(
+                    lora_rank,
+                    cfg.num_attention_heads * q_head_dim,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    mapper.set_device(layer_idx, vb.pp("q_b_proj"), loading_isq),
+                )?;
+                QProj::Lora { a, norm, b }
+            }
+            None => QProj::Plain(ColumnParallelLayer::new(
+                cfg.hidden_size,
+                cfg.num_attention_heads * q_head_dim,
+                &cfg.quantization_config,
+                false,
+                comm,
+                mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
+            )?),
+        };
 
         let kv_a_proj_with_mqa = ReplicatedLayer::new(
             cfg.hidden_size,
@@ -428,7 +474,10 @@ impl MLAAttention {
         };
 
         let (w_q, w_qr) = {
-            let q_proj_weight = q.dequantize_w()?.t()?;
+            let q_proj_weight = match &q {
+                QProj::Lora { a: _, norm: _, b } => b.dequantize_w()?.t()?,
+                QProj::Plain(q) => q.dequantize_w()?.t()?,
+            };
             let q_proj_weight =
                 q_proj_weight.reshape(((), cfg.num_attention_heads, cfg.q_head_dim()))?;
             (
@@ -500,7 +549,10 @@ impl MLAAttention {
     ) -> Result<Tensor> {
         let (bs, seq_len, _) = xs.dims3()?;
 
-        let hidden_states_or_q_c = xs;
+        let hidden_states_or_q_c = match &self.q {
+            QProj::Lora { a, norm, b: _ } => a.forward_autocast(xs)?.apply(norm)?,
+            QProj::Plain(_) => xs.clone(),
+        };
 
         let kv_a = self.kv_a_proj_with_mqa.forward_autocast(xs)?;
         let kv_split = kv_a.split(
@@ -579,7 +631,11 @@ impl MLAAttention {
                 Ok(out)
             }
         } else {
-            let q = self.q.forward_autocast(&hidden_states_or_q_c)?.reshape((
+            let q = match &self.q {
+                QProj::Lora { a: _, norm: _, b } => b.forward_autocast(&hidden_states_or_q_c)?,
+                QProj::Plain(q) => q.forward(&hidden_states_or_q_c)?,
+            };
+            let q = q.reshape((
                 bs,
                 seq_len,
                 self.cfg.num_attention_heads,
@@ -1270,7 +1326,15 @@ impl IsqModel for DeepSeekV3 {
         let mut tensors = Vec::new();
         tensors.push((&mut self.lm_head, None));
         for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.attn.q, Some(i)));
+            match &mut layer.attn.q {
+                QProj::Plain(q) => {
+                    tensors.push((q, Some(i)));
+                }
+                QProj::Lora { a, norm: _, b } => {
+                    tensors.push((a, Some(i)));
+                    tensors.push((b, Some(i)));
+                }
+            }
             tensors.push((&mut layer.attn.kv_a_proj_with_mqa, Some(i)));
             tensors.push((&mut layer.attn.kv_b_proj, Some(i)));
             tensors.push((&mut layer.attn.o_proj, Some(i)));
@@ -1391,7 +1455,16 @@ impl IsqModel for DeepSeekV3 {
                 MoeOrMlp::Mlp(_) => (),
             }
 
-            uvb_l.pp("self_attn").pp("q_proj").add(&layer.attn.q);
+            match &layer.attn.q {
+                QProj::Plain(q) => {
+                    uvb_l.pp("self_attn").pp("q_proj").add(q);
+                }
+                QProj::Lora { a, norm, b } => {
+                    uvb_l.pp("self_attn").pp("q_a_proj").add(a);
+                    uvb_l.pp("self_attn").pp("q_a_layernorm").add(norm);
+                    uvb_l.pp("self_attn").pp("q_b_proj").add(b);
+                }
+            }
             uvb_l
                 .pp("self_attn")
                 .pp("kv_a_proj_with_mqa")
