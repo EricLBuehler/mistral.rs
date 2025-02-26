@@ -493,7 +493,8 @@ impl MLAAttention {
         // We absorb `W_UK` into `W_Q` resulting in W_Q_UK
         let w_q_uk = w_q
             .permute((1, 0, 2))?
-            .matmul(&w_uk.permute((1, 0, 2))?.t()?)?
+            .contiguous()?
+            .matmul(&w_uk.permute((1, 0, 2))?.t()?.contiguous()?)?
             .permute((1, 0, 2))?
             .flatten_from(1)?
             .contiguous()?;
@@ -503,7 +504,8 @@ impl MLAAttention {
             .reshape(((), cfg.num_attention_heads, cfg.v_head_dim))?;
         let w_uv_o = w_uv
             .permute((1, 0, 2))?
-            .matmul(&w_o.permute((1, 0, 2))?.t()?)?
+            .contiguous()?
+            .matmul(&w_o.permute((1, 0, 2))?.t()?.contiguous()?)?
             .flatten(0, 1)?
             .contiguous()?;
 
