@@ -609,8 +609,8 @@ impl MLAAttention {
                     .forward(&q_pe, &k_pe.unsqueeze(1)?, seqlen_offsets)?;
 
             mistralrs_paged_attn::concat_and_cache_mla(
-                &kv_c_normed,
-                &k_pe.squeeze(1)?,
+                &kv_c_normed.reshape(((), self.cfg.kv_lora_rank))?,
+                &k_pe.squeeze(1)?.reshape(((), self.cfg.qk_rope_head_dim))?,
                 &kv_cache,
                 &slot_mapping,
             )?;
