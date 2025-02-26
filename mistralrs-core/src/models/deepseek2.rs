@@ -632,7 +632,7 @@ impl MLAAttention {
             mistralrs_paged_attn::concat_and_cache_mla(
                 &kv_c_normed.reshape(((), self.cfg.kv_lora_rank))?,
                 &k_pe.squeeze(1)?.reshape(((), self.cfg.qk_rope_head_dim))?,
-                &kv_cache,
+                &kv_cache.squeeze(D::Minus2)?,
                 &slot_mapping,
             )?;
 
@@ -687,7 +687,7 @@ impl MLAAttention {
             mistralrs_paged_attn::concat_and_cache_mla(
                 &kv_c_normed.reshape(((), self.cfg.kv_lora_rank))?,
                 &k_pe.squeeze(1)?.reshape(((), self.cfg.qk_rope_head_dim))?,
-                &kv_cache,
+                &kv_cache.squeeze(D::Minus2)?,
                 &slot_mapping,
             )?;
 
@@ -1233,7 +1233,7 @@ impl DeepSeekV2 {
                 hidden_size: cfg.hidden_size,
                 // num_kv_heads: (cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size())
                 //     .max(1),
-                num_kv_heads: cfg.kv_lora_rank + cfg.qk_rope_head_dim, // TODO
+                num_kv_heads: 1, // TODO
                 num_attn_heads: (cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
                 sliding_window: None,
@@ -1246,7 +1246,7 @@ impl DeepSeekV2 {
                 // } else {
                 //     cfg.v_head_dim
                 // },
-                v_head_dim: 1, // TODO
+                v_head_dim: cfg.kv_lora_rank + cfg.qk_rope_head_dim, // TODO
             },
             mapper,
         })
