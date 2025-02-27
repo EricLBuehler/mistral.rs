@@ -1,3 +1,4 @@
+use core::ffi::c_char;
 use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
@@ -10,11 +11,14 @@ pub(crate) fn is_daemon() -> bool {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(transparent)]
-pub(crate) struct BigI8Array(#[serde(with = "BigArray")] pub(crate) [i8; 128]);
+pub(crate) struct BigCCharArray(#[serde(with = "BigArray")] pub(crate) [c_char; 128]);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) enum WorkerTransferData {
-    Init { id: BigI8Array, worker_rank: usize },
+    Init {
+        id: BigCCharArray,
+        worker_rank: usize,
+    },
 }
 
 pub(crate) fn ipc_name() -> anyhow::Result<Name<'static>> {

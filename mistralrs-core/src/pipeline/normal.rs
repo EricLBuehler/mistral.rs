@@ -18,7 +18,7 @@ use super::{
     Qwen2Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
-use crate::daemon::{self, BigI8Array, WorkerTransferData};
+use crate::daemon::{self, BigCCharArray, WorkerTransferData};
 use crate::device_map::{self, DeviceMapper};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
@@ -523,7 +523,7 @@ impl Loader for NormalLoader {
                     cmd.args(&args[1..]);
 
                     let data = WorkerTransferData::Init {
-                        id: BigI8Array(*id.internal()),
+                        id: BigCCharArray(*id.internal()),
                         worker_rank,
                     };
 
