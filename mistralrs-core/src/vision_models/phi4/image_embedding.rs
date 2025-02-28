@@ -5,7 +5,7 @@ use candle_nn::Module;
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
-    layers::AvgPool2d,
+    layers::{AvgPool2d, ReflectionPad2d},
     ops::NonZeroOp,
     utils::unvarbuilder::UnVarBuilder,
     vision_models::{
@@ -83,16 +83,6 @@ impl Module for EmbeddingLayers {
         Ok(xs)
     }
 }
-
-/// A simplified ReflectionPad2d layer for padding only the right and bottom by 1.
-struct SimpleReflectionPad2d;
-
-impl Module for SimpleReflectionPad2d {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        todo!()
-    }
-}
-
 pub struct ImageEmbedding {
     wte: candle_nn::Embedding,
     image_dim_out: usize,
@@ -106,7 +96,7 @@ pub struct ImageEmbedding {
     hd_transform_order: String,
     use_hd_transform: bool,
     tensors: Vec<(String, Tensor)>,
-    img_processor_padding: Option<SimpleReflectionPad2d>,
+    img_processor_padding: Option<ReflectionPad2d>,
     crop_size: usize,
     image_token_compression: Option<AvgPool2d>,
     base_feat_height_reduction: usize,
@@ -140,7 +130,7 @@ impl ImageEmbedding {
         assert_eq!(m.pow(2), l);
         let img_processor_padding = if m % 2 != 0 {
             m += 1;
-            Some(SimpleReflectionPad2d)
+            Some(ReflectionPad2d::new((0, 1, 0, 1)))
         } else {
             None
         };

@@ -1757,3 +1757,94 @@ impl AvgPool2d {
         xs.avg_pool2d_with_stride(self.kernel_size, self.stride)
     }
 }
+
+/// Applies 2D reflection padding to a tensor of shape (N, C, H, W).
+///
+/// The `padding` argument is a 4-tuple (pad_left, pad_right, pad_top, pad_bottom).
+/// For left padding, it reflects the values from column 1 up to pad_left (in reverse order);
+/// for right padding, it reflects from the second-to-last column backwards, and similarly for
+/// vertical (height) padding.
+///
+/// # Example
+///
+/// ```rust
+/// # use candle_core::{Tensor, Device, Result};
+/// # fn main() -> Result<()> {
+/// let x = Tensor::new(/* ... a tensor of shape (N, C, H, W) ... */, &Device::Cpu)?;
+/// let padded = reflection_pad2d(&x, (2, 2, 3, 3))?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct ReflectionPad2d {
+    padding: (usize, usize, usize, usize),
+}
+
+impl ReflectionPad2d {
+    pub fn new(padding: (usize, usize, usize, usize)) -> Self {
+        Self { padding }
+    }
+}
+
+impl Module for ReflectionPad2d {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (pad_left, pad_right, pad_top, pad_bottom) = self.padding;
+
+        let (_n, _c, h, w) = xs.dims4()?;
+
+        // --- Horizontal Padding (along width, axis = 3) ---
+        // For left padding, we reflect columns 1..=pad_left (in reverse order).
+        let left_pad = if pad_left > 0 {
+            // Create indices: [pad_left, pad_left-1, ..., 1]
+            let indices: Vec<i64> = (1..=pad_left as i64).rev().collect();
+            Some(xs.index_select(&Tensor::new(indices, &Device::Cpu)?, 3)?)
+        } else {
+            None
+        };
+
+        // For right padding, we reflect from the right side (excluding the last column).
+        let right_pad = if pad_right > 0 {
+            // For pad_right == 2, generate indices: [w-2, w-3, ... , w-1-pad_right]
+            let start = w as i64 - 2;
+            let indices: Vec<i64> = (0..pad_right as i64).map(|i| start - i).collect();
+            Some(xs.index_select(&Tensor::new(indices, &Device::Cpu)?, 3)?)
+        } else {
+            None
+        };
+
+        // Concatenate horizontally (along width, dim=3)
+        let x_padded_width = match (left_pad, right_pad) {
+            (Some(l), Some(r)) => Tensor::cat(&[l, xs.clone(), r], 3)?,
+            (Some(l), None) => Tensor::cat(&[l, xs.clone()], 3)?,
+            (None, Some(r)) => Tensor::cat(&[xs.clone(), r], 3)?,
+            (None, None) => xs.clone(),
+        };
+
+        // --- Vertical Padding (along height, axis = 2) ---
+        // For top padding, reflect rows 1..=pad_top (in reverse order)
+        let top_pad = if pad_top > 0 {
+            let indices: Vec<i64> = (1..=pad_top as i64).rev().collect();
+            Some(x_padded_width.index_select(&Tensor::new(indices, &Device::Cpu)?, 2)?)
+        } else {
+            None
+        };
+
+        // For bottom padding, reflect from the bottom (excluding the last row)
+        let bottom_pad = if pad_bottom > 0 {
+            let start = h as i64 - 2;
+            let indices: Vec<i64> = (0..pad_bottom as i64).map(|i| start - i).collect();
+            Some(x_padded_width.index_select(&Tensor::new(indices, &Device::Cpu)?, 2)?)
+        } else {
+            None
+        };
+
+        // Concatenate vertically (along height, dim=2)
+        let x_padded = match (top_pad, bottom_pad) {
+            (Some(t), Some(b)) => Tensor::cat(&[t, x_padded_width, b], 2)?,
+            (Some(t), None) => Tensor::cat(&[t, x_padded_width], 2)?,
+            (None, Some(b)) => Tensor::cat(&[x_padded_width, b], 2)?,
+            (None, None) => x_padded_width,
+        };
+
+        Ok(x_padded)
+    }
+}
