@@ -4,9 +4,9 @@ use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
-    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin,
-    Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader,
-    VisionPromptPrefixer, XLoraPaths,
+    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, Phi4MMLoader,
+    PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel,
+    VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
 };
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -136,6 +136,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
             VisionLoaderType::Idefics3 => Box::new(Idefics3Loader),
             VisionLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
+            VisionLoaderType::Phi4MM => Box::new(Phi4MMLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
