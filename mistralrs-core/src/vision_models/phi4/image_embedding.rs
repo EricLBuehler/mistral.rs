@@ -2,19 +2,21 @@ use std::{fmt::Debug, sync::Arc};
 
 use candle_core::{shape::ShapeWithOneHole, DType, Device, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::Module;
-use either::Either;
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
-    layers::AvgPool2d, utils::unvarbuilder::UnVarBuilder, vision_models::{
+    layers::AvgPool2d,
+    ops::NonZeroOp,
+    utils::unvarbuilder::UnVarBuilder,
+    vision_models::{
         phi4::config::Phi4MMImgProcessorConfig,
         siglip::{SiglipVisionConfig, SiglipVisionTransformer},
-    }
+    },
 };
 
 use super::Phi4MMConfig;
 
-const MAX_INPUT_ID: f64 = 1e9;
+const IMAGE_SPECIAL_TOKEN_ID: f64 = 200010.;
 
 trait ModuleWithMetadata: Module + Debug + Send + Sync {
     fn device(&self) -> Device;
@@ -103,13 +105,12 @@ pub struct ImageEmbedding {
     image_processor: SiglipVisionTransformer,
     hd_transform_order: String,
     use_hd_transform: bool,
-    vocab_size: usize,
     tensors: Vec<(String, Tensor)>,
     img_processor_padding: Option<SimpleReflectionPad2d>,
     crop_size: usize,
     image_token_compression: Option<AvgPool2d>,
-    base_feat_height_reduction: Option<usize>,
-    base_feat_height_target: usize,
+    base_feat_height_reduction: usize,
+    base_feat_height_target: Option<usize>,
 }
 
 impl ImageEmbedding {
@@ -157,10 +158,10 @@ impl ImageEmbedding {
             match &img_embd_config.image_token_compression_cls {
                 Some(x) if x == "avg_pool_2d" => (
                     Some(AvgPool2d::new(2, 2)),
-                    Some(1 as usize),
-                    base_feat_height_target / 2,
+                    1 as usize,
+                    Some(base_feat_height_target / 2),
                 ),
-                None => (None, None, 2),
+                None => (None, 2 as usize, None),
                 _ => candle_core::bail!("Unexpected image_token_compression_cls"),
             };
 
@@ -290,7 +291,6 @@ impl ImageEmbedding {
             layers: EmbeddingLayers(layers),
             hd_transform_order,
             use_hd_transform,
-            vocab_size: cfg.vocab_size,
             tensors,
             img_processor_padding,
             crop_size,
@@ -375,44 +375,57 @@ impl ImageEmbedding {
     fn forward(
         &self,
         input_ids: &Tensor,
-        pixel_values: &Tensor,
+        input_embeds: &Tensor,
+        image_attention_mask: Option<&Tensor>,
         image_sizes: Option<Vec<(usize, usize)>>,
     ) -> Result<Tensor> {
         let input_ids = input_ids.reshape(((), input_ids.dim(D::Minus1)?))?;
 
-        let input_ids_lt = input_ids.lt(0.0f64)?;
-        let input_ids_gt = input_ids.gt(-MAX_INPUT_ID)?;
-        // positions = torch.nonzero((input_ids < 0) & (input_ids > -MAX_INPUT_ID), as_tuple=False)
-        let positions = input_ids_lt.bitwise_and(&input_ids_gt)?.nonzero()?;
+        let positions = input_ids.eq(IMAGE_SPECIAL_TOKEN_ID)?.nonzero()?;
+
         let target_dev = self.layers.0[0].device();
         let target_dtype = self.layers.0[0].dtype();
 
         let mut select = false;
-        // If some, use hd transform case and it contains num_img_toks
-        let mut hd_transform = None;
         let mut image_set_tensor = None;
         if positions.dim(0)? > 0 {
             select = true;
-            // input_ids[positions[:, 0], positions[:, 1]]
-            if self.use_hd_transform && image_sizes.is_some() {
-                assert_eq!(pixel_values.dims().len(), 5);
-                let bs = pixel_values.dim(0)?;
-                let img_features = self.get_image_features(&pixel_values.flatten(0, 1)?)?;
-                let base_feat_dim = (img_features.dims()[1] as f32).sqrt() as usize;
-                assert_eq!(base_feat_dim, 24);
 
-                // bs x max_num_crops x (24x24) x C
-                let img_features =
-                    img_features.reshape((bs, (), base_feat_dim.pow(2), self.image_dim_out))?;
+            if self.use_hd_transform && image_sizes.is_some() {
+                assert_eq!(input_embeds.dims().len(), 5);
+                let bs = input_embeds.dim(0)?;
+                let img_features = match image_attention_mask {
+                    Some(attn_mask) => self.get_image_features(
+                        &input_embeds.flatten(0, 1)?,
+                        Some(&attn_mask.ne(0.)?.flatten(0, 1)?),
+                    )?,
+                    None => self.get_image_features(input_embeds, None)?,
+                };
+
+                let base_feat_height_target = self.base_feat_height_target.unwrap();
+                let base_resolution = self.crop_size;
+                let base_feat_height_reduction = self.base_feat_height_reduction;
+
+                let base_feat_height = (img_features.dim(1)? as f64).sqrt() as usize;
+                let base_feat_width = base_feat_height;
+
+                assert_eq!(base_feat_height, base_feat_height_target);
+                assert_eq!(base_feat_width, base_feat_height_target);
+
+                let img_features = img_features.reshape((
+                    bs,
+                    (),
+                    base_feat_height * base_feat_width,
+                    self.image_dim_out,
+                ))?;
                 let C = self.image_dim_out;
-                let H = base_feat_dim;
+                let H = base_feat_height;
 
                 let mut output_imgs = Vec::new();
-                let mut output_len = Vec::new();
                 for bs_ in 0..bs {
                     let (h, w) = image_sizes.as_ref().unwrap()[bs_];
-                    let h = h / 336;
-                    let w = w / 336;
+                    let h = h / base_resolution;
+                    let w = w / base_resolution;
                     let B_ = h * w;
 
                     // 1 x (24x24) x 1024
@@ -421,51 +434,171 @@ impl ImageEmbedding {
                     // 1 x 12 x 12 x 4096
                     let glb_img = global_img_feature
                         .reshape((1, H, H, C))?
-                        .reshape((1, H / 2, 2, H / 2, 2, C))?
+                        .reshape((
+                            1,
+                            H / base_feat_height_reduction,
+                            base_feat_height_reduction,
+                            H / base_feat_height_reduction,
+                            base_feat_height_reduction,
+                            C,
+                        ))?
                         .contiguous()?
                         .permute((0, 1, 3, 2, 4, 5))?
-                        .reshape((1, H / 2, H / 2, 4 * C))?
+                        .reshape((
+                            1,
+                            H / base_feat_height_reduction,
+                            H / base_feat_height_reduction,
+                            base_feat_height_reduction * base_feat_height_reduction * C,
+                        ))?
                         .contiguous()?;
                     let temp_glbl_gn = self
                         .sub_gn
                         .as_ref()
                         .expect("Need `sub_gn` if `use_hd_transform`")
-                        .repeat((1, H / 2, 1, 1))?;
+                        .repeat((1, H / base_feat_height_reduction, 1, 1))?;
 
                     // 1 x 156 x 4096
-                    let glb_img =
-                        Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((1, (), 4 * C))?;
+                    let glb_img = Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((
+                        1,
+                        (),
+                        base_feat_height_reduction * base_feat_height_reduction * C,
+                    ))?;
 
                     // (max_num_crops-1) x (12x12) x C
-                    let sub_img = img_features.i((bs_, 1..))?;
+                    let mut sub_img = img_features.i((bs_, 1..))?;
 
                     // 16x574x1024
                     // Get rid of padding sub_img
-                    let sub_img = sub_img.i(..B_)?;
+                    sub_img = sub_img.i(..B_)?;
 
                     // (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
-                    let sub_img = sub_img
+                    sub_img = sub_img
                         .reshape((B_, H, H, C))?
-                        .reshape((B_, H / 2, 2, H / 2, 2, C))?
+                        .reshape((
+                            B_,
+                            H / base_feat_height_reduction,
+                            base_feat_height_reduction,
+                            H / base_feat_height_reduction,
+                            base_feat_height_reduction,
+                            C,
+                        ))?
                         .contiguous()?
                         .permute((0, 1, 3, 2, 4, 5))?
-                        .reshape((B_, (), 4 * C))?
+                        .reshape((
+                            B_,
+                            (),
+                            base_feat_height_reduction * base_feat_height_reduction * C,
+                        ))?
                         .contiguous()?;
-                    let sub_img = sub_img
-                        .reshape(BigShapeWithOneHole((1usize, h, w, 12usize, 12usize, ())))?
+                    sub_img = sub_img
+                        .reshape(BigShapeWithOneHole((
+                            1usize,
+                            h,
+                            w,
+                            base_feat_height / base_feat_height_reduction,
+                            base_feat_width / base_feat_height_reduction,
+                            (),
+                        )))?
                         .permute((0, 1, 3, 2, 4, 5))?
-                        .reshape((1, h * 12, w * 12, 4 * C))?;
-                    let temp_sub_gn = self
-                        .sub_gn
-                        .as_ref()
-                        .expect("Need `sub_gn` if `use_hd_transform`")
-                        .repeat((1, h * 12, 1, 1))?;
+                        .reshape((
+                            1,
+                            h * base_feat_height / base_feat_height_reduction,
+                            w * base_feat_width / base_feat_height_reduction,
+                            base_feat_height_reduction * base_feat_height_reduction * C,
+                        ))?;
+
+                    let (temp_sub_GN, temp_len) = if let Some(image_attention_mask) =
+                        image_attention_mask
+                    {
+                        let h_indices = Tensor::arange_step(
+                            0,
+                            image_attention_mask.dim(2)? as u32,
+                            2,
+                            &target_dev,
+                        )?;
+                        let w_indices = Tensor::arange_step(
+                            0,
+                            image_attention_mask.dim(3)? as u32,
+                            2,
+                            &target_dev,
+                        )?;
+
+                        let reshaped_image_attention_mask = {
+                            let mut selected = image_attention_mask.i((bs_, 1..B_ + 1))?;
+                            selected = selected.index_select(&h_indices, 1)?;
+                            selected = selected.index_select(&w_indices, 2)?;
+                            selected
+                                .reshape((
+                                    1,
+                                    h,
+                                    w,
+                                    base_feat_height / base_feat_height_reduction,
+                                    base_feat_width,
+                                    base_feat_height_reduction,
+                                ))?
+                                .permute((0, 1, 3, 2, 4))?
+                                .reshape((
+                                    1,
+                                    h * base_feat_height / base_feat_height_reduction,
+                                    w * base_feat_width / base_feat_height_reduction,
+                                ))?
+                        };
+
+                        let useful_height = reshaped_image_attention_mask
+                            .i((0, .., 0))?
+                            .sum_all()?
+                            .to_scalar::<u32>()?;
+                        let useful_width = reshaped_image_attention_mask
+                            .i((0, 0, ..))?
+                            .sum_all()?
+                            .to_scalar::<u32>()?;
+
+                        sub_img =
+                            sub_img.i((.., ..useful_height as usize, ..useful_width as usize))?;
+
+                        let temp_len = {
+                            let mut selected = image_attention_mask.i((bs_, ..B_ + 1))?;
+                            selected = selected.index_select(&h_indices, 1)?;
+                            selected = selected.index_select(&w_indices, 2)?;
+                            selected.sum_all()?.to_scalar::<u32>()?
+                        };
+                        let temp_len = temp_len as usize
+                            + useful_height as usize
+                            + 1
+                            + base_feat_height / base_feat_height_reduction;
+
+                        (
+                            self.sub_gn
+                                .as_ref()
+                                .expect("Need `sub_gn` if `use_hd_transform`")
+                                .repeat((1, useful_height as usize, 1, 1))?,
+                            temp_len,
+                        )
+                    } else {
+                        let temp_len = (h * w + 1) * self.num_img_tokens
+                            + 1
+                            + (h + 1) * base_feat_height / base_feat_height_reduction;
+
+                        (
+                            self.sub_gn
+                                .as_ref()
+                                .expect("Need `sub_gn` if `use_hd_transform`")
+                                .repeat((
+                                    1,
+                                    h * base_feat_height / base_feat_height_reduction,
+                                    1,
+                                    1,
+                                ))?,
+                            temp_len,
+                        )
+                    };
 
                     let sub_img =
-                        Tensor::cat(&[sub_img, temp_sub_gn], 2)?.reshape((1, (), 4 * C))?;
+                        Tensor::cat(&[sub_img, temp_sub_GN], 2)?.reshape((1, (), 4 * C))?;
 
                     // (1, num_img_tokens, 1024*4)
 
+                    // glb + sub
                     match self.hd_transform_order.as_str() {
                         "glb_sub" => {
                             output_imgs.push(Tensor::cat(
@@ -498,12 +631,10 @@ impl ImageEmbedding {
                         }
                     }
 
-                    let temp_len = (h * w + 1) * 144 + 1 + (h + 1) * 12;
+                    // (h*w+1)*144 + 1 + (h+1)*12
                     assert_eq!(temp_len, output_imgs.last().unwrap().dims()[1]);
-                    output_len.push(temp_len);
                 }
 
-                hd_transform = Some(output_len);
                 let mut image_set_tensor_inner = Vec::new();
                 for img in output_imgs {
                     let layerout = self
@@ -511,66 +642,43 @@ impl ImageEmbedding {
                         .forward(&img.to_device(&target_dev)?.to_dtype(target_dtype)?)?;
                     image_set_tensor_inner.push(layerout);
                 }
-                image_set_tensor = Some(Either::Left(image_set_tensor_inner));
-            } else if pixel_values.dims().len() == 4 {
-                let tt = self
-                    .get_image_features(pixel_values)?
-                    .to_device(&target_dev)?
-                    .to_dtype(target_dtype)?
-                    .reshape(((), self.image_dim_out))?;
-                let image_set_tensor_inner = self.layers.forward(&tt)?;
-                image_set_tensor = Some(Either::Right(image_set_tensor_inner));
-            } else if pixel_values.dims().len() == 3 {
-                let tt = pixel_values
-                    .to_device(&target_dev)?
-                    .to_dtype(target_dtype)?
-                    .reshape(((), self.image_dim_out))?;
-                let image_set_tensor_inner = self.layers.forward(&tt)?;
-                image_set_tensor = Some(Either::Right(image_set_tensor_inner));
+                image_set_tensor = Some(image_set_tensor_inner);
             } else {
                 unreachable!()
             }
         }
 
-        let input_ids = input_ids.clamp(0.0, self.vocab_size as f64)?;
         let mut hidden_states = self.wte.forward(&input_ids)?;
-        if select {
-            match (hd_transform, image_set_tensor) {
-                (Some(output_lens), Some(Either::Left(image_set_tensors))) => {
-                    let mut idx = 0;
-                    for (i, cnt) in output_lens.into_iter().enumerate() {
-                        let img_set_tensor = image_set_tensors[i]
-                            .to_device(&target_dev)?
-                            .to_dtype(target_dtype)?;
-                        // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
-                        let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
-                        let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
-                        hidden_states = hidden_states.slice_assign(
-                            &[&p_0, &(p_1..p_1 + cnt), &(..img_set_tensor.dims()[2])],
-                            &img_set_tensor,
-                        )?;
-                        idx += cnt;
-                    }
-                }
-                (None, Some(Either::Right(image_set_tensor))) => {
-                    let mut idx = 0;
-                    // Know len(img_embeds) == pixel_values.dim(0) == len(selected_g_values)
-                    // https://huggingface.co/microsoft/Phi-3.5-vision-instruct/blob/dbcdaaacf52c8e40cf8de6d6ffa6ff6860e5f256/image_embedding_phi3_v.py#L259
-                    for i in 0..pixel_values.dim(0)? {
-                        let cnt = self.num_img_tokens;
-                        let img_set_tensor = image_set_tensor
-                            .i(i * cnt..(i + 1) * cnt)?
-                            .to_device(&target_dev)?
-                            .to_dtype(target_dtype)?;
-                        let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
-                        let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
-                        // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
-                        hidden_states = hidden_states.slice_assign(
-                            &[&p_0, &(p_1..p_1 + cnt), &(..img_set_tensor.dims()[2])],
-                            &img_set_tensor,
-                        )?;
-                        idx += cnt;
-                    }
+        if select && self.use_hd_transform {
+            match image_set_tensor {
+                Some(image_set_tensors) => {
+                    let merged_img_set_tensor = Tensor::cat(&image_set_tensors, 1)?.squeeze(0)?;
+
+                    // Get the equiv 0th and 1th rows of the positions_tuple
+                    let positions_transposed = positions.t()?;
+                    let positions_transposed_0 = positions_transposed.i(0)?;
+                    let positions_transposed_1 = positions_transposed.i(1)?;
+
+                    let linear_index = ((positions_transposed_0
+                        * hidden_states.dim(D::Minus1)? as f64)?
+                        + positions_transposed_1)?;
+
+                    // Zero it out
+                    hidden_states = hidden_states.flatten_all()?.scatter_add(
+                        &linear_index,
+                        &Tensor::zeros(
+                            linear_index.elem_count(),
+                            hidden_states.dtype(),
+                            hidden_states.device(),
+                        )?,
+                        0,
+                    )?;
+
+                    hidden_states = hidden_states.flatten_all()?.scatter_add(
+                        &linear_index,
+                        &merged_img_set_tensor.flatten_all()?,
+                        0,
+                    )?;
                 }
                 _ => unreachable!(),
             }

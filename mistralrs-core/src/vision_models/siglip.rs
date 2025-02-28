@@ -59,7 +59,7 @@ impl Default for SiglipVisionConfig {
     }
 }
 
-struct VisionEmbeddings {
+pub(super) struct VisionEmbeddings {
     patch_size: usize,
     patch_embedding: Conv2d,
     num_patches_per_side: usize,

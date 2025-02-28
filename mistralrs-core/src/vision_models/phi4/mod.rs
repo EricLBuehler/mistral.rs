@@ -21,6 +21,8 @@ mod image_embedding;
 
 pub(crate) use config::Phi4MMConfig;
 
+const MAX_INPUT_ID: f64 = 1e9;
+
 struct Attention {
     qkv_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
