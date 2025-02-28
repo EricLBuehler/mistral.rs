@@ -129,7 +129,7 @@ impl ImageEmbedding {
 
         let siglip_vision_config = &PHI4_MM_VISION_CFG;
         let image_processor =
-            SiglipVisionTransformer::new(&siglip_vision_config, vb.pp("img_processor"))?;
+            SiglipVisionTransformer::new(siglip_vision_config, vb.pp("img_processor"))?;
 
         let pe_weight = image_processor.embeddings.position_embedding.embeddings();
         let (l, d) = pe_weight.dims2()?;
@@ -158,10 +158,10 @@ impl ImageEmbedding {
             match &img_embd_config.image_token_compression_cls {
                 Some(x) if x == "avg_pool_2d" => (
                     Some(AvgPool2d::new(2, 2)),
-                    1 as usize,
+                    1_usize,
                     Some(base_feat_height_target / 2),
                 ),
-                None => (None, 2 as usize, None),
+                None => (None, 2_usize, None),
                 _ => candle_core::bail!("Unexpected image_token_compression_cls"),
             };
 
@@ -313,7 +313,7 @@ impl ImageEmbedding {
     ) -> Result<Tensor> {
         assert!(self.layer_idx < 0);
         let img_feature = self.image_processor.forward_get_hidden_states(
-            &img_embeds,
+            img_embeds,
             attention_mask,
             None,
             self.layer_idx,

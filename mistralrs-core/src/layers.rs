@@ -1113,9 +1113,9 @@ impl Phi4MMRotaryEmbedding {
                 scaling_type: Phi4MMScaledRopeType::LongRope,
                 short_factor: Some(short_factor),
                 long_factor: Some(long_factor),
-            }) => Self::new_longrope(short_factor, long_factor, &cfg, dtype, dev),
+            }) => Self::new_longrope(short_factor, long_factor, cfg, dtype, dev),
 
-            _ => Self::new_unscaled(&cfg, dtype, dev),
+            _ => Self::new_unscaled(cfg, dtype, dev),
         }
     }
 

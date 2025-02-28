@@ -445,14 +445,14 @@ impl Phi4MMInputsProcessor {
         let (new_size, padding_width, padding_height) = if ratio_width < ratio_height {
             (
                 (target_width, (orig_h as f64 * ratio_width) as usize),
-                0 as usize,
+                0_usize,
                 target_height - (orig_h as f64 * ratio_width) as usize,
             )
         } else {
             (
                 ((orig_w as f64 * ratio_height) as usize, target_height),
                 target_width - (orig_w as f64 * ratio_height) as usize,
-                0 as usize,
+                0_usize,
             )
         };
 
@@ -602,9 +602,9 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
 
             let downsample_attention_mask = {
                 let h_indices =
-                    Tensor::arange_step(0, attention_mask_reshape.dim(1)? as u32, 2, &device)?;
+                    Tensor::arange_step(0, attention_mask_reshape.dim(1)? as u32, 2, device)?;
                 let w_indices =
-                    Tensor::arange_step(0, attention_mask_reshape.dim(2)? as u32, 2, &device)?;
+                    Tensor::arange_step(0, attention_mask_reshape.dim(2)? as u32, 2, device)?;
                 let selected = attention_mask_reshape
                     .index_select(&h_indices, 1)?
                     .index_select(&w_indices, 2)?;
