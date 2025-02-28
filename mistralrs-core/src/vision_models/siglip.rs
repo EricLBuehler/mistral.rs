@@ -517,6 +517,10 @@ impl SiglipVisionTransformer {
         hidden_states.apply(&self.post_layernorm)
     }
 
+    pub fn dtype(&self) -> DType {
+        self.embeddings.patch_embedding.weight().dtype()
+    }
+
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

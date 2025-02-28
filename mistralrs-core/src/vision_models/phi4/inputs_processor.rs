@@ -239,6 +239,15 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             detokenized = img_token_pattern
                 .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
                 .to_string();
+
+            seq.set_toks(
+                tokenizer
+                    .encode(detokenized.clone(), true)
+                    .expect("Encode failed")
+                    .get_ids()
+                    .to_vec(),
+            );
+
             seq.set_initial_prompt(detokenized);
 
             let mut i = 0;
@@ -256,6 +265,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 new_ids.extend(vec![token_id; *token_count]);
                 new_ids.extend(seq.get_toks()[i + 1..].to_vec());
                 seq.set_toks(new_ids);
+                i += token_count;
             }
             toks.push(seq.get_toks().to_vec());
 

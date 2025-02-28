@@ -313,7 +313,7 @@ impl ImageEmbedding {
     ) -> Result<Tensor> {
         assert!(self.layer_idx < 0);
         let img_feature = self.image_processor.forward_get_hidden_states(
-            img_embeds,
+            &img_embeds.to_dtype(self.image_processor.dtype())?,
             attention_mask,
             None,
             self.layer_idx,
@@ -540,8 +540,7 @@ impl ImageEmbedding {
                                     h,
                                     w,
                                     base_feat_height / base_feat_height_reduction,
-                                    base_feat_width,
-                                    base_feat_height_reduction,
+                                    base_feat_width / base_feat_height_reduction,
                                 ))?
                                 .permute((0, 1, 3, 2, 4))?
                                 .reshape((
@@ -600,8 +599,11 @@ impl ImageEmbedding {
                         )
                     };
 
-                    let sub_img =
-                        Tensor::cat(&[sub_img, temp_sub_GN], 2)?.reshape((1, (), 4 * C))?;
+                    let sub_img = Tensor::cat(&[sub_img, temp_sub_GN], 2)?.reshape((
+                        1,
+                        (),
+                        base_feat_height_reduction * base_feat_height_reduction * C,
+                    ))?;
 
                     // (1, num_img_tokens, 1024*4)
 
@@ -662,17 +664,18 @@ impl ImageEmbedding {
                     let merged_img_set_tensor = Tensor::cat(&image_set_tensors, 1)?.squeeze(0)?;
 
                     // Get the equiv 0th and 1th rows of the positions_tuple
-                    let positions_transposed = positions.t()?;
+                    let positions_transposed = positions.t()?.to_dtype(DType::F32)?;
                     let positions_transposed_0 = positions_transposed.i(0)?;
                     let positions_transposed_1 = positions_transposed.i(1)?;
 
-                    let linear_index = ((positions_transposed_0
+                    let mut linear_index = ((positions_transposed_0
                         * hidden_states.dim(D::Minus1)? as f64)?
                         + positions_transposed_1)?;
+                    linear_index = linear_index.to_dtype(DType::U32)?;
 
                     // Zero it out
                     hidden_states = hidden_states.flatten_all()?.scatter_add(
-                        &linear_index.to_dtype(DType::U32)?,
+                        &linear_index,
                         &Tensor::zeros(
                             linear_index.elem_count(),
                             hidden_states.dtype(),
@@ -682,7 +685,7 @@ impl ImageEmbedding {
                     )?;
 
                     hidden_states = hidden_states.flatten_all()?.scatter_add(
-                        &linear_index.to_dtype(DType::U32)?,
+                        &linear_index,
                         &merged_img_set_tensor.flatten_all()?,
                         0,
                     )?;
