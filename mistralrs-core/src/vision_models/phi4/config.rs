@@ -16,6 +16,30 @@ pub struct Phi4MMLoraConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Phi4MMImageEmbedConfig {
+    pub n_embd: Option<usize>,
+    pub crop_size: Option<usize>,
+    pub embedding_cls: String,
+    pub enable_gradient_checkpointing: bool,
+    pub hd_transform_order: Option<String>,
+    pub image_token_compression_cls: Option<String>,
+    pub projection_cls: Option<String>,
+    pub use_hd_transform: Option<bool>,
+    pub with_learnable_separator: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Phi4MMEmbdLayerConfig {
+    pub image_embd_layer: Phi4MMImageEmbedConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Phi4MMImgProcessorConfig {
+    pub layer_idx: Option<isize>,
+    pub type_feature: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Phi4MMConfig {
     pub vocab_size: usize,
     pub hidden_size: usize,
@@ -40,8 +64,8 @@ pub struct Phi4MMConfig {
     pub eos_token_id: usize,
     pub pad_token_id: usize,
     pub sliding_window: Option<usize>,
-    pub embd_layer: String,
-    pub img_processor: Option<String>,
+    pub embd_layer: Phi4MMEmbdLayerConfig,
+    pub img_processor: Option<Phi4MMImgProcessorConfig>,
     pub audio_processor: Option<String>,
     pub vision_lora: Option<Phi4MMLoraConfig>,
     pub speech_lora: Option<Phi4MMLoraConfig>,

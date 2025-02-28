@@ -1739,3 +1739,21 @@ impl MlpLayer for Mlp {
         self.gate.dtype_and_device()
     }
 }
+
+pub struct AvgPool2d {
+    kernel_size: usize,
+    stride: usize,
+}
+
+impl AvgPool2d {
+    pub fn new(kernel_size: usize, stride: usize) -> Self {
+        Self {
+            kernel_size,
+            stride,
+        }
+    }
+
+    pub fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        xs.avg_pool2d_with_stride(self.kernel_size, self.stride)
+    }
+}

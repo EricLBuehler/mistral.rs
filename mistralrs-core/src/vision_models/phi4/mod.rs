@@ -17,6 +17,7 @@ use crate::{
 };
 
 mod config;
+mod image_embedding;
 
 pub(crate) use config::Phi4MMConfig;
 
