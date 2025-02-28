@@ -424,26 +424,20 @@ impl Encoder {
         Ok(Self { layers })
     }
 
-    fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
-        let mut hidden_states = xs.clone();
-        for layer in &self.layers {
-            hidden_states = layer.forward(&hidden_states, attention_mask)?;
-        }
-        Ok(hidden_states)
-    }
-
-    pub fn forward_get_hidden_states(
+    fn forward_get_hidden_states(
         &self,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-    ) -> Result<(Tensor, Vec<Tensor>)> {
+        hidden_states_index: isize,
+    ) -> Result<Tensor> {
         let mut hidden_states = xs.clone();
-        let mut hidden_states_all = Vec::new();
-        for layer in &self.layers {
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
             hidden_states = layer.forward(&hidden_states, attention_mask)?;
-            hidden_states_all.push(hidden_states.clone());
+            if (self.layers.len() as isize + hidden_states_index) as usize == layer_idx {
+                return Ok(hidden_states);
+            }
         }
-        Ok((hidden_states, hidden_states_all))
+        Ok(hidden_states)
     }
 }
 
@@ -477,38 +471,7 @@ impl SiglipVisionTransformer {
         attention_mask: Option<&Tensor>,
         tgt_sizes: Option<&Tensor>,
     ) -> Result<Tensor> {
-        let bs = pixel_values.dim(0)?;
-        let patch_attention_mask = if let Some(attn_mask) = attention_mask {
-            attn_mask.clone()
-        } else {
-            let patch_size = self.config.patch_size;
-            Tensor::ones(
-                (
-                    bs,
-                    pixel_values.dim(2)? / patch_size,
-                    pixel_values.dim(3)? / patch_size,
-                ),
-                DType::U8,
-                pixel_values.device(),
-            )?
-        };
-
-        let hidden_states =
-            self.embeddings
-                .forward(pixel_values, &patch_attention_mask, tgt_sizes)?;
-
-        let attention_mask = if attention_mask.is_none() {
-            None
-        } else {
-            let mask = patch_attention_mask
-                .reshape((patch_attention_mask.dim(0)?, ()))?
-                .to_dtype(hidden_states.dtype())?;
-            Some(CausalMasker.expand_mask(&mask, hidden_states.dtype(), None)?)
-        };
-        let hidden_states = self
-            .encoder
-            .forward(&hidden_states, attention_mask.as_ref())?;
-        hidden_states.apply(&self.post_layernorm)
+        self.forward_get_hidden_states(pixel_values, attention_mask, tgt_sizes, -1)
     }
 
     pub fn forward_get_hidden_states(
@@ -516,7 +479,8 @@ impl SiglipVisionTransformer {
         pixel_values: &Tensor,
         attention_mask: Option<&Tensor>,
         tgt_sizes: Option<&Tensor>,
-    ) -> Result<(Tensor, Vec<Tensor>)> {
+        hidden_states_index: isize,
+    ) -> Result<Tensor> {
         let bs = pixel_values.dim(0)?;
         let patch_attention_mask = if let Some(attn_mask) = attention_mask {
             attn_mask.clone()
@@ -545,13 +509,12 @@ impl SiglipVisionTransformer {
                 .to_dtype(hidden_states.dtype())?;
             Some(CausalMasker.expand_mask(&mask, hidden_states.dtype(), None)?)
         };
-        let (hidden_states, hidden_states_all) = self
-            .encoder
-            .forward_get_hidden_states(&hidden_states, attention_mask.as_ref())?;
-        Ok((
-            hidden_states.apply(&self.post_layernorm)?,
-            hidden_states_all,
-        ))
+        let hidden_states = self.encoder.forward_get_hidden_states(
+            &hidden_states,
+            attention_mask.as_ref(),
+            hidden_states_index,
+        )?;
+        hidden_states.apply(&self.post_layernorm)
     }
 
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {

@@ -305,12 +305,13 @@ impl ImageEmbedding {
         img_embeds: &Tensor,
         attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
-        let (_, hidden_states) =
-            self.image_processor
-                .forward_get_hidden_states(&img_embeds, attention_mask, None)?;
         assert!(self.layer_idx < 0);
-        let img_feature =
-            hidden_states[(hidden_states.len() as isize + self.layer_idx) as usize].clone();
+        let img_feature = self.image_processor.forward_get_hidden_states(
+            &img_embeds,
+            attention_mask,
+            None,
+            self.layer_idx,
+        )?;
 
         if self.type_feature == "patch" {
             let mut patch_feature = img_feature.clone();
