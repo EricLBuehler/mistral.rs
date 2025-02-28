@@ -53,18 +53,18 @@ impl Attention {
         let op_size = num_heads * head_dim + 2 * num_kv_heads * head_dim;
 
         // No TP here.
-        let qkv_proj = mistralrs_quant::linear_no_bias(
+        let qkv_proj = mistralrs_quant::linear_no_bias_static_lora(
             cfg.hidden_size,
             op_size,
-            &cfg.quantization_config,
-            vb.pp("qkv_proj").pp("base_layer"),
+            cfg.loras(),
+            vb.pp("qkv_proj"),
         )?;
 
-        let o_proj = mistralrs_quant::linear_no_bias(
+        let o_proj = mistralrs_quant::linear_no_bias_static_lora(
             num_heads * head_dim,
             cfg.hidden_size,
-            &cfg.quantization_config,
-            vb.pp("o_proj").pp("base_layer"),
+            cfg.loras(),
+            vb.pp("o_proj"),
         )?;
 
         Ok(Self {
@@ -216,18 +216,18 @@ impl Mlp {
         let i_size = cfg.intermediate_size;
 
         // No TP here.
-        let gate_up_proj = mistralrs_quant::linear_no_bias(
+        let gate_up_proj = mistralrs_quant::linear_no_bias_static_lora(
             hidden_size,
             2 * i_size,
-            &cfg.quantization_config,
-            vb.pp("gate_up_proj").pp("base_layer"),
+            cfg.loras(),
+            vb.pp("gate_up_proj"),
         )?;
 
-        let down_proj = mistralrs_quant::linear_no_bias(
+        let down_proj = mistralrs_quant::linear_no_bias_static_lora(
             i_size,
             hidden_size,
-            &cfg.quantization_config,
-            vb.pp("down_proj").pp("base_layer"),
+            cfg.loras(),
+            vb.pp("down_proj"),
         )?;
 
         Ok(Self {

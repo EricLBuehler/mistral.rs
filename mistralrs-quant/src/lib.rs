@@ -28,6 +28,7 @@ mod gptq;
 mod hqq;
 mod imatrix;
 pub mod safetensors;
+mod static_lora;
 mod unquantized;
 mod utils;
 
@@ -49,6 +50,7 @@ pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
+pub use static_lora::{linear_no_bias_static_lora, StaticLoraConfig};
 pub use unquantized::UnquantLinear;
 pub use utils::UQFF_QUANT_TYPE_OFFSET;
 

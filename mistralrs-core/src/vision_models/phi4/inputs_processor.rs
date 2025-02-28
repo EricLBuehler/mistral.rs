@@ -468,10 +468,7 @@ impl Phi4MMInputsProcessor {
             attention_mask = attention_mask.slice_assign(
                 &[&.., &(attention_mask.dim(1)? - padding_width / 14..)],
                 &Tensor::zeros(
-                    (
-                        attention_mask.dim(0)?,
-                        attention_mask.dim(1)? - padding_width / 14,
-                    ),
+                    (attention_mask.dim(0)?, padding_width / 14),
                     DType::U32,
                     device,
                 )?,
@@ -481,10 +478,7 @@ impl Phi4MMInputsProcessor {
             attention_mask = attention_mask.slice_assign(
                 &[&(attention_mask.dim(0)? - padding_height / 14..), &..],
                 &Tensor::zeros(
-                    (
-                        attention_mask.dim(0)? - padding_height / 14,
-                        attention_mask.dim(1)?,
-                    ),
+                    (padding_height / 14, attention_mask.dim(1)?),
                     DType::U32,
                     device,
                 )?,

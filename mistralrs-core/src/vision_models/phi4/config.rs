@@ -1,4 +1,6 @@
-use mistralrs_quant::QuantizedConfig;
+use std::collections::HashMap;
+
+use mistralrs_quant::{QuantizedConfig, StaticLoraConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -68,8 +70,8 @@ pub struct Phi4MMConfig {
     pub embd_layer: Phi4MMEmbdLayerConfig,
     pub img_processor: Option<Phi4MMImgProcessorConfig>,
     // pub audio_processor: Option<String>,
-    pub vision_lora: Option<Phi4MMLoraConfig>,
-    pub speech_lora: Option<Phi4MMLoraConfig>,
+    pub vision_lora: StaticLoraConfig,
+    pub speech_lora: StaticLoraConfig,
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "d_flash_attn")]
     pub use_flash_attn: bool,
@@ -82,5 +84,12 @@ impl Phi4MMConfig {
 
     pub fn head_dim(&self) -> usize {
         self.hidden_size / self.num_attention_heads
+    }
+
+    pub fn loras(&self) -> HashMap<String, StaticLoraConfig> {
+        let mut accum = HashMap::new();
+        accum.insert("speech".to_string(), self.speech_lora.clone());
+        accum.insert("vision".to_string(), self.vision_lora.clone());
+        accum
     }
 }
