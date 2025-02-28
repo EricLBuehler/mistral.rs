@@ -23,6 +23,7 @@ use crate::{
 mod config;
 mod embedding;
 mod image_embedding;
+mod inputs_processor;
 
 pub(crate) use config::Phi4MMConfig;
 
