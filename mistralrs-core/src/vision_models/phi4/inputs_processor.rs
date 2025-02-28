@@ -4,9 +4,8 @@ use std::{any::Any, collections::HashSet, num::NonZeroUsize, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
-use itertools::Itertools;
 use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
-use regex_automata::meta::Regex;
+use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
@@ -30,10 +29,13 @@ use crate::vision_models::{
     ModelInputs,
 };
 
+use super::image_embedding::IMAGE_SPECIAL_TOKEN_ID;
+
+const COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN: &str = r"<\|image_\d+\|>";
+const IMAGE_SPECIAL_TOKEN: &str = "<|endoftext10|>";
+
 // Input processor
-pub struct Phi4MMInputsProcessor {
-    image_tag_splitter: Regex,
-}
+pub struct Phi4MMInputsProcessor;
 // Processor
 pub struct Phi4MMProcessor {
     inputs_processor: Arc<Phi4MMInputsProcessor>,
@@ -45,10 +47,7 @@ impl ProcessorCreator for Phi4MMProcessor {
         _: PreProcessorConfig,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Self {
-            inputs_processor: Arc::new(Phi4MMInputsProcessor {
-                image_tag_splitter: Regex::new(r"<\|image_\d+\|>")
-                    .expect("Failed to compile split regex."),
-            }),
+            inputs_processor: Arc::new(Phi4MMInputsProcessor),
         })
     }
 }
@@ -113,21 +112,19 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             .iter()
             .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
 
-        let (pixel_values, image_sizes, num_img_tokens, n_images) = if has_images {
+        let (pixel_values, pixel_attention_mask, image_sizes, num_img_tokens) = if has_images {
             let mut pixel_values_accum = Vec::new();
+            let mut pixel_attention_masks_accum = Vec::new();
             let mut image_sizes_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
-            let mut n_images = Vec::new();
             for seq in input_seqs.iter_mut() {
                 let imgs = seq
                     .take_images()
                     .expect("Need to have images by this point.");
-                let imgs_len = imgs.len();
-                n_images.push(imgs_len);
                 let PreprocessedImages {
                     pixel_values,
-                    pixel_attention_mask: _,
-                    image_sizes,
+                    pixel_attention_mask,
+                    image_sizes: _,
                     num_img_tokens,
                     aspect_ratio_ids: _,
                     aspect_ratio_mask: _,
@@ -138,7 +135,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                     cols: _,
                     pixel_values_list: _,
                     tgt_sizes: _,
-                    image_sizes_all: _,
+                    image_sizes_all,
                 } = self
                     .preprocess(
                         imgs,
@@ -148,16 +145,19 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                         (usize::MAX, usize::MAX), // Don't use it here...
                     )
                     .expect("Preprocessor failed");
-                let image_sizes = image_sizes.unwrap();
+                let image_sizes = image_sizes_all.unwrap();
+                let pixel_attention_mask = pixel_attention_mask.unwrap();
                 pixel_values_accum.push(pixel_values);
-                image_sizes_accum.push(image_sizes);
+                pixel_attention_masks_accum.push(pixel_attention_mask);
+                // Using extend on purpose
+                image_sizes_accum.extend(image_sizes);
                 num_img_tokens_accum.push(num_img_tokens.unwrap());
             }
             (
                 Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
+                Some(Tensor::cat(&pixel_attention_masks_accum, 0).unwrap()),
                 Some(image_sizes_accum),
                 Some(num_img_tokens_accum),
-                n_images,
             )
         } else {
             return Box::new(
@@ -218,7 +218,6 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             );
         };
 
-        let mut toks = Vec::new();
         let detokenized = tokenizer
             .decode_batch(
                 &input_seqs
@@ -229,91 +228,42 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             )
             .expect("Decode failed");
 
-        for (detokenized, (seq, (num_img_tokens, n_images))) in detokenized.into_iter().zip(
-            input_seqs
-                .iter_mut()
-                .zip(num_img_tokens.unwrap().into_iter().zip(n_images)),
-        ) {
-            let splits = self
-                .image_tag_splitter
-                .split(&detokenized)
-                .map(|span| &detokenized[span.range()])
-                .collect::<Vec<_>>();
-            let prompt_chunks = tokenizer
-                .encode_batch(splits, true)
-                .expect("Encode failed")
-                .into_iter()
-                .map(|enc| enc.get_ids().to_vec())
-                .collect::<Vec<_>>();
+        let img_token_pattern = Regex::new(COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN).unwrap();
 
-            let image_tags = self.image_tag_splitter.find_iter(&detokenized);
-            let image_ids = image_tags
-                .into_iter()
-                .map(|s| {
-                    let s = &detokenized[s.range()];
-                    s.split('|')
-                        .nth(1)
-                        .unwrap()
-                        .split('_')
-                        .nth(1)
-                        .unwrap()
-                        .parse::<u32>()
-                        .expect("Failed to parse image id to u32")
-                })
-                .collect::<Vec<_>>();
-            let unique_image_ids = image_ids
-                .iter()
-                .copied()
-                .unique()
-                .sorted()
-                .collect::<Vec<_>>();
-            // `image_ids` must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be [1, 4, 5]
-            if unique_image_ids != (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>() {
-                return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                    "`image_ids` must start from 1, and must be continuous, e.g. [1, 2, 3], cannot be [1, 4, 5].",
-                ))));
+        let mut toks = Vec::new();
+
+        for (mut detokenized, (seq, num_img_tokens)) in detokenized
+            .into_iter()
+            .zip(input_seqs.iter_mut().zip(num_img_tokens.unwrap()))
+        {
+            detokenized = img_token_pattern
+                .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
+                .to_string();
+            seq.set_initial_prompt(detokenized);
+
+            let mut i = 0;
+            let mut image_token_count_iter = num_img_tokens.iter();
+            while i < seq.get_toks().len() {
+                let token_id = seq.get_toks()[i];
+                let token_count = if token_id == IMAGE_SPECIAL_TOKEN_ID as u32 {
+                    image_token_count_iter.next().unwrap()
+                } else {
+                    i += 1;
+                    continue;
+                };
+
+                let mut new_ids = seq.get_toks()[..i].to_vec();
+                new_ids.extend(vec![token_id; *token_count]);
+                new_ids.extend(seq.get_toks()[i + 1..].to_vec());
+                seq.set_toks(new_ids);
             }
-            // Total images must be the same as the number of image tags
-            if unique_image_ids.len() != n_images {
-                return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                    "Total images must be the same as the number of image tags.",
-                ))));
-            }
+            toks.push(seq.get_toks().to_vec());
 
-            // Use the TryInto + unwrap_or to handle case when id==0
-            let image_ids_pad = image_ids
-                .iter()
-                .map(|id| {
-                    [-(*id as i64)].repeat(
-                        num_img_tokens[TryInto::<usize>::try_into(*id as isize - 1)
-                            .unwrap_or(num_img_tokens.len() - 1)],
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            let mut input_ids: Vec<i64> = Vec::new();
-            for item in prompt_chunks
-                .iter()
-                .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
-                .interleave(image_ids_pad)
-            {
-                input_ids.extend(item);
-            }
-
-            // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-            seq.set_toks(
-                input_ids
-                    .iter()
-                    .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
-                    .collect::<Vec<_>>(),
-            );
             if let Some(ref mut metadata) = paged_attn_metadata {
                 // Free and then reallocate as appropriate
                 metadata.block_engine.free_sequence(*seq.id());
                 metadata.block_engine.allocate(*seq);
             }
-
-            toks.push(input_ids);
         }
 
         let iter = if is_prompt {
@@ -342,6 +292,8 @@ impl InputsProcessor for Phi4MMInputsProcessor {
         };
 
         Box::new(iter.into_iter().map(move |metadata| {
+            let pixel_values = pixel_values.clone();
+            let pixel_attention_mask = pixel_attention_mask.clone();
             let text_models_inputs_processor::InnerInputProcessorOutput {
                 inputs:
                     text_models_inputs_processor::InputMetadata {
@@ -362,8 +314,8 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 pixel_values: pixel_values.clone(),
                 model_specific_args: Box::new(Phi4MMVisionSpecificArgs {
                     image_sizes: image_sizes.clone(),
-                    image_attention_mask: None,
-                    input_image_embeds: None,
+                    image_attention_mask: pixel_attention_mask,
+                    input_image_embeds: pixel_values,
                 }),
                 paged_attn_meta,
                 flash_meta,

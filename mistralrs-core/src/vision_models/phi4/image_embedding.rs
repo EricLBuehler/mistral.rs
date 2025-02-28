@@ -1,4 +1,7 @@
-use std::{fmt::Debug, sync::Arc};
+use std::{
+    fmt::Debug,
+    sync::{Arc, LazyLock},
+};
 
 use candle_core::{shape::ShapeWithOneHole, DType, Device, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::Module;
@@ -83,6 +86,18 @@ impl Module for EmbeddingLayers {
         Ok(xs)
     }
 }
+
+pub(crate) static PHI4_MM_VISION_CFG: LazyLock<SiglipVisionConfig> =
+    LazyLock::new(|| SiglipVisionConfig {
+        hidden_size: 1152,
+        image_size: 448,
+        intermediate_size: 4304,
+        num_attention_heads: 16,
+        num_hidden_layers: 27,
+        patch_size: 14,
+        ..Default::default()
+    });
+
 pub struct ImageEmbedding {
     wte: candle_nn::Embedding,
     image_dim_out: usize,
@@ -112,15 +127,7 @@ impl ImageEmbedding {
     ) -> Result<Self> {
         let hidden_size = img_embd_config.n_embd.unwrap_or(cfg.hidden_size);
 
-        let siglip_vision_config = SiglipVisionConfig {
-            hidden_size: 1152,
-            image_size: 448,
-            intermediate_size: 4304,
-            num_attention_heads: 16,
-            num_hidden_layers: 27,
-            patch_size: 14,
-            ..Default::default()
-        };
+        let siglip_vision_config = &PHI4_MM_VISION_CFG;
         let image_processor =
             SiglipVisionTransformer::new(&siglip_vision_config, vb.pp("img_processor"))?;
 
@@ -371,7 +378,7 @@ impl ImageEmbedding {
         input_ids: &Tensor,
         input_embeds: &Tensor,
         image_attention_mask: Option<&Tensor>,
-        image_sizes: Option<Vec<(usize, usize)>>,
+        image_sizes: Option<Vec<(u32, u32)>>,
     ) -> Result<Tensor> {
         let input_ids = input_ids.reshape(((), input_ids.dim(D::Minus1)?))?;
 
@@ -418,8 +425,8 @@ impl ImageEmbedding {
                 let mut output_imgs = Vec::new();
                 for bs_ in 0..bs {
                     let (h, w) = image_sizes.as_ref().unwrap()[bs_];
-                    let h = h / base_resolution;
-                    let w = w / base_resolution;
+                    let h = h as usize / base_resolution;
+                    let w = w as usize / base_resolution;
                     let B_ = h * w;
 
                     // 1 x (24x24) x 1024

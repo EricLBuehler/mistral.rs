@@ -44,7 +44,7 @@ impl Phi4MMImageAudioEmbedding {
         input_ids: &Tensor,
         input_image_embeds: &Tensor,
         image_attention_mask: Option<&Tensor>,
-        image_sizes: Option<Vec<(usize, usize)>>,
+        image_sizes: Option<Vec<(u32, u32)>>,
     ) -> Result<Tensor> {
         assert!(-MAX_INPUT_ID < self.image_input_id);
 

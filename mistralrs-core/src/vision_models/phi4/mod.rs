@@ -23,9 +23,10 @@ use crate::{
 mod config;
 mod embedding;
 mod image_embedding;
-mod inputs_processor;
+pub(crate) mod inputs_processor;
 
 pub(crate) use config::Phi4MMConfig;
+pub(crate) use image_embedding::PHI4_MM_VISION_CFG;
 
 struct Attention {
     qkv_proj: Arc<dyn QuantMethod>,
@@ -470,7 +471,7 @@ impl Phi4MMModel {
         seqlen_offsets: &[usize],
         position_ids: &[usize],
         context_lens: Vec<(usize, usize)>,
-        image_sizes: Option<Vec<(usize, usize)>>,
+        image_sizes: Option<Vec<(u32, u32)>>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -530,7 +531,7 @@ impl Phi4MMModel {
 
 #[derive(Default)]
 pub(crate) struct Phi4MMVisionSpecificArgs {
-    pub image_sizes: Option<Vec<(usize, usize)>>,
+    pub image_sizes: Option<Vec<(u32, u32)>>,
     pub input_image_embeds: Option<Tensor>,
     pub image_attention_mask: Option<Tensor>,
 }

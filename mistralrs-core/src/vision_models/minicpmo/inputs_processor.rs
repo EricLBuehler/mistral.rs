@@ -316,6 +316,11 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         .to_vec();
 
                     seq.set_toks(input_ids.clone());
+                    if let Some(ref mut metadata) = paged_attn_metadata {
+                        // Free and then reallocate as appropriate
+                        metadata.block_engine.free_sequence(*seq.id());
+                        metadata.block_engine.allocate(*seq);
+                    }
 
                     let image_start_idx = input_ids
                         .iter()
