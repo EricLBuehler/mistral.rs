@@ -4,7 +4,7 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Module;
-use embedding::Phi4MMImageAudioEmbedding;
+use mm_embedding::Phi4MMImageAudioEmbedding;
 use mistralrs_quant::{MatMul, QuantMethod, ReplicatedLayer, ShardedVarBuilder};
 
 use crate::{
@@ -23,7 +23,7 @@ use crate::{
 };
 
 mod config;
-mod embedding;
+mod mm_embedding;
 mod image_embedding;
 pub(crate) mod inputs_processor;
 

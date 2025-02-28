@@ -395,6 +395,7 @@ impl ImageEmbedding {
 
         let mut select = false;
         let mut image_set_tensor = None;
+        let mut output_lens = None;
         if positions.dim(0)? > 0 {
             select = true;
 
@@ -429,6 +430,7 @@ impl ImageEmbedding {
                 let H = base_feat_height;
 
                 let mut output_imgs = Vec::new();
+                let mut output_lens_accum = Vec::new();
                 for bs_ in 0..bs {
                     let (h, w) = image_sizes.as_ref().unwrap()[bs_];
                     let h = h as usize / base_resolution;
@@ -642,6 +644,7 @@ impl ImageEmbedding {
 
                     // (h*w+1)*144 + 1 + (h+1)*12
                     assert_eq!(temp_len, output_imgs.last().unwrap().dims()[1]);
+                    output_lens_accum.push(temp_len);
                 }
 
                 let mut image_set_tensor_inner = Vec::new();
@@ -652,6 +655,7 @@ impl ImageEmbedding {
                     image_set_tensor_inner.push(layerout);
                 }
                 image_set_tensor = Some(image_set_tensor_inner);
+                output_lens = Some(output_lens_accum);
             } else {
                 unreachable!()
             }
@@ -659,36 +663,22 @@ impl ImageEmbedding {
 
         let mut hidden_states = self.wte.forward(&input_ids)?;
         if select && self.use_hd_transform {
-            match image_set_tensor {
-                Some(image_set_tensors) => {
-                    let merged_img_set_tensor = Tensor::cat(&image_set_tensors, 1)?.squeeze(0)?;
-
-                    // Get the equiv 0th and 1th rows of the positions_tuple
-                    let positions_transposed = positions.t()?.to_dtype(DType::F32)?;
-                    let positions_transposed_0 = positions_transposed.i(0)?;
-                    let positions_transposed_1 = positions_transposed.i(1)?;
-
-                    let mut linear_index = ((positions_transposed_0
-                        * hidden_states.dim(D::Minus1)? as f64)?
-                        + positions_transposed_1)?;
-                    linear_index = linear_index.to_dtype(DType::U32)?;
-
-                    // Zero it out
-                    hidden_states = hidden_states.flatten_all()?.scatter_add(
-                        &linear_index,
-                        &Tensor::zeros(
-                            linear_index.elem_count(),
-                            hidden_states.dtype(),
-                            hidden_states.device(),
-                        )?,
-                        0,
-                    )?;
-
-                    hidden_states = hidden_states.flatten_all()?.scatter_add(
-                        &linear_index,
-                        &merged_img_set_tensor.flatten_all()?,
-                        0,
-                    )?;
+            match (image_set_tensor, output_lens) {
+                (Some(image_set_tensors), Some(output_lens)) => {
+                    let mut idx = 0;
+                    for (i, cnt) in output_lens.into_iter().enumerate() {
+                        let img_set_tensor = image_set_tensors[i]
+                            .to_device(&target_dev)?
+                            .to_dtype(target_dtype)?;
+                        // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
+                        let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
+                        let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
+                        hidden_states = hidden_states.slice_assign(
+                            &[&p_0, &(p_1..p_1 + cnt), &(..img_set_tensor.dims()[2])],
+                            &img_set_tensor,
+                        )?;
+                        idx += cnt;
+                    }
                 }
                 _ => unreachable!(),
             }
