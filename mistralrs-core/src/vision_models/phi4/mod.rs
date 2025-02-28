@@ -57,14 +57,14 @@ impl Attention {
             cfg.hidden_size,
             op_size,
             &cfg.quantization_config,
-            vb.pp("qkv_proj"),
+            vb.pp("qkv_proj").pp("base_layer"),
         )?;
 
         let o_proj = mistralrs_quant::linear_no_bias(
             num_heads * head_dim,
             cfg.hidden_size,
             &cfg.quantization_config,
-            vb.pp("o_proj"),
+            vb.pp("o_proj").pp("base_layer"),
         )?;
 
         Ok(Self {
@@ -220,14 +220,14 @@ impl Mlp {
             hidden_size,
             2 * i_size,
             &cfg.quantization_config,
-            vb.pp("gate_up_proj"),
+            vb.pp("gate_up_proj").pp("base_layer"),
         )?;
 
         let down_proj = mistralrs_quant::linear_no_bias(
             i_size,
             hidden_size,
             &cfg.quantization_config,
-            vb.pp("down_proj"),
+            vb.pp("down_proj").pp("base_layer"),
         )?;
 
         Ok(Self {
@@ -312,18 +312,15 @@ impl DecoderLayer {
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
-            .self_attn
-            .forward(
-                &xs,
-                attention_mask,
-                seqlen_offsets,
-                position_ids,
-                kv_cache,
-                metadata,
-                flash_params,
-            )
-            .unwrap();
+        let xs = self.self_attn.forward(
+            &xs,
+            attention_mask,
+            seqlen_offsets,
+            position_ids,
+            kv_cache,
+            metadata,
+            flash_params,
+        )?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -431,7 +428,7 @@ impl Phi4MMModel {
         let embed_tokens_extend = Phi4MMImageAudioEmbedding::new(
             cfg,
             embed_tokens.clone(),
-            vb.pp("embed_tokens_extend"),
+            vb_m.pp("embed_tokens_extend"),
         )?;
 
         Ok(Self {

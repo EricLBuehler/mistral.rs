@@ -2614,7 +2614,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
             max_seq_len: _,
             max_batch_size,
             max_image_shape: _,
-            max_num_images,
+            max_num_images: _,
         } = params
         else {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
@@ -2622,10 +2622,10 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
 
         let cfg: Phi4MMConfig = serde_json::from_str(config)?;
 
-        let vcfg = &PHI3V_CLIP_CONFIG;
+        let vcfg = &PHI4_MM_VISION_CFG;
 
         let num_patches = (vcfg.image_size / vcfg.patch_size).pow(2);
-        let img_seq_len = (num_patches + 1) * max_num_images;
+        let img_seq_len = num_patches + 1;
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
@@ -2657,15 +2657,10 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         let num_patches = (vcfg.image_size / vcfg.patch_size).pow(2);
         let img_seq_len = num_patches + 1;
 
-        let max_vision_attn = {
-            // do_image_splitting = true
-            let images_factor = 5;
-
-            (max_batch_size * images_factor * max_num_images)
-                * vcfg.num_attention_heads
-                * img_seq_len
-                * img_seq_len
-        };
+        let max_vision_attn = (max_batch_size * max_num_images)
+            * vcfg.num_attention_heads
+            * img_seq_len
+            * img_seq_len;
 
         Ok(max_vision_attn)
     }

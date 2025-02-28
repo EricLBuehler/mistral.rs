@@ -67,7 +67,7 @@ pub struct Phi4MMConfig {
     pub sliding_window: Option<usize>,
     pub embd_layer: Phi4MMEmbdLayerConfig,
     pub img_processor: Option<Phi4MMImgProcessorConfig>,
-    pub audio_processor: Option<String>,
+    // pub audio_processor: Option<String>,
     pub vision_lora: Option<Phi4MMLoraConfig>,
     pub speech_lora: Option<Phi4MMLoraConfig>,
     pub quantization_config: Option<QuantizedConfig>,

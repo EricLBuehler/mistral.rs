@@ -167,8 +167,14 @@ impl ImageEmbedding {
 
         assert_eq!(use_hd_transform, with_learnable_separator);
         let (glb_gn, sub_gn) = if with_learnable_separator {
-            let glb_gn = vb.get((1, 1, image_dim_out * 4), "glb_GN")?;
-            let sub_gn = vb.get((1, 1, 1, image_dim_out * 4), "sub_GN")?;
+            let glb_gn = vb.get(
+                (1, 1, image_dim_out * base_feat_height_reduction.pow(2)),
+                "glb_GN",
+            )?;
+            let sub_gn = vb.get(
+                (1, 1, 1, image_dim_out * base_feat_height_reduction.pow(2)),
+                "sub_GN",
+            )?;
             (Some(glb_gn), Some(sub_gn))
         } else {
             (None, None)
@@ -201,7 +207,7 @@ impl ImageEmbedding {
                 ("mlp", true) => {
                     let dim_proj = hidden_size;
                     let a = mistralrs_quant::linear_b(
-                        image_dim_out * 4,
+                        image_dim_out * base_feat_height_reduction.pow(2),
                         dim_proj,
                         true,
                         &None,
