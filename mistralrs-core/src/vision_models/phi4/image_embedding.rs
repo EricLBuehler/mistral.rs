@@ -14,9 +14,9 @@ use crate::{
     },
 };
 
-use super::Phi4MMConfig;
+use super::{config::Phi4MMImageEmbedConfig, Phi4MMConfig};
 
-const IMAGE_SPECIAL_TOKEN_ID: f64 = 200010.;
+pub(super) const IMAGE_SPECIAL_TOKEN_ID: f64 = 200010.;
 
 trait ModuleWithMetadata: Module + Debug + Send + Sync {
     fn device(&self) -> Device;
@@ -114,9 +114,12 @@ pub struct ImageEmbedding {
 }
 
 impl ImageEmbedding {
-    fn new(cfg: &Phi4MMConfig, wte: candle_nn::Embedding, vb: ShardedVarBuilder) -> Result<Self> {
-        let img_embd_config = &cfg.embd_layer.image_embd_layer;
-
+    pub fn new(
+        cfg: &Phi4MMConfig,
+        img_embd_config: &Phi4MMImageEmbedConfig,
+        wte: candle_nn::Embedding,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let hidden_size = img_embd_config.n_embd.unwrap_or(cfg.hidden_size);
 
         let siglip_vision_config = SiglipVisionConfig {
@@ -373,7 +376,7 @@ impl ImageEmbedding {
     }
 
     #[allow(non_snake_case)]
-    fn forward(
+    pub fn forward(
         &self,
         input_ids: &Tensor,
         input_embeds: &Tensor,

@@ -30,7 +30,7 @@ pub struct Phi4MMImageEmbedConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Phi4MMEmbdLayerConfig {
-    pub image_embd_layer: Phi4MMImageEmbedConfig,
+    pub image_embd_layer: Option<Phi4MMImageEmbedConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -63,6 +63,7 @@ pub struct Phi4MMConfig {
     pub bos_token_id: usize,
     pub eos_token_id: usize,
     pub pad_token_id: usize,
+    pub image_input_id: Option<f64>,
     pub sliding_window: Option<usize>,
     pub embd_layer: Phi4MMEmbdLayerConfig,
     pub img_processor: Option<Phi4MMImgProcessorConfig>,

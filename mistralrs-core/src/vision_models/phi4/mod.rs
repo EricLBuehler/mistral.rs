@@ -1,27 +1,30 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Module;
+use embedding::Phi4MMImageAudioEmbedding;
 use mistralrs_quant::{MatMul, QuantMethod, ReplicatedLayer, ShardedVarBuilder};
 
 use crate::{
+    amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{self, Activation, Phi4MMRotaryEmbedding, RmsNorm, Sdpa},
+    layers::{self, Activation, CausalMasker, Phi4MMRotaryEmbedding, RmsNorm, Sdpa},
+    layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
+        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, KvCache, NormalCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, VisionModel,
     },
     utils::progress::NiceProgressBar,
 };
 
 mod config;
+mod embedding;
 mod image_embedding;
 
 pub(crate) use config::Phi4MMConfig;
-
-const MAX_INPUT_ID: f64 = 1e9;
 
 struct Attention {
     qkv_proj: Arc<dyn QuantMethod>,
@@ -330,6 +333,7 @@ impl DecoderLayer {
 
 pub struct Phi4MMModel {
     embed_tokens: candle_nn::Embedding,
+    embed_tokens_extend: Phi4MMImageAudioEmbedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -422,6 +426,12 @@ impl Phi4MMModel {
             ))?
         };
 
+        let embed_tokens_extend = Phi4MMImageAudioEmbedding::new(
+            cfg,
+            embed_tokens.clone(),
+            vb.pp("embed_tokens_extend"),
+        )?;
+
         Ok(Self {
             layers,
             norm,
@@ -446,6 +456,151 @@ impl Phi4MMModel {
                 v_head_dim: cfg.head_dim(),
             },
             mapper,
+            embed_tokens_extend,
         })
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        input_image_embeds: Option<Tensor>,
+        image_attention_mask: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        position_ids: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        image_sizes: Option<Vec<(usize, usize)>>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        let mut xs = if let Some(input_image_embeds) = &input_image_embeds {
+            self.embed_tokens_extend.forward(
+                input_ids,
+                input_image_embeds,
+                image_attention_mask.as_ref(),
+                image_sizes,
+            )?
+        } else {
+            self.embed_tokens.forward(input_ids)?
+        };
+        let cache = &mut self.cache.normal().0;
+        let attention_mask = CausalMasker.make_sliding_window_causal_mask_matrix(
+            input_ids,
+            metadata
+                .as_ref()
+                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+                .unwrap_or(&*cache as &dyn PastKvLenCache),
+            self.sliding_window,
+            xs.dtype(),
+            self.cfg.num_attn_heads,
+        )?;
+        let attention_mask = attention_mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
+
+        for (i, layer) in self.layers.iter().enumerate() {
+            xs = self.mapper.map(xs, i)?;
+            xs = layer.forward(
+                &xs,
+                attention_mask
+                    .as_ref()
+                    .map(|m| m.to_device(xs.device()).unwrap())
+                    .as_ref(),
+                seqlen_offsets,
+                position_ids,
+                &mut cache[i],
+                metadata
+                    .as_ref()
+                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
+                flash_params,
+            )?
+        }
+        let xs = xs.to_device(&self.device)?;
+        let mut xs = xs.apply(&self.norm)?;
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
+    }
 }
+
+#[derive(Default)]
+pub(crate) struct Phi4MMVisionSpecificArgs {
+    pub image_sizes: Option<Vec<(usize, usize)>>,
+    pub input_image_embeds: Option<Tensor>,
+    pub image_attention_mask: Option<Tensor>,
+}
+
+impl VisionModel for Phi4MMModel {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        _pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+        model_specific_args: Box<dyn Any>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        let Phi4MMVisionSpecificArgs {
+            image_sizes,
+            image_attention_mask,
+            input_image_embeds,
+        } = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `Phi4MMVisionSpecificArgs`");
+        self.forward(
+            input_ids,
+            input_image_embeds,
+            image_attention_mask,
+            seqlen_offsets,
+            &position_ids,
+            context_lens,
+            image_sizes,
+            metadata,
+            flash_params,
+        )
+    }
+    fn cache(&self) -> &EitherCache {
+        &self.cache
+    }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        &mut self.cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+    fn has_conv2d(&self) -> bool {
+        true
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
+    }
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
+        Box::new(Phi4MMVisionSpecificArgs::default())
+    }
+}
+
+impl IsqModel for Phi4MMModel {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        todo!()
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        todo!()
+    }
+}
+
+impl AnyMoeBaseModelMixin for Phi4MMModel {}
