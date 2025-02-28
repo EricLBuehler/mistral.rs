@@ -4,8 +4,8 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Module;
-use mm_embedding::Phi4MMImageAudioEmbedding;
 use mistralrs_quant::{MatMul, QuantMethod, ReplicatedLayer, ShardedVarBuilder};
+use mm_embedding::Phi4MMImageAudioEmbedding;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -23,9 +23,9 @@ use crate::{
 };
 
 mod config;
-mod mm_embedding;
 mod image_embedding;
 pub(crate) mod inputs_processor;
+mod mm_embedding;
 
 pub(crate) use config::Phi4MMConfig;
 pub(crate) use image_embedding::PHI4_MM_VISION_CFG;

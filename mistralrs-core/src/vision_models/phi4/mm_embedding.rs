@@ -65,29 +65,19 @@ impl Phi4MMImageAudioEmbedding {
                 + positions_transposed_1)?;
             linear_index = linear_index.to_dtype(DType::U32)?;
 
-            // Zero it out
-            input_ids = input_ids
-                .flatten_all()?
-                .to_dtype(DType::F32)?
-                .scatter_add(
-                    &linear_index,
-                    &Tensor::zeros(linear_index.elem_count(), DType::F32, input_ids.device())?,
-                    0,
-                )?
-                .to_dtype(DType::I64)?;
+            let special_token_id = Tensor::full(
+                IMAGE_SPECIAL_TOKEN_ID as f32,
+                linear_index.elem_count(),
+                input_ids.device(),
+            )?;
 
-            input_ids = input_ids
-                .flatten_all()?
-                .to_dtype(DType::F32)?
-                .scatter_add(
-                    &linear_index,
-                    &Tensor::full(
-                        IMAGE_SPECIAL_TOKEN_ID,
-                        linear_index.elem_count(),
-                        input_ids.device(),
-                    )?,
-                    0,
-                )?
+            let flat_input_ids = input_ids.flatten_all()?.to_dtype(DType::F32)?;
+
+            let current_vals = flat_input_ids.index_select(&linear_index, 0)?;
+            let delta = special_token_id.broadcast_sub(&current_vals)?;
+
+            input_ids = flat_input_ids
+                .scatter_add(&linear_index, &delta, 0)?
                 .to_dtype(DType::I64)?;
         }
 
