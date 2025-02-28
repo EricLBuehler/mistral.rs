@@ -1,4 +1,4 @@
-use candle_core::{IndexOp, Result, Tensor, D};
+use candle_core::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::ShardedVarBuilder;
 
@@ -65,25 +65,33 @@ impl Phi4MMImageAudioEmbedding {
                 + positions_transposed_1)?;
 
             // Zero it out
-            input_ids = input_ids.flatten_all()?.scatter_add(
-                &linear_index,
-                &Tensor::zeros(
-                    linear_index.elem_count(),
-                    input_ids.dtype(),
-                    input_ids.device(),
-                )?,
-                0,
-            )?;
+            input_ids = input_ids
+                .flatten_all()?
+                .to_dtype(DType::F32)?
+                .scatter_add(
+                    &linear_index.to_dtype(DType::U32)?,
+                    &Tensor::zeros(
+                        linear_index.elem_count(),
+                        input_ids.dtype(),
+                        input_ids.device(),
+                    )?,
+                    0,
+                )?
+                .to_dtype(DType::I64)?;
 
-            input_ids = input_ids.flatten_all()?.scatter_add(
-                &linear_index,
-                &Tensor::full(
-                    IMAGE_SPECIAL_TOKEN_ID,
-                    linear_index.elem_count(),
-                    input_ids.device(),
-                )?,
-                0,
-            )?;
+            input_ids = input_ids
+                .flatten_all()?
+                .to_dtype(DType::F32)?
+                .scatter_add(
+                    &linear_index.to_dtype(DType::U32)?,
+                    &Tensor::full(
+                        IMAGE_SPECIAL_TOKEN_ID,
+                        linear_index.elem_count(),
+                        input_ids.device(),
+                    )?,
+                    0,
+                )?
+                .to_dtype(DType::I64)?;
         }
 
         let image_hidden_states = if let Some(image_embed) = &self.image_embed {

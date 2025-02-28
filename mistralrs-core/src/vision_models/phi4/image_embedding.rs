@@ -672,7 +672,7 @@ impl ImageEmbedding {
 
                     // Zero it out
                     hidden_states = hidden_states.flatten_all()?.scatter_add(
-                        &linear_index,
+                        &linear_index.to_dtype(DType::U32)?,
                         &Tensor::zeros(
                             linear_index.elem_count(),
                             hidden_states.dtype(),
@@ -682,7 +682,7 @@ impl ImageEmbedding {
                     )?;
 
                     hidden_states = hidden_states.flatten_all()?.scatter_add(
-                        &linear_index,
+                        &linear_index.to_dtype(DType::U32)?,
                         &merged_img_set_tensor.flatten_all()?,
                         0,
                     )?;

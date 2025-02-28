@@ -425,7 +425,7 @@ impl Phi4MMInputsProcessor {
                 );
 
                 let target_width = image_size * target_aspect_ratio.0 as usize;
-                let target_height = image_size * target_aspect_ratio.0 as usize;
+                let target_height = image_size * target_aspect_ratio.1 as usize;
 
                 (
                     (target_aspect_ratio.0 as f64, target_aspect_ratio.1 as f64),
@@ -489,9 +489,9 @@ impl Phi4MMInputsProcessor {
         image = Self::pad_image(
             &image,
             0,
-            0,
-            padding_width as u32,
             padding_height as u32,
+            padding_width as u32,
+            0,
             Rgba([255u8, 255, 255, 255]),
         );
 
@@ -568,7 +568,7 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
 
             let hd_image = elem.apply(transforms, device)?;
             let (img_h, img_w) = (hd_image.dim(1)?, hd_image.dim(2)?);
-            let (mask_h, mask_w) = (attention_mask.dim(1)?, attention_mask.dim(2)?);
+            let (mask_h, mask_w) = (attention_mask.dim(0)?, attention_mask.dim(1)?);
 
             // Resize with bicubic interpolation
             let global_image = hd_image
@@ -589,7 +589,7 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
                 .permute((0, 2, 4, 1, 3, 5))?
                 .reshape(((), 3, base_resolution, base_resolution))?;
 
-            let attention_mask_reshape = hd_image
+            let attention_mask_reshape = attention_mask
                 .reshape((
                     1,
                     (mask_h as f32 / mask_resolution as f32) as usize,
@@ -598,7 +598,7 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
                     mask_resolution,
                 ))?
                 .permute((0, 1, 3, 2, 4))?
-                .reshape(((), 3, mask_resolution, mask_resolution))?;
+                .reshape(((), mask_resolution, mask_resolution))?;
 
             let downsample_attention_mask = {
                 let h_indices =
@@ -631,7 +631,7 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
                 + 16;
 
             let hd_image_reshape = Tensor::cat(&[global_image, hd_image_reshape], 0)?;
-            let hd_mask_reshape = Tensor::cat(&[global_attention_mask, attention_mask], 0)?;
+            let hd_mask_reshape = Tensor::cat(&[global_attention_mask, attention_mask_reshape], 0)?;
 
             image_sizes.push((img_h as u32, img_w as u32));
             padded_images.push(hd_image_reshape);
