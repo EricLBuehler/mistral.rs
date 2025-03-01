@@ -692,7 +692,7 @@ impl ImageEmbedding {
         Ok(hidden_states)
     }
 
-    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
         if let Some(glb_gn) = self.glb_gn.clone() {

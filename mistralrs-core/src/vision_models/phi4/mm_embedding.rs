@@ -2,6 +2,8 @@ use candle_core::{Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::ShardedVarBuilder;
 
+use crate::utils::unvarbuilder::UnVarBuilder;
+
 use super::{image_embedding::ImageEmbedding, Phi4MMConfig};
 
 const MAX_INPUT_ID: f64 = 1e9;
@@ -63,5 +65,15 @@ impl Phi4MMImageAudioEmbedding {
 
             None => self.wte.forward(&input_ids),
         }
+    }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        if let Some(image_embed) = &self.image_embed {
+            uvb.pp("image_embed").extend(image_embed.residual_tensors());
+        }
+
+        uvb.to_safetensors()
     }
 }

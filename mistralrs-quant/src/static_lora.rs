@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::Result;
+use candle_core::{DType, Result};
 use candle_nn::Linear;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -49,8 +49,9 @@ pub fn linear_no_bias_static_lora(
                     1.0
                 };
 
-                let delta_weight = (b.matmul(&a)? * scale)?;
-                weight = (weight + delta_weight)?;
+                let delta_weight =
+                    (b.to_dtype(DType::F32)?.matmul(&a.to_dtype(DType::F32)?)? * scale)?;
+                weight = (weight + delta_weight.to_dtype(a.dtype())?)?;
             }
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
