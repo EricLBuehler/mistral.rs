@@ -1,13 +1,10 @@
-use candle_core::{DType, IndexOp, Result, Tensor, D};
+use candle_core::{Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::ShardedVarBuilder;
-
-use crate::{ops::BitWiseOp, vision_models::phi4::image_embedding::IMAGE_SPECIAL_TOKEN_ID};
 
 use super::{image_embedding::ImageEmbedding, Phi4MMConfig};
 
 const MAX_INPUT_ID: f64 = 1e9;
-const COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE: (f64, f64) = (-9999., -1.);
 
 pub struct Phi4MMImageAudioEmbedding {
     image_embed: Option<ImageEmbedding>,
@@ -48,38 +45,7 @@ impl Phi4MMImageAudioEmbedding {
     ) -> Result<Tensor> {
         assert!(-MAX_INPUT_ID < self.image_input_id);
 
-        let mut input_ids = input_ids.reshape(((), input_ids.dim(D::Minus1)?))?;
-
-        let image_position_mask = input_ids
-            .ge(COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE.0)?
-            .bitwise_and(&input_ids.le(COMPATIBLE_IMAGE_SPECIAL_TOKEN_ID_RANGE.1)?)?;
-
-        // Slice assign for IMAGE_SPECIAL_TOKEN_ID
-        {
-            // Get the equiv 0th and 1th rows of the positions_tuple
-            let positions_transposed = image_position_mask.t()?.to_dtype(DType::F32)?;
-            let positions_transposed_0 = positions_transposed.i(0)?;
-            let positions_transposed_1 = positions_transposed.i(1)?;
-
-            let mut linear_index = ((positions_transposed_0 * input_ids.dim(D::Minus1)? as f64)?
-                + positions_transposed_1)?;
-            linear_index = linear_index.to_dtype(DType::U32)?;
-
-            let special_token_id = Tensor::full(
-                IMAGE_SPECIAL_TOKEN_ID as f32,
-                linear_index.elem_count(),
-                input_ids.device(),
-            )?;
-
-            let flat_input_ids = input_ids.flatten_all()?.to_dtype(DType::F32)?;
-
-            let current_vals = flat_input_ids.index_select(&linear_index, 0)?;
-            let delta = special_token_id.broadcast_sub(&current_vals)?;
-
-            input_ids = flat_input_ids
-                .scatter_add(&linear_index, &delta, 0)?
-                .to_dtype(DType::I64)?;
-        }
+        let input_ids = input_ids.reshape(((), input_ids.dim(D::Minus1)?))?;
 
         let image_hidden_states = if let Some(image_embed) = &self.image_embed {
             Some(image_embed.forward(

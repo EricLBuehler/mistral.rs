@@ -668,12 +668,12 @@ impl ImageEmbedding {
                     let mut hidden_states_flat = hidden_states.reshape(((), hs_d))?;
 
                     // Get the equiv 0th and 1th rows of the positions_tuple
-                    let positions_transposed = positions.t()?.to_dtype(DType::F32)?;
-                    let positions_transposed_0 = positions_transposed.i(0)?;
-                    let positions_transposed_1 = positions_transposed.i(1)?;
+                    let positions_transposed = positions.to_dtype(DType::F32)?;
+                    let positions_transposed_0 = positions_transposed.i((.., 0))?;
+                    let positions_transposed_1 = positions_transposed.i((.., 1))?;
 
-                    let mut linear_index =
-                        ((positions_transposed_0 * hs_l as f64)? + positions_transposed_1)?;
+                    let mut linear_index = ((positions_transposed_0 * (hs_l * hs_b) as f64)?
+                        + positions_transposed_1)?;
                     linear_index = linear_index.to_dtype(DType::U32)?;
                     linear_index = linear_index.unsqueeze(1)?.repeat((1, hs_d))?;
 
