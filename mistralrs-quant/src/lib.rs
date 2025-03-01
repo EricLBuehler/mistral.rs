@@ -175,7 +175,8 @@ pub fn set_use_matmul_via_f16(via_f16: bool) {
     }
 }
 pub fn get_use_matmul_via_f16() -> bool {
-    USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
+    return false;
+    // USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
 }
 
 impl MatMul {

@@ -35,7 +35,6 @@ use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::{self, LLaVAProcessor};
 use crate::vision_models::llava_next::Model as LLaVANext;
 use crate::vision_models::llava_next_inputs_processor::{self, LLaVANextProcessor};
-use crate::vision_models::minicpmo;
 use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3, PHI3V_CLIP_CONFIG};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
@@ -43,6 +42,7 @@ use crate::vision_models::phi4::{Phi4MMConfig, Phi4MMModel, PHI4_MM_VISION_CFG};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::qwen2vl::{Config as Qwen2VLConfig, Qwen2VLModel, Qwen2VLProcessor};
+use crate::vision_models::{minicpmo, phi4};
 
 pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     // pixel_values and pixel_attention_mask only specified for prompt seqs
@@ -2619,7 +2619,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
     ) -> Result<usize> {
         // NOTE: we ignore max_num_images although it can only be one...
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images: _,
@@ -2637,7 +2637,8 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + prompt_chunksize;
+            let max_seq_len = img_seq_len + max_seq_len;
+            let max_seq_len = 10000;
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -2653,7 +2654,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         let AutoDeviceMapParams::Vision {
             max_seq_len: _,
             max_batch_size,
-            max_image_shape: _,
+            max_image_shape,
             max_num_images,
         } = params
         else {
@@ -2665,12 +2666,26 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         let num_patches = (vcfg.image_size / vcfg.patch_size).pow(2);
         let img_seq_len = num_patches + 1;
 
+        let max_batch_size = max_batch_size
+            * (max_image_shape
+                .0
+                .div_ceil(phi4::inputs_processor::DYHD_BASE_RESOLUTION)
+                * max_image_shape
+                    .1
+                    .div_ceil(phi4::inputs_processor::DYHD_BASE_RESOLUTION)
+                + 1);
+
         let max_vision_attn = (max_batch_size * max_num_images)
             * vcfg.num_attention_heads
             * img_seq_len
             * img_seq_len;
+        let max_qkv = 3
+            * (max_batch_size
+                * vcfg.num_attention_heads
+                * img_seq_len
+                * (vcfg.hidden_size / vcfg.num_attention_heads));
 
-        Ok(max_vision_attn)
+        Ok(max_vision_attn + max_qkv)
     }
 
     fn non_mapped_size_in_bytes(
@@ -2723,9 +2738,42 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
                     (0, 0)
                 };
 
-                let clip_vit = get_clip_vit_num_elems(&PHI3V_CLIP_CONFIG);
+                let vision_transformer = {
+                    let cfg = &PHI4_MM_VISION_CFG;
 
-                proj + glb_gn + sub_gn + clip_vit
+                    let post_layernorm = cfg.hidden_size;
+
+                    let conv_config = Conv2dConfig {
+                        stride: cfg.patch_size,
+                        ..Default::default()
+                    };
+                    let patch_embedding = cfg.num_channels * cfg.hidden_size / conv_config.groups
+                        * cfg.patch_size
+                        * cfg.patch_size;
+
+                    let num_patches_per_side = cfg.image_size / cfg.patch_size;
+                    let num_patches = num_patches_per_side.pow(2);
+                    let position_embedding = num_patches * cfg.hidden_size;
+
+                    let layer_elems = {
+                        let layer_norm_1 = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
+                        let layer_norm_2 = cfg.hidden_size + bias_if!(true, cfg.hidden_size);
+
+                        let fc1 = cfg.hidden_size * cfg.intermediate_size + cfg.intermediate_size;
+                        let fc2 = cfg.intermediate_size * cfg.hidden_size + cfg.hidden_size;
+
+                        let q_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                        let k_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                        let v_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                        let o_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+
+                        layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
+                    };
+
+                    post_layernorm + patch_embedding + position_embedding + layer_elems
+                };
+
+                proj + glb_gn + sub_gn + vision_transformer
             } else {
                 0
             };

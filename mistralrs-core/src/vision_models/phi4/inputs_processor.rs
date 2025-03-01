@@ -33,6 +33,7 @@ use super::image_embedding::IMAGE_SPECIAL_TOKEN_ID;
 
 const COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN: &str = r"<\|image_\d+\|>";
 const IMAGE_SPECIAL_TOKEN: &str = "<|endoftext10|>";
+pub(crate) const DYHD_BASE_RESOLUTION: usize = 448;
 
 // Input processor
 pub struct Phi4MMInputsProcessor;
@@ -561,7 +562,7 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
                 }],
             };
             // Dynamic HD
-            let dyhd_base_resolution = 448;
+            let dyhd_base_resolution = DYHD_BASE_RESOLUTION;
             let base_resolution = dyhd_base_resolution;
             // over 384 and 448 resolution
             let mask_resolution = base_resolution / 14;

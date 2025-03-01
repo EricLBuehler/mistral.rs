@@ -2,11 +2,11 @@
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
-use mistralrs_quant::ShardedVarBuilder;
-use std::ops::Mul;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use std::{ops::Mul, sync::Arc};
 
 use crate::{
-    layers::{conv2d, embedding, layer_norm, linear, Activation, CausalMasker, MatMul, QLinear},
+    layers::{conv2d, embedding, layer_norm, Activation, CausalMasker, MatMul},
     serde_default_fn,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -230,11 +230,10 @@ struct Attention {
     num_heads: usize,
     head_dim: usize,
     scale: f64,
-    q_proj: QLinear,
-    k_proj: QLinear,
-    v_proj: QLinear,
-    o_proj: QLinear,
-    neg_inf: Tensor,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
 }
 
 impl Attention {
@@ -244,73 +243,62 @@ impl Attention {
         let head_dim = embed_dim / num_heads;
         let scale = 1.0 / (head_dim as f64).sqrt();
 
-        let q_proj = linear(embed_dim, embed_dim, vb.pp("q_proj"))?;
-        let k_proj = linear(embed_dim, embed_dim, vb.pp("k_proj"))?;
-        let v_proj = linear(embed_dim, embed_dim, vb.pp("v_proj"))?;
-        let o_proj = linear(embed_dim, embed_dim, vb.pp("out_proj"))?;
+        let q_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("q_proj"))?;
+        let k_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("k_proj"))?;
+        let v_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("v_proj"))?;
+        let o_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("out_proj"))?;
 
         Ok(Self {
             embed_dim,
             num_heads,
             head_dim,
             scale,
-            q_proj: QLinear::from_linear(q_proj),
-            k_proj: QLinear::from_linear(k_proj),
-            v_proj: QLinear::from_linear(v_proj),
-            o_proj: QLinear::from_linear(o_proj),
-            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())?.to_dtype(vb.dtype())?,
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
         })
     }
 
     fn forward(&self, xs: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if self.q_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)?;
-        }
-        let mut q = self.q_proj.forward(&xs)?;
-        let mut k = self.k_proj.forward(&xs)?;
-        let mut v = self.v_proj.forward(&xs)?;
-        if self.q_proj.is_quant() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
+        let mut q = self.q_proj.forward(xs)?;
+        let mut k = self.k_proj.forward(xs)?;
+        let mut v = self.v_proj.forward(xs)?;
 
-        let q = q
+        q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let k = k
-            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        let v = v
-            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
-
-        let attn_weights =
-            (MatMul.matmul(&q.contiguous()?, &k.transpose(2, 3)?.contiguous()?)? * self.scale)?;
-
-        let attn_weights = CausalMasker.apply_mask_one_and_zero(
-            &attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
-            attn_weights,
-            &self.neg_inf,
-        )?;
-        let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
-        let mut attn_output = MatMul.matmul(&attn_weights, &v.contiguous()?)?;
-
-        if self.q_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)?;
-        }
-        let mut res = attn_output
             .transpose(1, 2)?
-            .reshape((b_sz, q_len, self.embed_dim))?
-            .apply(&self.o_proj)?;
-        if self.q_proj.is_quant() {
-            res = res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
+            .contiguous()?;
+        k = k
+            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        v = v
+            .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+
+        let mut attn_weights = q
+            .matmul_with_alpha(&k.transpose(2, 3)?, Some(self.scale))
+            .unwrap();
+
+        attn_weights = match attention_mask {
+            Some(mask) => attn_weights.broadcast_add(&mask).unwrap(),
+            None => attn_weights,
+        };
+        candle_nn::ops::inplace_softmax_last_dim(&mut attn_weights).unwrap();
+        attn_weights = MatMul.matmul(&attn_weights, &v).unwrap();
+
+        Ok(self
+            .o_proj
+            .forward(
+                &attn_weights
+                    .transpose(1, 2)?
+                    .reshape((b_sz, q_len, self.embed_dim))?,
+            )
+            .unwrap())
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
@@ -327,34 +315,35 @@ impl Attention {
 
 struct VisionMLP {
     activation: Activation,
-    fc1: QLinear,
-    fc2: QLinear,
+    fc1: Arc<dyn QuantMethod>,
+    fc2: Arc<dyn QuantMethod>,
 }
 
 impl VisionMLP {
     fn new(config: SiglipVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let fc1 = linear(config.hidden_size, config.intermediate_size, vb.pp("fc1"))?;
-        let fc2 = linear(config.intermediate_size, config.hidden_size, vb.pp("fc2"))?;
+        let fc1 = mistralrs_quant::linear(
+            config.hidden_size,
+            config.intermediate_size,
+            &None,
+            vb.pp("fc1"),
+        )?;
+        let fc2 = mistralrs_quant::linear(
+            config.intermediate_size,
+            config.hidden_size,
+            &None,
+            vb.pp("fc2"),
+        )?;
         Ok(Self {
             activation: config.hidden_act,
-            fc1: QLinear::from_linear(fc1),
-            fc2: QLinear::from_linear(fc2),
+            fc1,
+            fc2,
         })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let mut x = x.clone();
-        let original_dtype = x.dtype();
-        if self.fc1.is_quant() {
-            x = x.to_dtype(DType::F32)?;
-        }
-        let x = self.fc1.forward(&x)?;
-        let x = self.activation.forward(&x)?;
-        let mut res = self.fc2.forward(&x)?;
-        if self.fc1.is_quant() {
-            res = res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
+        let mut x = self.fc1.forward(x)?;
+        x = self.activation.forward(&x)?;
+        self.fc2.forward(&x)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
