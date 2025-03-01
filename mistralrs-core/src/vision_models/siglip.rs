@@ -512,7 +512,7 @@ impl SiglipVisionTransformer {
         let hidden_states = self.encoder.forward_get_hidden_states(
             &hidden_states,
             attention_mask.as_ref(),
-            hidden_states_index,
+            hidden_states_index + 1,
         )?;
         hidden_states.apply(&self.post_layernorm)
     }
