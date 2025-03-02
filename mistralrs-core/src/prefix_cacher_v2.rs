@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use candle_core::{Device, Result};
 use itertools::Itertools;
+use tracing::info;
 
 use crate::{
     pipeline::{KvCache, SingleCache},
@@ -46,6 +47,9 @@ pub struct MatchingCache {
 
 impl PrefixCacheManagerV2 {
     pub fn new(device: Device, n_on_device: usize, no_prefix_cache: bool) -> Self {
+        if !no_prefix_cache {
+            info!("PrefixCacherV2 is enabled! Expect higher multi-turn prompt throughput.");
+        }
         PrefixCacheManagerV2 {
             caches: HashMap::new(),
             device,
