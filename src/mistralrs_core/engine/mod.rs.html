@@ -1074,8 +1074,7 @@
 <a href="#1073" id="1073">1073</a>
 <a href="#1074" id="1074">1074</a>
 <a href="#1075" id="1075">1075</a>
-<a href="#1076" id="1076">1076</a>
-<a href="#1077" id="1077">1077</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
+<a href="#1076" id="1076">1076</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>interprocess::local_socket::{traits::Listener, ListenerOptions};
 <span class="kw">use </span>llguidance::toktrie::TokEnv;
@@ -1153,7 +1152,7 @@
         config: SchedulerConfig,
         truncate_sequence: bool,
         <span class="kw-2">mut </span>no_kv_cache: bool,
-        <span class="kw-2">mut </span>_no_prefix_cache: bool,
+        <span class="kw-2">mut </span>no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
@@ -1161,14 +1160,10 @@
         <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         no_kv_cache |= <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().no_kv_cache;
 
-        <span class="comment">// TODO: We need a nice fix, when prefix caching is enabled setting the non-PA pre op to
-        // Nothing makes it work but breaks all other cases. This requires more investigation!!
-        // no_prefix_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache;
-        // TODO: Prefix caching is always disabled if using PagedAttention for now.
-        // let no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
-        //     || no_prefix_cache
-        //     || no_kv_cache;
-        </span><span class="kw">let </span>no_prefix_cache = <span class="bool-val">true</span>;
+        no_prefix_cache = <span class="macro">matches!</span>(config, SchedulerConfig::PagedAttentionMeta { .. })
+            || no_prefix_cache
+            || no_kv_cache;
+
         <span class="self">Self </span>{
             rx,
             pipeline,
@@ -1325,9 +1320,19 @@
                                 <span class="string">"All sequences must either return raw logits, or not."
                             </span>);
 
-                            <span class="comment">// Reset non granular state because the old sequence must be dead.
-                            // Technically we don't need to do this but it is better to be safe.
-                            </span>pipeline
+                            <span class="comment">// This comes from prefix caching
+                            // The invariant where all token offsets are the same is handled by the scheduler
+                            </span><span class="kw">let </span>pre_op = <span class="kw">if </span>scheduled.prompt[<span class="number">0</span>].token_offset() != <span class="number">0 </span>{
+                                CacheInstruction::In(adapter_inst)
+                            } <span class="kw">else </span>{
+                                CacheInstruction::Reset {
+                                    load_preallocated_cache: <span class="bool-val">true</span>,
+                                    reset_non_granular: <span class="bool-val">false</span>,
+                                    adapter_inst,
+                                }
+                            };
+
+                            pipeline
                                 .step(
                                     <span class="kw-2">&amp;mut </span>scheduled.prompt,
                                     <span class="bool-val">true</span>,
@@ -1335,14 +1340,7 @@
                                     <span class="kw-2">&amp;mut </span><span class="self">self</span>.prefix_cacher,
                                     <span class="self">self</span>.disable_eos_stop,
                                     rng.clone(),
-                                    CacheBackendMetadata::DefaultInstructions {
-                                        pre_op: CacheInstruction::Reset {
-                                            load_preallocated_cache: <span class="bool-val">true</span>,
-                                            reset_non_granular: <span class="bool-val">false</span>,
-                                            adapter_inst,
-                                        },
-                                        post_op,
-                                    },
+                                    CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
                                 )
                                 .<span class="kw">await
                         </span>};

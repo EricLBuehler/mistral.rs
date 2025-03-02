@@ -879,7 +879,11 @@
 <a href="#878" id="878">878</a>
 <a href="#879" id="879">879</a>
 <a href="#880" id="880">880</a>
-<a href="#881" id="881">881</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
+<a href="#881" id="881">881</a>
+<a href="#882" id="882">882</a>
+<a href="#883" id="883">883</a>
+<a href="#884" id="884">884</a>
+<a href="#885" id="885">885</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -1412,6 +1416,10 @@
             <span class="kw">let </span><span class="kw-2">mut </span>n_chunks = Vec::new();
             <span class="kw">let </span>prompt_chunksize: usize = prompt_chunksize.into();
 
+            <span class="comment">// This comes from prefix caching
+            // The invariant where all token offsets are the same is handled by the scheduler
+            </span><span class="kw">let </span>offset = input_seqs[<span class="number">0</span>].token_offset();
+
             <span class="comment">// Pad each sequence by the padding token to the max len.
             </span><span class="kw">for </span>ctxt <span class="kw">in </span>toks.iter() {
                 <span class="kw">let </span>chunks = ctxt.chunks(prompt_chunksize).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
@@ -1434,7 +1442,7 @@
                 .map(|(i, chunk)| {
                     <span class="kw">let </span>(toks, seq_ns): (Vec&lt;Vec&lt;T&gt;&gt;, Vec&lt;usize&gt;) = chunk.into_iter().unzip();
                     make_prompt_chunk(
-                        i * prompt_chunksize,
+                        i * prompt_chunksize + offset,
                         toks,
                         <span class="kw-2">&amp;</span>seq_ns
                             .iter()

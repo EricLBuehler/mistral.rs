@@ -200,10 +200,15 @@
 <a href="#199" id="199">199</a>
 <a href="#200" id="200">200</a>
 <a href="#201" id="201">201</a>
-<a href="#202" id="202">202</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>itertools::Itertools;
+<span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
     pipeline::{KvCache, SingleCache},
@@ -248,6 +253,9 @@
 
 <span class="kw">impl </span>PrefixCacheManagerV2 {
     <span class="kw">pub fn </span>new(device: Device, n_on_device: usize, no_prefix_cache: bool) -&gt; <span class="self">Self </span>{
+        <span class="kw">if </span>!no_prefix_cache {
+            <span class="macro">info!</span>(<span class="string">"PrefixCacherV2 is enabled! Expect higher multi-turn prompt throughput."</span>);
+        }
         PrefixCacheManagerV2 {
             caches: HashMap::new(),
             device,
