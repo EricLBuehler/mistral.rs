@@ -280,16 +280,14 @@ impl Attention {
             .transpose(1, 2)?
             .contiguous()?;
 
-        let mut attn_weights = q
-            .matmul_with_alpha(&k.transpose(2, 3)?, Some(self.scale))
-            .unwrap();
+        let mut attn_weights = q.matmul_with_alpha(&k.transpose(2, 3)?, Some(self.scale))?;
 
         attn_weights = match attention_mask {
-            Some(mask) => attn_weights.broadcast_add(&mask).unwrap(),
+            Some(mask) => attn_weights.broadcast_add(mask)?,
             None => attn_weights,
         };
-        candle_nn::ops::inplace_softmax_last_dim(&mut attn_weights).unwrap();
-        attn_weights = MatMul.matmul(&attn_weights, &v).unwrap();
+        candle_nn::ops::inplace_softmax_last_dim(&mut attn_weights)?;
+        attn_weights = MatMul.matmul(&attn_weights, &v)?;
 
         Ok(self
             .o_proj
@@ -297,8 +295,7 @@ impl Attention {
                 &attn_weights
                     .transpose(1, 2)?
                     .reshape((b_sz, q_len, self.embed_dim))?,
-            )
-            .unwrap())
+            )?)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
