@@ -92,6 +92,7 @@ class VisionArchitecture(Enum):
     Qwen2VL = "qwen2vl"
     Idefics3 = "idefics3"
     MiniCpmO = "minicpmo"
+    Phi4MM = "phi4mm"
 
 @dataclass
 class DiffusionArchitecture(Enum):
@@ -315,14 +316,15 @@ class Runner:
         - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
         - `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
             PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-            The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
+            The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
         - `pa_gpu_mem_usage`: Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
             If this is not set and the device is CUDA, it will default to `0.9`.
             PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-            The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
+            The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
         - `pa_ctxt_len`: Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
             PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-            The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
+            The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
+            This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
         - `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
             it will default to 32. PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
         - `no_paged_attn` disables PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.

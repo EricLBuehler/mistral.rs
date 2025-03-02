@@ -394,6 +394,12 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 all_continuous_vid_pad.push(continuous_vid_pad);
 
                 seq.set_toks(ids);
+
+                if let Some(ref mut metadata) = paged_attn_metadata {
+                    // Free and then reallocate as appropriate
+                    metadata.block_engine.free_sequence(*seq.id());
+                    metadata.block_engine.allocate(*seq);
+                }
             }
 
             let mut input_ids_searching = Vec::new();

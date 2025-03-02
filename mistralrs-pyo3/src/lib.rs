@@ -548,12 +548,11 @@ impl Runner {
                     max_num_images: p.max_num_images,
                 })
                 .unwrap_or(AutoDeviceMapParams::default_vision()),
-            Which::DiffusionPlain { .. } => {
-                return Err(PyApiErr::from(
-                    "diffusion model doesn't support max_seq_len",
-                ))
-            }
+            Which::DiffusionPlain { .. } => AutoDeviceMapParams::default_text(),
         };
+
+        let max_seq_len = auto_map_params.max_seq_len();
+
         let max_seqs = if tgt_non_granular_index.is_some() {
             1
         } else {
@@ -671,7 +670,7 @@ impl Runner {
                 (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
                     block_size,
                     512,
-                    MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+                    MemoryGpuConfig::ContextSize(max_seq_len),
                 )?),
                 (block_size, None, None, Some(ctxt), true, false) => Some(
                     PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::ContextSize(ctxt))?,

@@ -40,6 +40,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Qwen2VL`
 - `Idefics3`
 - `MiniCpmO`
+- `Phi4MM`
 
 ### Architecture for diffusion models
 - `Flux`

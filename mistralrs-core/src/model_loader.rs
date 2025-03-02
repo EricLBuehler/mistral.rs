@@ -165,9 +165,7 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
             max_image_shape: (*max_image_length, *max_image_length),
             max_num_images: *max_num_images,
         }),
-        ModelSelected::DiffusionPlain { .. } => {
-            anyhow::bail!("diffusion model doesn't support max_seq_len")
-        }
+        ModelSelected::DiffusionPlain { .. } => Ok(AutoDeviceMapParams::default_text()),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())

@@ -118,20 +118,21 @@ struct Args {
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
+    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem")]
     paged_attn_gpu_mem: Option<usize>,
 
     /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
     /// If this is not set and the device is CUDA, it will default to `0.9`.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
+    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem-usage")]
     paged_attn_gpu_mem_usage: Option<f32>,
 
     /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) > `pa-ctxt-len` > `pa-gpu-mem`.
+    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
+    /// This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
     #[arg(long = "pa-ctxt-len")]
     paged_ctxt_len: Option<usize>,
 
@@ -301,6 +302,8 @@ async fn main() -> Result<()> {
         None => None,
     };
 
+    let max_seq_len = auto_device_map_params.max_seq_len();
+
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_no_kv_cache(args.no_kv_cache)
         .with_chat_template(args.chat_template)
@@ -395,7 +398,7 @@ async fn main() -> Result<()> {
         (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
             block_size,
             512,
-            MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+            MemoryGpuConfig::ContextSize(max_seq_len),
         )?),
         (block_size, None, None, Some(ctxt), true, false) => Some(PagedAttentionConfig::new(
             block_size,

@@ -26,7 +26,7 @@ pub use normal_loaders::{
 use tracing::{info, warn};
 pub use vision_loaders::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader, Phi3VLoader,
-    Qwen2VLLoader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    Phi4MMLoader, Qwen2VLLoader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 
 pub use diffusion_loaders::{
@@ -41,8 +41,8 @@ use crate::{
     },
     utils::debug::DeviceRepr,
     xlora_models::XLoraConfig,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryGpuConfig, MemoryUsage,
-    Ordering, PagedAttentionConfig, TryIntoDType,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryUsage, Ordering,
+    PagedAttentionConfig, TryIntoDType,
 };
 
 use super::Pipeline;
@@ -551,8 +551,8 @@ pub trait DeviceMappedModelLoader {
         let kv_cache_size_elems = match paged_attn_config {
             Some(paged_attn_config) => {
                 let cache_config = calculate_cache_config(
-                    MemoryGpuConfig::ContextSize(max_seq_len),
-                    0,
+                    paged_attn_config.mem_gpu,
+                    paged_attn_config.mem_cpu,
                     Some(
                         paged_attn_config
                             .block_size
@@ -651,14 +651,18 @@ pub trait DeviceMappedModelLoader {
             let layers_on_device = if current_ordinal == 0
                 && device_capacity
                     >= remaining_to_map
-                        + non_mapped_max_act_size_in_bytes
-                        + mapped_max_act_size_in_bytes
+                        + non_mapped_max_act_size_in_bytes.max(mapped_max_act_size_in_bytes)
+                        + non_mapped_size_in_bytes
+                        + kv_cache_size_in_bytes * (num_layers - current_layer)
             {
                 remaining_to_map = 0;
 
                 num_layers - current_layer
             } else if current_ordinal != 0
-                && device_capacity >= remaining_to_map + mapped_max_act_size_in_bytes
+                && device_capacity
+                    >= remaining_to_map
+                        + mapped_max_act_size_in_bytes
+                        + kv_cache_size_in_bytes * (num_layers - current_layer)
             {
                 remaining_to_map = 0;
 
@@ -666,7 +670,7 @@ pub trait DeviceMappedModelLoader {
             } else {
                 // All devices need to account for the max mapped act size
                 let mut used_capacity = mapped_max_act_size_in_bytes;
-                let mut used_capacity_no_act = mapped_max_act_size_in_bytes;
+                let mut used_capacity_no_act = 0;
                 let mut layers_on_device = 0;
 
                 // Device w/ ordinal 0 carries the non-mapped things
@@ -674,6 +678,7 @@ pub trait DeviceMappedModelLoader {
                     // Ensure the activations are properly handled
                     used_capacity = used_capacity.max(non_mapped_max_act_size_in_bytes);
                     used_capacity += non_mapped_size_in_bytes;
+                    used_capacity_no_act += non_mapped_size_in_bytes;
                 }
 
                 while let Some(&last) = layer_sizes_in_bytes.last() {

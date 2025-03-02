@@ -251,6 +251,12 @@ impl InputsProcessor for Idefics3ImageProcessor {
                 let ids = toks.get_ids().to_vec();
                 all_ids.push(ids.clone());
                 seq.set_toks(ids);
+
+                if let Some(ref mut metadata) = paged_attn_metadata {
+                    // Free and then reallocate as appropriate
+                    metadata.block_engine.free_sequence(*seq.id());
+                    metadata.block_engine.allocate(*seq);
+                }
             }
 
             let mut all_ids_new = Vec::new();
