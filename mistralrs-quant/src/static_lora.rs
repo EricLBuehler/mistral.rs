@@ -49,8 +49,13 @@ pub fn linear_no_bias_static_lora(
                     1.0
                 };
 
-                let delta_weight =
-                    (b.to_dtype(DType::F32)?.matmul(&a.to_dtype(DType::F32)?)? * scale)?;
+                let ab = if a.device().is_cpu() {
+                    b.to_dtype(DType::F32)?.matmul(&a.to_dtype(DType::F32)?)?
+                } else {
+                    b.matmul(&a)?
+                };
+
+                let delta_weight = (ab * scale)?;
                 weight = (weight + delta_weight.to_dtype(a.dtype())?)?;
             }
 
