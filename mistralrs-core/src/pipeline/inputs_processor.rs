@@ -531,6 +531,10 @@ pub mod text_models_inputs_processor {
             let mut n_chunks = Vec::new();
             let prompt_chunksize: usize = prompt_chunksize.into();
 
+            // This comes from prefix caching
+            // The invariant where all token offsets are the same is handled by the scheduler
+            let offset = input_seqs[0].token_offset();
+
             // Pad each sequence by the padding token to the max len.
             for ctxt in toks.iter() {
                 let chunks = ctxt.chunks(prompt_chunksize).collect::<Vec<_>>();
@@ -553,7 +557,7 @@ pub mod text_models_inputs_processor {
                 .map(|(i, chunk)| {
                     let (toks, seq_ns): (Vec<Vec<T>>, Vec<usize>) = chunk.into_iter().unzip();
                     make_prompt_chunk(
-                        i * prompt_chunksize,
+                        i * prompt_chunksize + offset,
                         toks,
                         &seq_ns
                             .iter()
