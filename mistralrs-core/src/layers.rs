@@ -1776,17 +1776,6 @@ impl AvgPool2d {
 /// For left padding, it reflects the values from column 1 up to pad_left (in reverse order);
 /// for right padding, it reflects from the second-to-last column backwards, and similarly for
 /// vertical (height) padding.
-///
-/// # Example
-///
-/// ```rust
-/// # use candle_core::{Tensor, Device, Result};
-/// # fn main() -> Result<()> {
-/// let x = Tensor::new(/* ... a tensor of shape (N, C, H, W) ... */, &Device::Cpu)?;
-/// let padded = reflection_pad2d(&x, (2, 2, 3, 3))?;
-/// # Ok(())
-/// # }
-/// ```
 pub struct ReflectionPad2d {
     padding: (usize, usize, usize, usize),
 }
