@@ -274,9 +274,9 @@
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = [<span class="number">0u8</span>; <span class="number">128</span>];
         stream.read_exact(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>id_bytes = [<span class="number">0i8</span>; <span class="number">128</span>];
+        <span class="kw">let </span><span class="kw-2">mut </span>id_bytes: [core::ffi::c_char; <span class="number">128</span>] = [<span class="number">0</span>; <span class="number">128</span>];
         <span class="kw">for </span>(i, <span class="kw-2">&amp;</span>b) <span class="kw">in </span>buffer.iter().enumerate() {
-            id_bytes[i] = b <span class="kw">as </span>i8;
+            id_bytes[i] = b <span class="kw">as </span>core::ffi::c_char;
         }
         <span class="prelude-val">Ok</span>(Id::uninit(id_bytes))
     }

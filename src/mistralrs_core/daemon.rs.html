@@ -21,7 +21,12 @@
 <a href="#20" id="20">20</a>
 <a href="#21" id="21">21</a>
 <a href="#22" id="22">22</a>
-<a href="#23" id="23">23</a></pre></div><pre class="rust"><code><span class="kw">use </span>interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
+<a href="#23" id="23">23</a>
+<a href="#24" id="24">24</a>
+<a href="#25" id="25">25</a>
+<a href="#26" id="26">26</a>
+<a href="#27" id="27">27</a></pre></div><pre class="rust"><code><span class="kw">use </span>core::ffi::c_char;
+<span class="kw">use </span>interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>serde_big_array::BigArray;
 
@@ -33,11 +38,14 @@
 
 <span class="attr">#[derive(Serialize, Deserialize, Debug)]
 #[serde(transparent)]
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BigI8Array(<span class="attr">#[serde(with = <span class="string">"BigArray"</span>)] </span><span class="kw">pub</span>(<span class="kw">crate</span>) [i8; <span class="number">128</span>]);
+</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>BigCCharArray(<span class="attr">#[serde(with = <span class="string">"BigArray"</span>)] </span><span class="kw">pub</span>(<span class="kw">crate</span>) [c_char; <span class="number">128</span>]);
 
 <span class="attr">#[derive(Serialize, Deserialize, Debug)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>WorkerTransferData {
-    Init { id: BigI8Array, worker_rank: usize },
+    Init {
+        id: BigCCharArray,
+        worker_rank: usize,
+    },
 }
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>ipc_name() -&gt; anyhow::Result&lt;Name&lt;<span class="lifetime">'static</span>&gt;&gt; {
