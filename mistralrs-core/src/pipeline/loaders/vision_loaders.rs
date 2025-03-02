@@ -297,11 +297,11 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
         // NOTE: we ignore max_num_images although it can only be one...
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
@@ -319,7 +319,7 @@ impl DeviceMappedModelLoader for Phi3VLoader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + prompt_chunksize;
+            let max_seq_len = img_seq_len + max_seq_len;
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -434,8 +434,7 @@ impl DeviceMappedModelLoader for Phi3VLoader {
             let head_dim = cfg.head_dim();
             let op_size = head_dim * head_dim + 2 * cfg.num_key_value_heads * head_dim;
             let qkv_proj = size_in * op_size / weight_pack_factor;
-            let o_proj =
-                (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor + size_in;
+            let o_proj = (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor;
 
             let h_size = cfg.hidden_size;
             let i_size = cfg.intermediate_size;
@@ -573,10 +572,10 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
@@ -592,7 +591,7 @@ impl DeviceMappedModelLoader for Idefics2Loader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + prompt_chunksize;
+            let max_seq_len = img_seq_len + max_seq_len;
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -902,10 +901,10 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
@@ -927,7 +926,7 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         let max_text_attn = {
             let cfg = &config.text_config;
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + prompt_chunksize;
+            let max_seq_len = img_seq_len + max_seq_len;
 
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
@@ -1155,10 +1154,10 @@ impl DeviceMappedModelLoader for LLaVALoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
@@ -1176,7 +1175,7 @@ impl DeviceMappedModelLoader for LLaVALoader {
         let max_text_attn = {
             let cfg = &config.text_config;
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + prompt_chunksize;
+            let max_seq_len = img_seq_len + max_seq_len;
 
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
@@ -1453,10 +1452,10 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
@@ -1482,7 +1481,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
 
         let max_self_text_attn = {
             let cfg = &config.text_config;
-            max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize
+            max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
         Ok(max_self_text_attn.max(max_cross_text_attn))
@@ -1782,10 +1781,10 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
@@ -1807,7 +1806,7 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + prompt_chunksize;
+            let max_seq_len = img_seq_len + max_seq_len;
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -2071,10 +2070,10 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
@@ -2090,7 +2089,7 @@ impl DeviceMappedModelLoader for Idefics3Loader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + prompt_chunksize;
+            let max_seq_len = img_seq_len + max_seq_len;
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -2352,10 +2351,10 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
@@ -2371,7 +2370,7 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
-            let max_seq_len = img_seq_len + prompt_chunksize;
+            let max_seq_len = img_seq_len + max_seq_len;
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -2615,7 +2614,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
         // NOTE: we ignore max_num_images although it can only be one...
         let AutoDeviceMapParams::Vision {
@@ -2638,7 +2637,6 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
             let max_seq_len = img_seq_len + max_seq_len;
-            let max_seq_len = 10000;
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -2650,7 +2648,6 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         _config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        // NOTE: we ignore max_num_images although it can only be one...
         let AutoDeviceMapParams::Vision {
             max_seq_len: _,
             max_batch_size,
@@ -2799,8 +2796,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
             let head_dim = cfg.head_dim();
             let op_size = head_dim * head_dim + 2 * cfg.num_key_value_heads() * head_dim;
             let qkv_proj = size_in * op_size / weight_pack_factor;
-            let o_proj =
-                (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor + size_in;
+            let o_proj = (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor;
 
             let h_size = cfg.hidden_size;
             let i_size = cfg.intermediate_size;
