@@ -57,7 +57,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - φ⁴ 📷 Run the **Phi 4 Multimodal** model: [documentation and guide here](docs/PHI4MM.md)
 
     ```
-    ./mistralrs-server --port 1234 vision-plain -m microsoft/Phi-4-multimodal-instruct -a phi4mm
+    ./mistralrs-server -i vision-plain -m microsoft/Phi-4-multimodal-instruct -a phi4mm
     ```
 
 - 🤗📷 Run the **Smol VLM** Model: [documentation and guide here](docs/IDEFICS3.md)
