@@ -41,8 +41,8 @@ use crate::{
     },
     utils::debug::DeviceRepr,
     xlora_models::XLoraConfig,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryGpuConfig, MemoryUsage,
-    Ordering, PagedAttentionConfig, TryIntoDType,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryUsage, Ordering,
+    PagedAttentionConfig, TryIntoDType,
 };
 
 use super::Pipeline;
@@ -551,8 +551,8 @@ pub trait DeviceMappedModelLoader {
         let kv_cache_size_elems = match paged_attn_config {
             Some(paged_attn_config) => {
                 let cache_config = calculate_cache_config(
-                    MemoryGpuConfig::ContextSize(max_seq_len),
-                    0,
+                    paged_attn_config.mem_gpu,
+                    paged_attn_config.mem_cpu,
                     Some(
                         paged_attn_config
                             .block_size
