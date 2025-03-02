@@ -565,7 +565,9 @@
 <a href="#564" id="564">564</a>
 <a href="#565" id="565">565</a>
 <a href="#566" id="566">566</a>
-<a href="#567" id="567">567</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a>
+<a href="#569" id="569">569</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
@@ -595,6 +597,7 @@
 <span class="kw">mod </span>hqq;
 <span class="kw">mod </span>imatrix;
 <span class="kw">pub mod </span>safetensors;
+<span class="kw">mod </span>static_lora;
 <span class="kw">mod </span>unquantized;
 <span class="kw">mod </span>utils;
 
@@ -616,6 +619,7 @@
 <span class="kw">pub use </span>gptq::GptqLayer;
 <span class="kw">pub use </span>hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 <span class="kw">pub use </span>imatrix::{CollectedImatrixData, ImatrixLayerStats};
+<span class="kw">pub use </span>static_lora::{linear_no_bias_static_lora, StaticLoraConfig};
 <span class="kw">pub use </span>unquantized::UnquantLinear;
 <span class="kw">pub use </span>utils::UQFF_QUANT_TYPE_OFFSET;
 

@@ -509,9 +509,7 @@
 <a href="#508" id="508">508</a>
 <a href="#509" id="509">509</a>
 <a href="#510" id="510">510</a>
-<a href="#511" id="511">511</a>
-<a href="#512" id="512">512</a>
-<a href="#513" id="513">513</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#511" id="511">511</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::{<span class="self">self</span>, File},
     num::NonZeroUsize,
 };
@@ -678,9 +676,7 @@
             max_image_shape: (<span class="kw-2">*</span>max_image_length, <span class="kw-2">*</span>max_image_length),
             max_num_images: <span class="kw-2">*</span>max_num_images,
         }),
-        ModelSelected::DiffusionPlain { .. } =&gt; {
-            <span class="macro">anyhow::bail!</span>(<span class="string">"diffusion model doesn't support max_seq_len"</span>)
-        }
+        ModelSelected::DiffusionPlain { .. } =&gt; <span class="prelude-val">Ok</span>(AutoDeviceMapParams::default_text()),
         ModelSelected::Toml { file } =&gt; {
             <span class="kw">let </span>selector: TomlSelector = toml::from_str(
                 <span class="kw-2">&amp;</span>fs::read_to_string(file.clone())

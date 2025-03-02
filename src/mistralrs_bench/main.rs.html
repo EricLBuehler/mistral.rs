@@ -573,7 +573,12 @@
 <a href="#572" id="572">572</a>
 <a href="#573" id="573">573</a>
 <a href="#574" id="574">574</a>
-<a href="#575" id="575">575</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
@@ -877,20 +882,23 @@
     </span><span class="attr">#[arg(long = <span class="string">"isq"</span>, value_parser = parse_isq_value)]
     </span>in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
 
-    <span class="doccomment">/// GPU memory to allocate for KV cache with PagedAttention in MBs. If this is not set and the device is CUDA, it will default to
-    /// using `pa-gpu-mem-usage` set to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
+    <span class="doccomment">/// GPU memory to allocate for KV cache with PagedAttention in MBs.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+    /// The priority is as follows: `pa-ctxt-len` &gt; `pa-gpu-mem-usage` &gt; `pa-gpu-mem`.
     </span><span class="attr">#[arg(long = <span class="string">"pa-gpu-mem"</span>)]
     </span>paged_attn_gpu_mem: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
     <span class="doccomment">/// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-    /// If this is not set and the device is CUDA, it will default to `0.9`. PagedAttention is only supported on CUDA and is always automatically activated.
-    /// This is always used over `pa-gpu-mem` if both are specified.
+    /// If this is not set and the device is CUDA, it will default to `0.9`.
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+    /// The priority is as follows: `pa-ctxt-len` &gt; `pa-gpu-mem-usage` &gt; `pa-gpu-mem`.
     </span><span class="attr">#[arg(long = <span class="string">"pa-gpu-mem-usage"</span>)]
     </span>paged_attn_gpu_mem_usage: <span class="prelude-ty">Option</span>&lt;f32&gt;,
 
-    <span class="doccomment">/// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold)
-    /// when using PagedAttention, which is only supported on CUDA and is always automatically activated.
-    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) &gt; `pa-ctxt-len` &gt; `pa-gpu-mem`.
+    <span class="doccomment">/// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
+    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+    /// The priority is as follows: `pa-ctxt-len` &gt; `pa-gpu-mem-usage` &gt; `pa-gpu-mem`.
+    /// This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
     </span><span class="attr">#[arg(long = <span class="string">"pa-ctxt-len"</span>)]
     </span>paged_ctxt_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
@@ -930,6 +938,8 @@
 
     <span class="kw">let </span>dtype = get_model_dtype(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
     <span class="kw">let </span>auto_device_map_params = get_auto_device_map_params(<span class="kw-2">&amp;</span>args.model)<span class="question-mark">?</span>;
+
+    <span class="kw">let </span>max_seq_len = auto_device_map_params.max_seq_len();
 
     <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = LoaderBuilder::new(args.model)
         .with_use_flash_attn(use_flash_attn)
@@ -1020,8 +1030,8 @@
         (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
             block_size,
             <span class="number">512</span>,
-            MemoryGpuConfig::Utilization(<span class="number">0.9</span>), <span class="comment">// NOTE(EricLBuehler): default is to use 90% of memory
-        </span>)<span class="question-mark">?</span>),
+            MemoryGpuConfig::ContextSize(max_seq_len),
+        )<span class="question-mark">?</span>),
         (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(ctxt), <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
             block_size,
             <span class="number">512</span>,

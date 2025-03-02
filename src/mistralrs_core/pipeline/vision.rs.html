@@ -938,15 +938,16 @@
 <a href="#937" id="937">937</a>
 <a href="#938" id="938">938</a>
 <a href="#939" id="939">939</a>
-<a href="#940" id="940">940</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
-    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, PreProcessingMixin,
-    Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel, VisionModelLoader,
-    VisionPromptPrefixer, XLoraPaths,
+    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, Phi4MMLoader,
+    PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel,
+    VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
 };
 <span class="kw">use super</span>::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
@@ -1076,6 +1077,7 @@
             VisionLoaderType::Qwen2VL =&gt; Box::new(Qwen2VLLoader),
             VisionLoaderType::Idefics3 =&gt; Box::new(Idefics3Loader),
             VisionLoaderType::MiniCpmO =&gt; Box::new(MiniCpmOLoader),
+            VisionLoaderType::Phi4MM =&gt; Box::new(Phi4MMLoader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -1519,8 +1521,8 @@
                 eos_tok: eos,
                 kind: <span class="self">self</span>.kind.clone(),
                 no_kv_cache: <span class="bool-val">false</span>,
-                no_prefix_cache: <span class="bool-val">true</span>, <span class="comment">// TODO: evaluate. Do vision models need to not have prefix caching?
-                </span>activation_dtype: dtype,
+                no_prefix_cache: <span class="bool-val">false</span>,
+                activation_dtype: dtype,
                 sliding_window,
                 cache_config,
                 cache_engine,

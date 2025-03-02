@@ -501,15 +501,39 @@
 <a href="#500" id="500">500</a>
 <a href="#501" id="501">501</a>
 <a href="#502" id="502">502</a>
-<a href="#503" id="503">503</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#503" id="503">503</a>
+<a href="#504" id="504">504</a>
+<a href="#505" id="505">505</a>
+<a href="#506" id="506">506</a>
+<a href="#507" id="507">507</a>
+<a href="#508" id="508">508</a>
+<a href="#509" id="509">509</a>
+<a href="#510" id="510">510</a>
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
-<span class="kw">use </span>mistralrs_quant::ShardedVarBuilder;
-<span class="kw">use </span>std::ops::Mul;
+<span class="kw">use </span>mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+<span class="kw">use </span>std::{ops::Mul, sync::Arc};
 
 <span class="kw">use crate</span>::{
-    layers::{conv2d, embedding, layer_norm, linear, Activation, CausalMasker, MatMul, QLinear},
+    layers::{conv2d, embedding, layer_norm, Activation, CausalMasker, MatMul},
     serde_default_fn,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -546,11 +570,27 @@
     </span><span class="kw">pub </span>layer_norm_eps: f64,
 }
 
-<span class="kw">struct </span>VisionEmbeddings {
+<span class="kw">impl </span>Default <span class="kw">for </span>SiglipVisionConfig {
+    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            hidden_size: <span class="number">768</span>,
+            intermediate_size: <span class="number">3072</span>,
+            num_hidden_layers: <span class="number">12</span>,
+            num_attention_heads: <span class="number">12</span>,
+            num_channels: <span class="number">3</span>,
+            image_size: <span class="number">224</span>,
+            patch_size: <span class="number">16</span>,
+            hidden_act: Activation::GeluPytorchTanh,
+            layer_norm_eps: <span class="number">1e-6</span>,
+        }
+    }
+}
+
+<span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">struct </span>VisionEmbeddings {
     patch_size: usize,
     patch_embedding: Conv2d,
     num_patches_per_side: usize,
-    position_embedding: Embedding,
+    <span class="kw">pub</span>(<span class="kw">super</span>) position_embedding: Embedding,
 }
 
 <span class="doccomment">/// torch.bucketize with right=True
@@ -717,11 +757,10 @@
     num_heads: usize,
     head_dim: usize,
     scale: f64,
-    q_proj: QLinear,
-    k_proj: QLinear,
-    v_proj: QLinear,
-    o_proj: QLinear,
-    neg_inf: Tensor,
+    q_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    k_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    v_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    o_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
 }
 
 <span class="kw">impl </span>Attention {
@@ -731,73 +770,57 @@
         <span class="kw">let </span>head_dim = embed_dim / num_heads;
         <span class="kw">let </span>scale = <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt();
 
-        <span class="kw">let </span>q_proj = linear(embed_dim, embed_dim, vb.pp(<span class="string">"q_proj"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>k_proj = linear(embed_dim, embed_dim, vb.pp(<span class="string">"k_proj"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>v_proj = linear(embed_dim, embed_dim, vb.pp(<span class="string">"v_proj"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>o_proj = linear(embed_dim, embed_dim, vb.pp(<span class="string">"out_proj"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>q_proj = mistralrs_quant::linear(embed_dim, embed_dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"q_proj"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>k_proj = mistralrs_quant::linear(embed_dim, embed_dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"k_proj"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>v_proj = mistralrs_quant::linear(embed_dim, embed_dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"v_proj"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>o_proj = mistralrs_quant::linear(embed_dim, embed_dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"out_proj"</span>))<span class="question-mark">?</span>;
 
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_dim,
             num_heads,
             head_dim,
             scale,
-            q_proj: QLinear::from_linear(q_proj),
-            k_proj: QLinear::from_linear(k_proj),
-            v_proj: QLinear::from_linear(v_proj),
-            o_proj: QLinear::from_linear(o_proj),
-            neg_inf: Tensor::new(f32::NEG_INFINITY, vb.device())<span class="question-mark">?</span>.to_dtype(vb.dtype())<span class="question-mark">?</span>,
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
         })
     }
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>(b_sz, q_len, <span class="kw">_</span>) = xs.dims3()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>original_dtype = xs.dtype();
-        <span class="kw">let </span><span class="kw-2">mut </span>xs = xs.clone();
-        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
-            xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
-        }
-        <span class="kw">let </span><span class="kw-2">mut </span>q = <span class="self">self</span>.q_proj.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>k = <span class="self">self</span>.k_proj.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>v = <span class="self">self</span>.v_proj.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
-        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
-            q = q.to_dtype(original_dtype)<span class="question-mark">?</span>;
-            k = k.to_dtype(original_dtype)<span class="question-mark">?</span>;
-            v = v.to_dtype(original_dtype)<span class="question-mark">?</span>;
-        }
+        <span class="kw">let </span><span class="kw-2">mut </span>q = <span class="self">self</span>.q_proj.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>k = <span class="self">self</span>.k_proj.forward(xs)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>v = <span class="self">self</span>.v_proj.forward(xs)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>q = q
+        q = q
             .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>k = k
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
+        k = k
             .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>v = v
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
+        v = v
             .reshape((b_sz, q_len, <span class="self">self</span>.num_heads, <span class="self">self</span>.head_dim))<span class="question-mark">?
-            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
+            </span>.contiguous()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>attn_weights =
-            (MatMul.matmul(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>)<span class="question-mark">? </span>* <span class="self">self</span>.scale)<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>attn_weights = (q.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>)<span class="question-mark">? </span>* <span class="self">self</span>.scale)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>attn_weights = CausalMasker.apply_mask_one_and_zero(
-            <span class="kw-2">&amp;</span>attention_mask.map(|x| x.to_dtype(DType::U8).unwrap()),
-            attn_weights,
-            <span class="kw-2">&amp;</span><span class="self">self</span>.neg_inf,
-        )<span class="question-mark">?</span>;
-        <span class="kw">let </span>attn_weights = candle_nn::ops::softmax_last_dim(<span class="kw-2">&amp;</span>attn_weights)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>attn_output = MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v.contiguous()<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+        attn_weights = <span class="kw">match </span>attention_mask {
+            <span class="prelude-val">Some</span>(mask) =&gt; attn_weights.broadcast_add(mask)<span class="question-mark">?</span>,
+            <span class="prelude-val">None </span>=&gt; attn_weights,
+        };
+        candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>attn_weights)<span class="question-mark">?</span>;
+        attn_weights = MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
 
-        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
-            attn_output = attn_output.to_dtype(DType::F32)<span class="question-mark">?</span>;
-        }
-        <span class="kw">let </span><span class="kw-2">mut </span>res = attn_output
-            .transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
-            </span>.reshape((b_sz, q_len, <span class="self">self</span>.embed_dim))<span class="question-mark">?
-            </span>.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.o_proj)<span class="question-mark">?</span>;
-        <span class="kw">if </span><span class="self">self</span>.q_proj.is_quant() {
-            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
-        }
-        <span class="prelude-val">Ok</span>(res)
+        <span class="self">self</span>.o_proj.forward(<span class="kw-2">&amp;</span>attn_weights.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape((
+            b_sz,
+            q_len,
+            <span class="self">self</span>.embed_dim,
+        ))<span class="question-mark">?</span>)
     }
 
     <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
@@ -814,34 +837,35 @@
 
 <span class="kw">struct </span>VisionMLP {
     activation: Activation,
-    fc1: QLinear,
-    fc2: QLinear,
+    fc1: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
+    fc2: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
 }
 
 <span class="kw">impl </span>VisionMLP {
     <span class="kw">fn </span>new(config: SiglipVisionConfig, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="kw">let </span>fc1 = linear(config.hidden_size, config.intermediate_size, vb.pp(<span class="string">"fc1"</span>))<span class="question-mark">?</span>;
-        <span class="kw">let </span>fc2 = linear(config.intermediate_size, config.hidden_size, vb.pp(<span class="string">"fc2"</span>))<span class="question-mark">?</span>;
+        <span class="kw">let </span>fc1 = mistralrs_quant::linear(
+            config.hidden_size,
+            config.intermediate_size,
+            <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+            vb.pp(<span class="string">"fc1"</span>),
+        )<span class="question-mark">?</span>;
+        <span class="kw">let </span>fc2 = mistralrs_quant::linear(
+            config.intermediate_size,
+            config.hidden_size,
+            <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+            vb.pp(<span class="string">"fc2"</span>),
+        )<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             activation: config.hidden_act,
-            fc1: QLinear::from_linear(fc1),
-            fc2: QLinear::from_linear(fc2),
+            fc1,
+            fc2,
         })
     }
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">let </span><span class="kw-2">mut </span>x = x.clone();
-        <span class="kw">let </span>original_dtype = x.dtype();
-        <span class="kw">if </span><span class="self">self</span>.fc1.is_quant() {
-            x = x.to_dtype(DType::F32)<span class="question-mark">?</span>;
-        }
-        <span class="kw">let </span>x = <span class="self">self</span>.fc1.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
-        <span class="kw">let </span>x = <span class="self">self</span>.activation.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="self">self</span>.fc2.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
-        <span class="kw">if </span><span class="self">self</span>.fc1.is_quant() {
-            res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
-        }
-        <span class="prelude-val">Ok</span>(res)
+        <span class="kw">let </span><span class="kw-2">mut </span>x = <span class="self">self</span>.fc1.forward(x)<span class="question-mark">?</span>;
+        x = <span class="self">self</span>.activation.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
+        <span class="self">self</span>.fc2.forward(<span class="kw-2">&amp;</span>x)
     }
 
     <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
@@ -911,17 +935,25 @@
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{ layers })
     }
 
-    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor, attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">fn </span>forward_get_hidden_states(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        xs: <span class="kw-2">&amp;</span>Tensor,
+        attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+        hidden_states_index: isize,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>hidden_states = xs.clone();
-        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.layers {
+        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
             hidden_states = layer.forward(<span class="kw-2">&amp;</span>hidden_states, attention_mask)<span class="question-mark">?</span>;
+            <span class="kw">if </span>(<span class="self">self</span>.layers.len() <span class="kw">as </span>isize + hidden_states_index) <span class="kw">as </span>usize == layer_idx {
+                <span class="kw">return </span><span class="prelude-val">Ok</span>(hidden_states);
+            }
         }
         <span class="prelude-val">Ok</span>(hidden_states)
     }
 }
 
 <span class="kw">pub struct </span>SiglipVisionTransformer {
-    embeddings: VisionEmbeddings,
+    <span class="kw">pub</span>(<span class="kw">super</span>) embeddings: VisionEmbeddings,
     encoder: Encoder,
     post_layernorm: LayerNorm,
     config: SiglipVisionConfig,
@@ -949,6 +981,16 @@
         pixel_values: <span class="kw-2">&amp;</span>Tensor,
         attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
         tgt_sizes: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+        <span class="self">self</span>.forward_get_hidden_states(pixel_values, attention_mask, tgt_sizes, -<span class="number">1</span>)
+    }
+
+    <span class="kw">pub fn </span>forward_get_hidden_states(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        pixel_values: <span class="kw-2">&amp;</span>Tensor,
+        attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+        tgt_sizes: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+        hidden_states_index: isize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>bs = pixel_values.dim(<span class="number">0</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>patch_attention_mask = <span class="kw">if let </span><span class="prelude-val">Some</span>(attn_mask) = attention_mask {
@@ -978,10 +1020,16 @@
                 </span>.to_dtype(hidden_states.dtype())<span class="question-mark">?</span>;
             <span class="prelude-val">Some</span>(CausalMasker.expand_mask(<span class="kw-2">&amp;</span>mask, hidden_states.dtype(), <span class="prelude-val">None</span>)<span class="question-mark">?</span>)
         };
-        <span class="kw">let </span>hidden_states = <span class="self">self
-            </span>.encoder
-            .forward(<span class="kw-2">&amp;</span>hidden_states, attention_mask.as_ref())<span class="question-mark">?</span>;
+        <span class="kw">let </span>hidden_states = <span class="self">self</span>.encoder.forward_get_hidden_states(
+            <span class="kw-2">&amp;</span>hidden_states,
+            attention_mask.as_ref(),
+            hidden_states_index + <span class="number">1</span>,
+        )<span class="question-mark">?</span>;
         hidden_states.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.post_layernorm)
+    }
+
+    <span class="kw">pub fn </span>dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DType {
+        <span class="self">self</span>.embeddings.patch_embedding.weight().dtype()
     }
 
     <span class="kw">pub fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {

@@ -810,7 +810,12 @@
 <a href="#809" id="809">809</a>
 <a href="#810" id="810">810</a>
 <a href="#811" id="811">811</a>
-<a href="#812" id="812">812</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a></pre></div><pre class="rust"><code><span class="kw">mod </span>diffusion_loaders;
 <span class="kw">mod </span>normal_loaders;
 <span class="kw">mod </span>vision_loaders;
 
@@ -838,7 +843,7 @@
 <span class="kw">use </span>tracing::{info, warn};
 <span class="kw">pub use </span>vision_loaders::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader, Phi3VLoader,
-    Qwen2VLLoader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+    Phi4MMLoader, Qwen2VLLoader, VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 
 <span class="kw">pub use </span>diffusion_loaders::{
@@ -853,8 +858,8 @@
     },
     utils::debug::DeviceRepr,
     xlora_models::XLoraConfig,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryGpuConfig, MemoryUsage,
-    Ordering, PagedAttentionConfig, TryIntoDType,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryUsage, Ordering,
+    PagedAttentionConfig, TryIntoDType,
 };
 
 <span class="kw">use </span><span class="kw">super</span>::Pipeline;
@@ -1363,8 +1368,8 @@
         <span class="kw">let </span>kv_cache_size_elems = <span class="kw">match </span>paged_attn_config {
             <span class="prelude-val">Some</span>(paged_attn_config) =&gt; {
                 <span class="kw">let </span>cache_config = calculate_cache_config(
-                    MemoryGpuConfig::ContextSize(max_seq_len),
-                    <span class="number">0</span>,
+                    paged_attn_config.mem_gpu,
+                    paged_attn_config.mem_cpu,
                     <span class="prelude-val">Some</span>(
                         paged_attn_config
                             .block_size
@@ -1463,14 +1468,18 @@
             </span><span class="kw">let </span>layers_on_device = <span class="kw">if </span>current_ordinal == <span class="number">0
                 </span>&amp;&amp; device_capacity
                     &gt;= remaining_to_map
-                        + non_mapped_max_act_size_in_bytes
-                        + mapped_max_act_size_in_bytes
+                        + non_mapped_max_act_size_in_bytes.max(mapped_max_act_size_in_bytes)
+                        + non_mapped_size_in_bytes
+                        + kv_cache_size_in_bytes * (num_layers - current_layer)
             {
                 remaining_to_map = <span class="number">0</span>;
 
                 num_layers - current_layer
             } <span class="kw">else if </span>current_ordinal != <span class="number">0
-                </span>&amp;&amp; device_capacity &gt;= remaining_to_map + mapped_max_act_size_in_bytes
+                </span>&amp;&amp; device_capacity
+                    &gt;= remaining_to_map
+                        + mapped_max_act_size_in_bytes
+                        + kv_cache_size_in_bytes * (num_layers - current_layer)
             {
                 remaining_to_map = <span class="number">0</span>;
 
@@ -1478,7 +1487,7 @@
             } <span class="kw">else </span>{
                 <span class="comment">// All devices need to account for the max mapped act size
                 </span><span class="kw">let </span><span class="kw-2">mut </span>used_capacity = mapped_max_act_size_in_bytes;
-                <span class="kw">let </span><span class="kw-2">mut </span>used_capacity_no_act = mapped_max_act_size_in_bytes;
+                <span class="kw">let </span><span class="kw-2">mut </span>used_capacity_no_act = <span class="number">0</span>;
                 <span class="kw">let </span><span class="kw-2">mut </span>layers_on_device = <span class="number">0</span>;
 
                 <span class="comment">// Device w/ ordinal 0 carries the non-mapped things
@@ -1486,6 +1495,7 @@
                     <span class="comment">// Ensure the activations are properly handled
                     </span>used_capacity = used_capacity.max(non_mapped_max_act_size_in_bytes);
                     used_capacity += non_mapped_size_in_bytes;
+                    used_capacity_no_act += non_mapped_size_in_bytes;
                 }
 
                 <span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>last) = layer_sizes_in_bytes.last() {

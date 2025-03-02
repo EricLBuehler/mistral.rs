@@ -2526,7 +2526,323 @@
 <a href="#2525" id="2525">2525</a>
 <a href="#2526" id="2526">2526</a>
 <a href="#2527" id="2527">2527</a>
-<a href="#2528" id="2528">2528</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#2528" id="2528">2528</a>
+<a href="#2529" id="2529">2529</a>
+<a href="#2530" id="2530">2530</a>
+<a href="#2531" id="2531">2531</a>
+<a href="#2532" id="2532">2532</a>
+<a href="#2533" id="2533">2533</a>
+<a href="#2534" id="2534">2534</a>
+<a href="#2535" id="2535">2535</a>
+<a href="#2536" id="2536">2536</a>
+<a href="#2537" id="2537">2537</a>
+<a href="#2538" id="2538">2538</a>
+<a href="#2539" id="2539">2539</a>
+<a href="#2540" id="2540">2540</a>
+<a href="#2541" id="2541">2541</a>
+<a href="#2542" id="2542">2542</a>
+<a href="#2543" id="2543">2543</a>
+<a href="#2544" id="2544">2544</a>
+<a href="#2545" id="2545">2545</a>
+<a href="#2546" id="2546">2546</a>
+<a href="#2547" id="2547">2547</a>
+<a href="#2548" id="2548">2548</a>
+<a href="#2549" id="2549">2549</a>
+<a href="#2550" id="2550">2550</a>
+<a href="#2551" id="2551">2551</a>
+<a href="#2552" id="2552">2552</a>
+<a href="#2553" id="2553">2553</a>
+<a href="#2554" id="2554">2554</a>
+<a href="#2555" id="2555">2555</a>
+<a href="#2556" id="2556">2556</a>
+<a href="#2557" id="2557">2557</a>
+<a href="#2558" id="2558">2558</a>
+<a href="#2559" id="2559">2559</a>
+<a href="#2560" id="2560">2560</a>
+<a href="#2561" id="2561">2561</a>
+<a href="#2562" id="2562">2562</a>
+<a href="#2563" id="2563">2563</a>
+<a href="#2564" id="2564">2564</a>
+<a href="#2565" id="2565">2565</a>
+<a href="#2566" id="2566">2566</a>
+<a href="#2567" id="2567">2567</a>
+<a href="#2568" id="2568">2568</a>
+<a href="#2569" id="2569">2569</a>
+<a href="#2570" id="2570">2570</a>
+<a href="#2571" id="2571">2571</a>
+<a href="#2572" id="2572">2572</a>
+<a href="#2573" id="2573">2573</a>
+<a href="#2574" id="2574">2574</a>
+<a href="#2575" id="2575">2575</a>
+<a href="#2576" id="2576">2576</a>
+<a href="#2577" id="2577">2577</a>
+<a href="#2578" id="2578">2578</a>
+<a href="#2579" id="2579">2579</a>
+<a href="#2580" id="2580">2580</a>
+<a href="#2581" id="2581">2581</a>
+<a href="#2582" id="2582">2582</a>
+<a href="#2583" id="2583">2583</a>
+<a href="#2584" id="2584">2584</a>
+<a href="#2585" id="2585">2585</a>
+<a href="#2586" id="2586">2586</a>
+<a href="#2587" id="2587">2587</a>
+<a href="#2588" id="2588">2588</a>
+<a href="#2589" id="2589">2589</a>
+<a href="#2590" id="2590">2590</a>
+<a href="#2591" id="2591">2591</a>
+<a href="#2592" id="2592">2592</a>
+<a href="#2593" id="2593">2593</a>
+<a href="#2594" id="2594">2594</a>
+<a href="#2595" id="2595">2595</a>
+<a href="#2596" id="2596">2596</a>
+<a href="#2597" id="2597">2597</a>
+<a href="#2598" id="2598">2598</a>
+<a href="#2599" id="2599">2599</a>
+<a href="#2600" id="2600">2600</a>
+<a href="#2601" id="2601">2601</a>
+<a href="#2602" id="2602">2602</a>
+<a href="#2603" id="2603">2603</a>
+<a href="#2604" id="2604">2604</a>
+<a href="#2605" id="2605">2605</a>
+<a href="#2606" id="2606">2606</a>
+<a href="#2607" id="2607">2607</a>
+<a href="#2608" id="2608">2608</a>
+<a href="#2609" id="2609">2609</a>
+<a href="#2610" id="2610">2610</a>
+<a href="#2611" id="2611">2611</a>
+<a href="#2612" id="2612">2612</a>
+<a href="#2613" id="2613">2613</a>
+<a href="#2614" id="2614">2614</a>
+<a href="#2615" id="2615">2615</a>
+<a href="#2616" id="2616">2616</a>
+<a href="#2617" id="2617">2617</a>
+<a href="#2618" id="2618">2618</a>
+<a href="#2619" id="2619">2619</a>
+<a href="#2620" id="2620">2620</a>
+<a href="#2621" id="2621">2621</a>
+<a href="#2622" id="2622">2622</a>
+<a href="#2623" id="2623">2623</a>
+<a href="#2624" id="2624">2624</a>
+<a href="#2625" id="2625">2625</a>
+<a href="#2626" id="2626">2626</a>
+<a href="#2627" id="2627">2627</a>
+<a href="#2628" id="2628">2628</a>
+<a href="#2629" id="2629">2629</a>
+<a href="#2630" id="2630">2630</a>
+<a href="#2631" id="2631">2631</a>
+<a href="#2632" id="2632">2632</a>
+<a href="#2633" id="2633">2633</a>
+<a href="#2634" id="2634">2634</a>
+<a href="#2635" id="2635">2635</a>
+<a href="#2636" id="2636">2636</a>
+<a href="#2637" id="2637">2637</a>
+<a href="#2638" id="2638">2638</a>
+<a href="#2639" id="2639">2639</a>
+<a href="#2640" id="2640">2640</a>
+<a href="#2641" id="2641">2641</a>
+<a href="#2642" id="2642">2642</a>
+<a href="#2643" id="2643">2643</a>
+<a href="#2644" id="2644">2644</a>
+<a href="#2645" id="2645">2645</a>
+<a href="#2646" id="2646">2646</a>
+<a href="#2647" id="2647">2647</a>
+<a href="#2648" id="2648">2648</a>
+<a href="#2649" id="2649">2649</a>
+<a href="#2650" id="2650">2650</a>
+<a href="#2651" id="2651">2651</a>
+<a href="#2652" id="2652">2652</a>
+<a href="#2653" id="2653">2653</a>
+<a href="#2654" id="2654">2654</a>
+<a href="#2655" id="2655">2655</a>
+<a href="#2656" id="2656">2656</a>
+<a href="#2657" id="2657">2657</a>
+<a href="#2658" id="2658">2658</a>
+<a href="#2659" id="2659">2659</a>
+<a href="#2660" id="2660">2660</a>
+<a href="#2661" id="2661">2661</a>
+<a href="#2662" id="2662">2662</a>
+<a href="#2663" id="2663">2663</a>
+<a href="#2664" id="2664">2664</a>
+<a href="#2665" id="2665">2665</a>
+<a href="#2666" id="2666">2666</a>
+<a href="#2667" id="2667">2667</a>
+<a href="#2668" id="2668">2668</a>
+<a href="#2669" id="2669">2669</a>
+<a href="#2670" id="2670">2670</a>
+<a href="#2671" id="2671">2671</a>
+<a href="#2672" id="2672">2672</a>
+<a href="#2673" id="2673">2673</a>
+<a href="#2674" id="2674">2674</a>
+<a href="#2675" id="2675">2675</a>
+<a href="#2676" id="2676">2676</a>
+<a href="#2677" id="2677">2677</a>
+<a href="#2678" id="2678">2678</a>
+<a href="#2679" id="2679">2679</a>
+<a href="#2680" id="2680">2680</a>
+<a href="#2681" id="2681">2681</a>
+<a href="#2682" id="2682">2682</a>
+<a href="#2683" id="2683">2683</a>
+<a href="#2684" id="2684">2684</a>
+<a href="#2685" id="2685">2685</a>
+<a href="#2686" id="2686">2686</a>
+<a href="#2687" id="2687">2687</a>
+<a href="#2688" id="2688">2688</a>
+<a href="#2689" id="2689">2689</a>
+<a href="#2690" id="2690">2690</a>
+<a href="#2691" id="2691">2691</a>
+<a href="#2692" id="2692">2692</a>
+<a href="#2693" id="2693">2693</a>
+<a href="#2694" id="2694">2694</a>
+<a href="#2695" id="2695">2695</a>
+<a href="#2696" id="2696">2696</a>
+<a href="#2697" id="2697">2697</a>
+<a href="#2698" id="2698">2698</a>
+<a href="#2699" id="2699">2699</a>
+<a href="#2700" id="2700">2700</a>
+<a href="#2701" id="2701">2701</a>
+<a href="#2702" id="2702">2702</a>
+<a href="#2703" id="2703">2703</a>
+<a href="#2704" id="2704">2704</a>
+<a href="#2705" id="2705">2705</a>
+<a href="#2706" id="2706">2706</a>
+<a href="#2707" id="2707">2707</a>
+<a href="#2708" id="2708">2708</a>
+<a href="#2709" id="2709">2709</a>
+<a href="#2710" id="2710">2710</a>
+<a href="#2711" id="2711">2711</a>
+<a href="#2712" id="2712">2712</a>
+<a href="#2713" id="2713">2713</a>
+<a href="#2714" id="2714">2714</a>
+<a href="#2715" id="2715">2715</a>
+<a href="#2716" id="2716">2716</a>
+<a href="#2717" id="2717">2717</a>
+<a href="#2718" id="2718">2718</a>
+<a href="#2719" id="2719">2719</a>
+<a href="#2720" id="2720">2720</a>
+<a href="#2721" id="2721">2721</a>
+<a href="#2722" id="2722">2722</a>
+<a href="#2723" id="2723">2723</a>
+<a href="#2724" id="2724">2724</a>
+<a href="#2725" id="2725">2725</a>
+<a href="#2726" id="2726">2726</a>
+<a href="#2727" id="2727">2727</a>
+<a href="#2728" id="2728">2728</a>
+<a href="#2729" id="2729">2729</a>
+<a href="#2730" id="2730">2730</a>
+<a href="#2731" id="2731">2731</a>
+<a href="#2732" id="2732">2732</a>
+<a href="#2733" id="2733">2733</a>
+<a href="#2734" id="2734">2734</a>
+<a href="#2735" id="2735">2735</a>
+<a href="#2736" id="2736">2736</a>
+<a href="#2737" id="2737">2737</a>
+<a href="#2738" id="2738">2738</a>
+<a href="#2739" id="2739">2739</a>
+<a href="#2740" id="2740">2740</a>
+<a href="#2741" id="2741">2741</a>
+<a href="#2742" id="2742">2742</a>
+<a href="#2743" id="2743">2743</a>
+<a href="#2744" id="2744">2744</a>
+<a href="#2745" id="2745">2745</a>
+<a href="#2746" id="2746">2746</a>
+<a href="#2747" id="2747">2747</a>
+<a href="#2748" id="2748">2748</a>
+<a href="#2749" id="2749">2749</a>
+<a href="#2750" id="2750">2750</a>
+<a href="#2751" id="2751">2751</a>
+<a href="#2752" id="2752">2752</a>
+<a href="#2753" id="2753">2753</a>
+<a href="#2754" id="2754">2754</a>
+<a href="#2755" id="2755">2755</a>
+<a href="#2756" id="2756">2756</a>
+<a href="#2757" id="2757">2757</a>
+<a href="#2758" id="2758">2758</a>
+<a href="#2759" id="2759">2759</a>
+<a href="#2760" id="2760">2760</a>
+<a href="#2761" id="2761">2761</a>
+<a href="#2762" id="2762">2762</a>
+<a href="#2763" id="2763">2763</a>
+<a href="#2764" id="2764">2764</a>
+<a href="#2765" id="2765">2765</a>
+<a href="#2766" id="2766">2766</a>
+<a href="#2767" id="2767">2767</a>
+<a href="#2768" id="2768">2768</a>
+<a href="#2769" id="2769">2769</a>
+<a href="#2770" id="2770">2770</a>
+<a href="#2771" id="2771">2771</a>
+<a href="#2772" id="2772">2772</a>
+<a href="#2773" id="2773">2773</a>
+<a href="#2774" id="2774">2774</a>
+<a href="#2775" id="2775">2775</a>
+<a href="#2776" id="2776">2776</a>
+<a href="#2777" id="2777">2777</a>
+<a href="#2778" id="2778">2778</a>
+<a href="#2779" id="2779">2779</a>
+<a href="#2780" id="2780">2780</a>
+<a href="#2781" id="2781">2781</a>
+<a href="#2782" id="2782">2782</a>
+<a href="#2783" id="2783">2783</a>
+<a href="#2784" id="2784">2784</a>
+<a href="#2785" id="2785">2785</a>
+<a href="#2786" id="2786">2786</a>
+<a href="#2787" id="2787">2787</a>
+<a href="#2788" id="2788">2788</a>
+<a href="#2789" id="2789">2789</a>
+<a href="#2790" id="2790">2790</a>
+<a href="#2791" id="2791">2791</a>
+<a href="#2792" id="2792">2792</a>
+<a href="#2793" id="2793">2793</a>
+<a href="#2794" id="2794">2794</a>
+<a href="#2795" id="2795">2795</a>
+<a href="#2796" id="2796">2796</a>
+<a href="#2797" id="2797">2797</a>
+<a href="#2798" id="2798">2798</a>
+<a href="#2799" id="2799">2799</a>
+<a href="#2800" id="2800">2800</a>
+<a href="#2801" id="2801">2801</a>
+<a href="#2802" id="2802">2802</a>
+<a href="#2803" id="2803">2803</a>
+<a href="#2804" id="2804">2804</a>
+<a href="#2805" id="2805">2805</a>
+<a href="#2806" id="2806">2806</a>
+<a href="#2807" id="2807">2807</a>
+<a href="#2808" id="2808">2808</a>
+<a href="#2809" id="2809">2809</a>
+<a href="#2810" id="2810">2810</a>
+<a href="#2811" id="2811">2811</a>
+<a href="#2812" id="2812">2812</a>
+<a href="#2813" id="2813">2813</a>
+<a href="#2814" id="2814">2814</a>
+<a href="#2815" id="2815">2815</a>
+<a href="#2816" id="2816">2816</a>
+<a href="#2817" id="2817">2817</a>
+<a href="#2818" id="2818">2818</a>
+<a href="#2819" id="2819">2819</a>
+<a href="#2820" id="2820">2820</a>
+<a href="#2821" id="2821">2821</a>
+<a href="#2822" id="2822">2822</a>
+<a href="#2823" id="2823">2823</a>
+<a href="#2824" id="2824">2824</a>
+<a href="#2825" id="2825">2825</a>
+<a href="#2826" id="2826">2826</a>
+<a href="#2827" id="2827">2827</a>
+<a href="#2828" id="2828">2828</a>
+<a href="#2829" id="2829">2829</a>
+<a href="#2830" id="2830">2830</a>
+<a href="#2831" id="2831">2831</a>
+<a href="#2832" id="2832">2832</a>
+<a href="#2833" id="2833">2833</a>
+<a href="#2834" id="2834">2834</a>
+<a href="#2835" id="2835">2835</a>
+<a href="#2836" id="2836">2836</a>
+<a href="#2837" id="2837">2837</a>
+<a href="#2838" id="2838">2838</a>
+<a href="#2839" id="2839">2839</a>
+<a href="#2840" id="2840">2840</a>
+<a href="#2841" id="2841">2841</a>
+<a href="#2842" id="2842">2842</a>
+<a href="#2843" id="2843">2843</a>
+<a href="#2844" id="2844">2844</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -2557,18 +2873,20 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2::{Config <span class="kw">as </span>Idefics2Config, Idefics2};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics2_input_processor::Idefics2Processor;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
+<span class="kw">use </span><span class="kw">crate</span>::vision_models::inputs_processor::Phi4MMProcessor;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava::config::Config <span class="kw">as </span>LLaVAConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava15::Model <span class="kw">as </span>LLaVA;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava_inputs_processor::{<span class="self">self</span>, LLaVAProcessor};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava_next::Model <span class="kw">as </span>LLaVANext;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::llava_next_inputs_processor::{<span class="self">self</span>, LLaVANextProcessor};
-<span class="kw">use </span><span class="kw">crate</span>::vision_models::minicpmo;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::phi3::{Config <span class="kw">as </span>Phi3Config, Model <span class="kw">as </span>Phi3, PHI3V_CLIP_CONFIG};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::phi3_inputs_processor::Phi3Processor;
+<span class="kw">use </span><span class="kw">crate</span>::vision_models::phi4::{Phi4MMConfig, Phi4MMModel, PHI4_MM_VISION_CFG};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::preprocessor_config::PreProcessorConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::qwen2vl::{Config <span class="kw">as </span>Qwen2VLConfig, Qwen2VLModel, Qwen2VLProcessor};
+<span class="kw">use </span><span class="kw">crate</span>::vision_models::{minicpmo, phi4};
 
 <span class="kw">pub trait </span>VisionModel: IsqModel + AnyMoeBaseModelMixin {
     <span class="comment">// pixel_values and pixel_attention_mask only specified for prompt seqs
@@ -2665,6 +2983,8 @@
     </span>Idefics3,
     <span class="attr">#[serde(rename = <span class="string">"minicpmo"</span>)]
     </span>MiniCpmO,
+    <span class="attr">#[serde(rename = <span class="string">"phi4mm"</span>)]
+    </span>Phi4MM,
 }
 
 <span class="kw">impl </span>FromStr <span class="kw">for </span>VisionLoaderType {
@@ -2679,7 +2999,8 @@
             <span class="string">"qwen2vl" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Qwen2VL),
             <span class="string">"idefics3" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Idefics3),
             <span class="string">"minicpmo" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::MiniCpmO),
-            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`."</span>)),
+            <span class="string">"phi4mm" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Phi4MM),
+            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`."</span>)),
         }
     }
 }
@@ -2809,7 +3130,7 @@
             </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             <span class="comment">// MLP
-            </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.gate__up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
             Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
         ])
     }
@@ -2820,11 +3141,11 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="comment">// NOTE: we ignore max_num_images although it can only be one...
         </span><span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len: <span class="kw">_</span>,
+            max_seq_len,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -2842,7 +3163,7 @@
 
         <span class="kw">let </span>max_text_attn = {
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -2957,8 +3278,7 @@
             <span class="kw">let </span>head_dim = cfg.head_dim();
             <span class="kw">let </span>op_size = head_dim * head_dim + <span class="number">2 </span>* cfg.num_key_value_heads * head_dim;
             <span class="kw">let </span>qkv_proj = size_in * op_size / weight_pack_factor;
-            <span class="kw">let </span>o_proj =
-                (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor + size_in;
+            <span class="kw">let </span>o_proj = (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor;
 
             <span class="kw">let </span>h_size = cfg.hidden_size;
             <span class="kw">let </span>i_size = cfg.intermediate_size;
@@ -3096,10 +3416,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len: <span class="kw">_</span>,
+            max_seq_len,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -3115,7 +3435,7 @@
 
         <span class="kw">let </span>max_text_attn = {
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -3425,10 +3745,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len: <span class="kw">_</span>,
+            max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
@@ -3450,7 +3770,7 @@
         <span class="kw">let </span>max_text_attn = {
             <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>config.text_config;
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
 
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
@@ -3678,10 +3998,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len: <span class="kw">_</span>,
+            max_seq_len,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -3699,7 +4019,7 @@
         <span class="kw">let </span>max_text_attn = {
             <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>config.text_config;
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
 
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
@@ -3976,10 +4296,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len: <span class="kw">_</span>,
+            max_seq_len,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -4005,7 +4325,7 @@
 
         <span class="kw">let </span>max_self_text_attn = {
             <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>config.text_config;
-            max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize
+            max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
         <span class="prelude-val">Ok</span>(max_self_text_attn.max(max_cross_text_attn))
@@ -4305,10 +4625,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len: <span class="kw">_</span>,
+            max_seq_len,
             max_batch_size,
             max_image_shape,
             max_num_images,
@@ -4330,7 +4650,7 @@
 
         <span class="kw">let </span>max_text_attn = {
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
             max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -4594,10 +4914,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len: <span class="kw">_</span>,
+            max_seq_len,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -4613,7 +4933,7 @@
 
         <span class="kw">let </span>max_text_attn = {
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -4875,10 +5195,10 @@
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
         params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
         <span class="kw">let </span>AutoDeviceMapParams::Vision {
-            max_seq_len: <span class="kw">_</span>,
+            max_seq_len,
             max_batch_size,
             max_image_shape: <span class="kw">_</span>,
             max_num_images,
@@ -4894,7 +5214,7 @@
 
         <span class="kw">let </span>max_text_attn = {
             <span class="comment">// This model injects the vision information directly into the input embeddings
-            </span><span class="kw">let </span>max_seq_len = img_seq_len + prompt_chunksize;
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
             max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
         };
 
@@ -5052,6 +5372,318 @@
         };
 
         <span class="prelude-val">Ok</span>(Box::new(cfg))
+    }
+}
+
+<span class="comment">// ======================== Phi 4MM loader
+
+</span><span class="doccomment">/// [`VisionLoader`] for a Phi 4MM Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+</span><span class="kw">pub struct </span>Phi4MMLoader;
+
+<span class="kw">pub struct </span>Phi4MMPrefixer;
+
+<span class="kw">impl </span>VisionPromptPrefixer <span class="kw">for </span>Phi4MMPrefixer {
+    <span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, image_index: usize, prompt: <span class="kw-2">&amp;</span>str) -&gt; String {
+        <span class="comment">// Image indexing starts at 0.
+        </span><span class="macro">format!</span>(<span class="string">"&lt;|image_{}|&gt;{prompt}"</span>, image_index + <span class="number">1</span>)
+    }
+}
+
+<span class="kw">impl </span>VisionModelLoader <span class="kw">for </span>Phi4MMLoader {
+    <span class="kw">fn </span>load(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        use_flash_attn: bool,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>config: Phi4MMConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        config.use_flash_attn = use_flash_attn;
+        <span class="prelude-val">Ok</span>(Box::new(Phi4MMModel::new(
+            <span class="kw-2">&amp;</span>config,
+            vb,
+            <span class="self">self</span>.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )<span class="question-mark">?</span>))
+    }
+    <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
+    <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str, use_flash_attn: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>config: Phi4MMConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        config.use_flash_attn = use_flash_attn;
+        <span class="prelude-val">Ok</span>(Box::new(config))
+    }
+    <span class="kw">fn </span>get_processor(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _model_config: <span class="kw-2">&amp;</span>str,
+        processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
+        preprocessor_config: PreProcessorConfig,
+        _max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
+    ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
+        Phi4MMProcessor::new_processor(processor_config, preprocessor_config)
+    }
+    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>config: Phi4MMConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(config.num_hidden_layers)
+    }
+    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
+    <span class="kw">fn </span>prefixer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>VisionPromptPrefixer&gt; {
+        Arc::new(Phi4MMPrefixer)
+    }
+}
+
+<span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Phi4MMLoader {
+    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// Attention
+            </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// MLP
+            </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+        ])
+    }
+}
+
+<span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Phi4MMLoader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        _prompt_chunksize: usize,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="comment">// NOTE: we ignore max_num_images although it can only be one...
+        </span><span class="kw">let </span>AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: <span class="kw">_</span>,
+            max_num_images: <span class="kw">_</span>,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg: Phi4MMConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>vcfg = <span class="kw-2">&amp;</span>PHI4_MM_VISION_CFG;
+
+        <span class="kw">let </span>num_patches = (vcfg.image_size / vcfg.patch_size).pow(<span class="number">2</span>);
+        <span class="kw">let </span>img_seq_len = num_patches + <span class="number">1</span>;
+
+        <span class="kw">let </span>max_text_attn = {
+            <span class="comment">// This model injects the vision information directly into the input embeddings
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
+            max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
+        };
+
+        <span class="prelude-val">Ok</span>(max_text_attn)
+    }
+
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Vision {
+            max_seq_len: <span class="kw">_</span>,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>vcfg = <span class="kw-2">&amp;</span>PHI4_MM_VISION_CFG;
+
+        <span class="kw">let </span>num_patches = (vcfg.image_size / vcfg.patch_size).pow(<span class="number">2</span>);
+        <span class="kw">let </span>img_seq_len = num_patches + <span class="number">1</span>;
+
+        <span class="kw">let </span>max_batch_size = max_batch_size
+            * (max_image_shape
+                .<span class="number">0
+                </span>.div_ceil(phi4::inputs_processor::DYHD_BASE_RESOLUTION)
+                * max_image_shape
+                    .<span class="number">1
+                    </span>.div_ceil(phi4::inputs_processor::DYHD_BASE_RESOLUTION)
+                + <span class="number">1</span>);
+
+        <span class="kw">let </span>max_vision_attn = (max_batch_size * max_num_images)
+            * vcfg.num_attention_heads
+            * img_seq_len
+            * img_seq_len;
+        <span class="kw">let </span>max_qkv = <span class="number">3
+            </span>* (max_batch_size
+                * vcfg.num_attention_heads
+                * img_seq_len
+                * (vcfg.hidden_size / vcfg.num_attention_heads));
+
+        <span class="prelude-val">Ok</span>(max_vision_attn + max_qkv)
+    }
+
+    <span class="kw">fn </span>non_mapped_size_in_bytes(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>cfg: Phi4MMConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="kw">let </span>elems = {
+            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size
+            } <span class="kw">else </span>{
+                <span class="number">0
+            </span>};
+            <span class="kw">let </span>norm = cfg.hidden_size;
+
+            <span class="kw">let </span>image_embed = <span class="kw">if let </span><span class="prelude-val">Some</span>(img_embed) = <span class="kw-2">&amp;</span>cfg.embd_layer.image_embd_layer {
+                <span class="kw">let </span>projection_cls = img_embed
+                    .projection_cls
+                    .clone()
+                    .unwrap_or(<span class="string">"linear"</span>.to_string());
+                <span class="kw">let </span>with_learnable_separator = img_embed.with_learnable_separator.unwrap_or(<span class="bool-val">false</span>);
+                <span class="kw">let </span>use_hd_transform = img_embed.use_hd_transform.unwrap_or(<span class="bool-val">false</span>);
+                <span class="kw">let </span>image_dim_out = PHI4_MM_VISION_CFG.hidden_size;
+
+                <span class="kw">let </span>proj = <span class="kw">match </span>(projection_cls.as_str(), use_hd_transform) {
+                    (<span class="string">"linear"</span>, <span class="kw">_</span>) =&gt; image_dim_out * cfg.hidden_size + cfg.hidden_size,
+                    (<span class="string">"mlp"</span>, <span class="bool-val">true</span>) =&gt; {
+                        <span class="kw">let </span>a = (image_dim_out * <span class="number">4</span>) * cfg.hidden_size + cfg.hidden_size;
+                        <span class="kw">let </span>b = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                        a + b
+                    }
+                    (<span class="string">"mlp"</span>, <span class="bool-val">false</span>) =&gt; {
+                        <span class="kw">let </span>a = image_dim_out * cfg.hidden_size + cfg.hidden_size;
+                        <span class="kw">let </span>b = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                        a + b
+                    }
+                    <span class="kw">_ </span>=&gt; {
+                        <span class="macro">anyhow::bail!</span>(<span class="string">"projection_cls=`{projection_cls}` not implemented."</span>);
+                    }
+                };
+
+                <span class="kw">let </span>(glb_gn, sub_gn) = <span class="kw">if </span>with_learnable_separator {
+                    <span class="kw">let </span>glb_gn = image_dim_out * <span class="number">4</span>;
+                    <span class="kw">let </span>sub_gn = image_dim_out * <span class="number">4</span>;
+                    (glb_gn, sub_gn)
+                } <span class="kw">else </span>{
+                    (<span class="number">0</span>, <span class="number">0</span>)
+                };
+
+                <span class="kw">let </span>vision_transformer = {
+                    <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>PHI4_MM_VISION_CFG;
+
+                    <span class="kw">let </span>post_layernorm = cfg.hidden_size;
+
+                    <span class="kw">let </span>conv_config = Conv2dConfig {
+                        stride: cfg.patch_size,
+                        ..Default::default()
+                    };
+                    <span class="kw">let </span>patch_embedding = cfg.num_channels * cfg.hidden_size / conv_config.groups
+                        * cfg.patch_size
+                        * cfg.patch_size;
+
+                    <span class="kw">let </span>num_patches_per_side = cfg.image_size / cfg.patch_size;
+                    <span class="kw">let </span>num_patches = num_patches_per_side.pow(<span class="number">2</span>);
+                    <span class="kw">let </span>position_embedding = num_patches * cfg.hidden_size;
+
+                    <span class="kw">let </span>layer_elems = {
+                        <span class="kw">let </span>layer_norm_1 = cfg.hidden_size + <span class="macro">bias_if!</span>(<span class="bool-val">true</span>, cfg.hidden_size);
+                        <span class="kw">let </span>layer_norm_2 = cfg.hidden_size + <span class="macro">bias_if!</span>(<span class="bool-val">true</span>, cfg.hidden_size);
+
+                        <span class="kw">let </span>fc1 = cfg.hidden_size * cfg.intermediate_size + cfg.intermediate_size;
+                        <span class="kw">let </span>fc2 = cfg.intermediate_size * cfg.hidden_size + cfg.hidden_size;
+
+                        <span class="kw">let </span>q_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                        <span class="kw">let </span>k_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                        <span class="kw">let </span>v_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+                        <span class="kw">let </span>o_proj = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+
+                        layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
+                    };
+
+                    post_layernorm + patch_embedding + position_embedding + layer_elems
+                };
+
+                proj + glb_gn + sub_gn + vision_transformer
+            } <span class="kw">else </span>{
+                <span class="number">0
+            </span>};
+
+            embed_tokens + lm_head + norm + image_embed
+        };
+
+        <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
+    }
+
+    <span class="kw">fn </span>layer_sizes_in_bytes(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
+        <span class="kw">let </span>cfg: Phi4MMConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="kw">let </span>per_layer_elems = {
+            <span class="kw">let </span>input_layernorm = cfg.hidden_size;
+            <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size;
+
+            <span class="kw">let </span>size_in = cfg.hidden_size;
+            <span class="kw">let </span>head_dim = cfg.head_dim();
+            <span class="kw">let </span>op_size = head_dim * head_dim + <span class="number">2 </span>* cfg.num_key_value_heads() * head_dim;
+            <span class="kw">let </span>qkv_proj = size_in * op_size / weight_pack_factor;
+            <span class="kw">let </span>o_proj = (cfg.num_attention_heads * head_dim) * size_in / weight_pack_factor;
+
+            <span class="kw">let </span>h_size = cfg.hidden_size;
+            <span class="kw">let </span>i_size = cfg.intermediate_size;
+            <span class="kw">let </span>gate_up_proj = h_size * (<span class="number">2 </span>* i_size) / weight_pack_factor;
+            <span class="kw">let </span>down_proj = h_size * i_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + qkv_proj
+                + o_proj
+                + gate_up_proj
+                + down_proj
+        };
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>cfg: Phi4MMConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg: Phi4MMConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads(),
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
+    }
+
+    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
+        <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[NonMappedSubModel::Vision])
     }
 }
 </code></pre></div></section></main></body></html>

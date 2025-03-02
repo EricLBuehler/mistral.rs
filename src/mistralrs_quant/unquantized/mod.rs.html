@@ -361,9 +361,7 @@
 <a href="#360" id="360">360</a>
 <a href="#361" id="361">361</a>
 <a href="#362" id="362">362</a>
-<a href="#363" id="363">363</a>
-<a href="#364" id="364">364</a>
-<a href="#365" id="365">365</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#363" id="363">363</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
     num::NonZeroUsize,
@@ -458,11 +456,9 @@
                     }
                 }
                 DeviceLocation::Metal { .. } =&gt; {
-                    <span class="kw">let </span><span class="kw-2">mut </span>out = b.contiguous()<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
-                    a.to_dtype(DType::F32)<span class="question-mark">?
-                        </span>.matmul_with_alpha_beta(<span class="kw-2">&amp;</span>w.to_dtype(DType::F32)<span class="question-mark">?</span>.t()<span class="question-mark">?</span>, <span class="kw-2">&amp;mut </span>out, <span class="prelude-val">None</span>)
-                        .unwrap();
-                    out.to_dtype(a.dtype())
+                    <span class="kw">let </span><span class="kw-2">mut </span>out = b.contiguous()<span class="question-mark">?</span>;
+                    a.matmul_with_alpha_beta(<span class="kw-2">&amp;</span>w.t()<span class="question-mark">?</span>, <span class="kw-2">&amp;mut </span>out, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
+                    <span class="prelude-val">Ok</span>(out)
                 }
                 DeviceLocation::Cpu =&gt; {
                     <span class="attr">#[cfg(feature = <span class="string">"accelerate"</span>)]

@@ -509,7 +509,10 @@
 <a href="#508" id="508">508</a>
 <a href="#509" id="509">509</a>
 <a href="#510" id="510">510</a>
-<a href="#511" id="511">511</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#511" id="511">511</a>
+<a href="#512" id="512">512</a>
+<a href="#513" id="513">513</a>
+<a href="#514" id="514">514</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
@@ -629,20 +632,21 @@
 
     <span class="doccomment">/// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) &gt; `pa-ctxt-len` &gt; `pa-gpu-mem`.
+    /// The priority is as follows: `pa-ctxt-len` &gt; `pa-gpu-mem-usage` &gt; `pa-gpu-mem`.
     </span><span class="attr">#[arg(long = <span class="string">"pa-gpu-mem"</span>)]
     </span>paged_attn_gpu_mem: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
     <span class="doccomment">/// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
     /// If this is not set and the device is CUDA, it will default to `0.9`.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) &gt; `pa-ctxt-len` &gt; `pa-gpu-mem`.
+    /// The priority is as follows: `pa-ctxt-len` &gt; `pa-gpu-mem-usage` &gt; `pa-gpu-mem`.
     </span><span class="attr">#[arg(long = <span class="string">"pa-gpu-mem-usage"</span>)]
     </span>paged_attn_gpu_mem_usage: <span class="prelude-ty">Option</span>&lt;f32&gt;,
 
     <span class="doccomment">/// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-gpu-mem-usage` (default = 0.9) &gt; `pa-ctxt-len` &gt; `pa-gpu-mem`.
+    /// The priority is as follows: `pa-ctxt-len` &gt; `pa-gpu-mem-usage` &gt; `pa-gpu-mem`.
+    /// This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
     </span><span class="attr">#[arg(long = <span class="string">"pa-ctxt-len"</span>)]
     </span>paged_ctxt_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 
@@ -812,6 +816,8 @@
         <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
     };
 
+    <span class="kw">let </span>max_seq_len = auto_device_map_params.max_seq_len();
+
     <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = LoaderBuilder::new(args.model)
         .with_no_kv_cache(args.no_kv_cache)
         .with_chat_template(args.chat_template)
@@ -906,8 +912,8 @@
         (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
             block_size,
             <span class="number">512</span>,
-            MemoryGpuConfig::Utilization(<span class="number">0.9</span>), <span class="comment">// NOTE(EricLBuehler): default is to use 90% of memory
-        </span>)<span class="question-mark">?</span>),
+            MemoryGpuConfig::ContextSize(max_seq_len),
+        )<span class="question-mark">?</span>),
         (block_size, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(ctxt), <span class="bool-val">true</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(PagedAttentionConfig::new(
             block_size,
             <span class="number">512</span>,
