@@ -604,12 +604,18 @@
 <a href="#603" id="603">603</a>
 <a href="#604" id="604">604</a>
 <a href="#605" id="605">605</a>
-<a href="#606" id="606">606</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Arc};
+<a href="#606" id="606">606</a>
+<a href="#607" id="607">607</a>
+<a href="#608" id="608">608</a>
+<a href="#609" id="609">609</a>
+<a href="#610" id="610">610</a>
+<a href="#611" id="611">611</a>
+<a href="#612" id="612">612</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Arc};
 
 <span class="kw">use crate</span>::{
     pipeline::AutoDeviceMapParams,
     utils::{debug::DeviceRepr, log::once_log_info},
-    Topology, TryIntoDType,
+    MemoryUsage, Topology, TryIntoDType,
 };
 <span class="kw">use </span>candle_core::{DType, Device, DeviceLocation, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>mistralrs_quant::ShardedVarBuilder;
@@ -819,10 +825,13 @@
                         <span class="comment">// If the variant changes, print the previous continuous block
                         </span><span class="kw">if </span>!variant.same_device(current_dev) {
                             once_log_info(<span class="macro">format!</span>(
-                                <span class="string">"Layers {}-{}: {}"</span>,
+                                <span class="string">"Layers {}-{}: {} ({} GB)"</span>,
                                 start_index,
                                 i - <span class="number">1</span>,
-                                current_dev.device_pretty_repr()
+                                current_dev.device_pretty_repr(),
+                                MemoryUsage
+                                    .get_total_memory(current_dev)<span class="question-mark">?
+                                    </span>.div_ceil(<span class="number">1024 </span>* <span class="number">1024 </span>* <span class="number">1024</span>),
                             ));
                             start_index = i; <span class="comment">// start a new range
                             </span>current_dev = variant;
@@ -830,10 +839,13 @@
                     }
 
                     once_log_info(<span class="macro">format!</span>(
-                        <span class="string">"Layers {}-{}: {}"</span>,
+                        <span class="string">"Layers {}-{}: {} ({} GB)"</span>,
                         start_index,
                         combined.len() - <span class="number">1</span>,
-                        current_dev.device_pretty_repr()
+                        current_dev.device_pretty_repr(),
+                        MemoryUsage
+                            .get_total_memory(current_dev)<span class="question-mark">?
+                            </span>.div_ceil(<span class="number">1024 </span>* <span class="number">1024 </span>* <span class="number">1024</span>),
                     ));
                 }
 

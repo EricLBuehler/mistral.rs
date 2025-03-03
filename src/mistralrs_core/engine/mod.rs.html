@@ -1073,8 +1073,7 @@
 <a href="#1072" id="1072">1072</a>
 <a href="#1073" id="1073">1073</a>
 <a href="#1074" id="1074">1074</a>
-<a href="#1075" id="1075">1075</a>
-<a href="#1076" id="1076">1076</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
+<a href="#1075" id="1075">1075</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>interprocess::local_socket::{traits::Listener, ListenerOptions};
 <span class="kw">use </span>llguidance::toktrie::TokEnv;
@@ -1157,7 +1156,6 @@
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
     ) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>device = <span class="macro">get_mut_arcmutex!</span>(pipeline).device().clone();
         no_kv_cache |= <span class="macro">get_mut_arcmutex!</span>(pipeline).get_metadata().no_kv_cache;
 
         no_prefix_cache = <span class="macro">matches!</span>(config, SchedulerConfig::PagedAttentionMeta { .. })
@@ -1171,7 +1169,7 @@
             id: <span class="number">0</span>,
             truncate_sequence,
             no_kv_cache,
-            prefix_cacher: PrefixCacheManagerV2::new(device, prefix_cache_n, no_prefix_cache),
+            prefix_cacher: PrefixCacheManagerV2::new(prefix_cache_n, no_prefix_cache),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,

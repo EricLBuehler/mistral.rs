@@ -526,7 +526,13 @@
 <a href="#525" id="525">525</a>
 <a href="#526" id="526">526</a>
 <a href="#527" id="527">527</a>
-<a href="#528" id="528">528</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
@@ -534,7 +540,8 @@
 <span class="kw">use </span>std::{ops::Mul, sync::Arc};
 
 <span class="kw">use crate</span>::{
-    layers::{conv2d, embedding, layer_norm, Activation, CausalMasker, MatMul},
+    attention::SdpaParams,
+    layers::{conv2d, embedding, layer_norm, Activation, CausalMasker, Sdpa},
     serde_default_fn,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -757,7 +764,7 @@
     embed_dim: usize,
     num_heads: usize,
     head_dim: usize,
-    scale: f64,
+    scale: f32,
     q_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     k_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
     v_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
@@ -769,7 +776,7 @@
         <span class="kw">let </span>embed_dim = config.hidden_size;
         <span class="kw">let </span>num_heads = config.num_attention_heads;
         <span class="kw">let </span>head_dim = embed_dim / num_heads;
-        <span class="kw">let </span>scale = <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f64).sqrt();
+        <span class="kw">let </span>scale = <span class="number">1.0 </span>/ (head_dim <span class="kw">as </span>f32).sqrt();
 
         <span class="kw">let </span>q_proj = mistralrs_quant::linear(embed_dim, embed_dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"q_proj"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>k_proj = mistralrs_quant::linear(embed_dim, embed_dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"k_proj"</span>))<span class="question-mark">?</span>;
@@ -808,15 +815,20 @@
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
             </span>.contiguous()<span class="question-mark">?</span>;
 
-        q.device().synchronize()<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>attn_weights = (q.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>)<span class="question-mark">? </span>* <span class="self">self</span>.scale)<span class="question-mark">?</span>;
-
-        attn_weights = <span class="kw">match </span>attention_mask {
-            <span class="prelude-val">Some</span>(mask) =&gt; attn_weights.broadcast_add(mask)<span class="question-mark">?</span>,
-            <span class="prelude-val">None </span>=&gt; attn_weights,
-        };
-        candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>attn_weights)<span class="question-mark">?</span>;
-        attn_weights = MatMul.matmul(<span class="kw-2">&amp;</span>attn_weights, <span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
+        <span class="kw">let </span>attn_weights = Sdpa.run_attention(
+            <span class="kw-2">&amp;</span>q,
+            <span class="kw-2">&amp;</span>k,
+            <span class="kw-2">&amp;</span>v,
+            attention_mask,
+            <span class="prelude-val">None</span>,
+            <span class="kw-2">&amp;</span>SdpaParams {
+                n_kv_groups: <span class="number">1</span>,
+                use_flash_attn: <span class="bool-val">false</span>,
+                sliding_window: <span class="prelude-val">None</span>,
+                softcap: <span class="prelude-val">None</span>,
+                softmax_scale: <span class="self">self</span>.scale,
+            },
+        )<span class="question-mark">?</span>;
 
         <span class="self">self</span>.o_proj.forward(<span class="kw-2">&amp;</span>attn_weights.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.reshape((
             b_sz,

@@ -385,12 +385,19 @@
 <a href="#384" id="384">384</a>
 <a href="#385" id="385">385</a>
 <a href="#386" id="386">386</a>
-<a href="#387" id="387">387</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
 
-<span class="kw">use crate</span>::{cublaslt::CUBLASLT_HANDLE, pipeline::text_models_inputs_processor::FlashParams};
+<span class="kw">use crate</span>::{
+    cublaslt::CUBLASLT_HANDLE, pipeline::text_models_inputs_processor::FlashParams, MemoryUsage,
+};
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>mistralrs_quant::{get_use_matmul_via_f16, MatMul};
@@ -595,7 +602,10 @@
     mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
     sdpa_params: <span class="kw-2">&amp;</span>SdpaParams,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    q.device().synchronize()<span class="question-mark">?</span>;
+    <span class="comment">// If less that 4 GB available, synchronize
+    </span><span class="kw">if </span>MemoryUsage.get_memory_available(q.device())<span class="question-mark">? </span>&lt; <span class="number">4 </span>* <span class="number">1024 </span>* (<span class="number">1024 </span>* <span class="number">1024</span>) {
+        q.device().synchronize()<span class="question-mark">?</span>;
+    }
 
     <span class="comment">// Use faster softmax if mask is rank 2 or it's rank 3
     </span><span class="kw">if </span>mask.is_some_and(|mask| mask.rank() == <span class="number">2 </span>|| mask.rank() == <span class="number">3</span>) &amp;&amp; supports_attn_softmax()<span class="question-mark">? </span>{

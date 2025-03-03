@@ -818,10 +818,7 @@
 <a href="#817" id="817">817</a>
 <a href="#818" id="818">818</a>
 <a href="#819" id="819">819</a>
-<a href="#820" id="820">820</a>
-<a href="#821" id="821">821</a>
-<a href="#822" id="822">822</a>
-<a href="#823" id="823">823</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#820" id="820">820</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1396,14 +1393,11 @@
                 cfg.vocab_size,
                 <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
                 <span class="bool-val">false</span>,
-                mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), <span class="bool-val">false</span>),
             )<span class="question-mark">?
         </span>} <span class="kw">else </span>{
             ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )<span class="question-mark">?</span>,
+                mapper.cast_nm_device(embed_tokens.embeddings(), <span class="bool-val">false</span>)<span class="question-mark">?</span>,
                 <span class="prelude-val">None</span>,
             ))<span class="question-mark">?
         </span>};

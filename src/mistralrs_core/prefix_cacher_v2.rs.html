@@ -204,9 +204,31 @@
 <a href="#203" id="203">203</a>
 <a href="#204" id="204">204</a>
 <a href="#205" id="205">205</a>
-<a href="#206" id="206">206</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
+<span class="kw">use </span>either::Either;
 <span class="kw">use </span>itertools::Itertools;
 <span class="kw">use </span>tracing::info;
 
@@ -237,9 +259,14 @@
     }
 }
 
+<span class="attr">#[derive(Clone)]
+</span><span class="kw">struct </span>CacheElement {
+    cache: Vec&lt;<span class="prelude-ty">Option</span>&lt;KvCache&gt;&gt;,
+    devices: Vec&lt;<span class="prelude-ty">Option</span>&lt;Device&gt;&gt;,
+}
+
 <span class="kw">pub struct </span>PrefixCacheManagerV2 {
-    caches: HashMap&lt;Tokens, Vec&lt;<span class="prelude-ty">Option</span>&lt;KvCache&gt;&gt;&gt;,
-    device: Device,
+    caches: HashMap&lt;Tokens, CacheElement&gt;,
     n_on_device: usize,
     no_prefix_cache: bool,
 }
@@ -252,13 +279,12 @@
 }
 
 <span class="kw">impl </span>PrefixCacheManagerV2 {
-    <span class="kw">pub fn </span>new(device: Device, n_on_device: usize, no_prefix_cache: bool) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(n_on_device: usize, no_prefix_cache: bool) -&gt; <span class="self">Self </span>{
         <span class="kw">if </span>!no_prefix_cache {
             <span class="macro">info!</span>(<span class="string">"PrefixCacherV2 is enabled! Expect higher multi-turn prompt throughput."</span>);
         }
         PrefixCacheManagerV2 {
             caches: HashMap::new(),
-            device,
             n_on_device,
             no_prefix_cache,
         }
@@ -270,11 +296,27 @@
             <span class="kw">return</span>;
         }
         <span class="kw">let </span>cache = seq.normal_cache().to_vec();
-        <span class="self">self</span>.caches.insert(seq.get_toks().to_vec().into(), cache);
+        <span class="kw">let </span>devices = cache
+            .iter()
+            .map(|x| x.as_ref().map(|x| x.k().unwrap().unwrap().device().clone()))
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        <span class="self">self</span>.caches.insert(
+            seq.get_toks().to_vec().into(),
+            CacheElement { cache, devices },
+        );
     }
 
-    <span class="kw">fn </span>cache_to(cache: <span class="kw-2">&amp;mut </span>[<span class="prelude-ty">Option</span>&lt;KvCache&gt;], device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">for </span>layer <span class="kw">in </span>cache.iter_mut().flatten() {
+    <span class="kw">fn </span>cache_to(
+        cache: <span class="kw-2">&amp;mut </span>[<span class="prelude-ty">Option</span>&lt;KvCache&gt;],
+        devices: Either&lt;<span class="kw-2">&amp;</span>Device, <span class="kw-2">&amp;</span>Vec&lt;<span class="prelude-ty">Option</span>&lt;Device&gt;&gt;&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span>cache
+            .iter_mut()
+            .enumerate()
+            .flat_map(|(i, x)| x.as_mut().map(|x| (i, x)))
+        {
+            <span class="kw">let </span>device = devices.left_or_else(|layers| layers[i].as_ref().unwrap());
+
             <span class="kw-2">*</span>layer = KvCache {
                 k: SingleCache {
                     all_data: layer
@@ -311,7 +353,7 @@
         }
         <span class="kw">let </span><span class="kw-2">mut </span>n_on_device = <span class="number">0</span>;
         <span class="kw">for </span>cache <span class="kw">in </span><span class="self">self</span>.caches.values() {
-            <span class="kw">let </span>first_non_none = cache.iter().find_or_first(|x| x.is_some());
+            <span class="kw">let </span>first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
             <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
                 <span class="kw">continue</span>;
             };
@@ -331,7 +373,7 @@
             <span class="kw">if </span>n_on_device - n_evicted == <span class="self">self</span>.n_on_device {
                 <span class="kw">break</span>;
             }
-            <span class="kw">let </span>first_non_none = cache.iter().find_or_first(|x| x.is_some());
+            <span class="kw">let </span>first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
             <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
                 <span class="kw">continue</span>;
             };
@@ -342,7 +384,7 @@
                 .expect(<span class="string">"No KV cache data"</span>)
                 .device();
             <span class="kw">if </span>!<span class="macro">matches!</span>(cache_device, Device::Cpu) {
-                <span class="self">Self</span>::cache_to(cache, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
+                <span class="self">Self</span>::cache_to(<span class="kw-2">&amp;mut </span>cache.cache, Either::Left(<span class="kw-2">&amp;</span>Device::Cpu))<span class="question-mark">?</span>;
                 n_evicted += <span class="number">1</span>;
             }
         }
@@ -356,7 +398,7 @@
         }
         <span class="comment">// Intentionally evict the first ones first, as they are the oldest
         </span><span class="kw">for </span>cache <span class="kw">in </span><span class="self">self</span>.caches.values_mut() {
-            <span class="kw">let </span>first_non_none = cache.iter().find_or_first(|x| x.is_some());
+            <span class="kw">let </span>first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
             <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
                 <span class="kw">continue</span>;
             };
@@ -367,7 +409,7 @@
                 .expect(<span class="string">"No KV cache data"</span>)
                 .device();
             <span class="kw">if </span>!<span class="macro">matches!</span>(cache_device, Device::Cpu) {
-                <span class="self">Self</span>::cache_to(cache, <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
+                <span class="self">Self</span>::cache_to(<span class="kw-2">&amp;mut </span>cache.cache, Either::Left(<span class="kw-2">&amp;</span>Device::Cpu))<span class="question-mark">?</span>;
             }
         }
         <span class="prelude-val">Ok</span>(<span class="self">self</span>.caches.len())
@@ -396,12 +438,12 @@
         }
         <span class="kw">if let </span>(match_len, <span class="prelude-val">Some</span>(longest_match)) = longest_match {
             <span class="kw">let </span><span class="kw-2">mut </span>cache = longest_match.clone();
-            <span class="self">Self</span>::cache_to(<span class="kw-2">&amp;mut </span>cache, <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-            <span class="kw">for </span>layer <span class="kw">in </span>cache.iter_mut().flatten() {
+            <span class="self">Self</span>::cache_to(<span class="kw-2">&amp;mut </span>cache.cache, Either::Right(<span class="kw-2">&amp;</span>cache.devices))<span class="question-mark">?</span>;
+            <span class="kw">for </span>layer <span class="kw">in </span>cache.cache.iter_mut().flatten() {
                 layer.set_len(match_len);
             }
             <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(MatchingCache {
-                normal: cache,
+                normal: cache.cache,
                 toks: toks.<span class="number">0</span>[match_len..].to_vec(),
                 offset: match_len,
             }))
