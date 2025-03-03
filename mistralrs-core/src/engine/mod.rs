@@ -81,7 +81,6 @@ impl Engine {
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
     ) -> Self {
-        let device = get_mut_arcmutex!(pipeline).device().clone();
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
         no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
@@ -95,7 +94,7 @@ impl Engine {
             id: 0,
             truncate_sequence,
             no_kv_cache,
-            prefix_cacher: PrefixCacheManagerV2::new(device, prefix_cache_n, no_prefix_cache),
+            prefix_cacher: PrefixCacheManagerV2::new(prefix_cache_n, no_prefix_cache),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,

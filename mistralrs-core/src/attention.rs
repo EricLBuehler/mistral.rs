@@ -210,8 +210,8 @@ fn naive_sdpa(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    // If less that 1 GB available, synchronize
-    if MemoryUsage.get_memory_available(q.device())? < 1024 * (1024 * 1024) {
+    // If less that 4 GB available, synchronize
+    if MemoryUsage.get_memory_available(q.device())? < 4 * 1024 * (1024 * 1024) {
         q.device().synchronize()?;
     }
 

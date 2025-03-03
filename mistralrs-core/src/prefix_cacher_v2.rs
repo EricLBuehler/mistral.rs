@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use candle_core::{Device, Result};
+use either::Either;
 use itertools::Itertools;
 use tracing::info;
 
@@ -31,9 +32,14 @@ impl From<Vec<u32>> for Tokens {
     }
 }
 
+#[derive(Clone)]
+struct CacheElement {
+    cache: Vec<Option<KvCache>>,
+    devices: Vec<Option<Device>>,
+}
+
 pub struct PrefixCacheManagerV2 {
-    caches: HashMap<Tokens, Vec<Option<KvCache>>>,
-    device: Device,
+    caches: HashMap<Tokens, CacheElement>,
     n_on_device: usize,
     no_prefix_cache: bool,
 }
@@ -46,13 +52,12 @@ pub struct MatchingCache {
 }
 
 impl PrefixCacheManagerV2 {
-    pub fn new(device: Device, n_on_device: usize, no_prefix_cache: bool) -> Self {
+    pub fn new(n_on_device: usize, no_prefix_cache: bool) -> Self {
         if !no_prefix_cache {
             info!("PrefixCacherV2 is enabled! Expect higher multi-turn prompt throughput.");
         }
         PrefixCacheManagerV2 {
             caches: HashMap::new(),
-            device,
             n_on_device,
             no_prefix_cache,
         }
@@ -64,11 +69,27 @@ impl PrefixCacheManagerV2 {
             return;
         }
         let cache = seq.normal_cache().to_vec();
-        self.caches.insert(seq.get_toks().to_vec().into(), cache);
+        let devices = cache
+            .iter()
+            .map(|x| x.as_ref().map(|x| x.k().unwrap().unwrap().device().clone()))
+            .collect::<Vec<_>>();
+        self.caches.insert(
+            seq.get_toks().to_vec().into(),
+            CacheElement { cache, devices },
+        );
     }
 
-    fn cache_to(cache: &mut [Option<KvCache>], device: &Device) -> Result<()> {
-        for layer in cache.iter_mut().flatten() {
+    fn cache_to(
+        cache: &mut [Option<KvCache>],
+        devices: Either<&Device, &Vec<Option<Device>>>,
+    ) -> Result<()> {
+        for (i, layer) in cache
+            .iter_mut()
+            .enumerate()
+            .flat_map(|(i, x)| x.as_mut().map(|x| (i, x)))
+        {
+            let device = devices.left_or_else(|layers| layers[i].as_ref().unwrap());
+
             *layer = KvCache {
                 k: SingleCache {
                     all_data: layer
@@ -105,7 +126,7 @@ impl PrefixCacheManagerV2 {
         }
         let mut n_on_device = 0;
         for cache in self.caches.values() {
-            let first_non_none = cache.iter().find_or_first(|x| x.is_some());
+            let first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
             let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
@@ -125,7 +146,7 @@ impl PrefixCacheManagerV2 {
             if n_on_device - n_evicted == self.n_on_device {
                 break;
             }
-            let first_non_none = cache.iter().find_or_first(|x| x.is_some());
+            let first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
             let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
@@ -136,7 +157,7 @@ impl PrefixCacheManagerV2 {
                 .expect("No KV cache data")
                 .device();
             if !matches!(cache_device, Device::Cpu) {
-                Self::cache_to(cache, &Device::Cpu)?;
+                Self::cache_to(&mut cache.cache, Either::Left(&Device::Cpu))?;
                 n_evicted += 1;
             }
         }
@@ -150,7 +171,7 @@ impl PrefixCacheManagerV2 {
         }
         // Intentionally evict the first ones first, as they are the oldest
         for cache in self.caches.values_mut() {
-            let first_non_none = cache.iter().find_or_first(|x| x.is_some());
+            let first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
             let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
@@ -161,7 +182,7 @@ impl PrefixCacheManagerV2 {
                 .expect("No KV cache data")
                 .device();
             if !matches!(cache_device, Device::Cpu) {
-                Self::cache_to(cache, &Device::Cpu)?;
+                Self::cache_to(&mut cache.cache, Either::Left(&Device::Cpu))?;
             }
         }
         Ok(self.caches.len())
@@ -190,12 +211,12 @@ impl PrefixCacheManagerV2 {
         }
         if let (match_len, Some(longest_match)) = longest_match {
             let mut cache = longest_match.clone();
-            Self::cache_to(&mut cache, &self.device)?;
-            for layer in cache.iter_mut().flatten() {
+            Self::cache_to(&mut cache.cache, Either::Right(&cache.devices))?;
+            for layer in cache.cache.iter_mut().flatten() {
                 layer.set_len(match_len);
             }
             Ok(Some(MatchingCache {
-                normal: cache,
+                normal: cache.cache,
                 toks: toks.0[match_len..].to_vec(),
                 offset: match_len,
             }))
