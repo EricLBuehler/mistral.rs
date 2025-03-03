@@ -525,7 +525,8 @@
 <a href="#524" id="524">524</a>
 <a href="#525" id="525">525</a>
 <a href="#526" id="526">526</a>
-<a href="#527" id="527">527</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Conv2d, Conv2dConfig, Embedding, LayerNorm, Module};
@@ -807,6 +808,7 @@
             </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?
             </span>.contiguous()<span class="question-mark">?</span>;
 
+        q.device().synchronize()<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>attn_weights = (q.matmul(<span class="kw-2">&amp;</span>k.transpose(<span class="number">2</span>, <span class="number">3</span>)<span class="question-mark">?</span>)<span class="question-mark">? </span>* <span class="self">self</span>.scale)<span class="question-mark">?</span>;
 
         attn_weights = <span class="kw">match </span>attention_mask {
