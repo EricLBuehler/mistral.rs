@@ -3,7 +3,7 @@ use std::{fmt::Debug, sync::Arc};
 use crate::{
     pipeline::AutoDeviceMapParams,
     utils::{debug::DeviceRepr, log::once_log_info},
-    Topology, TryIntoDType,
+    MemoryUsage, Topology, TryIntoDType,
 };
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
 use mistralrs_quant::ShardedVarBuilder;
@@ -213,10 +213,13 @@ impl DeviceMapSetting {
                         // If the variant changes, print the previous continuous block
                         if !variant.same_device(current_dev) {
                             once_log_info(format!(
-                                "Layers {}-{}: {}",
+                                "Layers {}-{}: {} ({} GB)",
                                 start_index,
                                 i - 1,
-                                current_dev.device_pretty_repr()
+                                current_dev.device_pretty_repr(),
+                                MemoryUsage
+                                    .get_total_memory(current_dev)?
+                                    .div_ceil(1024 * 1024 * 1024),
                             ));
                             start_index = i; // start a new range
                             current_dev = variant;
@@ -224,10 +227,13 @@ impl DeviceMapSetting {
                     }
 
                     once_log_info(format!(
-                        "Layers {}-{}: {}",
+                        "Layers {}-{}: {} ({} GB)",
                         start_index,
                         combined.len() - 1,
-                        current_dev.device_pretty_repr()
+                        current_dev.device_pretty_repr(),
+                        MemoryUsage
+                            .get_total_memory(current_dev)?
+                            .div_ceil(1024 * 1024 * 1024),
                     ));
                 }
 
