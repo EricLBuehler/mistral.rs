@@ -280,6 +280,7 @@ impl Attention {
             .transpose(1, 2)?
             .contiguous()?;
 
+        q.device().synchronize()?;
         let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.scale)?;
 
         attn_weights = match attention_mask {
