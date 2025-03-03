@@ -1,6 +1,5 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::Device;
-use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
 pub use lora::Ordering;
@@ -319,7 +318,6 @@ impl MistralRs {
         if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
             set_gemm_reduced_precision_f16();
         }
-        setup_cublas_lt_wrapper();
 
         let truncate_sequence = truncate_sequence.unwrap_or(false);
         let no_kv_cache = no_kv_cache.unwrap_or(false);
