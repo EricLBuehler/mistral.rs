@@ -573,14 +573,11 @@ impl MLlamaTextModel {
                 cfg.vocab_size,
                 &None,
                 false,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb.pp("lm_head"), false),
             )?
         } else {
             ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
+                mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
                 None,
             ))?
         };

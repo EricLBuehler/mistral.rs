@@ -3,7 +3,9 @@
 #[cfg(feature = "metal")]
 use std::sync::atomic::AtomicUsize;
 
-use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::text_models_inputs_processor::FlashParams};
+use crate::{
+    cublaslt::CUBLASLT_HANDLE, pipeline::text_models_inputs_processor::FlashParams, MemoryUsage,
+};
 
 use candle_core::{Device, Result, Tensor};
 use mistralrs_quant::{get_use_matmul_via_f16, MatMul};
@@ -208,7 +210,10 @@ fn naive_sdpa(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    q.device().synchronize()?;
+    // If less that 1 GB available, synchronize
+    if MemoryUsage.get_memory_available(q.device())? < 1024 * (1024 * 1024) {
+        q.device().synchronize()?;
+    }
 
     // Use faster softmax if mask is rank 2 or it's rank 3
     if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && supports_attn_softmax()? {

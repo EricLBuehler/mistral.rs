@@ -6,7 +6,8 @@ use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use std::{ops::Mul, sync::Arc};
 
 use crate::{
-    layers::{conv2d, embedding, layer_norm, Activation, CausalMasker, MatMul},
+    attention::SdpaParams,
+    layers::{conv2d, embedding, layer_norm, Activation, CausalMasker, Sdpa},
     serde_default_fn,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -229,7 +230,7 @@ struct Attention {
     embed_dim: usize,
     num_heads: usize,
     head_dim: usize,
-    scale: f64,
+    scale: f32,
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
@@ -241,7 +242,7 @@ impl Attention {
         let embed_dim = config.hidden_size;
         let num_heads = config.num_attention_heads;
         let head_dim = embed_dim / num_heads;
-        let scale = 1.0 / (head_dim as f64).sqrt();
+        let scale = 1.0 / (head_dim as f32).sqrt();
 
         let q_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("q_proj"))?;
         let k_proj = mistralrs_quant::linear(embed_dim, embed_dim, &None, vb.pp("k_proj"))?;
@@ -280,15 +281,20 @@ impl Attention {
             .transpose(1, 2)?
             .contiguous()?;
 
-        q.device().synchronize()?;
-        let mut attn_weights = (q.matmul(&k.transpose(2, 3)?)? * self.scale)?;
-
-        attn_weights = match attention_mask {
-            Some(mask) => attn_weights.broadcast_add(mask)?,
-            None => attn_weights,
-        };
-        candle_nn::ops::inplace_softmax_last_dim(&mut attn_weights)?;
-        attn_weights = MatMul.matmul(&attn_weights, &v)?;
+        let attn_weights = Sdpa.run_attention(
+            &q,
+            &k,
+            &v,
+            attention_mask,
+            None,
+            &SdpaParams {
+                n_kv_groups: 1,
+                use_flash_attn: false,
+                sliding_window: None,
+                softcap: None,
+                softmax_scale: self.scale,
+            },
+        )?;
 
         self.o_proj.forward(&attn_weights.transpose(1, 2)?.reshape((
             b_sz,
