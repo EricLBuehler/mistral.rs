@@ -587,30 +587,7 @@
 <a href="#586" id="586">586</a>
 <a href="#587" id="587">587</a>
 <a href="#588" id="588">588</a>
-<a href="#589" id="589">589</a>
-<a href="#590" id="590">590</a>
-<a href="#591" id="591">591</a>
-<a href="#592" id="592">592</a>
-<a href="#593" id="593">593</a>
-<a href="#594" id="594">594</a>
-<a href="#595" id="595">595</a>
-<a href="#596" id="596">596</a>
-<a href="#597" id="597">597</a>
-<a href="#598" id="598">598</a>
-<a href="#599" id="599">599</a>
-<a href="#600" id="600">600</a>
-<a href="#601" id="601">601</a>
-<a href="#602" id="602">602</a>
-<a href="#603" id="603">603</a>
-<a href="#604" id="604">604</a>
-<a href="#605" id="605">605</a>
-<a href="#606" id="606">606</a>
-<a href="#607" id="607">607</a>
-<a href="#608" id="608">608</a>
-<a href="#609" id="609">609</a>
-<a href="#610" id="610">610</a>
-<a href="#611" id="611">611</a>
-<a href="#612" id="612">612</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Arc};
+<a href="#589" id="589">589</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Arc};
 
 <span class="kw">use crate</span>::{
     pipeline::AutoDeviceMapParams,
@@ -621,27 +598,6 @@
 <span class="kw">use </span>mistralrs_quant::ShardedVarBuilder;
 <span class="kw">use </span>serde::Deserialize;
 <span class="kw">use </span>tracing::info;
-
-<span class="kw">fn </span>split_range(range: std::ops::Range&lt;usize&gt;, n: usize) -&gt; Vec&lt;std::ops::Range&lt;usize&gt;&gt; {
-    <span class="macro">assert!</span>(n &gt; <span class="number">0</span>, <span class="string">"n must be non-zero"</span>);
-
-    <span class="kw">let </span>total = range.end - range.start;
-    <span class="kw">let </span>chunk_size = total / n;
-    <span class="kw">let </span>remainder = total % n;
-
-    <span class="kw">let </span><span class="kw-2">mut </span>chunks = Vec::with_capacity(n);
-    <span class="kw">let </span><span class="kw-2">mut </span>start = range.start;
-
-    <span class="comment">// Create each chunk. The first `remainder` chunks get an extra element.
-    </span><span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..n {
-        <span class="kw">let </span>extra = <span class="kw">if </span>i &lt; remainder { <span class="number">1 </span>} <span class="kw">else </span>{ <span class="number">0 </span>};
-        <span class="kw">let </span>end = start + chunk_size + extra;
-        chunks.push(start..end);
-        start = end;
-    }
-
-    chunks
-}
 
 <span class="attr">#[derive(Debug, Default, Deserialize, Clone)]
 </span><span class="kw">pub struct </span>DeviceLayerMapMetadata {
@@ -656,11 +612,11 @@
     <span class="doccomment">/// Automatic device mapping (recommended).
     </span>Auto(AutoDeviceMapParams),
     <span class="doccomment">/// Dummy device mapping for a NCCL pipeline
-    </span>Nccl { devices: Vec&lt;Device&gt; },
-    <span class="doccomment">/// Device mapping when using PP (agnostic of TP)
-    </span>NcclPipelineParallel {
-        devices_and_comms: Vec&lt;(Arc&lt;mistralrs_quant::Comm&gt;, Device)&gt;,
+    </span>DummyNccl { nm_device: Device },
+    <span class="doccomment">/// Real device mapping for a NCCL pipeline
+    </span>Nccl {
         nm_device: Device,
+        comm: Arc&lt;mistralrs_quant::Comm&gt;,
     },
 }
 
@@ -699,27 +655,21 @@
         topology: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Topology&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;&gt; {
         <span class="kw">match </span><span class="self">self </span>{
-            <span class="self">Self</span>::Nccl { devices } =&gt; {
+            <span class="self">Self</span>::Nccl { nm_device, comm } =&gt; {
                 once_log_info(<span class="string">"Loading model using a NCCL-parallelized pipeline."</span>);
                 <span class="prelude-val">Ok</span>(Box::new(NcclDeviceMapper {
-                    nm_device: devices[<span class="number">0</span>].clone(),
-                    devices: devices.clone(),
+                    nm_device: nm_device.clone(),
+                    model_layers,
+                    comm: <span class="prelude-val">Some</span>(comm.clone()),
                 }))
             }
-            <span class="self">Self</span>::NcclPipelineParallel {
-                devices_and_comms,
-                nm_device,
-            } =&gt; {
-                <span class="kw">let </span>splits = split_range(<span class="number">0</span>..model_layers, devices_and_comms.len());
 
-                <span class="kw">let </span><span class="kw-2">mut </span>mappings = Vec::new();
-                <span class="kw">for </span>(split, device) <span class="kw">in </span>splits.into_iter().zip(devices_and_comms) {
-                    mappings.extend(<span class="macro">vec!</span>[device.clone(); split.len()]);
-                }
-
-                <span class="prelude-val">Ok</span>(Box::new(NcclPipelineParallelMapper {
-                    mappings,
+            <span class="self">Self</span>::DummyNccl { nm_device } =&gt; {
+                once_log_info(<span class="string">"Loading model using a NCCL-parallelized pipeline."</span>);
+                <span class="prelude-val">Ok</span>(Box::new(NcclDeviceMapper {
                     nm_device: nm_device.clone(),
+                    model_layers,
+                    comm: <span class="prelude-val">None</span>,
                 }))
             }
 
@@ -1034,7 +984,8 @@
 <span class="attr">#[derive(Debug)]
 </span><span class="kw">pub struct </span>NcclDeviceMapper {
     nm_device: Device,
-    devices: Vec&lt;Device&gt;,
+    model_layers: usize,
+    comm: <span class="prelude-ty">Option</span>&lt;Arc&lt;mistralrs_quant::Comm&gt;&gt;,
 }
 
 <span class="kw">impl </span>DeviceMapper <span class="kw">for </span>NcclDeviceMapper {
@@ -1057,7 +1008,7 @@
         <span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device)
     }
     <span class="kw">fn </span>get_unique_devices(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Device&gt; {
-        <span class="self">self</span>.devices.clone()
+        <span class="macro">vec!</span>[<span class="self">self</span>.nm_device.clone()]
     }
     <span class="kw">fn </span>cast_nm_device(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, loading_isq: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">if </span>loading_isq {
@@ -1079,21 +1030,24 @@
     }
     <span class="kw">fn </span>get_min_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>, dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType) -&gt; <span class="prelude-ty">Result</span>&lt;DType&gt; {
         dtype
-            .try_into_dtype(<span class="kw-2">&amp;</span><span class="self">self</span>.devices.iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())
+            .try_into_dtype(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device])
             .map_err(candle_core::Error::msg)
     }
     <span class="kw">fn </span>num_device_mapping_layers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-        <span class="comment">// Effectively one layer
-        </span><span class="number">1
-    </span>}
+        <span class="self">self</span>.model_layers
+    }
     <span class="kw">fn </span>get_comm_for(<span class="kw-2">&amp;</span><span class="self">self</span>, layer_idx: usize) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;mistralrs_quant::Comm&gt;&gt; {
-        <span class="kw">let </span>id = mistralrs_quant::Id::new();
-        <span class="prelude-val">Ok</span>(Arc::new(mistralrs_quant::Comm::from_device(
-            id,
-            <span class="self">self</span>.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device),
-            <span class="number">0</span>,
-            <span class="number">1</span>,
-        )<span class="question-mark">?</span>))
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(comm) = <span class="kw-2">&amp;</span><span class="self">self</span>.comm {
+            <span class="prelude-val">Ok</span>(comm.clone())
+        } <span class="kw">else </span>{
+            <span class="kw">let </span>id = mistralrs_quant::Id::new();
+            <span class="prelude-val">Ok</span>(Arc::new(mistralrs_quant::Comm::from_device(
+                id,
+                <span class="self">self</span>.device_for(layer_idx, <span class="bool-val">false</span>).unwrap_or(<span class="kw-2">&amp;</span><span class="self">self</span>.nm_device),
+                <span class="number">0</span>,
+                <span class="number">1</span>,
+            )<span class="question-mark">?</span>))
+        }
     }
 }
 

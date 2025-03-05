@@ -1670,8 +1670,8 @@
 
         <span class="comment">// If auto, convert to Map if not using nccl
         </span><span class="kw">if </span>use_nccl {
-            mapper = DeviceMapSetting::Nccl {
-                devices: available_devices.clone(),
+            mapper = DeviceMapSetting::DummyNccl {
+                nm_device: available_devices[<span class="number">0</span>].clone(),
             };
         } <span class="kw">else if let </span>DeviceMapSetting::Auto(params) = mapper.clone() {
             <span class="comment">// Initial dtype
@@ -1985,9 +1985,9 @@
             <span class="macro">info!</span>(<span class="string">"Loading all ranks."</span>);
             <span class="kw">let </span>device = available_devices[<span class="number">0</span>].clone();
             <span class="comment">// The mapper is specific to this pipeline
-            </span><span class="kw">let </span>mapper = DeviceMapSetting::NcclPipelineParallel {
-                devices_and_comms: <span class="macro">vec!</span>[(Arc::new(comm), device.clone())],
-                nm_device: device.clone(),
+            </span><span class="kw">let </span>mapper = DeviceMapSetting::Nccl {
+                nm_device: available_devices[<span class="number">0</span>].clone(),
+                comm: Arc::new(comm),
             }
             .into_mapper(
                 <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
