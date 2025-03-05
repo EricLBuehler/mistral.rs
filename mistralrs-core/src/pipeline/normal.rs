@@ -311,8 +311,8 @@ impl Loader for NormalLoader {
 
         // If auto, convert to Map if not using nccl
         if use_nccl {
-            mapper = DeviceMapSetting::Nccl {
-                devices: available_devices.clone(),
+            mapper = DeviceMapSetting::DummyNccl {
+                nm_device: available_devices[0].clone(),
             };
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
             // Initial dtype
@@ -626,9 +626,9 @@ impl Loader for NormalLoader {
             info!("Loading all ranks.");
             let device = available_devices[0].clone();
             // The mapper is specific to this pipeline
-            let mapper = DeviceMapSetting::NcclPipelineParallel {
-                devices_and_comms: vec![(Arc::new(comm), device.clone())],
-                nm_device: device.clone(),
+            let mapper = DeviceMapSetting::Nccl {
+                nm_device: available_devices[0].clone(),
+                comm: Arc::new(comm),
             }
             .into_mapper(
                 self.inner.get_total_device_mapping_num_layers(&config)?,
