@@ -389,18 +389,23 @@ impl NonZero {
 }
 
 #[cfg(feature = "cuda")]
-fn count_nonzero_cuda(dtype: candle_core::DType, d_in: *const c_void, n: u32) -> u32 {
+fn count_nonzero_cuda(
+    dtype: candle_core::DType,
+    d_in: *const c_void,
+    n: u32,
+    stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+) -> u32 {
     unsafe {
         match dtype {
-            candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n),
-            candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n),
-            candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n),
-            candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n),
-            candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n),
-            candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n),
-            candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n),
-            candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n),
-            candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n),
+            candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n, stream),
+            candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n, stream),
+            candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n, stream),
+            candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n, stream),
+            candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n, stream),
+            candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n, stream),
+            candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n, stream),
+            candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n, stream),
+            candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n, stream),
             candle_core::DType::F8E4M3 => todo!(),
         }
     }
@@ -415,33 +420,36 @@ fn nonzero_cuda(
     dims: *const c_void,
     num_dims: u32,
     d_out: *mut c_void,
+    stream: candle_core::cuda::cudarc::driver::sys::CUstream,
 ) {
     unsafe {
         match dtype {
-            candle_core::DType::U8 => ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out),
+            candle_core::DType::U8 => {
+                ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+            }
             candle_core::DType::U32 => {
-                ffi::nonzero_u32(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_u32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::I64 => {
-                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::I32 => {
-                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::I16 => {
-                ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::BF16 => {
-                ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::F16 => {
-                ffi::nonzero_f16(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_f16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::F32 => {
-                ffi::nonzero_f32(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_f32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::F64 => {
-                ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::F8E4M3 => todo!(),
         }
@@ -498,7 +506,9 @@ impl CustomOp1 for NonZero {
             candle_core::DType::F8E4M3 => todo!(),
         } as *const c_void;
         let n = layout.shape().elem_count();
-        let num_nonzero = count_nonzero_cuda(storage.dtype(), d_in, u32::try_from(n)?);
+
+        let num_nonzero =
+            count_nonzero_cuda(storage.dtype(), d_in, u32::try_from(n)?, *dev.cu_stream());
         let d_out = unsafe { dev.alloc::<u32>(num_nonzero as usize * layout.dims().len()) }
             .map_err(|_| Error::Msg("Failed to allocate memory for nonzero result".to_string()))?;
         let d_out_ptr = *d_out.device_ptr() as *mut c_void;
@@ -519,6 +529,7 @@ impl CustomOp1 for NonZero {
             d_dims_ptr,
             u32::try_from(layout.dims().len())?,
             d_out_ptr,
+            *dev.cu_stream(),
         );
         let shape = Shape::from_dims(&[num_nonzero as usize, layout.dims().len()]);
         let dst = candle_core::CudaStorage::wrap_cuda_slice(d_out, dev);
