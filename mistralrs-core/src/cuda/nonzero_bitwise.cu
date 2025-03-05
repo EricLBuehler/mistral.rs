@@ -112,7 +112,7 @@ void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
   const int nblocks = (num_nonzero + nthreads - 1) / nthreads;
   transform_indices<<<nblocks, nthreads>>>(out_temp, num_nonzero, dims,
                                            num_dims, d_out);
-  cudaDeviceSynchronize();
+  
   cudaFree(out_temp);
   cudaFree(d_temp_storage);
   cudaFree(num_selected_out);
@@ -187,7 +187,7 @@ void bitwise_and(const T *d_in1, const T *d_in2, T *d_out, int N) {
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
   bitwise_and__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
-  cudaDeviceSynchronize();
+  
 }
 
 template <typename T>
@@ -198,7 +198,7 @@ void bitwise_or(const T *d_in1, const T *d_in2, T *d_out, int N) {
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
   bitwise_or__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
-  cudaDeviceSynchronize();
+  
 }
 
 template <typename T>
@@ -209,7 +209,7 @@ void bitwise_xor(const T *d_in1, const T *d_in2, T *d_out, int N) {
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
   bitwise_xor__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
-  cudaDeviceSynchronize();
+  
 }
 
 #define BITWISE_OP(TYPENAME, RUST_NAME)                                        \
@@ -251,7 +251,7 @@ void leftshift(const T *d_in1, T *d_out, int N, const int32_t k) {
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
   leftshift_kernel<<<nblocks, nthreads>>>(d_in1, d_out, N, k);
-  cudaDeviceSynchronize();
+  
 }
 
 #define LEFTSHIFT_OP(TYPENAME, RUST_NAME)                                                 \

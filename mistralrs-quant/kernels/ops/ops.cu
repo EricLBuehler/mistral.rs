@@ -29,7 +29,7 @@ void bitwise_or(const T *d_in1, const T *d_in2, T *d_out, int N) {
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
   bitwise_or__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
-  cudaDeviceSynchronize();
+  
 }
 
 #define BITWISE_OP(TYPENAME, RUST_NAME)                                        \
@@ -61,7 +61,7 @@ void leftshift(const T *d_in1, T *d_out, int N, const int32_t k) {
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
   leftshift_kernel<<<nblocks, nthreads>>>(d_in1, d_out, N, k);
-  cudaDeviceSynchronize();
+  
 }
 
 #define LEFTSHIFT_OP(TYPENAME, RUST_NAME)                                                 \
