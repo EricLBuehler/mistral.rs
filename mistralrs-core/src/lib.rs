@@ -250,13 +250,12 @@ impl MistralRsBuilder {
 }
 
 #[cfg(feature = "cuda")]
-fn set_gemm_reduced_precision_f16() {
+fn set_gemm_reduced_precision_f16(device: candle_core::Device) {
     use mistralrs_quant::INHIBIT_GEMM_F16;
 
-    use candle_core::{DType, Device, Tensor};
+    use candle_core::{DType, Tensor};
 
-    // NOTE(EricLBuehler): When we support multi-GPU inference, we should check for each gpu here
-    let a = Tensor::zeros((2, 2), DType::BF16, &Device::new_cuda(0).unwrap()).unwrap();
+    let a = Tensor::zeros((2, 2), DType::BF16, &device).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_bf16(true);
     match a.matmul(&a) {
         Ok(_) => tracing::info!("Enabling GEMM reduced precision in BF16."),
@@ -269,7 +268,7 @@ fn set_gemm_reduced_precision_f16() {
         }
     }
 
-    let a = Tensor::zeros((2, 2), DType::F16, &Device::new_cuda(0).unwrap()).unwrap();
+    let a = Tensor::zeros((2, 2), DType::F16, &device).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_f16(true);
     match a.matmul(&a) {
         Ok(_) => tracing::info!("Enabling GEMM reduced precision in F16."),
@@ -317,9 +316,9 @@ impl MistralRs {
             ModelCategory::Diffusion => true,
         };
         if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
-            set_gemm_reduced_precision_f16();
+            set_gemm_reduced_precision_f16(get_mut_arcmutex!(pipeline).device());
         }
-        setup_cublas_lt_wrapper();
+        setup_cublas_lt_wrapper(get_mut_arcmutex!(pipeline).device());
 
         let truncate_sequence = truncate_sequence.unwrap_or(false);
         let no_kv_cache = no_kv_cache.unwrap_or(false);

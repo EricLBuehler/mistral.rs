@@ -19,6 +19,9 @@
     }                                                                          \
   } while (0)
 
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+
 int next_power_of_2(const uint32_t num_nonzero) {
   int result = 1;
   while (result < num_nonzero) {
@@ -130,11 +133,10 @@ void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
   if (nthreads > 1024) {
     nthreads = 1024;
   }
-  const int nblocks = (num_nonzero + nthreads - 1) / nthreads;
+  const int nblocks = MAX((num_nonzero + nthreads - 1) / nthreads, 1);
   transform_indices<<<nblocks, nthreads, 0, stream>>>(out_temp, num_nonzero,
                                                       dims, num_dims, d_out);
   CUDA_CHECK(cudaGetLastError());
-  CUDA_CHECK(cudaDeviceSynchronize());
 
   CUDA_CHECK(cudaFree(out_temp));
   CUDA_CHECK(cudaFree(d_temp_storage));
@@ -213,7 +215,6 @@ void bitwise_and(const T *d_in1, const T *d_in2, T *d_out, int N) {
   const int nblocks = (N + nthreads - 1) / nthreads;
   bitwise_and__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
   CUDA_CHECK(cudaGetLastError());
-  CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 template <typename T>
@@ -225,7 +226,6 @@ void bitwise_or(const T *d_in1, const T *d_in2, T *d_out, int N) {
   const int nblocks = (N + nthreads - 1) / nthreads;
   bitwise_or__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
   CUDA_CHECK(cudaGetLastError());
-  CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 template <typename T>
@@ -237,7 +237,6 @@ void bitwise_xor(const T *d_in1, const T *d_in2, T *d_out, int N) {
   const int nblocks = (N + nthreads - 1) / nthreads;
   bitwise_xor__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
   CUDA_CHECK(cudaGetLastError());
-  CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 #define BITWISE_OP(TYPENAME, RUST_NAME)                                        \
@@ -280,7 +279,6 @@ void leftshift(const T *d_in1, T *d_out, int N, const int32_t k) {
   const int nblocks = (N + nthreads - 1) / nthreads;
   leftshift_kernel<<<nblocks, nthreads>>>(d_in1, d_out, N, k);
   CUDA_CHECK(cudaGetLastError());
-  CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 #define LEFTSHIFT_OP(TYPENAME, RUST_NAME)                                      \
