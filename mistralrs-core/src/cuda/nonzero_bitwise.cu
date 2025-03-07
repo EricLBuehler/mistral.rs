@@ -44,17 +44,18 @@ void count_nonzero(const T *d_in, const uint32_t N, uint32_t *h_out,
       d_in, NonZeroOp<T>());
   size_t temp_storage_bytes = 0;
   uint32_t *d_num_nonzero;
-  CUDA_CHECK(cudaMalloc((void **)&d_num_nonzero, sizeof(uint32_t)));
+  CUDA_CHECK(
+      cudaMallocAsync((void **)&d_num_nonzero, sizeof(uint32_t), stream));
   CUDA_CHECK(cub::DeviceReduce::Sum(nullptr, temp_storage_bytes, itr,
                                     d_num_nonzero, N, stream));
   void **d_temp_storage;
-  CUDA_CHECK(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+  CUDA_CHECK(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
   CUDA_CHECK(cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, itr,
                                     d_num_nonzero, N, stream));
-  CUDA_CHECK(cudaMemcpy(h_out, d_num_nonzero, sizeof(uint32_t),
-                        cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaFree(d_num_nonzero));
-  CUDA_CHECK(cudaFree(d_temp_storage));
+  CUDA_CHECK(cudaMemcpyAsync(h_out, d_num_nonzero, sizeof(uint32_t),
+                             cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaFreeAsync(d_num_nonzero, stream));
+  CUDA_CHECK(cudaFreeAsync(d_temp_storage, stream));
 }
 
 #define COUNT_NONZERO_OP(TYPENAME, RUST_NAME)                                  \
@@ -118,14 +119,16 @@ void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
   cub::CountingInputIterator<uint32_t> counting_itr(0);
   uint32_t *out_temp;
   uint32_t *num_selected_out;
-  CUDA_CHECK(cudaMalloc((void **)&out_temp, num_nonzero * sizeof(uint32_t)));
-  CUDA_CHECK(cudaMalloc((void **)&num_selected_out, sizeof(uint32_t)));
+  CUDA_CHECK(cudaMallocAsync((void **)&out_temp, num_nonzero * sizeof(uint32_t),
+                             stream));
+  CUDA_CHECK(
+      cudaMallocAsync((void **)&num_selected_out, sizeof(uint32_t), stream));
   size_t temp_storage_bytes = 0;
   CUDA_CHECK(cub::DeviceSelect::Flagged(nullptr, temp_storage_bytes,
                                         counting_itr, itr, out_temp,
                                         num_selected_out, N, stream));
   void **d_temp_storage;
-  CUDA_CHECK(cudaMalloc(&d_temp_storage, temp_storage_bytes));
+  CUDA_CHECK(cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream));
   CUDA_CHECK(cub::DeviceSelect::Flagged(d_temp_storage, temp_storage_bytes,
                                         counting_itr, itr, out_temp,
                                         num_selected_out, (int)N, stream));
@@ -138,9 +141,9 @@ void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
                                                       dims, num_dims, d_out);
   CUDA_CHECK(cudaGetLastError());
 
-  CUDA_CHECK(cudaFree(out_temp));
-  CUDA_CHECK(cudaFree(d_temp_storage));
-  CUDA_CHECK(cudaFree(num_selected_out));
+  CUDA_CHECK(cudaFreeAsync(out_temp, stream));
+  CUDA_CHECK(cudaFreeAsync(d_temp_storage, stream));
+  CUDA_CHECK(cudaFreeAsync(num_selected_out, stream));
 }
 
 #define NONZERO_OP(TYPENAME, RUST_NAME)                                        \
