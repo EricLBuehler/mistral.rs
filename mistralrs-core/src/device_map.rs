@@ -157,7 +157,7 @@ impl DeviceMapSetting {
                     {
                         let dev = match device {
                             Device::Cpu => Device::Cpu,
-                            Device::Cuda(_) => device.clone(), //Device::cuda_if_available(*ordinal)?,
+                            Device::Cuda(_) => Device::cuda_if_available(*ordinal)?,
                             Device::Metal(_) => Device::new_metal(*ordinal)?,
                         };
                         if !device.is_cpu() {

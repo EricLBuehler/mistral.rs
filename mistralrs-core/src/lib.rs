@@ -398,7 +398,7 @@ impl MistralRs {
 
                                     request_sender.send(req).await.unwrap();
                                     let resp = receiver.recv().await.unwrap();
-                                    assert!(resp.is_ok());
+                                    resp.unwrap();
                                     continue;
                                 }
                                 Request::Tokenize(mut x) => {
@@ -408,7 +408,7 @@ impl MistralRs {
 
                                     request_sender.send(req).await.unwrap();
                                     let resp = receiver.recv().await.unwrap();
-                                    assert!(resp.is_ok());
+                                    resp.unwrap();
                                     continue;
                                 }
                                 Request::Normal(mut x) => {
@@ -419,7 +419,7 @@ impl MistralRs {
 
                                     request_sender.send(req).await.unwrap();
                                     let resp = receiver.recv().await.unwrap();
-                                    assert!(resp.as_result().is_ok());
+                                    resp.as_result().unwrap();
                                     continue;
                                 }
                                 Request::TerminateAllSeqsNextStep => {

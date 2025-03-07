@@ -34,7 +34,6 @@ serde_default_fn!(f64, routed_scaling_factor, 1.0);
 serde_default_fn!(TopkMethod, topk_method, TopkMethod::Greedy);
 serde_default_fn!(usize, moe_layer_freq, 1);
 serde_default_fn!(usize, first_k_dense_replace, 0);
-serde_default_fn!(bool, norm_topk_prob, false);
 serde_default_fn!(ScoringFunc, scoring_func, ScoringFunc::Softmax);
 serde_default_fn!(Activation, hidden_act, Activation::Silu);
 serde_default_fn!(bool, tie_word_embeddings, false);
@@ -77,9 +76,6 @@ pub struct DeepSeekV3Config {
     pub(crate) moe_layer_freq: usize,
     #[serde(default = "first_k_dense_replace")]
     pub(crate) first_k_dense_replace: usize,
-    // k dense layers
-    #[serde(default = "norm_topk_prob")]
-    pub(crate) norm_topk_prob: bool,
     #[serde(default = "scoring_func")]
     scoring_func: ScoringFunc,
     #[serde(default = "hidden_act")]
@@ -572,7 +568,7 @@ impl MoeGate {
             }
         };
 
-        if self.top_k > 1 && self.cfg.norm_topk_prob {
+        if matches!(self.cfg.scoring_func, ScoringFunc::Sigmoid) {
             let denmoninator = (topk_weight.sum_keepdim(D::Minus1)? + 1e-20)?;
             topk_weight = topk_weight.broadcast_div(&denmoninator)?;
         }

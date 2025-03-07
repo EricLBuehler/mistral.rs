@@ -69,6 +69,7 @@ mod ops {
     impl Comm {
         pub fn from_device(id: Id, dev: &Device, rank: usize, world_size: usize) -> Result<Self> {
             let device = dev.as_cuda_device()?.cuda_device();
+            assert_eq!(rank, device.ordinal());
             Ok(Self {
                 comm: cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
                     .map_err(|e| e.0)
@@ -133,6 +134,8 @@ mod ops {
                         Some((0, l)) if l == s.len() => s,
                         Some(_) | None => candle_core::bail!("input has to be contiguous"),
                     };
+                    assert_eq!(dev.ordinal(), self.comm.rank());
+                    assert!(elem_count > 0);
                     let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
                     self.comm
                         .comm
