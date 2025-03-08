@@ -283,7 +283,7 @@ fn set_gemm_reduced_precision_f16(device: candle_core::Device) {
 }
 
 #[cfg(not(feature = "cuda"))]
-fn set_gemm_reduced_precision_f16() {}
+fn set_gemm_reduced_precision_f16(_device: candle_core::Device) {}
 
 impl Drop for MistralRs {
     fn drop(&mut self) {
