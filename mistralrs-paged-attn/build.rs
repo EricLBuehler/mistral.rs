@@ -26,7 +26,20 @@ pub use backend::{copy_blocks, paged_attention, reshape_and_cache, swap_blocks};
     println!("cargo:rerun-if-changed=src/cuda/pagedattention.cu");
     println!("cargo:rerun-if-changed=src/cuda/copy_blocks_kernel.cu");
     println!("cargo:rerun-if-changed=src/cuda/reshape_and_cache_kernel.cu");
-    let mut builder = bindgen_cuda::Builder::default();
+    let mut builder = bindgen_cuda::Builder::default()
+        .arg("-std=c++17")
+        .arg("-O3")
+        .arg("-U__CUDA_NO_HALF_OPERATORS__")
+        .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
+        .arg("-U__CUDA_NO_HALF2_OPERATORS__")
+        .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+        .arg("--expt-relaxed-constexpr")
+        .arg("--expt-extended-lambda")
+        .arg("--use_fast_math")
+        .arg("--verbose")
+        .arg("--compiler-options")
+        .arg("-fPIC");
+
     // https://github.com/EricLBuehler/mistral.rs/issues/286
     if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
         builder = builder.arg("--compiler-options");
