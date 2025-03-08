@@ -65,57 +65,49 @@ struct _MLX_BFloat16 {
   /////////////////////////////////////////////////////////////////////////////
   // Conversions to bfloat
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_to_bfloat<T>>::type>
   constexpr METAL_FUNC _MLX_BFloat16(T x) thread
       : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_to_bfloat<T>>::type>
   constexpr METAL_FUNC _MLX_BFloat16(T x) threadgroup
       : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_to_bfloat<T>>::type>
   constexpr METAL_FUNC _MLX_BFloat16(T x) device
       : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_to_bfloat<T>>::type>
   constexpr METAL_FUNC _MLX_BFloat16(T x) constant
       : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
 
   /////////////////////////////////////////////////////////////////////////////
   // Conversions from bfloat
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_from_bfloat<T>>::type>
   constexpr METAL_FUNC operator T() const thread {
     return static_cast<T>(bfloat_bits_to_float(bits_));
   }
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_from_bfloat<T>>::type>
   constexpr METAL_FUNC operator T() const threadgroup {
     return static_cast<T>(bfloat_bits_to_float(bits_));
   }
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_from_bfloat<T>>::type>
   constexpr METAL_FUNC operator T() const device {
     return static_cast<T>(bfloat_bits_to_float(bits_));
   }
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_from_bfloat<T>>::type>
   constexpr METAL_FUNC operator T() constant {
     return static_cast<T>(bfloat_bits_to_float(bits_));
   }
@@ -133,29 +125,29 @@ constexpr METAL_FUNC _MLX_BFloat16 operator-(_MLX_BFloat16 x) {
 
 /////////////////////////////////////////////////////////////////////////////
 // Binary operators
-#define bfloat_binop_base(__op__, __operator__, otype, atype, btype, ctype) \
-  constexpr METAL_FUNC otype __operator__(atype lhs, btype rhs) {           \
-    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);          \
+#define bfloat_binop_base(__op__, __operator__, otype, atype, btype, ctype)    \
+  constexpr METAL_FUNC otype __operator__(atype lhs, btype rhs) {              \
+    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);             \
   }
 
-#define bfloat_binop_helper(__op__, __operator__, otype, itype, ctype)    \
-  constexpr METAL_FUNC otype __operator__(_MLX_BFloat16 lhs, itype rhs) { \
-    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);        \
-  }                                                                       \
-  constexpr METAL_FUNC otype __operator__(itype lhs, _MLX_BFloat16 rhs) { \
-    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);        \
+#define bfloat_binop_helper(__op__, __operator__, otype, itype, ctype)         \
+  constexpr METAL_FUNC otype __operator__(_MLX_BFloat16 lhs, itype rhs) {      \
+    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);             \
+  }                                                                            \
+  constexpr METAL_FUNC otype __operator__(itype lhs, _MLX_BFloat16 rhs) {      \
+    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);             \
   }
 
 /////////////////////////////////////////////////////////////////////////////
 // Arithmetic Operators
-#define bfloat_binop(_op_, _operator_)                                       \
-  bfloat_binop_base(                                                         \
-      _op_, _operator_, _MLX_BFloat16, _MLX_BFloat16, _MLX_BFloat16, float); \
-  bfloat_binop_helper(_op_, _operator_, float, float, float);                \
-  bfloat_binop_helper(_op_, _operator_, float, half, float);                 \
-  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, int32_t, float);      \
-  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, uint32_t, float);     \
-  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, int64_t, float);      \
+#define bfloat_binop(_op_, _operator_)                                         \
+  bfloat_binop_base(_op_, _operator_, _MLX_BFloat16, _MLX_BFloat16,            \
+                    _MLX_BFloat16, float);                                     \
+  bfloat_binop_helper(_op_, _operator_, float, float, float);                  \
+  bfloat_binop_helper(_op_, _operator_, float, half, float);                   \
+  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, int32_t, float);        \
+  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, uint32_t, float);       \
+  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, int64_t, float);        \
   bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, uint64_t, float);
 
 bfloat_binop(+, operator+);
@@ -165,14 +157,14 @@ bfloat_binop(/, operator/);
 
 /////////////////////////////////////////////////////////////////////////////
 // Comparison ops
-#define bfloat_compop(__op__, __operator__)                             \
-  bfloat_binop_base(                                                    \
-      __op__, __operator__, bool, _MLX_BFloat16, _MLX_BFloat16, float); \
-  bfloat_binop_helper(__op__, __operator__, bool, float, float);        \
-  bfloat_binop_helper(__op__, __operator__, bool, half, float);         \
-  bfloat_binop_helper(__op__, __operator__, bool, int32_t, float);      \
-  bfloat_binop_helper(__op__, __operator__, bool, uint32_t, float);     \
-  bfloat_binop_helper(__op__, __operator__, bool, int64_t, float);      \
+#define bfloat_compop(__op__, __operator__)                                    \
+  bfloat_binop_base(__op__, __operator__, bool, _MLX_BFloat16, _MLX_BFloat16,  \
+                    float);                                                    \
+  bfloat_binop_helper(__op__, __operator__, bool, float, float);               \
+  bfloat_binop_helper(__op__, __operator__, bool, half, float);                \
+  bfloat_binop_helper(__op__, __operator__, bool, int32_t, float);             \
+  bfloat_binop_helper(__op__, __operator__, bool, uint32_t, float);            \
+  bfloat_binop_helper(__op__, __operator__, bool, int64_t, float);             \
   bfloat_binop_helper(__op__, __operator__, bool, uint64_t, float);
 
 bfloat_compop(>, operator>);
@@ -189,27 +181,27 @@ bfloat_compop(!=, operator!=);
 
 /////////////////////////////////////////////////////////////////////////////
 // Inplace Operators
-#define bfloat_inplace_op_helper(__op__, __operator__, itype, addr_space) \
-  constexpr METAL_FUNC addr_space _MLX_BFloat16& __operator__(            \
-      addr_space _MLX_BFloat16& lhs, itype rhs) {                         \
-    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);         \
-    return lhs;                                                           \
-  }                                                                       \
-  constexpr METAL_FUNC addr_space itype& __operator__(                    \
-      addr_space itype& lhs, _MLX_BFloat16 rhs) {                         \
-    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);         \
-    return lhs;                                                           \
+#define bfloat_inplace_op_helper(__op__, __operator__, itype, addr_space)      \
+  constexpr METAL_FUNC addr_space _MLX_BFloat16 &__operator__(                 \
+      addr_space _MLX_BFloat16 &lhs, itype rhs) {                              \
+    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);              \
+    return lhs;                                                                \
+  }                                                                            \
+  constexpr METAL_FUNC addr_space itype &__operator__(addr_space itype &lhs,   \
+                                                      _MLX_BFloat16 rhs) {     \
+    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);              \
+    return lhs;                                                                \
   }
 
-#define bfloat_inplace_op_addr_space_helper(__op__, __operator__, itype) \
-  bfloat_inplace_op_helper(__op__, __operator__, itype, device);         \
-  bfloat_inplace_op_helper(__op__, __operator__, itype, thread);         \
+#define bfloat_inplace_op_addr_space_helper(__op__, __operator__, itype)       \
+  bfloat_inplace_op_helper(__op__, __operator__, itype, device);               \
+  bfloat_inplace_op_helper(__op__, __operator__, itype, thread);               \
   bfloat_inplace_op_helper(__op__, __operator__, itype, threadgroup);
 
-#define bfloat_inplace_op(itype)                             \
-  bfloat_inplace_op_addr_space_helper(+, operator+=, itype); \
-  bfloat_inplace_op_addr_space_helper(-, operator-=, itype); \
-  bfloat_inplace_op_addr_space_helper(*, operator*=, itype); \
+#define bfloat_inplace_op(itype)                                               \
+  bfloat_inplace_op_addr_space_helper(+, operator+=, itype);                   \
+  bfloat_inplace_op_addr_space_helper(-, operator-=, itype);                   \
+  bfloat_inplace_op_addr_space_helper(*, operator*=, itype);                   \
   bfloat_inplace_op_addr_space_helper(/, operator/=, itype);
 
 bfloat_inplace_op(float);
@@ -225,16 +217,16 @@ bfloat_inplace_op(uint64_t);
 #undef bfloat_inplace_op_addr_space_helper
 #undef bfloat_inplace_op
 
-#define bfloat_inplace_op_helper(__op__, __operator__, addr_space) \
-  constexpr METAL_FUNC addr_space _MLX_BFloat16& __operator__(     \
-      addr_space _MLX_BFloat16& lhs, _MLX_BFloat16 rhs) {          \
-    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);  \
-    return lhs;                                                    \
+#define bfloat_inplace_op_helper(__op__, __operator__, addr_space)             \
+  constexpr METAL_FUNC addr_space _MLX_BFloat16 &__operator__(                 \
+      addr_space _MLX_BFloat16 &lhs, _MLX_BFloat16 rhs) {                      \
+    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);              \
+    return lhs;                                                                \
   }
 
-#define bfloat_inplace_op_addr_space_helper(__op__, __operator__) \
-  bfloat_inplace_op_helper(__op__, __operator__, device);         \
-  bfloat_inplace_op_helper(__op__, __operator__, thread);         \
+#define bfloat_inplace_op_addr_space_helper(__op__, __operator__)              \
+  bfloat_inplace_op_helper(__op__, __operator__, device);                      \
+  bfloat_inplace_op_helper(__op__, __operator__, thread);                      \
   bfloat_inplace_op_helper(__op__, __operator__, threadgroup);
 
 bfloat_inplace_op_addr_space_helper(+, operator+=);
@@ -253,29 +245,24 @@ typedef struct _MLX_BFloat16 bfloat16_t;
 
 #endif
 
-
-
-
-
-
-
-template<typename T>
+template <typename T>
 [[kernel]] void reshape_and_cache(
-    const device T* __restrict__ key [[buffer(0)]],           // [num_tokens, num_heads, head_size]
-    const device T* __restrict__ value [[buffer(1)]],         // [num_tokens, num_heads, head_size]
-    device T* __restrict__ key_cache [[buffer(2)]],           // [num_blocks, num_heads, head_size/x, block_size, x]
-    device T* __restrict__ value_cache [[buffer(3)]],         // [num_blocks, num_heads, head_size, block_size]
-    const device int64_t* __restrict__ slot_mapping [[buffer(4)]],   // [num_tokens]
-    device const int& key_stride,
-    device const int& value_stride,
-    device const int& num_heads,
-    device const int& head_size,
-    device const int& block_size,
-    device const int& x,
+    const device T *__restrict__ key
+    [[buffer(0)]], // [num_tokens, num_heads, head_size]
+    const device T *__restrict__ value
+    [[buffer(1)]], // [num_tokens, num_heads, head_size]
+    device T *__restrict__ key_cache
+    [[buffer(2)]], // [num_blocks, num_heads, head_size/x, block_size, x]
+    device T *__restrict__ value_cache
+    [[buffer(3)]], // [num_blocks, num_heads, head_size, block_size]
+    const device int64_t *__restrict__ slot_mapping
+    [[buffer(4)]], // [num_tokens]
+    device const int &key_stride, device const int &value_stride,
+    device const int &num_heads, device const int &head_size,
+    device const int &block_size, device const int &x,
     uint gid [[threadgroup_position_in_grid]],
     uint tid [[thread_position_in_threadgroup]],
-    uint threads_per_threadgroup [[threads_per_threadgroup]]
-) {
+    uint threads_per_threadgroup [[threads_per_threadgroup]]) {
   const int64_t token_idx = gid;
   const int64_t slot_idx = slot_mapping[token_idx];
   if (slot_idx < 0) {
@@ -296,38 +283,33 @@ template<typename T>
     const int x_idx = head_offset / x;
     const int x_offset = head_offset % x;
 
-    const int64_t tgt_key_idx = block_idx * num_heads * (head_size / x) * block_size * x
-                                + head_idx * (head_size / x) * block_size * x
-                                + x_idx * block_size * x
-                                + block_offset * x
-                                + x_offset;
-    const int64_t tgt_value_idx = block_idx * num_heads * head_size * block_size
-                                  + head_idx * head_size * block_size
-                                  + head_offset * block_size
-                                  + block_offset;
+    const int64_t tgt_key_idx =
+        block_idx * num_heads * (head_size / x) * block_size * x +
+        head_idx * (head_size / x) * block_size * x + x_idx * block_size * x +
+        block_offset * x + x_offset;
+    const int64_t tgt_value_idx =
+        block_idx * num_heads * head_size * block_size +
+        head_idx * head_size * block_size + head_offset * block_size +
+        block_offset;
     key_cache[tgt_key_idx] = key[src_key_idx];
     value_cache[tgt_value_idx] = value[src_value_idx];
   }
 }
 
-#define instantiate_reshape_and_cache(type)                           \
-  template [[host_name("reshape_and_cache_" #type)]]                  \
-  [[kernel]] void reshape_and_cache<type>(                  \
-    const device type* __restrict__ key [[buffer(0)]],                  \
-    const device type* __restrict__ value [[buffer(1)]],                  \
-    device type* __restrict__ key_cache [[buffer(2)]],                  \
-    device type* __restrict__ value_cache [[buffer(3)]],                  \
-    const device int64_t* __restrict__ slot_mapping [[buffer(4)]],                  \
-    device const int& key_stride,                  \
-    device const int& value_stride,                  \
-    device const int& num_heads,                  \
-    device const int& head_size,                  \
-    device const int& block_size,                  \
-    device const int& x,                  \
-    uint gid [[threadgroup_position_in_grid]],                  \
-    uint tid [[thread_position_in_threadgroup]],                  \
-    uint threads_per_threadgroup [[threads_per_threadgroup]]);
+#define instantiate_reshape_and_cache(type)                                    \
+  template [[host_name("reshape_and_cache_" #type)]] [[kernel]] void           \
+  reshape_and_cache<type>(                                                     \
+      const device type *__restrict__ key [[buffer(0)]],                       \
+      const device type *__restrict__ value [[buffer(1)]],                     \
+      device type *__restrict__ key_cache [[buffer(2)]],                       \
+      device type *__restrict__ value_cache [[buffer(3)]],                     \
+      const device int64_t *__restrict__ slot_mapping [[buffer(4)]],           \
+      device const int &key_stride, device const int &value_stride,            \
+      device const int &num_heads, device const int &head_size,                \
+      device const int &block_size, device const int &x,                       \
+      uint gid [[threadgroup_position_in_grid]],                               \
+      uint tid [[thread_position_in_threadgroup]],                             \
+      uint threads_per_threadgroup [[threads_per_threadgroup]]);
 
-instantiate_reshape_and_cache(float)
-instantiate_reshape_and_cache(bfloat16_t)
-instantiate_reshape_and_cache(half)
+instantiate_reshape_and_cache(float) instantiate_reshape_and_cache(bfloat16_t)
+    instantiate_reshape_and_cache(half)

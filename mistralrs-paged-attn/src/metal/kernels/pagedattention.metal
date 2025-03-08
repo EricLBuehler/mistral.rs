@@ -1,7 +1,7 @@
 // Updated from MLX commit has f70764a
 
-#include <metal_stdlib>
 #include <metal_simdgroup>
+#include <metal_stdlib>
 
 using namespace metal;
 
@@ -69,57 +69,49 @@ struct _MLX_BFloat16 {
   /////////////////////////////////////////////////////////////////////////////
   // Conversions to bfloat
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_to_bfloat<T>>::type>
   constexpr METAL_FUNC _MLX_BFloat16(T x) thread
       : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_to_bfloat<T>>::type>
   constexpr METAL_FUNC _MLX_BFloat16(T x) threadgroup
       : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_to_bfloat<T>>::type>
   constexpr METAL_FUNC _MLX_BFloat16(T x) device
       : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_to_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_to_bfloat<T>>::type>
   constexpr METAL_FUNC _MLX_BFloat16(T x) constant
       : bits_(float_to_bfloat_bits(static_cast<float>(x))) {}
 
   /////////////////////////////////////////////////////////////////////////////
   // Conversions from bfloat
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_from_bfloat<T>>::type>
   constexpr METAL_FUNC operator T() const thread {
     return static_cast<T>(bfloat_bits_to_float(bits_));
   }
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_from_bfloat<T>>::type>
   constexpr METAL_FUNC operator T() const threadgroup {
     return static_cast<T>(bfloat_bits_to_float(bits_));
   }
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_from_bfloat<T>>::type>
   constexpr METAL_FUNC operator T() const device {
     return static_cast<T>(bfloat_bits_to_float(bits_));
   }
 
-  template <
-      typename T,
-      typename = typename enable_if<can_convert_from_bfloat<T>>::type>
+  template <typename T,
+            typename = typename enable_if<can_convert_from_bfloat<T>>::type>
   constexpr METAL_FUNC operator T() const constant {
     return static_cast<T>(bfloat_bits_to_float(bits_));
   }
@@ -137,29 +129,29 @@ constexpr METAL_FUNC _MLX_BFloat16 operator-(_MLX_BFloat16 x) {
 
 /////////////////////////////////////////////////////////////////////////////
 // Binary operators
-#define bfloat_binop_base(__op__, __operator__, otype, atype, btype, ctype) \
-  constexpr METAL_FUNC otype __operator__(atype lhs, btype rhs) {           \
-    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);          \
+#define bfloat_binop_base(__op__, __operator__, otype, atype, btype, ctype)    \
+  constexpr METAL_FUNC otype __operator__(atype lhs, btype rhs) {              \
+    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);             \
   }
 
-#define bfloat_binop_helper(__op__, __operator__, otype, itype, ctype)    \
-  constexpr METAL_FUNC otype __operator__(_MLX_BFloat16 lhs, itype rhs) { \
-    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);        \
-  }                                                                       \
-  constexpr METAL_FUNC otype __operator__(itype lhs, _MLX_BFloat16 rhs) { \
-    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);        \
+#define bfloat_binop_helper(__op__, __operator__, otype, itype, ctype)         \
+  constexpr METAL_FUNC otype __operator__(_MLX_BFloat16 lhs, itype rhs) {      \
+    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);             \
+  }                                                                            \
+  constexpr METAL_FUNC otype __operator__(itype lhs, _MLX_BFloat16 rhs) {      \
+    return static_cast<ctype>(lhs) __op__ static_cast<ctype>(rhs);             \
   }
 
 /////////////////////////////////////////////////////////////////////////////
 // Arithmetic Operators
-#define bfloat_binop(_op_, _operator_)                                       \
-  bfloat_binop_base(                                                         \
-      _op_, _operator_, _MLX_BFloat16, _MLX_BFloat16, _MLX_BFloat16, float); \
-  bfloat_binop_helper(_op_, _operator_, float, float, float);                \
-  bfloat_binop_helper(_op_, _operator_, float, half, float);                 \
-  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, int32_t, float);      \
-  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, uint32_t, float);     \
-  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, int64_t, float);      \
+#define bfloat_binop(_op_, _operator_)                                         \
+  bfloat_binop_base(_op_, _operator_, _MLX_BFloat16, _MLX_BFloat16,            \
+                    _MLX_BFloat16, float);                                     \
+  bfloat_binop_helper(_op_, _operator_, float, float, float);                  \
+  bfloat_binop_helper(_op_, _operator_, float, half, float);                   \
+  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, int32_t, float);        \
+  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, uint32_t, float);       \
+  bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, int64_t, float);        \
   bfloat_binop_helper(_op_, _operator_, _MLX_BFloat16, uint64_t, float);
 
 bfloat_binop(+, operator+);
@@ -169,14 +161,14 @@ bfloat_binop(/, operator/);
 
 /////////////////////////////////////////////////////////////////////////////
 // Comparison ops
-#define bfloat_compop(__op__, __operator__)                             \
-  bfloat_binop_base(                                                    \
-      __op__, __operator__, bool, _MLX_BFloat16, _MLX_BFloat16, float); \
-  bfloat_binop_helper(__op__, __operator__, bool, float, float);        \
-  bfloat_binop_helper(__op__, __operator__, bool, half, float);         \
-  bfloat_binop_helper(__op__, __operator__, bool, int32_t, float);      \
-  bfloat_binop_helper(__op__, __operator__, bool, uint32_t, float);     \
-  bfloat_binop_helper(__op__, __operator__, bool, int64_t, float);      \
+#define bfloat_compop(__op__, __operator__)                                    \
+  bfloat_binop_base(__op__, __operator__, bool, _MLX_BFloat16, _MLX_BFloat16,  \
+                    float);                                                    \
+  bfloat_binop_helper(__op__, __operator__, bool, float, float);               \
+  bfloat_binop_helper(__op__, __operator__, bool, half, float);                \
+  bfloat_binop_helper(__op__, __operator__, bool, int32_t, float);             \
+  bfloat_binop_helper(__op__, __operator__, bool, uint32_t, float);            \
+  bfloat_binop_helper(__op__, __operator__, bool, int64_t, float);             \
   bfloat_binop_helper(__op__, __operator__, bool, uint64_t, float);
 
 bfloat_compop(>, operator>);
@@ -193,27 +185,27 @@ bfloat_compop(!=, operator!=);
 
 /////////////////////////////////////////////////////////////////////////////
 // Inplace Operators
-#define bfloat_inplace_op_helper(__op__, __operator__, itype, addr_space) \
-  constexpr METAL_FUNC addr_space _MLX_BFloat16& __operator__(            \
-      addr_space _MLX_BFloat16& lhs, itype rhs) {                         \
-    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);         \
-    return lhs;                                                           \
-  }                                                                       \
-  constexpr METAL_FUNC addr_space itype& __operator__(                    \
-      addr_space itype& lhs, _MLX_BFloat16 rhs) {                         \
-    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);         \
-    return lhs;                                                           \
+#define bfloat_inplace_op_helper(__op__, __operator__, itype, addr_space)      \
+  constexpr METAL_FUNC addr_space _MLX_BFloat16 &__operator__(                 \
+      addr_space _MLX_BFloat16 &lhs, itype rhs) {                              \
+    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);              \
+    return lhs;                                                                \
+  }                                                                            \
+  constexpr METAL_FUNC addr_space itype &__operator__(addr_space itype &lhs,   \
+                                                      _MLX_BFloat16 rhs) {     \
+    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);              \
+    return lhs;                                                                \
   }
 
-#define bfloat_inplace_op_addr_space_helper(__op__, __operator__, itype) \
-  bfloat_inplace_op_helper(__op__, __operator__, itype, device);         \
-  bfloat_inplace_op_helper(__op__, __operator__, itype, thread);         \
+#define bfloat_inplace_op_addr_space_helper(__op__, __operator__, itype)       \
+  bfloat_inplace_op_helper(__op__, __operator__, itype, device);               \
+  bfloat_inplace_op_helper(__op__, __operator__, itype, thread);               \
   bfloat_inplace_op_helper(__op__, __operator__, itype, threadgroup);
 
-#define bfloat_inplace_op(itype)                             \
-  bfloat_inplace_op_addr_space_helper(+, operator+=, itype); \
-  bfloat_inplace_op_addr_space_helper(-, operator-=, itype); \
-  bfloat_inplace_op_addr_space_helper(*, operator*=, itype); \
+#define bfloat_inplace_op(itype)                                               \
+  bfloat_inplace_op_addr_space_helper(+, operator+=, itype);                   \
+  bfloat_inplace_op_addr_space_helper(-, operator-=, itype);                   \
+  bfloat_inplace_op_addr_space_helper(*, operator*=, itype);                   \
   bfloat_inplace_op_addr_space_helper(/, operator/=, itype);
 
 bfloat_inplace_op(float);
@@ -229,16 +221,16 @@ bfloat_inplace_op(uint64_t);
 #undef bfloat_inplace_op_addr_space_helper
 #undef bfloat_inplace_op
 
-#define bfloat_inplace_op_helper(__op__, __operator__, addr_space) \
-  constexpr METAL_FUNC addr_space _MLX_BFloat16& __operator__(     \
-      addr_space _MLX_BFloat16& lhs, _MLX_BFloat16 rhs) {          \
-    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);  \
-    return lhs;                                                    \
+#define bfloat_inplace_op_helper(__op__, __operator__, addr_space)             \
+  constexpr METAL_FUNC addr_space _MLX_BFloat16 &__operator__(                 \
+      addr_space _MLX_BFloat16 &lhs, _MLX_BFloat16 rhs) {                      \
+    lhs = static_cast<float>(lhs) __op__ static_cast<float>(rhs);              \
+    return lhs;                                                                \
   }
 
-#define bfloat_inplace_op_addr_space_helper(__op__, __operator__) \
-  bfloat_inplace_op_helper(__op__, __operator__, device);         \
-  bfloat_inplace_op_helper(__op__, __operator__, thread);         \
+#define bfloat_inplace_op_addr_space_helper(__op__, __operator__)              \
+  bfloat_inplace_op_helper(__op__, __operator__, device);                      \
+  bfloat_inplace_op_helper(__op__, __operator__, thread);                      \
   bfloat_inplace_op_helper(__op__, __operator__, threadgroup);
 
 bfloat_inplace_op_addr_space_helper(+, operator+=);
@@ -260,31 +252,23 @@ typedef struct _MLX_BFloat16 bfloat16_t;
 // ========================================== Generic vector types
 
 // A vector type to store Q, K, V elements.
-template<typename T, int VEC_SIZE>
-struct Vec {};
+template <typename T, int VEC_SIZE> struct Vec {};
 
 // A vector type to store FP32 accumulators.
-template<typename T>
-struct FloatVec {};
+template <typename T> struct FloatVec {};
 
 // Template vector operations.
-template<typename Acc, typename A, typename B>
-inline Acc mul(A a, B b);
+template <typename Acc, typename A, typename B> inline Acc mul(A a, B b);
 
-template<typename T>
-inline float sum(T v);
+template <typename T> inline float sum(T v);
 
-template<typename T>
-inline float dot(T a, T b) {
+template <typename T> inline float dot(T a, T b) {
   return sum(mul<T, T, T>(a, b));
 }
 
-template<typename A, typename T>
-inline float dot(T a, T b) {
+template <typename A, typename T> inline float dot(T a, T b) {
   return sum(mul<A, T, T>(a, b));
 }
-
-
 
 // FP32 vector data types.
 struct Float8_ {
@@ -292,82 +276,52 @@ struct Float8_ {
   float4 y;
 };
 
-template<>
-struct Vec<float, 1> {
+template <> struct Vec<float, 1> {
   using Type = float;
 };
-template<>
-struct Vec<float, 2> {
+template <> struct Vec<float, 2> {
   using Type = float2;
 };
-template<>
-struct Vec<float, 4> {
+template <> struct Vec<float, 4> {
   using Type = float4;
 };
-template<>
-struct Vec<float, 8> {
+template <> struct Vec<float, 8> {
   using Type = Float8_;
 };
 
-template<>
-struct FloatVec<float> {
+template <> struct FloatVec<float> {
   using Type = float;
 };
-template<>
-struct FloatVec<float2> {
+template <> struct FloatVec<float2> {
   using Type = float2;
 };
-template<>
-struct FloatVec<float4> {
+template <> struct FloatVec<float4> {
   using Type = float4;
 };
-template<>
-struct FloatVec<Float8_> {
+template <> struct FloatVec<Float8_> {
   using Type = Float8_;
 };
 
-template<>
-inline float mul(float a, float b) {
-  return a*b;
-}
+template <> inline float mul(float a, float b) { return a * b; }
 
-template<>
-inline float2 mul(float2 a, float2 b) {
-  return a*b;
-}
+template <> inline float2 mul(float2 a, float2 b) { return a * b; }
 
-template<>
-inline float4 mul(float4 a, float4 b) {
-  return a*b;
-}
+template <> inline float4 mul(float4 a, float4 b) { return a * b; }
 
-template<>
-inline Float8_ mul(Float8_ a, Float8_ b) {
+template <> inline Float8_ mul(Float8_ a, Float8_ b) {
   Float8_ c;
   c.x = a.x * b.x;
   c.y = a.y * b.y;
   return c;
 }
 
-template<>
-inline float sum(float a) {
-  return a;
-}
+template <> inline float sum(float a) { return a; }
 
-template<>
-inline float sum(float2 a) {
-  return a.x + a.y;
-}
+template <> inline float sum(float2 a) { return a.x + a.y; }
 
-template<>
-inline float sum(float4 a) {
-  return a.x + a.y + a.z + a.w;
-}
+template <> inline float sum(float4 a) { return a.x + a.y + a.z + a.w; }
 
-template<>
-inline float sum(Float8_ a) {
-  return sum(a.x) + sum(a.y);
-}
+template <> inline float sum(Float8_ a) { return sum(a.x) + sum(a.y); }
 
 inline Float8_ fma(Float8_ a, Float8_ b, Float8_ c) {
   Float8_ res;
@@ -376,21 +330,10 @@ inline Float8_ fma(Float8_ a, Float8_ b, Float8_ c) {
   return res;
 }
 
-inline void from_float(thread float& dst, float src) {
-  dst = src;
-}
-inline void from_float(thread float2& dst, float2 src) {
-  dst = src;
-}
-inline void from_float(thread float4& dst, float4 src) {
-  dst = src;
-}
-inline void from_float(thread Float8_& dst, Float8_ src) {
-  dst = src;
-}
-
-
-
+inline void from_float(thread float &dst, float src) { dst = src; }
+inline void from_float(thread float2 &dst, float2 src) { dst = src; }
+inline void from_float(thread float4 &dst, float4 src) { dst = src; }
+inline void from_float(thread Float8_ &dst, Float8_ src) { dst = src; }
 
 // BF16 vector data types.
 // #if defined(__HAVE_BFLOAT__)
@@ -560,65 +503,50 @@ struct Bfloat8_ {
   Bfloat4_ y;
 };
 
-template<>
-struct Vec<bfloat16_t, 1> {
+template <> struct Vec<bfloat16_t, 1> {
   using Type = bfloat16_t;
 };
-template<>
-struct Vec<bfloat16_t, 2> {
+template <> struct Vec<bfloat16_t, 2> {
   using Type = Bfloat2_;
 };
-template<>
-struct Vec<bfloat16_t, 4> {
+template <> struct Vec<bfloat16_t, 4> {
   using Type = Bfloat4_;
 };
-template<>
-struct Vec<bfloat16_t, 8> {
+template <> struct Vec<bfloat16_t, 8> {
   using Type = Bfloat8_;
 };
 
-template<>
-struct FloatVec<bfloat16_t> {
+template <> struct FloatVec<bfloat16_t> {
   using Type = float;
 };
-template<>
-struct FloatVec<Bfloat2_> {
+template <> struct FloatVec<Bfloat2_> {
   using Type = float2;
 };
-template<>
-struct FloatVec<Bfloat4_> {
+template <> struct FloatVec<Bfloat4_> {
   using Type = float4;
 };
-template<>
-struct FloatVec<Bfloat8_> {
+template <> struct FloatVec<Bfloat8_> {
   using Type = Float8_;
 };
 
-template<>
-inline float mul(bfloat16_t a, bfloat16_t b) {
+template <> inline float mul(bfloat16_t a, bfloat16_t b) {
   return (float)a * (float)b;
 }
-template<>
-inline bfloat16_t mul(bfloat16_t a, bfloat16_t b) {
-  return a*b;
-}
+template <> inline bfloat16_t mul(bfloat16_t a, bfloat16_t b) { return a * b; }
 
-template<>
-inline float2 mul(Bfloat2_ a, Bfloat2_ b) {
+template <> inline float2 mul(Bfloat2_ a, Bfloat2_ b) {
   float2 a_f((float)a.x, (float)a.y);
   float2 b_f((float)b.x, (float)b.y);
   return a_f * b_f;
 }
-template<>
-inline Bfloat2_ mul(Bfloat2_ a, Bfloat2_ b) {
+template <> inline Bfloat2_ mul(Bfloat2_ a, Bfloat2_ b) {
   Bfloat2_ c;
   c.x = a.x * b.x;
   c.y = a.y * b.y;
   return c;
 }
 
-template<>
-inline float4 mul(Bfloat4_ a, Bfloat4_ b) {
+template <> inline float4 mul(Bfloat4_ a, Bfloat4_ b) {
   float2 x = mul<float2, Bfloat2_, Bfloat2_>(a.x, b.x);
   float2 y = mul<float2, Bfloat2_, Bfloat2_>(a.y, b.y);
   float4 c;
@@ -628,54 +556,39 @@ inline float4 mul(Bfloat4_ a, Bfloat4_ b) {
   c.w = y.y;
   return c;
 }
-template<>
-inline Bfloat4_ mul(Bfloat4_ a, Bfloat4_ b) {
+template <> inline Bfloat4_ mul(Bfloat4_ a, Bfloat4_ b) {
   Bfloat4_ c;
   c.x = mul<Bfloat2_, Bfloat2_, Bfloat2_>(a.x, b.x);
   c.y = mul<Bfloat2_, Bfloat2_, Bfloat2_>(a.y, b.y);
   return c;
 }
 
-template<>
-inline Float8_ mul(Bfloat8_ a, Bfloat8_ b) {
+template <> inline Float8_ mul(Bfloat8_ a, Bfloat8_ b) {
   Float8_ c;
   c.x = mul<float4, Bfloat4_, Bfloat4_>(a.x, b.x);
   c.y = mul<float4, Bfloat4_, Bfloat4_>(a.y, b.y);
   return c;
 }
-template<>
-inline Bfloat8_ mul(Bfloat8_ a, Bfloat8_ b) {
+template <> inline Bfloat8_ mul(Bfloat8_ a, Bfloat8_ b) {
   Bfloat8_ c;
   c.x = mul<Bfloat4_, Bfloat4_, Bfloat4_>(a.x, b.x);
   c.y = mul<Bfloat4_, Bfloat4_, Bfloat4_>(a.y, b.y);
   return c;
 }
 
-template<>
-inline float sum(bfloat16_t a) {
-  return (float)a;
-}
+template <> inline float sum(bfloat16_t a) { return (float)a; }
 
-template<>
-inline float sum(Bfloat2_ a) {
-  return (float)a.x + (float)a.y;
-}
+template <> inline float sum(Bfloat2_ a) { return (float)a.x + (float)a.y; }
 
-template<>
-inline float sum(Bfloat4_ a) {
-  return sum(a.x) + sum(a.y);
-}
+template <> inline float sum(Bfloat4_ a) { return sum(a.x) + sum(a.y); }
 
-template<>
-inline float sum(Bfloat8_ a) {
-  return sum(a.x) + sum(a.y);
-}
+template <> inline float sum(Bfloat8_ a) { return sum(a.x) + sum(a.y); }
 
 inline float fma(bfloat16_t a, bfloat16_t b, float c) {
   return (float)a * (float)b + c;
 }
 inline bfloat16_t fma(bfloat16_t a, bfloat16_t b, bfloat16_t c) {
-  return a*b+c;
+  return a * b + c;
 }
 
 inline float2 fma(Bfloat2_ a, Bfloat2_ b, float2 c) {
@@ -720,20 +633,20 @@ inline Bfloat8_ fma(Bfloat8_ a, Bfloat8_ b, Bfloat8_ c) {
   return c;
 }
 
-inline void from_float(thread bfloat16_t& dst, float src) {
+inline void from_float(thread bfloat16_t &dst, float src) {
   dst = static_cast<bfloat16_t>(src);
 }
-inline void from_float(thread Bfloat2_& dst, float2 src) {
+inline void from_float(thread Bfloat2_ &dst, float2 src) {
   dst.x = static_cast<bfloat16_t>(src.x);
   dst.y = static_cast<bfloat16_t>(src.y);
 }
-inline void from_float(thread Bfloat4_& dst, float4 src) {
+inline void from_float(thread Bfloat4_ &dst, float4 src) {
   dst.x.x = static_cast<bfloat16_t>(src.x);
   dst.x.y = static_cast<bfloat16_t>(src.y);
   dst.y.x = static_cast<bfloat16_t>(src.z);
   dst.y.y = static_cast<bfloat16_t>(src.w);
 }
-inline void from_float(thread Bfloat8_& dst, Float8_ src) {
+inline void from_float(thread Bfloat8_ &dst, Float8_ src) {
   Bfloat4_ x;
   Bfloat4_ y;
   from_float(x, src.x);
@@ -744,79 +657,52 @@ inline void from_float(thread Bfloat8_& dst, Float8_ src) {
 
 // #endif
 
-
-
-
-
 // FP16 vector data types.
 struct Half8_ {
   half4 x;
   half4 y;
 };
 
-template<>
-struct Vec<half, 1> {
+template <> struct Vec<half, 1> {
   using Type = half;
 };
-template<>
-struct Vec<half, 2> {
+template <> struct Vec<half, 2> {
   using Type = half2;
 };
-template<>
-struct Vec<half, 4> {
+template <> struct Vec<half, 4> {
   using Type = half4;
 };
-template<>
-struct Vec<half, 8> {
+template <> struct Vec<half, 8> {
   using Type = Half8_;
 };
 
-template<>
-struct FloatVec<half> {
+template <> struct FloatVec<half> {
   using Type = float;
 };
-template<>
-struct FloatVec<half2> {
+template <> struct FloatVec<half2> {
   using Type = float2;
 };
-template<>
-struct FloatVec<half4> {
+template <> struct FloatVec<half4> {
   using Type = float4;
 };
-template<>
-struct FloatVec<Half8_> {
+template <> struct FloatVec<Half8_> {
   using Type = Float8_;
 };
 
-template<>
-inline float mul(half a, half b) {
-  return (float)a * (float)b;
-}
-template<>
-inline half mul(half a, half b) {
-  return a*b;
-}
+template <> inline float mul(half a, half b) { return (float)a * (float)b; }
+template <> inline half mul(half a, half b) { return a * b; }
 
-template<>
-inline float2 mul(half2 a, half2 b) {
+template <> inline float2 mul(half2 a, half2 b) {
   return (float2)a * (float2)b;
 }
-template<>
-inline half2 mul(half2 a, half2 b) {
-  return a * b;
-}
+template <> inline half2 mul(half2 a, half2 b) { return a * b; }
 
-template<>
-inline float4 mul(half4 a, half4 b) {
+template <> inline float4 mul(half4 a, half4 b) {
   return (float4)a * (float4)b;
 }
-template<>
-inline half4 mul(half4 a, half4 b) {
-  return a * b;
-}
+template <> inline half4 mul(half4 a, half4 b) { return a * b; }
 
-template<>
-inline Float8_ mul(Half8_ a, Half8_ b) {
+template <> inline Float8_ mul(Half8_ a, Half8_ b) {
   float4 x = mul<float4, half4, half4>(a.x, b.x);
   float4 y = mul<float4, half4, half4>(a.y, b.y);
   Float8_ c;
@@ -824,37 +710,22 @@ inline Float8_ mul(Half8_ a, Half8_ b) {
   c.y = y;
   return c;
 }
-template<>
-inline Half8_ mul(Half8_ a, Half8_ b) {
+template <> inline Half8_ mul(Half8_ a, Half8_ b) {
   Half8_ c;
   c.x = mul<half4, half4, half4>(a.x, b.x);
   c.y = mul<half4, half4, half4>(a.y, b.y);
   return c;
 }
 
-template<>
-inline float sum(half a) {
-  return (float)a;
-}
+template <> inline float sum(half a) { return (float)a; }
 
-template<>
-inline float sum(half2 a) {
-  return (float)a.x + (float)a.y;
-}
+template <> inline float sum(half2 a) { return (float)a.x + (float)a.y; }
 
-template<>
-inline float sum(half4 a) {
-  return sum(a.x) + sum(a.y);
-}
+template <> inline float sum(half4 a) { return sum(a.x) + sum(a.y); }
 
-template<>
-inline float sum(Half8_ a) {
-  return sum(a.x) + sum(a.y);
-}
+template <> inline float sum(Half8_ a) { return sum(a.x) + sum(a.y); }
 
-inline float fma(half a, half b, float c) {
-  return (float)a * (float)b + c;
-}
+inline float fma(half a, half b, float c) { return (float)a * (float)b + c; }
 
 inline float2 fma(half2 a, half2 b, float2 c) {
   return (float2)a * (float2)b + c;
@@ -879,20 +750,20 @@ inline Half8_ fma(Half8_ a, Half8_ b, Half8_ c) {
   return c;
 }
 
-inline void from_float(thread half& dst, float src) {
+inline void from_float(thread half &dst, float src) {
   dst = static_cast<half>(src);
 }
-inline void from_float(thread half2& dst, float2 src) {
+inline void from_float(thread half2 &dst, float2 src) {
   dst.x = static_cast<half>(src.x);
   dst.y = static_cast<half>(src.y);
 }
-inline void from_float(thread half4& dst, float4 src) {
+inline void from_float(thread half4 &dst, float4 src) {
   dst.x = static_cast<half>(src.x);
   dst.y = static_cast<half>(src.y);
   dst.z = static_cast<half>(src.z);
   dst.w = static_cast<half>(src.w);
 }
-inline void from_float(thread Half8_& dst, Float8_ src) {
+inline void from_float(thread Half8_ &dst, Float8_ src) {
   half4 x;
   half4 y;
   from_float(x, src.x);
@@ -904,7 +775,7 @@ inline void from_float(thread Half8_& dst, Float8_ src) {
 // ========================================== Dot product utilities
 
 // TODO(EricLBuehler): optimize with vectorization
-template<int THREAD_GROUP_SIZE, typename Vec, int N>
+template <int THREAD_GROUP_SIZE, typename Vec, int N>
 inline float qk_dot_(const threadgroup Vec (&q)[N], const thread Vec (&k)[N]) {
   // Compute the parallel products for Q*K^T (treat vector lanes separately).
   using A_vec = typename FloatVec<Vec>::Type;
@@ -923,10 +794,10 @@ inline float qk_dot_(const threadgroup Vec (&q)[N], const thread Vec (&k)[N]) {
   return qk;
 }
 
-template<typename T, int THREAD_GROUP_SIZE>
-struct Qk_dot {
-  template<typename Vec, int N>
-  static inline float dot(const threadgroup Vec (&q)[N], const thread Vec (&k)[N]) {
+template <typename T, int THREAD_GROUP_SIZE> struct Qk_dot {
+  template <typename Vec, int N>
+  static inline float dot(const threadgroup Vec (&q)[N],
+                          const thread Vec (&k)[N]) {
     return qk_dot_<THREAD_GROUP_SIZE>(q, k);
   }
 };
@@ -934,8 +805,9 @@ struct Qk_dot {
 // ========================================== Block sum utility
 
 // Utility function for attention softmax.
-template<int NUM_WARPS, int NUM_SIMD_LANES>
-inline float block_sum(threadgroup float* red_smem, float sum, uint simd_tid, uint simd_lid) {
+template <int NUM_WARPS, int NUM_SIMD_LANES>
+inline float block_sum(threadgroup float *red_smem, float sum, uint simd_tid,
+                       uint simd_lid) {
   // Compute the sum per simdgroup.
 #pragma unroll
   for (int mask = NUM_SIMD_LANES / 2; mask >= 1; mask /= 2) {
@@ -967,7 +839,6 @@ inline float block_sum(threadgroup float* red_smem, float sum, uint simd_tid, ui
 
 // ========================================== Paged Attention kernel
 
-
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define DIVIDE_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
@@ -975,31 +846,40 @@ inline float block_sum(threadgroup float* red_smem, float sum, uint simd_tid, ui
 constant bool use_partitioning [[function_constant(10)]];
 constant bool use_alibi [[function_constant(20)]];
 
-template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SIMD_LANES, int PARTITION_SIZE = 0>
+template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS,
+          int NUM_SIMD_LANES, int PARTITION_SIZE = 0>
 [[kernel]] void paged_attention(
-    device float* exp_sums [[buffer(0), function_constant(use_partitioning)]],         // [num_seqs, num_heads, max_num_partitions]
-    device float* max_logits [[buffer(1), function_constant(use_partitioning)]],       // [num_seqs, num_heads, max_num_partitions]
-    device T* out [[buffer(2)]],              // [num_seqs, num_heads, max_num_partitions, head_size]
-    device const T* q [[buffer(3)]],          // [num_seqs, num_heads, head_size]
-    device const T* k_cache [[buffer(4)]],    // [num_blocks, num_kv_heads, head_size/x, block_size, x]
-    device const T* v_cache [[buffer(5)]],    // [num_blocks, num_kv_heads, head_size, block_size]
-    const constant int& num_kv_heads [[buffer(6)]],     // [num_heads]
-    const constant float& scale [[buffer(7)]],
-    const constant float& softcapping [[buffer(8)]],
-    device const uint32_t* block_tables [[buffer(9)]],   // [num_seqs, max_num_blocks_per_seq]
-    device const uint32_t* context_lens [[buffer(10)]],  // [num_seqs]
-    const constant int& max_num_blocks_per_seq [[buffer(11)]],
-    device const float* alibi_slopes [[buffer(12), function_constant(use_alibi)]],     // [num_heads]
-    const constant int& q_stride [[buffer(13)]],
-    const constant int& kv_block_stride [[buffer(14)]],
-    const constant int& kv_head_stride [[buffer(15)]],
-    threadgroup char* shared_mem [[threadgroup(0)]],
+    device float *exp_sums
+    [[buffer(0), function_constant(use_partitioning)]], // [num_seqs, num_heads,
+                                                        // max_num_partitions]
+    device float *max_logits
+    [[buffer(1), function_constant(use_partitioning)]], // [num_seqs, num_heads,
+                                                        // max_num_partitions]
+    device T *out
+    [[buffer(2)]], // [num_seqs, num_heads, max_num_partitions, head_size]
+    device const T *q [[buffer(3)]], // [num_seqs, num_heads, head_size]
+    device const T *k_cache
+    [[buffer(4)]], // [num_blocks, num_kv_heads, head_size/x, block_size, x]
+    device const T *v_cache
+    [[buffer(5)]], // [num_blocks, num_kv_heads, head_size, block_size]
+    const constant int &num_kv_heads [[buffer(6)]], // [num_heads]
+    const constant float &scale [[buffer(7)]],
+    const constant float &softcapping [[buffer(8)]],
+    device const uint32_t *block_tables
+    [[buffer(9)]], // [num_seqs, max_num_blocks_per_seq]
+    device const uint32_t *context_lens [[buffer(10)]], // [num_seqs]
+    const constant int &max_num_blocks_per_seq [[buffer(11)]],
+    device const float *alibi_slopes
+    [[buffer(12), function_constant(use_alibi)]], // [num_heads]
+    const constant int &q_stride [[buffer(13)]],
+    const constant int &kv_block_stride [[buffer(14)]],
+    const constant int &kv_head_stride [[buffer(15)]],
+    threadgroup char *shared_mem [[threadgroup(0)]],
     uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],
     uint3 threadgroups_per_grid [[threadgroups_per_grid]],
     uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]],
     uint simd_tid [[simdgroup_index_in_threadgroup]],
-    uint simd_lid [[thread_index_in_simdgroup]]
-) {
+    uint simd_lid [[thread_index_in_simdgroup]]) {
   const int seq_idx = threadgroup_position_in_grid.y;
   const int partition_idx = threadgroup_position_in_grid.z;
   const int max_num_partitions = threadgroups_per_grid.z;
@@ -1012,22 +892,29 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   }
 
   const int num_context_blocks = DIVIDE_ROUND_UP(context_len, BLOCK_SIZE);
-  const int num_blocks_per_partition = USE_PARTITIONING ? PARTITION_SIZE / BLOCK_SIZE : num_context_blocks;
+  const int num_blocks_per_partition =
+      USE_PARTITIONING ? PARTITION_SIZE / BLOCK_SIZE : num_context_blocks;
 
   // [start_block_idx, end_block_idx) is the range of blocks to process.
-  const int start_block_idx = USE_PARTITIONING ? partition_idx * num_blocks_per_partition : 0;
-  const int end_block_idx = MIN(start_block_idx + num_blocks_per_partition, num_context_blocks);
+  const int start_block_idx =
+      USE_PARTITIONING ? partition_idx * num_blocks_per_partition : 0;
+  const int end_block_idx =
+      MIN(start_block_idx + num_blocks_per_partition, num_context_blocks);
   const int num_blocks = end_block_idx - start_block_idx;
 
   // [start_token_idx, end_token_idx) is the range of tokens to process.
   const int start_token_idx = start_block_idx * BLOCK_SIZE;
-  const int end_token_idx = MIN(start_token_idx + num_blocks * BLOCK_SIZE, context_len);
+  const int end_token_idx =
+      MIN(start_token_idx + num_blocks * BLOCK_SIZE, context_len);
   const int num_tokens = end_token_idx - start_token_idx;
 
   constexpr int THREAD_GROUP_SIZE = MAX(NUM_SIMD_LANES / BLOCK_SIZE, 1);
-  constexpr int NUM_THREAD_GROUPS = NUM_THREADS / THREAD_GROUP_SIZE; // Note: This assumes THREAD_GROUP_SIZE divides NUM_THREADS
+  constexpr int NUM_THREAD_GROUPS =
+      NUM_THREADS / THREAD_GROUP_SIZE; // Note: This assumes THREAD_GROUP_SIZE
+                                       // divides NUM_THREADS
   assert(NUM_THREADS % THREAD_GROUP_SIZE == 0);
-  constexpr int NUM_TOKENS_PER_THREAD_GROUP = DIVIDE_ROUND_UP(BLOCK_SIZE, NUM_SIMD_LANES);
+  constexpr int NUM_TOKENS_PER_THREAD_GROUP =
+      DIVIDE_ROUND_UP(BLOCK_SIZE, NUM_SIMD_LANES);
   constexpr int NUM_WARPS = NUM_THREADS / NUM_SIMD_LANES;
   const int warp_idx = simd_tid;
   const int lane = simd_lid;
@@ -1039,10 +926,10 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   const float alibi_slope = !use_alibi ? 0.f : alibi_slopes[head_idx];
 
   // A vector type to store a part of a key or a query.
-  // The vector size is configured in such a way that the threads in a thread group
-  // fetch or compute 16 bytes at a time.
-  // For example, if the size of a thread group is 4 and the data type is half,
-  // then the vector size is 16 / (4 * sizeof(half)) == 2.
+  // The vector size is configured in such a way that the threads in a thread
+  // group fetch or compute 16 bytes at a time. For example, if the size of a
+  // thread group is 4 and the data type is half, then the vector size is 16 /
+  // (4 * sizeof(half)) == 2.
   constexpr int VEC_SIZE = MAX(16 / (THREAD_GROUP_SIZE * sizeof(T)), 1);
   using K_vec = typename Vec<T, VEC_SIZE>::Type;
   using Q_vec = typename Vec<T, VEC_SIZE>::Type;
@@ -1055,20 +942,22 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
 
   // Load the query to registers.
   // Each thread in a thread group has a different part of the query.
-  // For example, if the thread group size is 4, then the first thread in the group
-  // has 0, 4, 8, ... th vectors of the query, and the second thread has 1, 5, 9, ...
-  // th vectors of the query, and so on.
-  const device T* q_ptr = q + seq_idx * q_stride + head_idx * HEAD_SIZE;
+  // For example, if the thread group size is 4, then the first thread in the
+  // group has 0, 4, 8, ... th vectors of the query, and the second thread has
+  // 1, 5, 9, ... th vectors of the query, and so on.
+  const device T *q_ptr = q + seq_idx * q_stride + head_idx * HEAD_SIZE;
   threadgroup Q_vec q_vecs[THREAD_GROUP_SIZE][NUM_VECS_PER_THREAD];
 #pragma unroll
-  for (int i = thread_group_idx; i < NUM_VECS_PER_THREAD; i += NUM_THREAD_GROUPS) {
+  for (int i = thread_group_idx; i < NUM_VECS_PER_THREAD;
+       i += NUM_THREAD_GROUPS) {
     const int vec_idx = thread_group_offset + i * THREAD_GROUP_SIZE;
-    q_vecs[thread_group_offset][i] = *reinterpret_cast<const device Q_vec*>(q_ptr + vec_idx * VEC_SIZE);
+    q_vecs[thread_group_offset][i] =
+        *reinterpret_cast<const device Q_vec *>(q_ptr + vec_idx * VEC_SIZE);
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
 
   // Use fp32 on softmax logits for better accuracy
-  threadgroup float* logits = reinterpret_cast<threadgroup float*>(shared_mem);
+  threadgroup float *logits = reinterpret_cast<threadgroup float *>(shared_mem);
   // Workspace for reduction
   threadgroup float red_smem[2 * NUM_WARPS];
 
@@ -1081,45 +970,52 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   // Each warp fetches a block of keys for each iteration.
   // Each thread group in a warp fetches a key from the block, and computes
   // dot product with the query.
-  const device uint32_t* block_table = block_tables + seq_idx * max_num_blocks_per_seq;
-  for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx; block_idx += NUM_WARPS) {
+  const device uint32_t *block_table =
+      block_tables + seq_idx * max_num_blocks_per_seq;
+  for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx;
+       block_idx += NUM_WARPS) {
     // NOTE: The block number is stored in int32. However, we cast it to int64
-    // because int32 can lead to overflow when this variable is multiplied by large numbers
-    // (e.g., kv_block_stride).
-    const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
+    // because int32 can lead to overflow when this variable is multiplied by
+    // large numbers (e.g., kv_block_stride).
+    const int64_t physical_block_number =
+        static_cast<int64_t>(block_table[block_idx]);
 
     // Load a key to registers.
     // Each thread in a thread group has a different part of the key.
-    // For example, if the thread group size is 4, then the first thread in the group
-    // has 0, 4, 8, ... th vectors of the key, and the second thread has 1, 5, 9, ... th
-    // vectors of the key, and so on.
+    // For example, if the thread group size is 4, then the first thread in the
+    // group has 0, 4, 8, ... th vectors of the key, and the second thread has
+    // 1, 5, 9, ... th vectors of the key, and so on.
     for (int i = 0; i < NUM_TOKENS_PER_THREAD_GROUP; i++) {
-      const int physical_block_offset = (thread_group_idx + i * NUM_SIMD_LANES) % BLOCK_SIZE;
+      const int physical_block_offset =
+          (thread_group_idx + i * NUM_SIMD_LANES) % BLOCK_SIZE;
       const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
       K_vec k_vecs[NUM_VECS_PER_THREAD];
 
 #pragma unroll
       for (int j = 0; j < NUM_VECS_PER_THREAD; j++) {
-        const device T* k_ptr = k_cache + physical_block_number * kv_block_stride
-                                        + kv_head_idx * kv_head_stride
-                                        + physical_block_offset * x;
+        const device T *k_ptr =
+            k_cache + physical_block_number * kv_block_stride +
+            kv_head_idx * kv_head_stride + physical_block_offset * x;
         const int vec_idx = thread_group_offset + j * THREAD_GROUP_SIZE;
         const int offset1 = (vec_idx * VEC_SIZE) / x;
         const int offset2 = (vec_idx * VEC_SIZE) % x;
-        k_vecs[j] = *reinterpret_cast<const device K_vec*>(k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+        k_vecs[j] = *reinterpret_cast<const device K_vec *>(
+            k_ptr + offset1 * BLOCK_SIZE * x + offset2);
       }
 
       // Compute dot product.
       // This includes a reduction across the threads in the same thread group.
-      float qk = scale * Qk_dot<T, THREAD_GROUP_SIZE>::dot(q_vecs[thread_group_offset], k_vecs);
-      
+      float qk = scale * Qk_dot<T, THREAD_GROUP_SIZE>::dot(
+                             q_vecs[thread_group_offset], k_vecs);
+
       // Apply softcapping
       if (softcapping != 1.0) {
         qk = precise::tanh(qk / softcapping) * softcapping;
       }
 
       // Add the ALiBi bias if slopes are given.
-      qk += (alibi_slope != 0) ? alibi_slope * (token_idx - context_len + 1) : 0;
+      qk +=
+          (alibi_slope != 0) ? alibi_slope * (token_idx - context_len + 1) : 0;
 
       if (thread_group_offset == 0) {
         // Store the partial reductions to shared memory.
@@ -1160,7 +1056,8 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
     logits[i] = val;
     exp_sum += val;
   }
-  exp_sum = block_sum<NUM_WARPS, NUM_SIMD_LANES>(&red_smem[NUM_WARPS], exp_sum, simd_tid, simd_lid);
+  exp_sum = block_sum<NUM_WARPS, NUM_SIMD_LANES>(&red_smem[NUM_WARPS], exp_sum,
+                                                 simd_tid, simd_lid);
 
   // Compute softmax.
   const float inv_sum = divide(1.f, exp_sum + 1e-6f);
@@ -1171,13 +1068,13 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
 
   // If partitioning is enabled, store the max logit and exp_sum.
   if (USE_PARTITIONING && thread_idx == 0 && use_partitioning) {
-    device float* max_logits_ptr = max_logits + seq_idx * num_heads * max_num_partitions
-                                       + head_idx * max_num_partitions
-                                       + partition_idx;
+    device float *max_logits_ptr =
+        max_logits + seq_idx * num_heads * max_num_partitions +
+        head_idx * max_num_partitions + partition_idx;
     *max_logits_ptr = qk_max;
-    device float* exp_sums_ptr = exp_sums + seq_idx * num_heads * max_num_partitions
-                                   + head_idx * max_num_partitions
-                                   + partition_idx;
+    device float *exp_sums_ptr = exp_sums +
+                                 seq_idx * num_heads * max_num_partitions +
+                                 head_idx * max_num_partitions + partition_idx;
     *exp_sums_ptr = exp_sum;
   }
 
@@ -1189,7 +1086,8 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
 
   constexpr int NUM_V_VECS_PER_ROW = BLOCK_SIZE / V_VEC_SIZE;
   constexpr int NUM_ROWS_PER_ITER = NUM_SIMD_LANES / NUM_V_VECS_PER_ROW;
-  constexpr int NUM_ROWS_PER_THREAD = DIVIDE_ROUND_UP(HEAD_SIZE, NUM_ROWS_PER_ITER);
+  constexpr int NUM_ROWS_PER_THREAD =
+      DIVIDE_ROUND_UP(HEAD_SIZE, NUM_ROWS_PER_ITER);
 
   // NOTE: We use FP32 for the accumulator for better accuracy.
   float accs[NUM_ROWS_PER_THREAD];
@@ -1199,19 +1097,22 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   }
 
   T zero_value = 0;
-  for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx; block_idx += NUM_WARPS) {
+  for (int block_idx = start_block_idx + warp_idx; block_idx < end_block_idx;
+       block_idx += NUM_WARPS) {
     // NOTE: The block number is stored in int32. However, we cast it to int64
-    // because int32 can lead to overflow when this variable is multiplied by large numbers
-    // (e.g., kv_block_stride).
-    const int64_t physical_block_number = static_cast<int64_t>(block_table[block_idx]);
+    // because int32 can lead to overflow when this variable is multiplied by
+    // large numbers (e.g., kv_block_stride).
+    const int64_t physical_block_number =
+        static_cast<int64_t>(block_table[block_idx]);
     const int physical_block_offset = (lane % NUM_V_VECS_PER_ROW) * V_VEC_SIZE;
     const int token_idx = block_idx * BLOCK_SIZE + physical_block_offset;
     L_vec logits_vec;
-    Float_L_vec logits_float_vec = *reinterpret_cast<threadgroup Float_L_vec*>(logits + token_idx - start_token_idx);
+    Float_L_vec logits_float_vec = *reinterpret_cast<threadgroup Float_L_vec *>(
+        logits + token_idx - start_token_idx);
     from_float(logits_vec, logits_float_vec);
 
-    const device T* v_ptr = v_cache + physical_block_number * kv_block_stride
-                                    + kv_head_idx * kv_head_stride;
+    const device T *v_ptr = v_cache + physical_block_number * kv_block_stride +
+                            kv_head_idx * kv_head_stride;
 #pragma unroll
     for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
       const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
@@ -1219,13 +1120,15 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
         const int offset = row_idx * BLOCK_SIZE + physical_block_offset;
         // NOTE: When v_vec contains the tokens that are out of the context,
         // we should explicitly zero out the values since they may contain NaNs.
-        // See https://github.com/vllm-project/vllm/issues/641#issuecomment-1682544472
-        V_vec v_vec = *reinterpret_cast<const device V_vec*>(v_ptr + offset);
+        // See
+        // https://github.com/vllm-project/vllm/issues/641#issuecomment-1682544472
+        V_vec v_vec = *reinterpret_cast<const device V_vec *>(v_ptr + offset);
         if (block_idx == num_context_blocks - 1) {
-          thread T* v_vec_ptr = reinterpret_cast<thread T*>(&v_vec);
+          thread T *v_vec_ptr = reinterpret_cast<thread T *>(&v_vec);
 #pragma unroll
           for (int j = 0; j < V_VEC_SIZE; j++) {
-            v_vec_ptr[j] = token_idx + j < context_len ? v_vec_ptr[j] : zero_value;
+            v_vec_ptr[j] =
+                token_idx + j < context_len ? v_vec_ptr[j] : zero_value;
           }
         }
         accs[i] += dot(logits_vec, v_vec);
@@ -1249,13 +1152,14 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   threadgroup_barrier(mem_flags::mem_threadgroup);
 
   // Perform reduction across warps.
-  threadgroup float* out_smem = reinterpret_cast<threadgroup float*>(shared_mem);
+  threadgroup float *out_smem =
+      reinterpret_cast<threadgroup float *>(shared_mem);
 #pragma unroll
   for (int i = NUM_WARPS; i > 1; i /= 2) {
     int mid = i / 2;
     // Upper warps write to shared memory.
     if (warp_idx >= mid && warp_idx < i) {
-      threadgroup float* dst = &out_smem[(warp_idx - mid) * HEAD_SIZE];
+      threadgroup float *dst = &out_smem[(warp_idx - mid) * HEAD_SIZE];
 #pragma unroll
       for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
         const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
@@ -1268,7 +1172,7 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
 
     // Lower warps update the output.
     if (warp_idx < mid) {
-      const threadgroup float* src = &out_smem[warp_idx * HEAD_SIZE];
+      const threadgroup float *src = &out_smem[warp_idx * HEAD_SIZE];
 #pragma unroll
       for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
         const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
@@ -1282,9 +1186,9 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
 
   // Write the final output.
   if (warp_idx == 0) {
-    device T* out_ptr = out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE
-                            + head_idx * max_num_partitions * HEAD_SIZE
-                            + partition_idx * HEAD_SIZE;
+    device T *out_ptr =
+        out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE +
+        head_idx * max_num_partitions * HEAD_SIZE + partition_idx * HEAD_SIZE;
 #pragma unroll
     for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
       const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
@@ -1295,22 +1199,21 @@ template <typename T, int HEAD_SIZE, int BLOCK_SIZE, int NUM_THREADS, int NUM_SI
   }
 }
 
-template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES, int PARTITION_SIZE = 0>
+template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
+          int PARTITION_SIZE = 0>
 [[kernel]] void paged_attention_v2_reduce(
-    device T* out [[buffer(0)]],
-    const device float* exp_sums [[buffer(1)]],
-    const device float* max_logits [[buffer(2)]],
-    const device T* tmp_out [[buffer(3)]],
-    device uint32_t* context_lens [[buffer(4)]],
-    const constant int& max_num_partitions [[buffer(5)]],
-    threadgroup char* shared_mem [[threadgroup(0)]],
+    device T *out [[buffer(0)]], const device float *exp_sums [[buffer(1)]],
+    const device float *max_logits [[buffer(2)]],
+    const device T *tmp_out [[buffer(3)]],
+    device uint32_t *context_lens [[buffer(4)]],
+    const constant int &max_num_partitions [[buffer(5)]],
+    threadgroup char *shared_mem [[threadgroup(0)]],
     uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],
     uint3 threadgroups_per_grid [[threadgroups_per_grid]],
     uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]],
     uint3 threads_per_threadgroup [[threads_per_threadgroup]],
     uint simd_tid [[simdgroup_index_in_threadgroup]],
-    uint simd_lid [[thread_index_in_simdgroup]]
-) {
+    uint simd_lid [[thread_index_in_simdgroup]]) {
   const int num_heads = threadgroups_per_grid.x;
   const int head_idx = threadgroup_position_in_grid.x;
   const int seq_idx = threadgroup_position_in_grid.y;
@@ -1318,10 +1221,13 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES, int PA
   const int num_partitions = DIVIDE_ROUND_UP(context_len, PARTITION_SIZE);
   if (num_partitions == 1) {
     // No need to reduce. Only copy tmp_out to out.
-    device T* out_ptr = out + seq_idx * num_heads * HEAD_SIZE + head_idx * HEAD_SIZE;
-    const device T* tmp_out_ptr = tmp_out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE
-                                          + head_idx * max_num_partitions * HEAD_SIZE;
-    for (int i = thread_position_in_threadgroup.x; i < HEAD_SIZE; i += threads_per_threadgroup.x) {
+    device T *out_ptr =
+        out + seq_idx * num_heads * HEAD_SIZE + head_idx * HEAD_SIZE;
+    const device T *tmp_out_ptr =
+        tmp_out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE +
+        head_idx * max_num_partitions * HEAD_SIZE;
+    for (int i = thread_position_in_threadgroup.x; i < HEAD_SIZE;
+         i += threads_per_threadgroup.x) {
       out_ptr[i] = tmp_out_ptr[i];
     }
     // Terminate the thread block.
@@ -1336,11 +1242,14 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES, int PA
   threadgroup float red_smem[2 * NUM_WARPS];
 
   // Load max logits to shared memory.
-  threadgroup float* shared_max_logits = reinterpret_cast<threadgroup float*>(shared_mem);
-  const device float* max_logits_ptr = max_logits + seq_idx * num_heads * max_num_partitions
-                                           + head_idx * max_num_partitions;
+  threadgroup float *shared_max_logits =
+      reinterpret_cast<threadgroup float *>(shared_mem);
+  const device float *max_logits_ptr =
+      max_logits + seq_idx * num_heads * max_num_partitions +
+      head_idx * max_num_partitions;
   float max_logit = -FLT_MAX;
-  for (int i = thread_position_in_threadgroup.x; i < num_partitions; i += threads_per_threadgroup.x) {
+  for (int i = thread_position_in_threadgroup.x; i < num_partitions;
+       i += threads_per_threadgroup.x) {
     const float l = max_logits_ptr[i];
     shared_max_logits[i] = l;
     max_logit = max(max_logit, l);
@@ -1367,116 +1276,162 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES, int PA
   max_logit = simd_shuffle(max_logit, 0);
 
   // Load rescaled exp sums to shared memory.
-  threadgroup float* shared_exp_sums = reinterpret_cast<threadgroup float*>(shared_mem + sizeof(float) * num_partitions);
-  const device float* exp_sums_ptr = exp_sums + seq_idx * num_heads * max_num_partitions
-                                       + head_idx * max_num_partitions;
+  threadgroup float *shared_exp_sums = reinterpret_cast<threadgroup float *>(
+      shared_mem + sizeof(float) * num_partitions);
+  const device float *exp_sums_ptr = exp_sums +
+                                     seq_idx * num_heads * max_num_partitions +
+                                     head_idx * max_num_partitions;
   float global_exp_sum = 0.0f;
-  for (int i = thread_position_in_threadgroup.x; i < num_partitions; i += threads_per_threadgroup.x) {
+  for (int i = thread_position_in_threadgroup.x; i < num_partitions;
+       i += threads_per_threadgroup.x) {
     float l = shared_max_logits[i];
     float rescaled_exp_sum = exp_sums_ptr[i] * exp(l - max_logit);
     global_exp_sum += rescaled_exp_sum;
     shared_exp_sums[i] = rescaled_exp_sum;
   }
   threadgroup_barrier(mem_flags::mem_threadgroup);
-  global_exp_sum = block_sum<NUM_WARPS, NUM_SIMD_LANES>(&red_smem[NUM_WARPS], global_exp_sum, simd_tid, simd_lid);
+  global_exp_sum = block_sum<NUM_WARPS, NUM_SIMD_LANES>(
+      &red_smem[NUM_WARPS], global_exp_sum, simd_tid, simd_lid);
   const float inv_global_exp_sum = divide(1.0f, global_exp_sum + 1e-6f);
 
   // Aggregate tmp_out to out.
-  const device T* tmp_out_ptr = tmp_out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE
-                                        + head_idx * max_num_partitions * HEAD_SIZE;
-  device T* out_ptr = out + seq_idx * num_heads * HEAD_SIZE + head_idx * HEAD_SIZE;
+  const device T *tmp_out_ptr =
+      tmp_out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE +
+      head_idx * max_num_partitions * HEAD_SIZE;
+  device T *out_ptr =
+      out + seq_idx * num_heads * HEAD_SIZE + head_idx * HEAD_SIZE;
 #pragma unroll
-  for (int i = thread_position_in_threadgroup.x; i < HEAD_SIZE; i += NUM_THREADS) {
+  for (int i = thread_position_in_threadgroup.x; i < HEAD_SIZE;
+       i += NUM_THREADS) {
     float acc = 0.0f;
     for (int j = 0; j < num_partitions; ++j) {
-      acc += float(tmp_out_ptr[j * HEAD_SIZE + i]) * shared_exp_sums[j] * inv_global_exp_sum;
+      acc += float(tmp_out_ptr[j * HEAD_SIZE + i]) * shared_exp_sums[j] *
+             inv_global_exp_sum;
     }
     out_ptr[i] = T(acc);
   }
 }
 
-#define instantiate_paged_attention_inner(type, head_size, block_size, num_threads, num_simd_lanes, partition_size)                                               \
-  template [[host_name("paged_attention_" #type "_hs" #head_size "_bs" #block_size "_nt" #num_threads "_nsl" #num_simd_lanes "_ps" #partition_size)]]  \
-  [[kernel]] void paged_attention<type, head_size, block_size, num_threads, num_simd_lanes, partition_size>(                                            \
-      device float* exp_sums [[buffer(0), function_constant(use_partitioning)]],                                             \
-      device float* max_logits [[buffer(1), function_constant(use_partitioning)]],                                            \
-      device type* out [[buffer(2)]],                                            \
-      device const type* q [[buffer(3)]],                                            \
-      device const type* k_cache [[buffer(4)]],                                            \
-      device const type* v_cache [[buffer(5)]],                                            \
-      const constant int& num_kv_heads [[buffer(6)]],                                          \
-      const constant float& scale [[buffer(7)]],                                            \
-      const constant float& softcapping [[buffer(8)]],                                            \
-      device const uint32_t* block_tables [[buffer(9)]],                                            \
-      device const uint32_t* context_lens [[buffer(10)]],                                            \
-      const constant int& max_num_blocks_per_seq [[buffer(11)]],                                            \
-      device const float* alibi_slopes [[buffer(12), function_constant(use_alibi)]],                                            \
-      const constant int& q_stride [[buffer(13)]],                                            \
-      const constant int& kv_block_stride [[buffer(14)]],                                            \
-      const constant int& kv_head_stride [[buffer(15)]],                                            \
-      threadgroup char* shared_mem [[threadgroup(0)]],                                            \
-      uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],                                            \
-      uint3 threadgroups_per_grid [[threadgroups_per_grid]],                                            \
-      uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]],                                            \
-      uint simd_tid [[simdgroup_index_in_threadgroup]],                                            \
-      uint simd_lid [[thread_index_in_simdgroup]]);                                            \
+#define instantiate_paged_attention_inner(                                     \
+    type, head_size, block_size, num_threads, num_simd_lanes, partition_size)  \
+  template                                                                     \
+      [[host_name("paged_attention_" #type "_hs" #head_size "_bs" #block_size  \
+                  "_nt" #num_threads "_nsl" #num_simd_lanes                    \
+                  "_ps" #partition_size)]] [[kernel]] void                     \
+      paged_attention<type, head_size, block_size, num_threads,                \
+                      num_simd_lanes, partition_size>(                         \
+          device float *exp_sums                                               \
+          [[buffer(0), function_constant(use_partitioning)]],                  \
+          device float *max_logits                                             \
+          [[buffer(1), function_constant(use_partitioning)]],                  \
+          device type *out [[buffer(2)]], device const type *q [[buffer(3)]],  \
+          device const type *k_cache [[buffer(4)]],                            \
+          device const type *v_cache [[buffer(5)]],                            \
+          const constant int &num_kv_heads [[buffer(6)]],                      \
+          const constant float &scale [[buffer(7)]],                           \
+          const constant float &softcapping [[buffer(8)]],                     \
+          device const uint32_t *block_tables [[buffer(9)]],                   \
+          device const uint32_t *context_lens [[buffer(10)]],                  \
+          const constant int &max_num_blocks_per_seq [[buffer(11)]],           \
+          device const float *alibi_slopes                                     \
+          [[buffer(12), function_constant(use_alibi)]],                        \
+          const constant int &q_stride [[buffer(13)]],                         \
+          const constant int &kv_block_stride [[buffer(14)]],                  \
+          const constant int &kv_head_stride [[buffer(15)]],                   \
+          threadgroup char *shared_mem [[threadgroup(0)]],                     \
+          uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]], \
+          uint3 threadgroups_per_grid [[threadgroups_per_grid]],               \
+          uint3 thread_position_in_threadgroup                                 \
+          [[thread_position_in_threadgroup]],                                  \
+          uint simd_tid [[simdgroup_index_in_threadgroup]],                    \
+          uint simd_lid [[thread_index_in_simdgroup]]);
 
-#define instantiate_paged_attention_v2_reduce_inner(type, head_size, num_threads, num_simd_lanes, partition_size)                                               \
-  template [[host_name("paged_attention_v2_reduce_" #type "_hs" #head_size "_nt" #num_threads "_nsl" #num_simd_lanes "_ps" #partition_size)]]  \
-  [[kernel]] void paged_attention_v2_reduce<type, head_size, num_threads, num_simd_lanes, partition_size>(             \
-      device type* out [[buffer(0)]],             \
-      const device float* exp_sums [[buffer(1)]],             \
-      const device float* max_logits [[buffer(2)]],             \
-      const device type* tmp_out [[buffer(3)]],             \
-      device uint32_t* context_lens [[buffer(4)]],             \
-      const constant int& max_num_partitions [[buffer(5)]],             \
-      threadgroup char* shared_mem [[threadgroup(0)]],             \
-      uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],             \
-      uint3 threadgroups_per_grid [[threadgroups_per_grid]],             \
-      uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]],             \
-      uint3 threads_per_threadgroup [[threads_per_threadgroup]],             \
-      uint simd_tid [[simdgroup_index_in_threadgroup]],             \
-      uint simd_lid [[thread_index_in_simdgroup]]);             \
+#define instantiate_paged_attention_v2_reduce_inner(                           \
+    type, head_size, num_threads, num_simd_lanes, partition_size)              \
+  template [[host_name("paged_attention_v2_reduce_" #type "_hs" #head_size     \
+                       "_nt" #num_threads "_nsl" #num_simd_lanes               \
+                       "_ps" #partition_size)]] [[kernel]] void                \
+  paged_attention_v2_reduce<type, head_size, num_threads, num_simd_lanes,      \
+                            partition_size>(                                   \
+      device type * out [[buffer(0)]],                                         \
+      const device float *exp_sums [[buffer(1)]],                              \
+      const device float *max_logits [[buffer(2)]],                            \
+      const device type *tmp_out [[buffer(3)]],                                \
+      device uint32_t *context_lens [[buffer(4)]],                             \
+      const constant int &max_num_partitions [[buffer(5)]],                    \
+      threadgroup char *shared_mem [[threadgroup(0)]],                         \
+      uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],     \
+      uint3 threadgroups_per_grid [[threadgroups_per_grid]],                   \
+      uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]], \
+      uint3 threads_per_threadgroup [[threads_per_threadgroup]],               \
+      uint simd_tid [[simdgroup_index_in_threadgroup]],                        \
+      uint simd_lid [[thread_index_in_simdgroup]]);
 
+#define instantiate_paged_attention_heads(type, block_size, num_threads,       \
+                                          num_simd_lanes, partition_size)      \
+  instantiate_paged_attention_inner(type, 64, block_size, num_threads,         \
+                                    num_simd_lanes, partition_size)            \
+      instantiate_paged_attention_inner(type, 80, block_size, num_threads,     \
+                                        num_simd_lanes, partition_size)        \
+          instantiate_paged_attention_inner(type, 96, block_size, num_threads, \
+                                            num_simd_lanes, partition_size)    \
+              instantiate_paged_attention_inner(type, 112, block_size,         \
+                                                num_threads, num_simd_lanes,   \
+                                                partition_size)                \
+                  instantiate_paged_attention_inner(                           \
+                      type, 128, block_size, num_threads, num_simd_lanes,      \
+                      partition_size)                                          \
+                      instantiate_paged_attention_inner(                       \
+                          type, 192, block_size, num_threads, num_simd_lanes,  \
+                          partition_size)                                      \
+                          instantiate_paged_attention_inner(                   \
+                              type, 256, block_size, num_threads,              \
+                              num_simd_lanes, partition_size)
 
-#define instantiate_paged_attention_heads(type, block_size, num_threads, num_simd_lanes, partition_size) \
-  instantiate_paged_attention_inner(type, 64, block_size, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_inner(type, 80, block_size, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_inner(type, 96, block_size, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_inner(type, 112, block_size, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_inner(type, 128, block_size, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_inner(type, 192, block_size, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_inner(type, 256, block_size, num_threads, num_simd_lanes, partition_size)
+#define instantiate_paged_attention_v2_reduce_heads(                           \
+    type, num_threads, num_simd_lanes, partition_size)                         \
+  instantiate_paged_attention_v2_reduce_inner(type, 64, num_threads,           \
+                                              num_simd_lanes, partition_size)  \
+      instantiate_paged_attention_v2_reduce_inner(                             \
+          type, 80, num_threads, num_simd_lanes, partition_size)               \
+          instantiate_paged_attention_v2_reduce_inner(                         \
+              type, 96, num_threads, num_simd_lanes, partition_size)           \
+              instantiate_paged_attention_v2_reduce_inner(                     \
+                  type, 112, num_threads, num_simd_lanes, partition_size)      \
+                  instantiate_paged_attention_v2_reduce_inner(                 \
+                      type, 128, num_threads, num_simd_lanes, partition_size)  \
+                      instantiate_paged_attention_v2_reduce_inner(             \
+                          type, 192, num_threads, num_simd_lanes,              \
+                          partition_size)                                      \
+                          instantiate_paged_attention_v2_reduce_inner(         \
+                              type, 256, num_threads, num_simd_lanes,          \
+                              partition_size)
 
-#define instantiate_paged_attention_v2_reduce_heads(type, num_threads, num_simd_lanes, partition_size) \
-  instantiate_paged_attention_v2_reduce_inner(type, 64, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_v2_reduce_inner(type, 80, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_v2_reduce_inner(type, 96, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_v2_reduce_inner(type, 112, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_v2_reduce_inner(type, 128, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_v2_reduce_inner(type, 192, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_v2_reduce_inner(type, 256, num_threads, num_simd_lanes, partition_size)
-
-#define instantiate_paged_attention_block_size(type, num_threads, num_simd_lanes, partition_size) \
-  instantiate_paged_attention_heads(type, 8, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_heads(type, 16, num_threads, num_simd_lanes, partition_size)         \
-  instantiate_paged_attention_heads(type, 32, num_threads, num_simd_lanes, partition_size)
+#define instantiate_paged_attention_block_size(type, num_threads,              \
+                                               num_simd_lanes, partition_size) \
+  instantiate_paged_attention_heads(type, 8, num_threads, num_simd_lanes,      \
+                                    partition_size)                            \
+      instantiate_paged_attention_heads(type, 16, num_threads, num_simd_lanes, \
+                                        partition_size)                        \
+          instantiate_paged_attention_heads(type, 32, num_threads,             \
+                                            num_simd_lanes, partition_size)
 
 // TODO: tune num_threads = 256
 // NOTE: partition_size = 0
-#define instantiate_paged_attention_v1(type, num_simd_lanes) \
+#define instantiate_paged_attention_v1(type, num_simd_lanes)                   \
   instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 0)
 
 // TODO: tune num_threads = 256
 // NOTE: partition_size = 512
-#define instantiate_paged_attention_v2(type, num_simd_lanes) \
-  instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 512) \
-  instantiate_paged_attention_v2_reduce_heads(type, 256, num_simd_lanes, 512)
+#define instantiate_paged_attention_v2(type, num_simd_lanes)                   \
+  instantiate_paged_attention_block_size(type, 256, num_simd_lanes, 512)       \
+      instantiate_paged_attention_v2_reduce_heads(type, 256, num_simd_lanes,   \
+                                                  512)
 
 instantiate_paged_attention_v1(float, 32)
-instantiate_paged_attention_v1(bfloat16_t, 32)
-instantiate_paged_attention_v1(half, 32)
+    instantiate_paged_attention_v1(bfloat16_t, 32)
+        instantiate_paged_attention_v1(half, 32)
 
-instantiate_paged_attention_v2(float, 32)
-instantiate_paged_attention_v2(bfloat16_t, 32)
-instantiate_paged_attention_v2(half, 32)
+            instantiate_paged_attention_v2(float, 32)
+                instantiate_paged_attention_v2(bfloat16_t, 32)
+                    instantiate_paged_attention_v2(half, 32)

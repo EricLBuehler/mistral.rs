@@ -302,11 +302,16 @@ impl Loader for NormalLoader {
         let available_devices = if let Ok(payload) = env::var(daemon::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
-            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
+            vec![candle_core::Device::new_cuda_with_stream(worker_rank + 1)?]
         } else if use_nccl {
-            vec![candle_core::Device::new_cuda(0)?]
+            vec![candle_core::Device::new_cuda_with_stream(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
+        };
+        let device = if use_nccl {
+            available_devices[0].clone()
+        } else {
+            device.clone()
         };
 
         // If auto, convert to Map if not using nccl
@@ -407,12 +412,12 @@ impl Loader for NormalLoader {
 
         let pipeline_mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
-            device,
+            &device,
             self.config.topology.as_ref(),
         )?;
         let mapper = mapper.into_mapper(
             self.inner.get_total_device_mapping_num_layers(&config)?,
-            device,
+            &device,
             self.config.topology.as_ref(),
         )?;
         let mut layer_devices = Vec::new();
@@ -469,6 +474,7 @@ impl Loader for NormalLoader {
         let multi_progress = Arc::new(MultiProgress::new());
 
         let mut model = if use_nccl {
+            let device = available_devices[0].clone();
             #[cfg(not(feature = "nccl"))]
             warn!(
                 "NCCL support was included in the build, be sure to build with `--features nccl`."
@@ -495,10 +501,9 @@ impl Loader for NormalLoader {
             info!("Local tensor parallel world size is {local_world_size}");
             info!("Global tensor parallel world size is {global_world_size}");
 
-            let mut id = mistralrs_quant::Id::new();
-
             // TP uses parallel pipelines.
             let name = daemon::ipc_name()?;
+            let mut id;
             let local_rank = if let Ok(payload) = env::var(daemon::IS_DAEMON_FLAG) {
                 let payload: WorkerTransferData = serde_json::from_str(&payload)?;
                 let WorkerTransferData::Init {
@@ -511,6 +516,7 @@ impl Loader for NormalLoader {
                 stream.write_all(b"ready\n")?;
                 worker_rank + 1
             } else {
+                id = mistralrs_quant::Id::new();
                 let num_workers =
                     mistralrs_quant::distributed::get_global_tp_size_from_devices()? - 1;
                 let mut children = Vec::new();
@@ -596,7 +602,7 @@ impl Loader for NormalLoader {
             // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
             let comm = mistralrs_quant::Comm::from_device(
                 id,
-                device,
+                &device,
                 local_rank + rank_offset,
                 global_world_size,
             )?;
@@ -624,7 +630,6 @@ impl Loader for NormalLoader {
             };
 
             info!("Loading all ranks.");
-            let device = available_devices[0].clone();
             // The mapper is specific to this pipeline
             let mapper = DeviceMapSetting::Nccl {
                 nm_device: available_devices[0].clone(),
@@ -900,7 +905,7 @@ impl Loader for NormalLoader {
                 paged_attn_config.block_size,
                 dtype,
                 model.config(),
-                device,
+                &device,
                 &pipeline_mapper
                     .get_unique_devices()
                     .into_iter()

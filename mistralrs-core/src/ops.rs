@@ -389,23 +389,29 @@ impl NonZero {
 }
 
 #[cfg(feature = "cuda")]
-fn count_nonzero_cuda(dtype: candle_core::DType, d_in: *const c_void, n: u32) -> u32 {
+fn count_nonzero_cuda(
+    dtype: candle_core::DType,
+    d_in: *const c_void,
+    n: u32,
+    stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+) -> u32 {
     unsafe {
         match dtype {
-            candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n),
-            candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n),
-            candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n),
-            candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n),
-            candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n),
-            candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n),
-            candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n),
-            candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n),
-            candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n),
+            candle_core::DType::U8 => ffi::count_nonzero_u8(d_in, n, stream),
+            candle_core::DType::U32 => ffi::count_nonzero_u32(d_in, n, stream),
+            candle_core::DType::I64 => ffi::count_nonzero_i64(d_in, n, stream),
+            candle_core::DType::I16 => ffi::count_nonzero_i16(d_in, n, stream),
+            candle_core::DType::I32 => ffi::count_nonzero_i32(d_in, n, stream),
+            candle_core::DType::BF16 => ffi::count_nonzero_bf16(d_in, n, stream),
+            candle_core::DType::F16 => ffi::count_nonzero_f16(d_in, n, stream),
+            candle_core::DType::F32 => ffi::count_nonzero_f32(d_in, n, stream),
+            candle_core::DType::F64 => ffi::count_nonzero_f64(d_in, n, stream),
             candle_core::DType::F8E4M3 => todo!(),
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[cfg(feature = "cuda")]
 fn nonzero_cuda(
     dtype: candle_core::DType,
@@ -415,33 +421,36 @@ fn nonzero_cuda(
     dims: *const c_void,
     num_dims: u32,
     d_out: *mut c_void,
+    stream: candle_core::cuda::cudarc::driver::sys::CUstream,
 ) {
     unsafe {
         match dtype {
-            candle_core::DType::U8 => ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out),
+            candle_core::DType::U8 => {
+                ffi::nonzero_u8(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
+            }
             candle_core::DType::U32 => {
-                ffi::nonzero_u32(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_u32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::I64 => {
-                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::I32 => {
-                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_i64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::I16 => {
-                ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_i16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::BF16 => {
-                ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_bf16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::F16 => {
-                ffi::nonzero_f16(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_f16(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::F32 => {
-                ffi::nonzero_f32(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_f32(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::F64 => {
-                ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out)
+                ffi::nonzero_f64(d_in, n, num_nonzero, dims, num_dims, d_out, stream)
             }
             candle_core::DType::F8E4M3 => todo!(),
         }
@@ -498,7 +507,9 @@ impl CustomOp1 for NonZero {
             candle_core::DType::F8E4M3 => todo!(),
         } as *const c_void;
         let n = layout.shape().elem_count();
-        let num_nonzero = count_nonzero_cuda(storage.dtype(), d_in, u32::try_from(n)?);
+
+        let num_nonzero =
+            count_nonzero_cuda(storage.dtype(), d_in, u32::try_from(n)?, *dev.cu_stream());
         let d_out = unsafe { dev.alloc::<u32>(num_nonzero as usize * layout.dims().len()) }
             .map_err(|_| Error::Msg("Failed to allocate memory for nonzero result".to_string()))?;
         let d_out_ptr = *d_out.device_ptr() as *mut c_void;
@@ -519,6 +530,7 @@ impl CustomOp1 for NonZero {
             d_dims_ptr,
             u32::try_from(layout.dims().len())?,
             d_out_ptr,
+            *dev.cu_stream(),
         );
         let shape = Shape::from_dims(&[num_nonzero as usize, layout.dims().len()]);
         let dst = candle_core::CudaStorage::wrap_cuda_slice(d_out, dev);
@@ -551,6 +563,174 @@ impl NonZeroOp for Tensor {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct ArgSort {
+    asc: bool,
+    last_dim: usize,
+    inplace: bool,
+}
+
+impl candle_core::CustomOp1 for ArgSort {
+    fn name(&self) -> &'static str {
+        "argsort"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _: &candle_core::CpuStorage,
+        _: &candle_core::Layout,
+    ) -> Result<(candle_core::CpuStorage, candle_core::Shape)> {
+        panic!("not implemented!")
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(
+        &self,
+        storage: &candle_core::CudaStorage,
+        layout: &candle_core::Layout,
+    ) -> Result<(candle_core::CudaStorage, candle_core::Shape)> {
+        use candle_core::backend::BackendStorage;
+        use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+        use candle_core::cuda_backend::CudaStorageSlice;
+        use candle_core::cuda_backend::WrapErr;
+        let dev = storage.device();
+        let elem_count = layout.shape().elem_count();
+        let ncols = self.last_dim as i32;
+        let nrows = elem_count as i32 / ncols;
+        let dst = unsafe { dev.alloc::<u32>(elem_count) }.w()?;
+
+        use std::ffi::c_void;
+
+        let src = match &storage.slice {
+            CudaStorageSlice::U8(inp) => inp.device_ptr(),
+            CudaStorageSlice::U32(inp) => inp.device_ptr(),
+            CudaStorageSlice::I64(inp) => inp.device_ptr(),
+            CudaStorageSlice::BF16(inp) => inp.device_ptr(),
+            CudaStorageSlice::F16(inp) => inp.device_ptr(),
+            CudaStorageSlice::F32(inp) => inp.device_ptr(),
+            CudaStorageSlice::F64(inp) => inp.device_ptr(),
+            _ => candle_core::bail!("Unexpected dtype in asort"),
+        };
+        let src_ptr = *src as *const c_void;
+        let dst_ptr = *dst.device_ptr() as *mut c_void;
+        let stream = *dev.cu_stream() as i64;
+        unsafe {
+            if self.asc {
+                match storage.dtype() {
+                    candle_core::DType::U8 => {
+                        ffi::asort_asc_u8(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::U32 => {
+                        ffi::asort_asc_u32(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::I64 => {
+                        ffi::asort_asc_i64(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::BF16 => {
+                        ffi::asort_asc_bf16(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F16 => {
+                        ffi::asort_asc_f16(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F32 => {
+                        ffi::asort_asc_f32(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F64 => {
+                        ffi::asort_asc_f64(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    _ => candle_core::bail!("Unexpected dtype in asort"),
+                }
+            } else {
+                match storage.dtype() {
+                    candle_core::DType::U8 => {
+                        ffi::asort_desc_u8(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::U32 => {
+                        ffi::asort_desc_u32(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::I64 => {
+                        ffi::asort_desc_i64(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::BF16 => {
+                        ffi::asort_desc_bf16(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F16 => {
+                        ffi::asort_desc_f16(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F32 => {
+                        ffi::asort_desc_f32(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    candle_core::DType::F64 => {
+                        ffi::asort_desc_f64(src_ptr, dst_ptr, nrows, ncols, self.inplace, stream)
+                    }
+                    _ => candle_core::bail!("Unexpected dtype in asort"),
+                }
+            }
+        }
+        let dst_ret = candle_core::cuda_backend::CudaStorage {
+            slice: CudaStorageSlice::U32(dst),
+            device: dev.clone(),
+        };
+        Ok((dst_ret, layout.shape().clone()))
+    }
+}
+
+#[allow(dead_code)]
+pub trait ArgSortOp {
+    fn arg_sort(&self, asc: bool) -> Result<Tensor>;
+    fn sort(&self, asc: bool) -> Result<(Tensor, Tensor)>;
+}
+
+impl ArgSortOp for Tensor {
+    /// Returns the indices that sort the tensor along the last dimension.
+    ///
+    /// If `asc` is `true`, sorting is in ascending order. Otherwise sorting is performed in
+    /// descending order. The sort is unstable so there is no guarantees on the final order when it
+    /// comes to ties.
+    fn arg_sort(&self, asc: bool) -> Result<Tensor> {
+        if !self.is_contiguous() {
+            return Err(candle_core::Error::RequiresContiguous { op: "arg_sort" });
+        }
+        let last_dim = match self.dims().last() {
+            Some(last_dim) => *last_dim,
+            None => candle_core::bail!("empty last-dim in arg-sort"),
+        };
+        // No need for a backward pass for arg sort.
+        self.apply_op1_no_bwd(&ArgSort {
+            asc,
+            last_dim,
+            inplace: false,
+        })
+    }
+
+    /// Sorts the tensor along the last dimension, returns the sorted tensor together with the
+    /// sorted indexes.
+    ///
+    /// If `asc` is `true`, sorting is in ascending order. Otherwise sorting is performed in
+    /// descending order. The sort is unstable so there is no guarantees on the final order when it
+    /// comes to ties.
+    fn sort(&self, asc: bool) -> Result<(Tensor, Tensor)> {
+        if !self.is_contiguous() {
+            return Err(candle_core::Error::RequiresContiguous { op: "arg_sort" });
+        }
+        let last_dim = match self.dims().last() {
+            Some(last_dim) => *last_dim,
+            None => candle_core::bail!("empty last-dim in arg-sort"),
+        };
+        let sorted = self.copy()?;
+
+        let asort = sorted.apply_op1_no_bwd(&ArgSort {
+            asc,
+            last_dim,
+            inplace: true,
+        })?;
+
+        Ok((sorted, asort))
+    }
+}
+
+#[allow(dead_code)]
 pub struct TopKOutput {
     pub values: Tensor,
     pub indices: Tensor,
@@ -571,29 +751,28 @@ pub trait TopKLastDimOp {
 impl TopKLastDimOp for Tensor {
     fn topk(&self, topk: usize) -> Result<TopKOutput> {
         // Sorted descending
-        let sorted_indices = self.arg_sort_last_dim(false)?;
+        #[cfg(feature = "cuda")]
+        let (values, sorted_indices) = self.sort(false)?;
+        #[cfg(not(feature = "cuda"))]
+        let (values, sorted_indices) = self.sort_last_dim(false)?;
         let topk_indices = sorted_indices.narrow(D::Minus1, 0, topk)?.contiguous()?;
+        let topk_values = values.narrow(D::Minus1, 0, topk)?.contiguous()?;
         Ok(TopKOutput {
-            values: self.gather(&topk_indices, D::Minus1)?,
+            values: topk_values,
             indices: topk_indices,
         })
     }
 
     fn topk_unsorted(&self, topk: usize) -> Result<TopKOutput> {
         // Sorted descending
-        let sorted_indices_all = self.arg_sort_last_dim(false)?;
-        let topk_indices_sorted = sorted_indices_all
-            .narrow(D::Minus1, 0, topk)?
-            .contiguous()?;
-        let topk_values_sorted = self.gather(&topk_indices_sorted, D::Minus1)?;
-
+        let TopKOutput { values, indices } = self.topk(topk)?;
         // Reorder the indices ascending
-        let reorder_indices = topk_indices_sorted.arg_sort_last_dim(true)?;
-        let topk_indices_unsorted = topk_indices_sorted
-            .to_dtype(DType::F32)?
-            .gather(&reorder_indices, D::Minus1)?
-            .to_dtype(DType::U32)?;
-        let topk_values_unsorted = topk_values_sorted.gather(&reorder_indices, D::Minus1)?;
+        #[cfg(feature = "cuda")]
+        let reorder_indices = indices.arg_sort(true)?;
+        #[cfg(not(feature = "cuda"))]
+        let reorder_indices = indices.arg_sort_last_dim(true)?;
+        let topk_indices_unsorted = indices.gather(&reorder_indices, D::Minus1)?;
+        let topk_values_unsorted = values.gather(&reorder_indices, D::Minus1)?;
         Ok(TopKOutput {
             values: topk_values_unsorted,
             indices: topk_indices_unsorted,

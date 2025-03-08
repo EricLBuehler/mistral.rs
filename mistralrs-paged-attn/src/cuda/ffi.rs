@@ -1,5 +1,7 @@
 use core::ffi::{c_int, c_long, c_void};
 
+use candle_core::cuda::cudarc::driver::sys::CUstream;
+
 extern "C" {
     pub fn reshape_and_cache(
         key: *const c_void,
@@ -15,6 +17,7 @@ extern "C" {
         x: c_int,
         key_stride: c_int,
         value_stride: c_int,
+        stream: CUstream,
 
         dtype: u32,
     );
@@ -40,6 +43,7 @@ extern "C" {
         q_stride: c_int,
         kv_block_stride: c_int,
         kv_head_stride: c_int,
+        stream: CUstream,
 
         dtype: u32,
     );
@@ -68,6 +72,7 @@ extern "C" {
         q_stride: c_int,
         kv_block_stride: c_int,
         kv_head_stride: c_int,
+        stream: CUstream,
 
         dtype: u32,
     );

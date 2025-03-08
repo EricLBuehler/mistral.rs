@@ -5,7 +5,7 @@ use serde_big_array::BigArray;
 
 pub(crate) const IS_DAEMON_FLAG: &str = "__MISTRALRS_DAEMON_INTERNAL";
 
-pub(crate) fn is_daemon() -> bool {
+pub fn is_daemon() -> bool {
     std::env::var(IS_DAEMON_FLAG).is_ok()
 }
 

@@ -14,48 +14,45 @@
  * limitations under the License.
  */
 
-
 #ifndef MARLIN_CUDA_KERNEL_CUH
 #define MARLIN_CUDA_KERNEL_CUH
+#include "marlin/marlin_dtypes.cuh"
+#include <assert.h>
 #include <cuda.h>
 #include <cuda_fp16.h>
-#include <assert.h>
 #include <iostream>
-#include "marlin/marlin_dtypes.cuh"
 using namespace marlin;
 
 // m16n8k16 tensor core mma instruction with fp16/bf16 inputs and fp32
 // output/accumulation.
 template <typename scalar_t>
-__device__ inline void mma(const typename ScalarType<scalar_t>::FragA& a_frag,
-                           const typename ScalarType<scalar_t>::FragB& frag_b,
-                           typename ScalarType<scalar_t>::FragC& frag_c) {
-  const uint32_t* a = reinterpret_cast<const uint32_t*>(&a_frag);
-  const uint32_t* b = reinterpret_cast<const uint32_t*>(&frag_b);
-  float* c = reinterpret_cast<float*>(&frag_c);
+__device__ inline void mma(const typename ScalarType<scalar_t>::FragA &a_frag,
+                           const typename ScalarType<scalar_t>::FragB &frag_b,
+                           typename ScalarType<scalar_t>::FragC &frag_c) {
+  const uint32_t *a = reinterpret_cast<const uint32_t *>(&a_frag);
+  const uint32_t *b = reinterpret_cast<const uint32_t *>(&frag_b);
+  float *c = reinterpret_cast<float *>(&frag_c);
   if constexpr (std::is_same<scalar_t, half>::value) {
-    asm volatile(
-        "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
-        "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%10,%11,%12,%13};\n"
-        : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
-        : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]), "r"(b[1]),
-          "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]));
+    asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
+                 "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%10,%11,%12,%13};\n"
+                 : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
+                 : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]),
+                   "r"(b[1]), "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]));
   } else if constexpr (std::is_same<scalar_t, nv_bfloat16>::value) {
-    asm volatile(
-        "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 "
-        "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%10,%11,%12,%13};\n"
-        : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
-        : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]), "r"(b[1]),
-          "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]));
+    asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 "
+                 "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%10,%11,%12,%13};\n"
+                 : "=f"(c[0]), "=f"(c[1]), "=f"(c[2]), "=f"(c[3])
+                 : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]),
+                   "r"(b[1]), "f"(c[0]), "f"(c[1]), "f"(c[2]), "f"(c[3]));
   }
 }
 
 // Instruction for loading a full 16x16 matrix fragment of operand A from shared
 // memory, directly in tensor core layout.
 template <typename scalar_t>
-__device__ inline void ldsm4(typename ScalarType<scalar_t>::FragA& frag_a,
-                             const void* smem_ptr) {
-  uint32_t* a = reinterpret_cast<uint32_t*>(&frag_a);
+__device__ inline void ldsm4(typename ScalarType<scalar_t>::FragA &frag_a,
+                             const void *smem_ptr) {
+  uint32_t *a = reinterpret_cast<uint32_t *>(&frag_a);
   uint32_t smem = static_cast<uint32_t>(__cvta_generic_to_shared(smem_ptr));
   asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
                : "=r"(a[0]), "=r"(a[1]), "=r"(a[2]), "=r"(a[3])
@@ -65,15 +62,13 @@ __device__ inline void ldsm4(typename ScalarType<scalar_t>::FragA& frag_a,
 // Lookup-table based 3-input logical operation; explicitly used for
 // dequantization as the compiler does not seem to automatically recognize it in
 // all cases.
-template <int lut>
-__device__ inline int lop3(int a, int b, int c) {
+template <int lut> __device__ inline int lop3(int a, int b, int c) {
   int res;
   asm volatile("lop3.b32 %0, %1, %2, %3, %4;\n"
                : "=r"(res)
                : "r"(a), "r"(b), "r"(c), "n"(lut));
   return res;
 }
-
 
 template <typename scalar_t>
 __device__ inline typename ScalarType<scalar_t>::FragB dequant(int q);
@@ -83,8 +78,7 @@ __device__ inline typename ScalarType<scalar_t>::FragB dequant(int q);
 // changes:
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/cutlass_extensions/include/cutlass_extensions/interleaved_numeric_conversion.h
 template <>
-__device__ inline typename ScalarType<half>::FragB
-      dequant<half>(int q) {
+__device__ inline typename ScalarType<half>::FragB dequant<half>(int q) {
   const int LO = 0x000f000f;
   const int HI = 0x00f000f0;
   const int EX = 0x64006400;
@@ -97,17 +91,17 @@ __device__ inline typename ScalarType<half>::FragB
   const int MUL = 0x2c002c00;
   const int ADD = 0xd480d480;
   typename ScalarType<half>::FragB frag_b;
-  frag_b[0] = __hsub2(*reinterpret_cast<half2*>(&lo),
-                      *reinterpret_cast<const half2*>(&SUB));
-  frag_b[1] = __hfma2(*reinterpret_cast<half2*>(&hi),
-                      *reinterpret_cast<const half2*>(&MUL),
-                      *reinterpret_cast<const half2*>(&ADD));
+  frag_b[0] = __hsub2(*reinterpret_cast<half2 *>(&lo),
+                      *reinterpret_cast<const half2 *>(&SUB));
+  frag_b[1] = __hfma2(*reinterpret_cast<half2 *>(&hi),
+                      *reinterpret_cast<const half2 *>(&MUL),
+                      *reinterpret_cast<const half2 *>(&ADD));
   return frag_b;
 }
 
 template <>
 __device__ inline typename ScalarType<nv_bfloat16>::FragB
-    dequant<nv_bfloat16>(int q) {
+dequant<nv_bfloat16>(int q) {
   static constexpr uint32_t MASK = 0x000f000f;
   static constexpr uint32_t EX = 0x43004300;
 
@@ -121,50 +115,50 @@ __device__ inline typename ScalarType<nv_bfloat16>::FragB
   static constexpr uint32_t MUL = 0x3F803F80;
   static constexpr uint32_t ADD = 0xC308C308;
 
-  frag_b[0] = __hfma2(*reinterpret_cast<nv_bfloat162*>(&lo),
-                      *reinterpret_cast<const nv_bfloat162*>(&MUL),
-                      *reinterpret_cast<const nv_bfloat162*>(&ADD));
-  frag_b[1] = __hfma2(*reinterpret_cast<nv_bfloat162*>(&hi),
-                      *reinterpret_cast<const nv_bfloat162*>(&MUL),
-                      *reinterpret_cast<const nv_bfloat162*>(&ADD));
+  frag_b[0] = __hfma2(*reinterpret_cast<nv_bfloat162 *>(&lo),
+                      *reinterpret_cast<const nv_bfloat162 *>(&MUL),
+                      *reinterpret_cast<const nv_bfloat162 *>(&ADD));
+  frag_b[1] = __hfma2(*reinterpret_cast<nv_bfloat162 *>(&hi),
+                      *reinterpret_cast<const nv_bfloat162 *>(&MUL),
+                      *reinterpret_cast<const nv_bfloat162 *>(&ADD));
   return frag_b;
 }
 
 // Multiply dequantized values by the corresponding quantization scale; used
 // only for grouped quantization.
 template <typename scalar_t>
-__device__ inline void scale(typename ScalarType<scalar_t>::FragB& frag_b,
-                             typename ScalarType<scalar_t>::FragS& frag_s,
+__device__ inline void scale(typename ScalarType<scalar_t>::FragB &frag_b,
+                             typename ScalarType<scalar_t>::FragS &frag_s,
                              int i) {
   using scalar_t2 = typename ScalarType<scalar_t>::scalar_t2;
   scalar_t2 s =
-      ScalarType<scalar_t>::num2num2(reinterpret_cast<scalar_t*>(&frag_s)[i]);
+      ScalarType<scalar_t>::num2num2(reinterpret_cast<scalar_t *>(&frag_s)[i]);
   frag_b[0] = __hmul2(frag_b[0], s);
   frag_b[1] = __hmul2(frag_b[1], s);
 }
 
 template <typename scalar_t,
-          const int threads,          // number of threads in a threadblock
-          const int thread_m_blocks,  // number of 16x16 blocks in the m
-                                      // dimension (batchsize) of the
-                                      // threadblock
-          const int thread_n_blocks,  // same for n dimension (output)
-          const int thread_k_blocks,  // same for k dimension (reduction)
-          const int stages,  // number of stages for the async global->shared
-                             // fetch pipeline
-          const int group_blocks = -1  // number of consecutive 16x16 blocks
-                                       // with a separate quantization scale
+          const int threads,         // number of threads in a threadblock
+          const int thread_m_blocks, // number of 16x16 blocks in the m
+                                     // dimension (batchsize) of the
+                                     // threadblock
+          const int thread_n_blocks, // same for n dimension (output)
+          const int thread_k_blocks, // same for k dimension (reduction)
+          const int stages, // number of stages for the async global->shared
+                            // fetch pipeline
+          const int group_blocks = -1 // number of consecutive 16x16 blocks
+                                      // with a separate quantization scale
           >
-__global__ void Marlin(
-    const int4* __restrict__ A,  // fp16 input matrix of shape mxk
-    const int4* __restrict__ B,  // 4bit quantized weight matrix of shape kxn
-    int4* __restrict__ C,        // fp16 output buffer of shape mxn
-    const int4* __restrict__ s,  // fp16 quantization scales of shape
-                                 // (k/groupsize)xn
-    int prob_m,                  // batch dimension m
-    int prob_n,                  // output dimension n
-    int prob_k,                  // reduction dimension k
-    int* locks  // extra global storage for barrier synchronization
+__global__ void
+Marlin(const int4 *__restrict__ A, // fp16 input matrix of shape mxk
+       const int4 *__restrict__ B, // 4bit quantized weight matrix of shape kxn
+       int4 *__restrict__ C,       // fp16 output buffer of shape mxn
+       const int4 *__restrict__ s, // fp16 quantization scales of shape
+                                   // (k/groupsize)xn
+       int prob_m,                 // batch dimension m
+       int prob_n,                 // output dimension n
+       int prob_k,                 // reduction dimension k
+       int *locks // extra global storage for barrier synchronization
 ) {
   // Each threadblock processes one "stripe" of the B matrix with (roughly) the
   // same size, which might involve multiple column "slices" (of width 16 *
@@ -205,11 +199,11 @@ __global__ void Marlin(
   int slice_row = (iters * blockIdx.x) % k_tiles;
   int slice_col_par = (iters * blockIdx.x) / k_tiles;
   int slice_col = slice_col_par;
-  int slice_iters;  // number of threadblock tiles in the current slice
+  int slice_iters; // number of threadblock tiles in the current slice
   int slice_count =
-      0;          // total number of active threadblocks in the current slice
-  int slice_idx;  // index of threadblock in current slice; numbered bottom to
-                  // top
+      0;         // total number of active threadblocks in the current slice
+  int slice_idx; // index of threadblock in current slice; numbered bottom to
+                 // top
 
   // We can easily implement parallel problem execution by just remapping
   // indices and advancing global pointers
@@ -225,22 +219,27 @@ __global__ void Marlin(
   auto init_slice = [&]() {
     slice_iters =
         iters * (blockIdx.x + 1) - (k_tiles * slice_col_par + slice_row);
-    if (slice_iters < 0 || slice_col_par >= n_tiles * parallel) slice_iters = 0;
-    if (slice_iters == 0) return;
-    if (slice_row + slice_iters > k_tiles) slice_iters = k_tiles - slice_row;
+    if (slice_iters < 0 || slice_col_par >= n_tiles * parallel)
+      slice_iters = 0;
+    if (slice_iters == 0)
+      return;
+    if (slice_row + slice_iters > k_tiles)
+      slice_iters = k_tiles - slice_row;
     slice_count = 1;
     slice_idx = 0;
     int col_first = iters * ceildiv(k_tiles * slice_col_par, iters);
     if (col_first <= k_tiles * (slice_col_par + 1)) {
       int col_off = col_first - k_tiles * slice_col_par;
       slice_count = ceildiv(k_tiles - col_off, iters);
-      if (col_off > 0) slice_count++;
+      if (col_off > 0)
+        slice_count++;
       int delta_first = iters * blockIdx.x - col_first;
       if (delta_first < 0 || (col_off == 0 && delta_first == 0))
         slice_idx = slice_count - 1;
       else {
         slice_idx = slice_count - 1 - delta_first / iters;
-        if (col_off > 0) slice_idx--;
+        if (col_off > 0)
+          slice_idx--;
       }
     }
     if (slice_col == n_tiles) {
@@ -252,30 +251,29 @@ __global__ void Marlin(
   };
   init_slice();
 
-  int a_gl_stride = prob_k / 8;  // stride of the A matrix in global memory
+  int a_gl_stride = prob_k / 8; // stride of the A matrix in global memory
   // We typically use `constexpr` to indicate that this value is a compile-time
   // constant
   constexpr int a_sh_stride =
-      16 * thread_k_blocks / 8;  // stride of an A matrix tile in shared memory
+      16 * thread_k_blocks / 8; // stride of an A matrix tile in shared memory
   constexpr int a_gl_rd_delta_o =
       16 * thread_k_blocks /
-      8;  // delta between subsequent A tiles in global memory
+      8; // delta between subsequent A tiles in global memory
   int a_gl_rd_delta_i =
       a_gl_stride *
-      (threads / a_gl_rd_delta_o);  // between subsequent accesses within a tile
+      (threads / a_gl_rd_delta_o); // between subsequent accesses within a tile
   constexpr int a_sh_wr_delta =
-      a_sh_stride *
-      (threads / a_gl_rd_delta_o);  // between shared memory writes
+      a_sh_stride * (threads / a_gl_rd_delta_o); // between shared memory writes
   constexpr int a_sh_rd_delta_o =
       2 * ((threads / 32) /
-           (thread_n_blocks / 4));  // between shared memory tile reads
+           (thread_n_blocks / 4)); // between shared memory tile reads
   constexpr int a_sh_rd_delta_i =
-      a_sh_stride * 16;  // within a shared memory tile
+      a_sh_stride * 16; // within a shared memory tile
   constexpr int a_sh_stage =
-      a_sh_stride * (16 * thread_m_blocks);  // overall size of a tile
+      a_sh_stride * (16 * thread_m_blocks); // overall size of a tile
   constexpr int a_sh_wr_iters =
       ceildiv(a_sh_stage,
-              a_sh_wr_delta);  // number of shared write iterations for a tile
+              a_sh_wr_delta); // number of shared write iterations for a tile
 
   int b_gl_stride = 16 * prob_n / 32;
   constexpr int b_sh_stride = 32 * thread_n_blocks / 4;
@@ -328,7 +326,7 @@ __global__ void Marlin(
   // needed if there are more threads than required for a certain tilesize or
   // when the batchsize is not a multiple of 16.
   bool a_sh_wr_pred[a_sh_wr_iters];
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < a_sh_wr_iters; i++)
     a_sh_wr_pred[i] = a_sh_wr_delta * i + a_sh_wr < a_sh_stride * prob_m;
   bool s_sh_wr_pred = threadIdx.x < s_sh_stride;
@@ -347,13 +345,13 @@ __global__ void Marlin(
   // loop unrolls, all shared memory accesses are static, we simply precompute
   // both transformed reads and writes.
   int a_sh_wr_trans[a_sh_wr_iters];
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < a_sh_wr_iters; i++)
     a_sh_wr_trans[i] = transform_a(a_sh_wr_delta * i + a_sh_wr);
   int a_sh_rd_trans[b_sh_wr_iters][thread_m_blocks];
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < b_sh_wr_iters; i++) {
-  #pragma unroll
+#pragma unroll
     for (int j = 0; j < thread_m_blocks; j++)
       a_sh_rd_trans[i][j] =
           transform_a(a_sh_rd_delta_o * i + a_sh_rd_delta_i * j + a_sh_rd);
@@ -363,16 +361,16 @@ __global__ void Marlin(
   // runtime; we break dependencies between subsequent accesses with a tile by
   // maintining multiple pointers (we have enough registers), a tiny
   // optimization.
-  const int4* B_ptr[b_sh_wr_iters];
-  #pragma unroll
+  const int4 *B_ptr[b_sh_wr_iters];
+#pragma unroll
   for (int i = 0; i < b_sh_wr_iters; i++)
     B_ptr[i] = B + b_gl_rd_delta_i * i + b_gl_rd;
 
   extern __shared__ int4 sh[];
   // Shared memory storage for global fetch pipelines.
-  int4* sh_a = sh;
-  int4* sh_b = sh_a + (stages * a_sh_stage);
-  int4* sh_s = sh_b + (stages * b_sh_stage);
+  int4 *sh_a = sh;
+  int4 *sh_b = sh_a + (stages * a_sh_stage);
+  int4 *sh_s = sh_b + (stages * b_sh_stage);
   // Register storage for double buffer of shared memory reads.
   FragA frag_a[2][thread_m_blocks];
   I4 frag_b_quant[2];
@@ -381,25 +379,25 @@ __global__ void Marlin(
 
   // Zero accumulators.
   auto zero_accums = [&]() {
-  #pragma unroll
+#pragma unroll
     for (int i = 0; i < thread_m_blocks * 4 * 2 * 4; i++)
-      reinterpret_cast<float*>(frag_c)[i] = 0;
+      reinterpret_cast<float *>(frag_c)[i] = 0;
   };
 
   // Asynchronously fetch the next A, B and s tile from global to the next
   // shared memory pipeline location.
   auto fetch_to_shared = [&](int pipe, int a_off, bool pred = true) {
     if (pred) {
-      int4* sh_a_stage = sh_a + a_sh_stage * pipe;
-  #pragma unroll
+      int4 *sh_a_stage = sh_a + a_sh_stage * pipe;
+#pragma unroll
       for (int i = 0; i < a_sh_wr_iters; i++) {
         cp_async4_pred(
             &sh_a_stage[a_sh_wr_trans[i]],
             &A[a_gl_rd_delta_i * i + a_gl_rd + a_gl_rd_delta_o * a_off],
             a_sh_wr_pred[i]);
       }
-      int4* sh_b_stage = sh_b + b_sh_stage * pipe;
-  #pragma unroll
+      int4 *sh_b_stage = sh_b + b_sh_stage * pipe;
+#pragma unroll
       for (int i = 0; i < b_sh_wr_iters; i++) {
         cp_async4(&sh_b_stage[b_sh_wr_delta * i + b_sh_wr], B_ptr[i]);
         B_ptr[i] += b_gl_rd_delta_o;
@@ -410,8 +408,9 @@ __global__ void Marlin(
         // and would need to be modified to support smaller groups.
         static_assert(group_blocks >= thread_k_blocks);
         if (pipe % (group_blocks / thread_k_blocks) == 0) {
-          int4* sh_s_stage = sh_s + s_sh_stage * pipe;
-          if (s_sh_wr_pred) cp_async4(&sh_s_stage[s_sh_wr], &s[s_gl_rd]);
+          int4 *sh_s_stage = sh_s + s_sh_stage * pipe;
+          if (s_sh_wr_pred)
+            cp_async4(&sh_s_stage[s_sh_wr], &s[s_gl_rd]);
           s_gl_rd += s_gl_rd_delta;
         }
       }
@@ -442,35 +441,38 @@ __global__ void Marlin(
       // This assumes group_blocks >= thread_k_blocks
       // and would need to be modified to support smaller groups.
       static_assert(group_blocks >= thread_k_blocks);
-      int4* sh_s_stage =
+      int4 *sh_s_stage =
           sh_s + s_sh_stage * ((group_blocks / thread_k_blocks) *
                                (pipe / (group_blocks / thread_k_blocks)));
-      reinterpret_cast<int4*>(&frag_s[k % 2])[0] = sh_s_stage[s_sh_rd];
+      reinterpret_cast<int4 *>(&frag_s[k % 2])[0] = sh_s_stage[s_sh_rd];
     }
-    int4* sh_a_stage = sh_a + a_sh_stage * pipe;
-  #pragma unroll
+    int4 *sh_a_stage = sh_a + a_sh_stage * pipe;
+#pragma unroll
     for (int i = 0; i < thread_m_blocks; i++)
-      ldsm4<scalar_t>(frag_a[k % 2][i], &sh_a_stage[a_sh_rd_trans[k % b_sh_wr_iters][i]]);
-    int4* sh_b_stage = sh_b + b_sh_stage * pipe;
-    frag_b_quant[k % 2] = *reinterpret_cast<I4*>(
+      ldsm4<scalar_t>(frag_a[k % 2][i],
+                      &sh_a_stage[a_sh_rd_trans[k % b_sh_wr_iters][i]]);
+    int4 *sh_b_stage = sh_b + b_sh_stage * pipe;
+    frag_b_quant[k % 2] = *reinterpret_cast<I4 *>(
         &sh_b_stage[b_sh_rd_delta * (k % b_sh_wr_iters) + b_sh_rd]);
   };
 
   // Execute the actual tensor core matmul of a sub-tile.
   auto matmul = [&](int k) {
-  // We have the m dimension as the inner loop in order to encourage overlapping
-  // dequantization and matmul operations.
-  #pragma unroll
+// We have the m dimension as the inner loop in order to encourage overlapping
+// dequantization and matmul operations.
+#pragma unroll
     for (int j = 0; j < 4; j++) {
       int b_quant = frag_b_quant[k % 2][j];
       int b_quant_shift = b_quant >> 8;
       FragB frag_b0 = dequant<scalar_t>(b_quant);
       // If there are no groups, we can just scale the final output once and can
       // avoid doing so for each weight.
-      if (group_blocks != -1) scale<scalar_t>(frag_b0, frag_s[k % 2][j], 0);
+      if (group_blocks != -1)
+        scale<scalar_t>(frag_b0, frag_s[k % 2][j], 0);
       FragB frag_b1 = dequant<scalar_t>(b_quant_shift);
-      if (group_blocks != -1) scale<scalar_t>(frag_b1, frag_s[k % 2][j], 1);
-  #pragma unroll
+      if (group_blocks != -1)
+        scale<scalar_t>(frag_b1, frag_s[k % 2][j], 1);
+#pragma unroll
       for (int i = 0; i < thread_m_blocks; i++) {
         mma<scalar_t>(frag_a[k % 2][i], frag_b0, frag_c[i][j][0]);
         mma<scalar_t>(frag_a[k % 2][i], frag_b1, frag_c[i][j][1]);
@@ -495,38 +497,38 @@ __global__ void Marlin(
       // unnecessary read or write iterations, e.g., for two warps we write only
       // once by warp 1 and read only once by warp 0.
 
-  #pragma unroll
+#pragma unroll
       for (int m_block = 0; m_block < thread_m_blocks; m_block++) {
-  #pragma unroll
+#pragma unroll
         for (int i = red_off; i > 0; i /= 2) {
           if (i <= red_idx && red_idx < 2 * i) {
-  #pragma unroll
+#pragma unroll
             for (int j = 0; j < 4 * 2; j++) {
               int red_sh_wr =
                   red_sh_delta * j + (red_sh_rd - red_sh_stride * i);
               if (i < red_off) {
-                float* c_rd =
-                    reinterpret_cast<float*>(&sh[red_sh_delta * j + red_sh_rd]);
-                float* c_wr = reinterpret_cast<float*>(&sh[red_sh_wr]);
-  #pragma unroll
+                float *c_rd = reinterpret_cast<float *>(
+                    &sh[red_sh_delta * j + red_sh_rd]);
+                float *c_wr = reinterpret_cast<float *>(&sh[red_sh_wr]);
+#pragma unroll
                 for (int k = 0; k < 4; k++)
-                  reinterpret_cast<FragC*>(frag_c)[4 * 2 * m_block + j][k] +=
+                  reinterpret_cast<FragC *>(frag_c)[4 * 2 * m_block + j][k] +=
                       c_rd[k] + c_wr[k];
               }
               sh[red_sh_wr] =
-                  reinterpret_cast<int4*>(&frag_c)[4 * 2 * m_block + j];
+                  reinterpret_cast<int4 *>(&frag_c)[4 * 2 * m_block + j];
             }
           }
           __syncthreads();
         }
         if (red_idx == 0) {
-  #pragma unroll
+#pragma unroll
           for (int i = 0; i < 4 * 2; i++) {
-            float* c_rd =
-                reinterpret_cast<float*>(&sh[red_sh_delta * i + red_sh_rd]);
-  #pragma unroll
+            float *c_rd =
+                reinterpret_cast<float *>(&sh[red_sh_delta * i + red_sh_rd]);
+#pragma unroll
             for (int j = 0; j < 4; j++)
-              reinterpret_cast<FragC*>(frag_c)[4 * 2 * m_block + i][j] +=
+              reinterpret_cast<FragC *>(frag_c)[4 * 2 * m_block + i][j] +=
                   c_rd[j];
           }
         }
@@ -557,39 +559,39 @@ __global__ void Marlin(
       int row = (threadIdx.x % 32) / 4;
 
       if (!first) {
-  // Interestingly, doing direct global accesses here really seems to mess up
-  // the compiler and lead to slowdowns, hence we also use async-copies even
-  // though these fetches are not actually asynchronous.
-  #pragma unroll
+// Interestingly, doing direct global accesses here really seems to mess up
+// the compiler and lead to slowdowns, hence we also use async-copies even
+// though these fetches are not actually asynchronous.
+#pragma unroll
         for (int i = 0; i < thread_m_blocks * 4; i++) {
-          cp_async4_pred(
-              &sh[c_sh_wr + c_sh_wr_delta * i],
-              &C[c_gl_wr + c_gl_wr_delta_o * (i / 2) +
-                 c_gl_wr_delta_i * (i % 2)],
-              i < (thread_m_blocks - 1) * 4 || 8 * (i / 2) + row < prob_m);
+          cp_async4_pred(&sh[c_sh_wr + c_sh_wr_delta * i],
+                         &C[c_gl_wr + c_gl_wr_delta_o * (i / 2) +
+                            c_gl_wr_delta_i * (i % 2)],
+                         i < (thread_m_blocks - 1) * 4 ||
+                             8 * (i / 2) + row < prob_m);
         }
         cp_async_fence();
         cp_async_wait<0>();
       }
 
-  #pragma unroll
+#pragma unroll
       for (int i = 0; i < thread_m_blocks * 4; i++) {
         if (i < (thread_m_blocks - 1) * 4 || 8 * (i / 2) + row < prob_m) {
           if (!first) {
             int4 c_red = sh[c_sh_wr + i * c_sh_wr_delta];
-  #pragma unroll
+#pragma unroll
             for (int j = 0; j < 2 * 4; j++) {
-              reinterpret_cast<float*>(
+              reinterpret_cast<float *>(
                   &frag_c)[4 * 2 * 4 * (i / 4) + 4 * j + (i % 4)] +=
-                  Dtype::num2float(reinterpret_cast<scalar_t*>(&c_red)[j]);
+                  Dtype::num2float(reinterpret_cast<scalar_t *>(&c_red)[j]);
             }
           }
           if (!last) {
             int4 c;
-  #pragma unroll
+#pragma unroll
             for (int j = 0; j < 2 * 4; j++) {
-              reinterpret_cast<scalar_t*>(&c)[j] =
-                  Dtype::float2num(reinterpret_cast<float*>(
+              reinterpret_cast<scalar_t *>(&c)[j] =
+                  Dtype::float2num(reinterpret_cast<float *>(
                       &frag_c)[4 * 2 * 4 * (i / 4) + 4 * j + (i % 4)]);
             }
             C[c_gl_wr + c_gl_wr_delta_o * (i / 2) + c_gl_wr_delta_i * (i % 2)] =
@@ -623,7 +625,7 @@ __global__ void Marlin(
 
     // We first reorder in shared memory to guarantee the most efficient final
     // global write patterns
-    auto write = [&](int idx, float c0, float c1, FragS& s) {
+    auto write = [&](int idx, float c0, float c1, FragS &s) {
       scalar_t2 res =
           Dtype::nums2num2(Dtype::float2num(c0), Dtype::float2num(c1));
 
@@ -633,13 +635,13 @@ __global__ void Marlin(
         res = __hmul2(res, s[0]);
       }
 
-      ((scalar_t2*)sh)[idx] = res;
+      ((scalar_t2 *)sh)[idx] = res;
     };
 
     if (threadIdx.x / 32 < thread_n_blocks / 4) {
-  #pragma unroll
+#pragma unroll
       for (int i = 0; i < thread_m_blocks; i++) {
-  #pragma unroll
+#pragma unroll
         for (int j = 0; j < 4; j++) {
           int wr = c_sh_wr + 8 * j;
           write(wr + (4 * c_sh_stride) * 0 + 0, frag_c[i][j][0][0],
@@ -656,7 +658,7 @@ __global__ void Marlin(
     }
     __syncthreads();
 
-  #pragma unroll
+#pragma unroll
     for (int i = 0;
          i < ceildiv(16 * thread_m_blocks, threads / (2 * thread_n_blocks));
          i++) {
@@ -670,8 +672,9 @@ __global__ void Marlin(
 
   // Start global fetch and register load pipelines.
   auto start_pipes = [&]() {
-  #pragma unroll
-    for (int i = 0; i < stages - 1; i++) fetch_to_shared(i, i, i < slice_iters);
+#pragma unroll
+    for (int i = 0; i < stages - 1; i++)
+      fetch_to_shared(i, i, i < slice_iters);
     zero_accums();
     wait_for_stage();
     fetch_to_registers(0, 0);
@@ -681,12 +684,12 @@ __global__ void Marlin(
 
   // Main loop.
   while (slice_iters) {
-  // We unroll over both the global fetch and the register load pipeline to
-  // ensure all shared memory accesses are static. Note that both pipelines have
-  // even length meaning that the next iteration will always start at index 0.
-  #pragma unroll
+// We unroll over both the global fetch and the register load pipeline to
+// ensure all shared memory accesses are static. Note that both pipelines have
+// even length meaning that the next iteration will always start at index 0.
+#pragma unroll
     for (int pipe = 0; pipe < stages;) {
-  #pragma unroll
+#pragma unroll
       for (int k = 0; k < b_sh_wr_iters; k++) {
         fetch_to_registers(k + 1, pipe % stages);
         if (k == b_sh_wr_iters - 2) {
@@ -698,7 +701,8 @@ __global__ void Marlin(
         matmul(k);
       }
       slice_iters--;
-      if (slice_iters == 0) break;
+      if (slice_iters == 0)
+        break;
     }
     a_gl_rd += a_gl_rd_delta_o * stages;
 
@@ -711,7 +715,8 @@ __global__ void Marlin(
       // For per-column scales, we only fetch them here in the final step before
       // write-out
       if (group_blocks == -1 && last) {
-        if (s_sh_wr_pred) cp_async4(&sh_s[s_sh_wr], &s[s_gl_rd]);
+        if (s_sh_wr_pred)
+          cp_async4(&sh_s[s_sh_wr], &s[s_gl_rd]);
         cp_async_fence();
       }
       thread_block_reduce();
@@ -719,17 +724,17 @@ __global__ void Marlin(
         cp_async_wait<0>();
         __syncthreads();
         if (threadIdx.x / 32 < thread_n_blocks / 4) {
-          reinterpret_cast<int4*>(&frag_s)[0] = sh_s[s_sh_rd + 0];
-          reinterpret_cast<int4*>(&frag_s)[1] = sh_s[s_sh_rd + 4];
+          reinterpret_cast<int4 *>(&frag_s)[0] = sh_s[s_sh_rd + 0];
+          reinterpret_cast<int4 *>(&frag_s)[1] = sh_s[s_sh_rd + 4];
         }
       }
-      if (slice_count > 1) {  // only globally reduce if there is more than one
-                              // block in a slice
+      if (slice_count > 1) { // only globally reduce if there is more than one
+                             // block in a slice
         barrier_acquire(&locks[slice_col], slice_idx);
         global_reduce(slice_idx == 0, last);
         barrier_release(&locks[slice_col], last);
       }
-      if (last)  // only the last block in a slice actually writes the result
+      if (last) // only the last block in a slice actually writes the result
         write_result();
       slice_row = 0;
       slice_col_par++;
@@ -738,12 +743,13 @@ __global__ void Marlin(
       if (slice_iters) {
         a_gl_rd = a_gl_stride * (threadIdx.x / a_gl_rd_delta_o) +
                   (threadIdx.x % a_gl_rd_delta_o);
-  #pragma unroll
+#pragma unroll
         for (int i = 0; i < b_sh_wr_iters; i++)
           B_ptr[i] += b_sh_stride - b_gl_rd_delta_o * k_tiles;
         if (slice_col == 0) {
-  #pragma unroll
-          for (int i = 0; i < b_sh_wr_iters; i++) B_ptr[i] -= b_gl_stride;
+#pragma unroll
+          for (int i = 0; i < b_sh_wr_iters; i++)
+            B_ptr[i] -= b_gl_stride;
         }
         s_gl_rd = s_sh_stride * slice_col + threadIdx.x;
         start_pipes();
@@ -752,14 +758,16 @@ __global__ void Marlin(
   }
 }
 
-
 // 8 warps are a good choice since every SM has 4 schedulers and having more
 // than 1 warp per schedule allows some more latency hiding. At the same time,
 // we want relatively few warps to have many registers per warp and small tiles.
-const int USER_THREADS = 256; // Note: This is only used with user-provided thread_k/n
-const int STAGES = 4;  // 4 pipeline stages fit into shared memory
-const int SHARED_MEM = 96 * 1024;  // max shared memory on compute capability 8.6 (< 8.0)
-static constexpr int pack_factor_4bit = 8;  // We have 8 4-bit vals inside a 32 bit
+const int USER_THREADS =
+    256;              // Note: This is only used with user-provided thread_k/n
+const int STAGES = 4; // 4 pipeline stages fit into shared memory
+const int SHARED_MEM =
+    96 * 1024; // max shared memory on compute capability 8.6 (< 8.0)
+static constexpr int pack_factor_4bit =
+    8; // We have 8 4-bit vals inside a 32 bit
 
 #define __CALL_IF(THREAD_M_BLOCKS, THREAD_N_BLOCKS, THREAD_K_BLOCKS,           \
                   GROUP_BLOCKS, NUM_THREADS)                                   \
@@ -767,13 +775,14 @@ static constexpr int pack_factor_4bit = 8;  // We have 8 4-bit vals inside a 32 
            thread_n_blocks == THREAD_N_BLOCKS &&                               \
            thread_k_blocks == THREAD_K_BLOCKS &&                               \
            group_blocks == GROUP_BLOCKS && num_threads == NUM_THREADS) {       \
-    cudaFuncSetAttribute(Marlin<scalar_t, NUM_THREADS, THREAD_M_BLOCKS, THREAD_N_BLOCKS, \
-                                THREAD_K_BLOCKS, STAGES, GROUP_BLOCKS>,        \
-                         cudaFuncAttributeMaxDynamicSharedMemorySize,          \
-                         SHARED_MEM);                                          \
-    Marlin<scalar_t, NUM_THREADS, THREAD_M_BLOCKS, THREAD_N_BLOCKS, THREAD_K_BLOCKS,     \
-           STAGES, GROUP_BLOCKS><<<blocks, NUM_THREADS, SHARED_MEM, stream>>>( \
-        A_ptr, B_ptr, C_ptr, s_ptr, prob_m, prob_n, prob_k, locks);            \
+    cudaFuncSetAttribute(                                                      \
+        Marlin<scalar_t, NUM_THREADS, THREAD_M_BLOCKS, THREAD_N_BLOCKS,        \
+               THREAD_K_BLOCKS, STAGES, GROUP_BLOCKS>,                         \
+        cudaFuncAttributeMaxDynamicSharedMemorySize, SHARED_MEM);              \
+    Marlin<scalar_t, NUM_THREADS, THREAD_M_BLOCKS, THREAD_N_BLOCKS,            \
+           THREAD_K_BLOCKS, STAGES, GROUP_BLOCKS>                              \
+        <<<blocks, NUM_THREADS, SHARED_MEM, stream>>>(                         \
+            A_ptr, B_ptr, C_ptr, s_ptr, prob_m, prob_n, prob_k, locks);        \
   }
 
 typedef struct {
@@ -785,22 +794,22 @@ typedef struct {
 thread_config_t small_batch_thread_configs[] = {
     // Ordered by priority
     // thread_k, thread_n, num_threads
-    {128, 128, 256},  // Default
-    {128, 64, 128},   // Reduce N 2X, same K
-    {64, 256, 256},   // Reduce K 2X, increase N 2X
-    {64, 128, 128},   // Reduce K 2X, same N
+    {128, 128, 256}, // Default
+    {128, 64, 128},  // Reduce N 2X, same K
+    {64, 256, 256},  // Reduce K 2X, increase N 2X
+    {64, 128, 128},  // Reduce K 2X, same N
 };
 
 thread_config_t large_batch_thread_configs[] = {
     // Ordered by priority
     // thread_k, thread_n, num_threads
-    {64, 256, 256},   // Default
-    {128, 128, 256},  // Reduce N 2X, increase K 2X
-    {64, 128, 128},   // Reduce N 2X, same K
-    {128, 64, 128},   // Reduce N 4X, increase K 2X
+    {64, 256, 256},  // Default
+    {128, 128, 256}, // Reduce N 2X, increase K 2X
+    {64, 128, 128},  // Reduce N 2X, same K
+    {128, 64, 128},  // Reduce N 4X, increase K 2X
 };
 
-bool is_valid_config(thread_config_t const& th_config, int prob_m, int prob_n,
+bool is_valid_config(thread_config_t const &th_config, int prob_m, int prob_n,
                      int prob_k) {
   // Sanity
   if (th_config.thread_k == -1 || th_config.thread_n == -1 ||
@@ -851,28 +860,27 @@ thread_config_t determine_thread_config(int prob_m, int prob_n, int prob_k) {
   return thread_config_t{-1, -1, -1};
 }
 
-#define CALL_IF(N_BLOCKS, K_BLOCKS, NUM_THREADS)    \
-  __CALL_IF(1, N_BLOCKS, K_BLOCKS, -1, NUM_THREADS) \
-  __CALL_IF(1, N_BLOCKS, K_BLOCKS, 8, NUM_THREADS)  \
-  __CALL_IF(1, N_BLOCKS, K_BLOCKS, -1, NUM_THREADS) \
-  __CALL_IF(1, N_BLOCKS, K_BLOCKS, 8, NUM_THREADS)  \
-  __CALL_IF(2, N_BLOCKS, K_BLOCKS, -1, NUM_THREADS) \
-  __CALL_IF(2, N_BLOCKS, K_BLOCKS, 8, NUM_THREADS)  \
-  __CALL_IF(3, N_BLOCKS, K_BLOCKS, -1, NUM_THREADS) \
-  __CALL_IF(3, N_BLOCKS, K_BLOCKS, 8, NUM_THREADS)  \
-  __CALL_IF(4, N_BLOCKS, K_BLOCKS, -1, NUM_THREADS) \
+#define CALL_IF(N_BLOCKS, K_BLOCKS, NUM_THREADS)                               \
+  __CALL_IF(1, N_BLOCKS, K_BLOCKS, -1, NUM_THREADS)                            \
+  __CALL_IF(1, N_BLOCKS, K_BLOCKS, 8, NUM_THREADS)                             \
+  __CALL_IF(1, N_BLOCKS, K_BLOCKS, -1, NUM_THREADS)                            \
+  __CALL_IF(1, N_BLOCKS, K_BLOCKS, 8, NUM_THREADS)                             \
+  __CALL_IF(2, N_BLOCKS, K_BLOCKS, -1, NUM_THREADS)                            \
+  __CALL_IF(2, N_BLOCKS, K_BLOCKS, 8, NUM_THREADS)                             \
+  __CALL_IF(3, N_BLOCKS, K_BLOCKS, -1, NUM_THREADS)                            \
+  __CALL_IF(3, N_BLOCKS, K_BLOCKS, 8, NUM_THREADS)                             \
+  __CALL_IF(4, N_BLOCKS, K_BLOCKS, -1, NUM_THREADS)                            \
   __CALL_IF(4, N_BLOCKS, K_BLOCKS, 8, NUM_THREADS)
 
-template<typename scalar_t>
-void marlin_matmul(const void* A, const void* B, void* s, void* C, int prob_m, int prob_k, 
-                 int prob_n, void* workspace, int groupsize
-                 ) {
-  
-  int dev = 0; 
-  cudaStream_t stream = 0; 
+template <typename scalar_t>
+void marlin_matmul(const void *A, const void *B, void *s, void *C, int prob_m,
+                   int prob_k, int prob_n, void *workspace, int groupsize,
+                   cudaStream_t stream) {
+
+  int dev = 0;
   int thread_k = -1;
-  int thread_n = -1; 
-  int sms = -1; 
+  int thread_n = -1;
+  int sms = -1;
   int max_par = 16;
 
   int tot_m = prob_m;
@@ -909,12 +917,12 @@ void marlin_matmul(const void* A, const void* B, void* s, void* C, int prob_m, i
     return;
   }
 
-  const int4* A_ptr = (const int4*)A;
-  const int4* B_ptr = (const int4*)B;
-  int4* C_ptr = (int4*)C;
-  const int4* s_ptr = (const int4*)s;
+  const int4 *A_ptr = (const int4 *)A;
+  const int4 *B_ptr = (const int4 *)B;
+  int4 *C_ptr = (int4 *)C;
+  const int4 *s_ptr = (const int4 *)s;
 
-  int* locks = (int*)workspace;
+  int *locks = (int *)workspace;
 
   for (int i = 0; i < tot_m_blocks; i += 4) {
     int thread_m_blocks = tot_m_blocks - i;
@@ -924,7 +932,8 @@ void marlin_matmul(const void* A, const void* B, void* s, void* C, int prob_m, i
       // Note that parallel > 1 currently only works for inputs without any
       // padding
       par = (16 * thread_m_blocks - pad) / 64;
-      if (par > max_par) par = max_par;
+      if (par > max_par)
+        par = max_par;
       prob_m = 64 * par;
       i += 4 * (par - 1);
       thread_m_blocks = 4;
@@ -948,40 +957,28 @@ void marlin_matmul(const void* A, const void* B, void* s, void* C, int prob_m, i
   }
 }
 
-extern "C" void marlin_4bit_f16(
-  const void* A,
-  const void* B,
-  void* s,
-  void* C,
-  int prob_m,
-  int prob_k, 
-  int prob_n,
-  void* workspace,
-  int groupsize
-) {
-    marlin_matmul<half>(A, B, s, C, prob_m, prob_k, prob_n, workspace, groupsize);
+extern "C" void marlin_4bit_f16(const void *A, const void *B, void *s, void *C,
+                                int prob_m, int prob_k, int prob_n,
+                                void *workspace, int groupsize,
+                                cudaStream_t stream) {
+  marlin_matmul<half>(A, B, s, C, prob_m, prob_k, prob_n, workspace, groupsize,
+                      stream);
 }
 
-extern "C" void marlin_4bit_bf16(
-  const void* A,
-  const void* B,
-  void* s,
-  void* C,
-  int prob_m,
-  int prob_k, 
-  int prob_n,
-  void* workspace,
-  int groupsize
-) {
-    marlin_matmul<nv_bfloat16>(A, B, s, C, prob_m, prob_k, prob_n, workspace, groupsize);
+extern "C" void marlin_4bit_bf16(const void *A, const void *B, void *s, void *C,
+                                 int prob_m, int prob_k, int prob_n,
+                                 void *workspace, int groupsize,
+                                 cudaStream_t stream) {
+  marlin_matmul<nv_bfloat16>(A, B, s, C, prob_m, prob_k, prob_n, workspace,
+                             groupsize, stream);
 }
-
 
 template <int const num_threads, int const num_bits, bool const has_perm>
-__global__ void gptq_marlin_repack_kernel(
-    uint32_t const* __restrict__ b_q_weight_ptr,
-    uint32_t const* __restrict__ perm_ptr, uint32_t* __restrict__ out_ptr,
-    int size_k, int size_n) {
+__global__ void
+gptq_marlin_repack_kernel(uint32_t const *__restrict__ b_q_weight_ptr,
+                          uint32_t const *__restrict__ perm_ptr,
+                          uint32_t *__restrict__ out_ptr, int size_k,
+                          int size_n) {
   constexpr int pack_factor = 32 / num_bits;
 
   int k_tiles = size_k / tile_k_size;
@@ -1009,8 +1006,8 @@ __global__ void gptq_marlin_repack_kernel(
 
   constexpr int perm_size = tile_k_size / 4;
 
-  int4* sh_perm_ptr = sh;
-  int4* sh_pipe_ptr = sh_perm_ptr;
+  int4 *sh_perm_ptr = sh;
+  int4 *sh_pipe_ptr = sh_perm_ptr;
   if constexpr (has_perm) {
     sh_pipe_ptr += perm_size;
   }
@@ -1024,7 +1021,7 @@ __global__ void gptq_marlin_repack_kernel(
   auto load_perm_to_shared = [&](int k_tile_id) {
     int first_k_int4 = (k_tile_id * tile_k_size) / 4;
 
-    int4 const* perm_int4_ptr = reinterpret_cast<int4 const*>(perm_ptr);
+    int4 const *perm_int4_ptr = reinterpret_cast<int4 const *>(perm_ptr);
 
     if (threadIdx.x < perm_size) {
       sh_perm_ptr[threadIdx.x] = perm_int4_ptr[first_k_int4 + threadIdx.x];
@@ -1040,22 +1037,22 @@ __global__ void gptq_marlin_repack_kernel(
 
     int first_n = n_tile_id * tile_n_size;
 
-    int4* sh_ptr = sh_pipe_ptr + stage_size * pipe;
+    int4 *sh_ptr = sh_pipe_ptr + stage_size * pipe;
 
     if constexpr (has_perm) {
       if (threadIdx.x < stage_size) {
         int k_id = threadIdx.x / stage_n_threads;
         int n_id = threadIdx.x % stage_n_threads;
 
-        uint32_t const* sh_perm_int_ptr =
-            reinterpret_cast<uint32_t const*>(sh_perm_ptr);
+        uint32_t const *sh_perm_int_ptr =
+            reinterpret_cast<uint32_t const *>(sh_perm_ptr);
 
         int src_k = sh_perm_int_ptr[k_id];
         int src_k_packed = src_k / pack_factor;
 
         cp_async4(
             &sh_ptr[k_id * stage_n_threads + n_id],
-            reinterpret_cast<int4 const*>(&(
+            reinterpret_cast<int4 const *>(&(
                 b_q_weight_ptr[src_k_packed * size_n + first_n + (n_id * 4)])));
       }
 
@@ -1068,7 +1065,7 @@ __global__ void gptq_marlin_repack_kernel(
         int first_k_packed = first_k / pack_factor;
 
         cp_async4(&sh_ptr[k_id * stage_n_threads + n_id],
-                  reinterpret_cast<int4 const*>(
+                  reinterpret_cast<int4 const *>(
                       &(b_q_weight_ptr[(first_k_packed + k_id) * size_n +
                                        first_n + (n_id * 4)])));
       }
@@ -1099,10 +1096,10 @@ __global__ void gptq_marlin_repack_kernel(
     constexpr int sh_stride = 64;
     constexpr uint32_t mask = (1 << num_bits) - 1;
 
-    int4* sh_stage_ptr = sh_pipe_ptr + stage_size * pipe;
-    uint32_t* sh_stage_int_ptr = reinterpret_cast<uint32_t*>(sh_stage_ptr);
+    int4 *sh_stage_ptr = sh_pipe_ptr + stage_size * pipe;
+    uint32_t *sh_stage_int_ptr = reinterpret_cast<uint32_t *>(sh_stage_ptr);
 
-    uint32_t* sh_perm_int_ptr = reinterpret_cast<uint32_t*>(sh_perm_ptr);
+    uint32_t *sh_perm_int_ptr = reinterpret_cast<uint32_t *>(sh_perm_ptr);
 
     uint32_t vals[8];
 
@@ -1127,13 +1124,13 @@ __global__ void gptq_marlin_repack_kernel(
       uint32_t b1_vals[tile_ints];
       uint32_t b2_vals[tile_ints];
 
-  #pragma unroll
+#pragma unroll
       for (int i = 0; i < tile_ints; i++) {
         b1_vals[i] = sh_stage_int_ptr[cur_n + sh_stride * i];
         b2_vals[i] = sh_stage_int_ptr[cur_n + 8 + sh_stride * i];
       }
 
-  #pragma unroll
+#pragma unroll
       for (int i = 0; i < 4; i++) {
         int cur_elem = tc_row + tc_offsets[i];
         int cur_int = cur_elem / pack_factor;
@@ -1153,7 +1150,7 @@ __global__ void gptq_marlin_repack_kernel(
       constexpr int pack_idx[8] = {0, 2, 4, 6, 1, 3, 5, 7};
 
       uint32_t res = 0;
-  #pragma unroll
+#pragma unroll
       for (int i = 0; i < 8; i++) {
         res |= vals[pack_idx[i]] << (i * 4);
       }
@@ -1165,7 +1162,7 @@ __global__ void gptq_marlin_repack_kernel(
 
       uint32_t res1 = 0;
       uint32_t res2 = 0;
-  #pragma unroll
+#pragma unroll
       for (int i = 0; i < 4; i++) {
         res1 |= vals[pack_idx[i]] << (i * 8);
         res2 |= vals[4 + pack_idx[i]] << (i * 8);
@@ -1177,14 +1174,14 @@ __global__ void gptq_marlin_repack_kernel(
   };
 
   auto start_pipes = [&](int k_tile_id, int n_tile_id) {
-  #pragma unroll
+#pragma unroll
     for (int pipe = 0; pipe < repack_stages - 1; pipe++) {
       fetch_to_shared(pipe, k_tile_id, n_tile_id + pipe);
     }
 
     wait_for_stage();
   };
-  #pragma unroll
+#pragma unroll
   for (int k_tile_id = start_k_tile; k_tile_id < finish_k_tile; k_tile_id++) {
     int n_tile_id = 0;
 
@@ -1195,7 +1192,7 @@ __global__ void gptq_marlin_repack_kernel(
     start_pipes(k_tile_id, n_tile_id);
 
     while (n_tile_id < n_tiles) {
-  #pragma unroll
+#pragma unroll
       for (int pipe = 0; pipe < repack_stages; pipe++) {
         fetch_to_shared((pipe + repack_stages - 1) % repack_stages, k_tile_id,
                         n_tile_id + pipe + repack_stages - 1);
@@ -1207,26 +1204,18 @@ __global__ void gptq_marlin_repack_kernel(
   }
 }
 
-  #define CALL_IF2(NUM_BITS, HAS_PERM)                                         \
-    else if (num_bits == NUM_BITS && has_perm == HAS_PERM) {                  \
-      cudaFuncSetAttribute(                                                   \
-          gptq_marlin_repack_kernel<repack_threads, NUM_BITS, \
-                                            HAS_PERM>,                        \
-          cudaFuncAttributeMaxDynamicSharedMemorySize, max_shared_mem);       \
-      gptq_marlin_repack_kernel<repack_threads, NUM_BITS,     \
-                                        HAS_PERM>                             \
-          <<<blocks, repack_threads, max_shared_mem, stream>>>(       \
-              b_q_weight_ptr, perm_ptr, out_ptr, size_k, size_n);             \
-    }
+#define CALL_IF2(NUM_BITS, HAS_PERM)                                           \
+  else if (num_bits == NUM_BITS && has_perm == HAS_PERM) {                     \
+    cudaFuncSetAttribute(                                                      \
+        gptq_marlin_repack_kernel<repack_threads, NUM_BITS, HAS_PERM>,         \
+        cudaFuncAttributeMaxDynamicSharedMemorySize, max_shared_mem);          \
+    gptq_marlin_repack_kernel<repack_threads, NUM_BITS, HAS_PERM>              \
+        <<<blocks, repack_threads, max_shared_mem, stream>>>(                  \
+            b_q_weight_ptr, perm_ptr, out_ptr, size_k, size_n);                \
+  }
 
-extern "C" void gptq_marlin_repack(
-  void* weight,
-  void* perm,
-  void* out,
-  int size_k,
-  int size_n,
-  int num_bits
-) {
+extern "C" void gptq_marlin_repack(void *weight, void *perm, void *out,
+                                   int size_k, int size_n, int num_bits) {
   // Verify compatibility with marlin tile of 16x64
   assert(size_k % tile_k_size == 0);
   assert(size_n % tile_n_size == 0);
@@ -1236,13 +1225,12 @@ extern "C" void gptq_marlin_repack(
   bool has_perm = true;
   int dev = 0;
   // Get ptrs
-  uint32_t const* b_q_weight_ptr =
-      reinterpret_cast<uint32_t const*>(weight);
-  uint32_t const* perm_ptr = reinterpret_cast<uint32_t const*>(perm);
-  uint32_t* out_ptr = reinterpret_cast<uint32_t*>(out);
+  uint32_t const *b_q_weight_ptr = reinterpret_cast<uint32_t const *>(weight);
+  uint32_t const *perm_ptr = reinterpret_cast<uint32_t const *>(perm);
+  uint32_t *out_ptr = reinterpret_cast<uint32_t *>(out);
 
   // Get dev info
-  cudaStream_t stream = 0; 
+  cudaStream_t stream = 0;
   int blocks;
   cudaDeviceGetAttribute(&blocks, cudaDevAttrMultiProcessorCount, dev);
 
@@ -1260,7 +1248,6 @@ extern "C" void gptq_marlin_repack(
   else {
     assert(false);
   }
-
 }
 
 #endif

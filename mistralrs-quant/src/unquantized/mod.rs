@@ -52,7 +52,7 @@ impl QuantMethod for UnquantLinear {
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
-        maybe_init_cublas_lt_wrapper();
+        maybe_init_cublas_lt_wrapper(a.device().clone());
 
         let w = match *a.dims() {
             [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
