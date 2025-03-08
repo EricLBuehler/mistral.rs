@@ -370,7 +370,7 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "metal")]
     let device = Device::new_metal(0)?;
     #[cfg(not(feature = "metal"))]
-    let device = if mistralrs_core::daemon::is_daemon() {
+    let device = if cfg!(feature = "nccl") {
         Device::Cpu
     } else {
         Device::cuda_if_available(0)?
@@ -433,7 +433,7 @@ fn main() -> anyhow::Result<()> {
         DeviceMapSetting::Auto(auto_device_map_params)
     };
 
-    let no_paged_attn = if device.is_cuda() {
+    let no_paged_attn = if device.is_cuda() || cfg!(feature = "nccl") {
         args.no_paged_attn
     } else if device.is_metal() {
         !args.paged_attn

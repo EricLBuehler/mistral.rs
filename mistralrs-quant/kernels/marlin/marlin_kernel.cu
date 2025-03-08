@@ -865,11 +865,10 @@ thread_config_t determine_thread_config(int prob_m, int prob_n, int prob_k) {
 
 template<typename scalar_t>
 void marlin_matmul(const void* A, const void* B, void* s, void* C, int prob_m, int prob_k, 
-                 int prob_n, void* workspace, int groupsize
+                 int prob_n, void* workspace, int groupsize, cudaStream_t stream
                  ) {
   
   int dev = 0; 
-  cudaStream_t stream = 0; 
   int thread_k = -1;
   int thread_n = -1; 
   int sms = -1; 
@@ -957,9 +956,9 @@ extern "C" void marlin_4bit_f16(
   int prob_k, 
   int prob_n,
   void* workspace,
-  int groupsize
+  int groupsize, cudaStream_t stream
 ) {
-    marlin_matmul<half>(A, B, s, C, prob_m, prob_k, prob_n, workspace, groupsize);
+    marlin_matmul<half>(A, B, s, C, prob_m, prob_k, prob_n, workspace, groupsize, stream);
 }
 
 extern "C" void marlin_4bit_bf16(
@@ -971,9 +970,9 @@ extern "C" void marlin_4bit_bf16(
   int prob_k, 
   int prob_n,
   void* workspace,
-  int groupsize
+  int groupsize, cudaStream_t stream
 ) {
-    marlin_matmul<nv_bfloat16>(A, B, s, C, prob_m, prob_k, prob_n, workspace, groupsize);
+    marlin_matmul<nv_bfloat16>(A, B, s, C, prob_m, prob_k, prob_n, workspace, groupsize, stream);
 }
 
 

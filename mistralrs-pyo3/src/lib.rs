@@ -44,7 +44,7 @@ static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 #[cfg(not(feature = "metal"))]
 fn get_device(seed: Option<u64>) -> &'static Result<Device> {
     DEVICE.get_or_init(|| {
-        let device = if mistralrs_core::daemon::is_daemon() {
+        let device = if cfg!(feature = "nccl") {
             Device::Cpu
         } else {
             Device::cuda_if_available(0)?
@@ -652,7 +652,7 @@ impl Runner {
             None => DeviceMapSetting::Auto(auto_map_params),
         };
 
-        let no_paged_attn = if device.is_cuda() {
+        let no_paged_attn = if device.is_cuda() || cfg!(feature = "nccl") {
             no_paged_attn
         } else if device.is_metal() {
             !paged_attn

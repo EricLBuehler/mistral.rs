@@ -625,7 +625,8 @@ void paged_attention_v1_launcher(
   int max_num_blocks_per_seq,
   int q_stride,
   int kv_block_stride,
-  int kv_head_stride
+  int kv_head_stride,
+  cudaStream_t stream
   ) {
 
   // int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
@@ -643,7 +644,6 @@ void paged_attention_v1_launcher(
 
   dim3 grid(num_heads, num_seqs, 1);
   dim3 block(NUM_THREADS);
-  const cudaStream_t stream = 0;
   switch (head_size) {
     // NOTE(woosuk): To reduce the compilation time, we only compile for the
     // head sizes that we use in the model. However, we can easily extend this
@@ -693,7 +693,8 @@ void paged_attention_v1_launcher(
     max_num_blocks_per_seq,                                         \
     q_stride,                                                       \
     kv_block_stride,                                                \
-    kv_head_stride);
+    kv_head_stride,                                                 \
+    stream);
 
 // NOTE(woosuk): To reduce the compilation time, we omitted block sizes
 // 1, 2, 4, 64, 128, 256.
@@ -733,6 +734,7 @@ extern "C" void paged_attention_v1(
   int32_t q_stride,
   int32_t kv_block_stride,
   int32_t kv_head_stride,
+  cudaStream_t stream,
 
   uint32_t dtype      // 0 => f16; 1 => bf16; 2 => f32
   ) {
@@ -801,7 +803,8 @@ void paged_attention_v2_launcher(
   int max_num_blocks_per_seq,
   int q_stride,
   int kv_block_stride,
-  int kv_head_stride
+  int kv_head_stride,
+  cudaStream_t stream
 
   ) {
   // int thread_group_size = MAX(WARP_SIZE / BLOCK_SIZE, 1);
@@ -823,7 +826,6 @@ void paged_attention_v2_launcher(
   int reduce_shared_mem_size = 2 * max_num_partitions * sizeof(float);
 
   dim3 block(NUM_THREADS);
-  const cudaStream_t stream = 0;
   switch (head_size) {
     // NOTE(woosuk): To reduce the compilation time, we only compile for the
     // head sizes that we use in the model. However, we can easily extend this
@@ -876,7 +878,8 @@ void paged_attention_v2_launcher(
     max_num_blocks_per_seq,                                         \
     q_stride,                                                       \
     kv_block_stride,                                                \
-    kv_head_stride);
+    kv_head_stride,                                                 \
+    stream); 
 
 // NOTE(woosuk): To reduce the compilation time, we omitted block sizes
 // 1, 2, 4, 64, 128, 256.
@@ -919,6 +922,7 @@ extern "C" void paged_attention_v2(
   int32_t q_stride,
   int32_t kv_block_stride,
   int32_t kv_head_stride,
+  cudaStream_t stream,
 
   uint32_t dtype      // 0 => f16; 1 => bf16; 2 => f32
   ) {

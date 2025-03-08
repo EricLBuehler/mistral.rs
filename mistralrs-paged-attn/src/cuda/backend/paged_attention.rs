@@ -203,6 +203,7 @@ impl PagedAttention {
                     q_stride as c_int,
                     kv_block_stride as c_int,
                     kv_head_stride as c_int,
+                    *dev.cu_stream(),
                     internal_type,
                 )
             }
@@ -241,6 +242,7 @@ impl PagedAttention {
                     q_stride as c_int,
                     kv_block_stride as c_int,
                     kv_head_stride as c_int,
+                    *dev.cu_stream(),
                     internal_type,
                 )
             }
@@ -393,6 +395,8 @@ fn update_cache<
     let vc = vc.as_cuda_slice::<T>()?;
     let s = s.as_cuda_slice::<i64>()?;
 
+    let dev = k.device();
+
     // Get cuda views for all tensors
     let k = k.slice(k_l.start_offset()..);
     let v = v.slice(v_l.start_offset()..);
@@ -453,6 +457,7 @@ fn update_cache<
             x as c_int,
             key_stride,
             value_stride,
+            *dev.cu_stream(),
             internal_type,
         )
     }

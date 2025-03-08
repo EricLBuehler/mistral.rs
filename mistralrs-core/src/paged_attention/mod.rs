@@ -128,10 +128,11 @@ pub fn calculate_cache_config(
         min_mem_gpu = min_mem_gpu.min(mem_gpu);
     }
 
-    // Cap at kv cache for max seq len
-    let mem_for_toks =
-        ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
-    let mem_gpu = min_mem_gpu.min(mem_for_toks);
+    // // Cap at kv cache for max seq len
+    // let mem_for_toks =
+    //     ctxt_to_blocks!(config.max_seq_len(), dtype_size, block_size, config) / SIZE_IN_MB;
+    // let mem_gpu = min_mem_gpu.min(mem_for_toks);
+    let mem_gpu = min_mem_gpu;
 
     let num_gpu_blocks = mb_to_blocks!(mem_gpu * SIZE_IN_MB, dtype_size, block_size, config);
     let num_cpu_blocks = mb_to_blocks!(mem_cpu * SIZE_IN_MB, dtype_size, block_size, config);
