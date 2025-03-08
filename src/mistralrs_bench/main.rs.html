@@ -578,7 +578,11 @@
 <a href="#577" id="577">577</a>
 <a href="#578" id="578">578</a>
 <a href="#579" id="579">579</a>
-<a href="#580" id="580">580</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
@@ -950,7 +954,11 @@
     <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
     </span><span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>)<span class="question-mark">?</span>;
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
-    </span><span class="kw">let </span>device = Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?</span>;
+    </span><span class="kw">let </span>device = <span class="kw">if </span><span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) {
+        Device::Cpu
+    } <span class="kw">else </span>{
+        Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?
+    </span>};
 
     <span class="kw">if let </span><span class="prelude-val">Some</span>(seed) = args.seed {
         device.set_seed(seed)<span class="question-mark">?</span>;
@@ -1009,7 +1017,7 @@
         DeviceMapSetting::Auto(auto_device_map_params)
     };
 
-    <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() {
+    <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() || <span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) {
         args.no_paged_attn
     } <span class="kw">else if </span>device.is_metal() {
         !args.paged_attn

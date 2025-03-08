@@ -415,7 +415,7 @@
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="comment">// Batch matrix multiplication
-        </span>maybe_init_cublas_lt_wrapper();
+        </span>maybe_init_cublas_lt_wrapper(a.device().clone());
 
         <span class="kw">let </span>w = <span class="kw">match </span><span class="kw-2">*</span>a.dims() {
             [b1, b2, <span class="kw">_</span>, <span class="kw">_</span>] =&gt; <span class="self">self</span>.w.broadcast_left((b1, b2))<span class="question-mark">?</span>,

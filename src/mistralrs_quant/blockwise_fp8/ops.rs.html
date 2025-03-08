@@ -451,7 +451,12 @@
 <a href="#450" id="450">450</a>
 <a href="#451" id="451">451</a>
 <a href="#452" id="452">452</a>
-<a href="#453" id="453">453</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{CpuStorage, CustomOp2, DType, <span class="prelude-ty">Result</span>, Tensor, WithDType};
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{CpuStorage, CustomOp2, DType, <span class="prelude-ty">Result</span>, Tensor, WithDType};
 <span class="kw">use </span>float8::F8E4M3;
 <span class="kw">use </span>rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -596,6 +601,8 @@
             <span class="macro">candle_core::bail!</span>(<span class="string">"Expected scale to be rank 2"</span>);
         }
 
+        <span class="kw">let </span>dev = weight_s.device();
+
         <span class="kw">let </span>weight = weight_s
             .as_cuda_slice::&lt;F8E4M3&gt;()<span class="question-mark">?
             </span>.slice(weight_l.start_offset()..);
@@ -627,6 +634,7 @@
                         scale_stride,
                         weight_block_size_y,
                         weight_block_size_x,
+                        <span class="kw-2">*</span>dev.cu_stream(),
                     )
                 };
                 CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
@@ -647,6 +655,7 @@
                         scale_stride,
                         weight_block_size_y,
                         weight_block_size_x,
+                        <span class="kw-2">*</span>dev.cu_stream(),
                     )
                 };
                 CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
@@ -667,6 +676,7 @@
                         scale_stride,
                         weight_block_size_y,
                         weight_block_size_x,
+                        <span class="kw-2">*</span>dev.cu_stream(),
                     )
                 };
                 CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())

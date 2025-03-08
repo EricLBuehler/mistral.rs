@@ -95,11 +95,7 @@
 <a href="#94" id="94">94</a>
 <a href="#95" id="95">95</a>
 <a href="#96" id="96">96</a>
-<a href="#97" id="97">97</a>
-<a href="#98" id="98">98</a>
-<a href="#99" id="99">99</a>
-<a href="#100" id="100">100</a>
-<a href="#101" id="101">101</a></pre></div><pre class="rust"><code><span class="comment">// https://github.com/huggingface/text-embeddings-inference/blob/cc1c510e8d8af8447c01e6b14c417473cf2dfda9/backends/candle/src/layers/cublaslt.rs
+<a href="#97" id="97">97</a></pre></div><pre class="rust"><code><span class="comment">// https://github.com/huggingface/text-embeddings-inference/blob/cc1c510e8d8af8447c01e6b14c417473cf2dfda9/backends/candle/src/layers/cublaslt.rs
 
 </span><span class="attr">#![allow(unused_variables, unused_imports, dead_code)]
 
@@ -121,7 +117,7 @@
 <span class="kw">pub static </span>CUBLASLT_HANDLE: Lazy&lt;Mutex&lt;<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>CublasLtWrapper&gt;&gt;&gt; =
     Lazy::new(|| Mutex::new(<span class="prelude-val">None</span>));
 
-<span class="kw">pub fn </span>setup_cublas_lt_wrapper() {
+<span class="kw">pub fn </span>setup_cublas_lt_wrapper(device: Device) {
     <span class="kw">unsafe </span>{
         INIT.call_once(|| {
             <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
@@ -135,21 +131,17 @@
                 // Then check if we can create a device
                 // Then check that the device is CUDA
                 </span><span class="kw">use </span>candle_core::cuda_backend::cudarc::driver;
-                CUBLASLT = driver::result::init()
-                    .ok()
-                    .and_then(|<span class="kw">_</span>| Device::cuda_if_available(<span class="number">0</span>).ok())
-                    .and_then(|device| <span class="kw">match </span>device {
-                        Device::Cuda(<span class="kw">_</span>) =&gt; <span class="prelude-val">Some</span>(CublasLtWrapper {
-                            cublaslt: CublasLt::new(<span class="kw-2">&amp;</span>device).unwrap(),
-                        }),
-                        <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
-                    });
-                <span class="macro">tracing::info!</span>(<span class="string">"Initialized cuBLASlt handle"</span>);
+                CUBLASLT = <span class="kw">match </span>device {
+                    Device::Cuda(<span class="kw">_</span>) =&gt; <span class="prelude-val">Some</span>(CublasLtWrapper {
+                        cublaslt: CublasLt::new(<span class="kw-2">&amp;</span>device).unwrap(),
+                    }),
+                    <span class="kw">_ </span>=&gt; <span class="prelude-val">None</span>,
+                }
             }
+            <span class="attr">#[allow(static_mut_refs)]
+            </span><span class="kw">let </span>cublaslt: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>CublasLtWrapper&gt; = CUBLASLT.as_ref();
+            <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
         });
-        <span class="attr">#[allow(static_mut_refs)]
-        </span><span class="kw">let </span>cublaslt: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>CublasLtWrapper&gt; = CUBLASLT.as_ref();
-        <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap() = cublaslt;
     }
 }
 

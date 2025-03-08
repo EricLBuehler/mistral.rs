@@ -1174,17 +1174,7 @@
 <a href="#1173" id="1173">1173</a>
 <a href="#1174" id="1174">1174</a>
 <a href="#1175" id="1175">1175</a>
-<a href="#1176" id="1176">1176</a>
-<a href="#1177" id="1177">1177</a>
-<a href="#1178" id="1178">1178</a>
-<a href="#1179" id="1179">1179</a>
-<a href="#1180" id="1180">1180</a>
-<a href="#1181" id="1181">1181</a>
-<a href="#1182" id="1182">1182</a>
-<a href="#1183" id="1183">1183</a>
-<a href="#1184" id="1184">1184</a>
-<a href="#1185" id="1185">1185</a>
-<a href="#1186" id="1186">1186</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1176" id="1176">1176</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1487,22 +1477,12 @@
 
         (q_pe, k_pe) = <span class="self">self</span>.rotary_emb.forward(<span class="kw-2">&amp;</span>q_pe, <span class="kw-2">&amp;</span>k_pe, seqlen_offsets)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>q = Tensor::zeros(
-            (bs, <span class="self">self</span>.num_attention_heads, seq_len, <span class="self">self</span>.q_head_dim),
-            q_pe.dtype(),
-            q_pe.device(),
-        )<span class="question-mark">?</span>;
-        q = q.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(..<span class="self">self</span>.cfg.qk_nope_head_dim)], <span class="kw-2">&amp;</span>q_nope)<span class="question-mark">?</span>;
-        q = q.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(<span class="self">self</span>.cfg.qk_nope_head_dim..)], <span class="kw-2">&amp;</span>q_pe)<span class="question-mark">?</span>;
-
-        <span class="kw">let </span><span class="kw-2">mut </span>k = Tensor::zeros(
-            (bs, <span class="self">self</span>.num_attention_heads, seq_len, <span class="self">self</span>.q_head_dim),
-            k_pe.dtype(),
-            k_pe.device(),
-        )<span class="question-mark">?</span>;
-        k = k.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(..<span class="self">self</span>.cfg.qk_nope_head_dim)], <span class="kw-2">&amp;</span>k_nope)<span class="question-mark">?</span>;
-        <span class="kw">let </span>k_pe = k_pe.repeat((<span class="number">1</span>, k.dim(<span class="number">1</span>)<span class="question-mark">?</span>, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>;
-        k = k.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(<span class="self">self</span>.cfg.qk_nope_head_dim..)], <span class="kw-2">&amp;</span>k_pe)<span class="question-mark">?</span>;
+        <span class="kw">let </span>q = Tensor::cat(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>q_nope, <span class="kw-2">&amp;</span>q_pe], D::Minus1)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>k = Tensor::cat(
+            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>k_nope, <span class="kw-2">&amp;</span>k_pe.repeat((<span class="number">1</span>, <span class="self">self</span>.num_attention_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>],
+            D::Minus1,
+        )<span class="question-mark">?
+        </span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_out = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
             <span class="prelude-val">Some</span>(paged_attn) =&gt; <span class="kw">match </span>metadata {

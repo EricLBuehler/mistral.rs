@@ -632,8 +632,7 @@
 <a href="#631" id="631">631</a>
 <a href="#632" id="632">632</a>
 <a href="#633" id="633">633</a>
-<a href="#634" id="634">634</a>
-<a href="#635" id="635">635</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#634" id="634">634</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
 <span class="kw">use </span>engine::Engine;
@@ -690,7 +689,7 @@
 <span class="attr">#[cfg(not(any(all(feature = <span class="string">"cuda"</span>, target_family = <span class="string">"unix"</span>), feature = <span class="string">"metal"</span>)))]
 </span><span class="kw">use </span>dummy_paged_attention <span class="kw">as </span>paged_attention;
 <span class="kw">mod </span>attention;
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>daemon;
+<span class="kw">pub mod </span>daemon;
 <span class="kw">mod </span>diffusion_models;
 <span class="kw">mod </span>pipeline;
 <span class="kw">mod </span>prefix_cacher;
@@ -885,13 +884,12 @@
 }
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-</span><span class="kw">fn </span>set_gemm_reduced_precision_f16() {
+</span><span class="kw">fn </span>set_gemm_reduced_precision_f16(device: candle_core::Device) {
     <span class="kw">use </span>mistralrs_quant::INHIBIT_GEMM_F16;
 
-    <span class="kw">use </span>candle_core::{DType, Device, Tensor};
+    <span class="kw">use </span>candle_core::{DType, Tensor};
 
-    <span class="comment">// NOTE(EricLBuehler): When we support multi-GPU inference, we should check for each gpu here
-    </span><span class="kw">let </span>a = Tensor::zeros((<span class="number">2</span>, <span class="number">2</span>), DType::BF16, <span class="kw-2">&amp;</span>Device::new_cuda(<span class="number">0</span>).unwrap()).unwrap();
+    <span class="kw">let </span>a = Tensor::zeros((<span class="number">2</span>, <span class="number">2</span>), DType::BF16, <span class="kw-2">&amp;</span>device).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_bf16(<span class="bool-val">true</span>);
     <span class="kw">match </span>a.matmul(<span class="kw-2">&amp;</span>a) {
         <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; <span class="macro">tracing::info!</span>(<span class="string">"Enabling GEMM reduced precision in BF16."</span>),
@@ -904,7 +902,7 @@
         }
     }
 
-    <span class="kw">let </span>a = Tensor::zeros((<span class="number">2</span>, <span class="number">2</span>), DType::F16, <span class="kw-2">&amp;</span>Device::new_cuda(<span class="number">0</span>).unwrap()).unwrap();
+    <span class="kw">let </span>a = Tensor::zeros((<span class="number">2</span>, <span class="number">2</span>), DType::F16, <span class="kw-2">&amp;</span>device).unwrap();
     candle_core::cuda::set_gemm_reduced_precision_f16(<span class="bool-val">true</span>);
     <span class="kw">match </span>a.matmul(<span class="kw-2">&amp;</span>a) {
         <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; <span class="macro">tracing::info!</span>(<span class="string">"Enabling GEMM reduced precision in F16."</span>),
@@ -919,7 +917,7 @@
 }
 
 <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
-</span><span class="kw">fn </span>set_gemm_reduced_precision_f16() {}
+</span><span class="kw">fn </span>set_gemm_reduced_precision_f16(_device: candle_core::Device) {}
 
 <span class="kw">impl </span>Drop <span class="kw">for </span>MistralRs {
     <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
@@ -952,9 +950,9 @@
             ModelCategory::Diffusion =&gt; <span class="bool-val">true</span>,
         };
         <span class="kw">if </span>!gemm_full_precision_f16.unwrap_or(<span class="bool-val">false</span>) &amp;&amp; model_supports_reduced_gemm {
-            set_gemm_reduced_precision_f16();
+            set_gemm_reduced_precision_f16(<span class="macro">get_mut_arcmutex!</span>(pipeline).device());
         }
-        setup_cublas_lt_wrapper();
+        setup_cublas_lt_wrapper(<span class="macro">get_mut_arcmutex!</span>(pipeline).device());
 
         <span class="kw">let </span>truncate_sequence = truncate_sequence.unwrap_or(<span class="bool-val">false</span>);
         <span class="kw">let </span>no_kv_cache = no_kv_cache.unwrap_or(<span class="bool-val">false</span>);
@@ -1034,7 +1032,7 @@
 
                                     request_sender.send(req).<span class="kw">await</span>.unwrap();
                                     <span class="kw">let </span>resp = receiver.recv().<span class="kw">await</span>.unwrap();
-                                    <span class="macro">assert!</span>(resp.is_ok());
+                                    resp.unwrap();
                                     <span class="kw">continue</span>;
                                 }
                                 Request::Tokenize(<span class="kw-2">mut </span>x) =&gt; {
@@ -1044,7 +1042,7 @@
 
                                     request_sender.send(req).<span class="kw">await</span>.unwrap();
                                     <span class="kw">let </span>resp = receiver.recv().<span class="kw">await</span>.unwrap();
-                                    <span class="macro">assert!</span>(resp.is_ok());
+                                    resp.unwrap();
                                     <span class="kw">continue</span>;
                                 }
                                 Request::Normal(<span class="kw-2">mut </span>x) =&gt; {
@@ -1055,7 +1053,7 @@
 
                                     request_sender.send(req).<span class="kw">await</span>.unwrap();
                                     <span class="kw">let </span>resp = receiver.recv().<span class="kw">await</span>.unwrap();
-                                    <span class="macro">assert!</span>(resp.as_result().is_ok());
+                                    resp.as_result().unwrap();
                                     <span class="kw">continue</span>;
                                 }
                                 Request::TerminateAllSeqsNextStep =&gt; {

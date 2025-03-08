@@ -1227,21 +1227,7 @@
 <a href="#1226" id="1226">1226</a>
 <a href="#1227" id="1227">1227</a>
 <a href="#1228" id="1228">1228</a>
-<a href="#1229" id="1229">1229</a>
-<a href="#1230" id="1230">1230</a>
-<a href="#1231" id="1231">1231</a>
-<a href="#1232" id="1232">1232</a>
-<a href="#1233" id="1233">1233</a>
-<a href="#1234" id="1234">1234</a>
-<a href="#1235" id="1235">1235</a>
-<a href="#1236" id="1236">1236</a>
-<a href="#1237" id="1237">1237</a>
-<a href="#1238" id="1238">1238</a>
-<a href="#1239" id="1239">1239</a>
-<a href="#1240" id="1240">1240</a>
-<a href="#1241" id="1241">1241</a>
-<a href="#1242" id="1242">1242</a>
-<a href="#1243" id="1243">1243</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1229" id="1229">1229</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
@@ -1277,7 +1263,6 @@
 <span class="macro">serde_default_fn!</span>(TopkMethod, topk_method, TopkMethod::Greedy);
 <span class="macro">serde_default_fn!</span>(usize, moe_layer_freq, <span class="number">1</span>);
 <span class="macro">serde_default_fn!</span>(usize, first_k_dense_replace, <span class="number">0</span>);
-<span class="macro">serde_default_fn!</span>(bool, norm_topk_prob, <span class="bool-val">false</span>);
 <span class="macro">serde_default_fn!</span>(ScoringFunc, scoring_func, ScoringFunc::Softmax);
 <span class="macro">serde_default_fn!</span>(Activation, hidden_act, Activation::Silu);
 <span class="macro">serde_default_fn!</span>(bool, tie_word_embeddings, <span class="bool-val">false</span>);
@@ -1320,9 +1305,6 @@
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) moe_layer_freq: usize,
     <span class="attr">#[serde(default = <span class="string">"first_k_dense_replace"</span>)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) first_k_dense_replace: usize,
-    <span class="comment">// k dense layers
-    </span><span class="attr">#[serde(default = <span class="string">"norm_topk_prob"</span>)]
-    </span><span class="kw">pub</span>(<span class="kw">crate</span>) norm_topk_prob: bool,
     <span class="attr">#[serde(default = <span class="string">"scoring_func"</span>)]
     </span>scoring_func: ScoringFunc,
     <span class="attr">#[serde(default = <span class="string">"hidden_act"</span>)]
@@ -1548,22 +1530,12 @@
 
         (q_pe, k_pe) = <span class="self">self</span>.rotary_emb.forward(<span class="kw-2">&amp;</span>q_pe, <span class="kw-2">&amp;</span>k_pe, seqlen_offsets)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>q = Tensor::zeros(
-            (bs, <span class="self">self</span>.num_attention_heads, seq_len, <span class="self">self</span>.q_head_dim),
-            q_pe.dtype(),
-            q_pe.device(),
-        )<span class="question-mark">?</span>;
-        q = q.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(..<span class="self">self</span>.cfg.qk_nope_head_dim)], <span class="kw-2">&amp;</span>q_nope)<span class="question-mark">?</span>;
-        q = q.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(<span class="self">self</span>.cfg.qk_nope_head_dim..)], <span class="kw-2">&amp;</span>q_pe)<span class="question-mark">?</span>;
-
-        <span class="kw">let </span><span class="kw-2">mut </span>k = Tensor::zeros(
-            (bs, <span class="self">self</span>.num_attention_heads, seq_len, <span class="self">self</span>.q_head_dim),
-            k_pe.dtype(),
-            k_pe.device(),
-        )<span class="question-mark">?</span>;
-        k = k.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(..<span class="self">self</span>.cfg.qk_nope_head_dim)], <span class="kw-2">&amp;</span>k_nope)<span class="question-mark">?</span>;
-        <span class="kw">let </span>k_pe = k_pe.repeat((<span class="number">1</span>, k.dim(<span class="number">1</span>)<span class="question-mark">?</span>, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>;
-        k = k.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(<span class="self">self</span>.cfg.qk_nope_head_dim..)], <span class="kw-2">&amp;</span>k_pe)<span class="question-mark">?</span>;
+        <span class="kw">let </span>q = Tensor::cat(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>q_nope, <span class="kw-2">&amp;</span>q_pe], D::Minus1)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>k = Tensor::cat(
+            <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>k_nope, <span class="kw-2">&amp;</span>k_pe.repeat((<span class="number">1</span>, <span class="self">self</span>.num_attention_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>],
+            D::Minus1,
+        )<span class="question-mark">?
+        </span>.contiguous()<span class="question-mark">?</span>;
 
         <span class="kw">let </span><span class="kw-2">mut </span>attn_out = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.paged_attn {
             <span class="prelude-val">Some</span>(paged_attn) =&gt; <span class="kw">match </span>metadata {
@@ -1815,7 +1787,7 @@
             }
         };
 
-        <span class="kw">if </span><span class="self">self</span>.top_k &gt; <span class="number">1 </span>&amp;&amp; <span class="self">self</span>.cfg.norm_topk_prob {
+        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.cfg.scoring_func, ScoringFunc::Sigmoid) {
             <span class="kw">let </span>denmoninator = (topk_weight.sum_keepdim(D::Minus1)<span class="question-mark">? </span>+ <span class="number">1e-20</span>)<span class="question-mark">?</span>;
             topk_weight = topk_weight.broadcast_div(<span class="kw-2">&amp;</span>denmoninator)<span class="question-mark">?</span>;
         }

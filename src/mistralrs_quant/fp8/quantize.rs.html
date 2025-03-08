@@ -276,7 +276,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>x = Tensor::rand(<span class="number">0.</span>, <span class="number">1.</span>, (<span class="number">1</span>, <span class="number">16</span>, <span class="number">32</span>), <span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
 
         <span class="comment">// Batch matrix multiplication
-        </span>maybe_init_cublas_lt_wrapper();
+        </span>maybe_init_cublas_lt_wrapper(x.device().clone());
 
         <span class="kw">let </span>handle = CUBLASLT_HANDLE.lock().unwrap().unwrap();
 

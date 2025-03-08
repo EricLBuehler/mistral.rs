@@ -243,7 +243,10 @@
 <a href="#242" id="242">242</a>
 <a href="#243" id="243">243</a>
 <a href="#244" id="244">244</a>
-<a href="#245" id="245">245</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Barrier};
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Barrier};
 
 <span class="kw">use </span>candle_core::Result;
 <span class="kw">pub use </span>ops::{Comm, Id, SumAllReduce};
@@ -314,6 +317,7 @@
     <span class="kw">impl </span>Comm {
         <span class="kw">pub fn </span>from_device(id: Id, dev: <span class="kw-2">&amp;</span>Device, rank: usize, world_size: usize) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
             <span class="kw">let </span>device = dev.as_cuda_device()<span class="question-mark">?</span>.cuda_device();
+            <span class="macro">assert_eq!</span>(rank, device.ordinal());
             <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
                 comm: cudarc::nccl::Comm::from_rank(device, rank, world_size, id.<span class="number">0</span>)
                     .map_err(|e| e.<span class="number">0</span>)
@@ -378,6 +382,8 @@
                         <span class="prelude-val">Some</span>((<span class="number">0</span>, l)) <span class="kw">if </span>l == s.len() =&gt; s,
                         <span class="prelude-val">Some</span>(<span class="kw">_</span>) | <span class="prelude-val">None </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"input has to be contiguous"</span>),
                     };
+                    <span class="macro">assert_eq!</span>(dev.ordinal(), <span class="self">self</span>.comm.rank());
+                    <span class="macro">assert!</span>(elem_count &gt; <span class="number">0</span>);
                     <span class="kw">let </span><span class="kw-2">mut </span>dst = <span class="kw">unsafe </span>{ dev.alloc::&lt;bf16&gt;(elem_count) }.w()<span class="question-mark">?</span>;
                     <span class="self">self</span>.comm
                         .comm

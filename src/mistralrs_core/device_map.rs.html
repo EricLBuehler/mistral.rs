@@ -587,7 +587,19 @@
 <a href="#586" id="586">586</a>
 <a href="#587" id="587">587</a>
 <a href="#588" id="588">588</a>
-<a href="#589" id="589">589</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Arc};
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Arc};
 
 <span class="kw">use crate</span>::{
     pipeline::AutoDeviceMapParams,
@@ -744,10 +756,22 @@
                     <span class="kw">for </span>DeviceLayerMapMetadata { ordinal, layers } <span class="kw">in
                         </span>device_layers.as_ref().unwrap()
                     {
-                        <span class="kw">let </span>dev = <span class="kw">match </span>device {
-                            Device::Cpu =&gt; Device::Cpu,
-                            Device::Cuda(<span class="kw">_</span>) =&gt; Device::cuda_if_available(<span class="kw-2">*</span>ordinal)<span class="question-mark">?</span>,
-                            Device::Metal(<span class="kw">_</span>) =&gt; Device::new_metal(<span class="kw-2">*</span>ordinal)<span class="question-mark">?</span>,
+                        <span class="kw">let </span>dev = <span class="kw">match </span>device.location() {
+                            DeviceLocation::Cpu =&gt; Device::Cpu,
+                            DeviceLocation::Cuda { gpu_id: device_ord } =&gt; {
+                                <span class="kw">if </span>device_ord == <span class="kw-2">*</span>ordinal {
+                                    device.clone()
+                                } <span class="kw">else </span>{
+                                    Device::new_cuda_with_stream(<span class="kw-2">*</span>ordinal)<span class="question-mark">?
+                                </span>}
+                            }
+                            DeviceLocation::Metal { gpu_id: device_ord } =&gt; {
+                                <span class="kw">if </span>device_ord == <span class="kw-2">*</span>ordinal {
+                                    device.clone()
+                                } <span class="kw">else </span>{
+                                    Device::new_metal(<span class="kw-2">*</span>ordinal)<span class="question-mark">?
+                                </span>}
+                            }
                         };
                         <span class="kw">if </span>!device.is_cpu() {
                             dev.set_seed(original_seed.unwrap())<span class="question-mark">?</span>;

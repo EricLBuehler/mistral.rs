@@ -32,7 +32,7 @@
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>IS_DAEMON_FLAG: <span class="kw-2">&amp;</span>str = <span class="string">"__MISTRALRS_DAEMON_INTERNAL"</span>;
 
-<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_daemon() -&gt; bool {
+<span class="kw">pub fn </span>is_daemon() -&gt; bool {
     std::env::var(IS_DAEMON_FLAG).is_ok()
 }
 

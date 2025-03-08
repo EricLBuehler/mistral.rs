@@ -512,7 +512,9 @@
 <a href="#511" id="511">511</a>
 <a href="#512" id="512">512</a>
 <a href="#513" id="513">513</a>
-<a href="#514" id="514">514</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
@@ -831,6 +833,8 @@
     </span><span class="kw">let </span>device = <span class="kw">if </span>args.cpu {
         args.no_paged_attn = <span class="bool-val">true</span>;
         Device::Cpu
+    } <span class="kw">else if </span><span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) {
+        Device::Cpu
     } <span class="kw">else </span>{
         Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?
     </span>};
@@ -891,7 +895,7 @@
         DeviceMapSetting::Auto(auto_device_map_params)
     };
 
-    <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() {
+    <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() || <span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) {
         args.no_paged_attn
     } <span class="kw">else if </span>device.is_metal() {
         !args.paged_attn
