@@ -31,7 +31,7 @@ def run():
         request(stream=False)
         finished = datetime.now()
 
-        print(f"Duration: {finished-now}")
+        print(f"Duration: {finished - now}")
 
         print("\nStreaming: ")
         print("=" * 15)
@@ -42,7 +42,7 @@ def run():
             pass
         finished = datetime.now()
 
-        print(f"Duration: {finished-now}")
+        print(f"Duration: {finished - now}")
 
 
 if __name__ == "__main__":

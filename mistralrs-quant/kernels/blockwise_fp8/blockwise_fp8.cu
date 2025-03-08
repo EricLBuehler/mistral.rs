@@ -38,8 +38,10 @@ __global__ void dequant_fp8_blockwise_kernel(
   __syncthreads(); // Ensure all threads see the loaded value.
 
   // Loop over the tile using a fixed blockDim, covering the whole tile.
-  for (int local_y = threadIdx.y; local_y < weight_block_size_y; local_y += blockDim.y) {
-    for (int local_x = threadIdx.x; local_x < weight_block_size_x; local_x += blockDim.x) {
+  for (int local_y = threadIdx.y; local_y < weight_block_size_y;
+       local_y += blockDim.y) {
+    for (int local_x = threadIdx.x; local_x < weight_block_size_x;
+         local_x += blockDim.x) {
       int weight_y = start_y + local_y;
       int weight_x = start_x + local_x;
       if (weight_y < weight_height && weight_x < weight_width) {
@@ -55,32 +57,34 @@ __global__ void dequant_fp8_blockwise_kernel(
 extern "C" void launch_dequant_fp8_blockwise_kernel_f32(
     const __nv_fp8_e4m3 *d_weight, const float *d_scale, float *d_output,
     int weight_height, int weight_width, int weight_row_stride,
-    int scale_stride, int weight_block_size_y, int weight_block_size_x, cudaStream_t stream) {
+    int scale_stride, int weight_block_size_y, int weight_block_size_x,
+    cudaStream_t stream) {
   int grid_y = (weight_height + weight_block_size_y - 1) / weight_block_size_y;
   int grid_x = (weight_width + weight_block_size_x - 1) / weight_block_size_x;
   dim3 blockDim(32, 32);
   dim3 gridDim(grid_x, grid_y);
 
-  dequant_fp8_blockwise_kernel<float>
-      <<<gridDim, blockDim, 0, stream>>>(d_weight, d_scale, d_output, weight_height,
-                              weight_width, weight_row_stride, scale_stride,
-                              weight_block_size_y, weight_block_size_x);
+  dequant_fp8_blockwise_kernel<float><<<gridDim, blockDim, 0, stream>>>(
+      d_weight, d_scale, d_output, weight_height, weight_width,
+      weight_row_stride, scale_stride, weight_block_size_y,
+      weight_block_size_x);
   CUDA_CHECK(cudaGetLastError());
 }
 
 extern "C" void launch_dequant_fp8_blockwise_kernel_f16(
     const __nv_fp8_e4m3 *d_weight, const float *d_scale, __half *d_output,
     int weight_height, int weight_width, int weight_row_stride,
-    int scale_stride, int weight_block_size_y, int weight_block_size_x, cudaStream_t stream) {
+    int scale_stride, int weight_block_size_y, int weight_block_size_x,
+    cudaStream_t stream) {
   int grid_y = (weight_height + weight_block_size_y - 1) / weight_block_size_y;
   int grid_x = (weight_width + weight_block_size_x - 1) / weight_block_size_x;
   dim3 blockDim(32, 32);
   dim3 gridDim(grid_x, grid_y);
 
-  dequant_fp8_blockwise_kernel<__half>
-      <<<gridDim, blockDim, 0, stream>>>(d_weight, d_scale, d_output, weight_height,
-                              weight_width, weight_row_stride, scale_stride,
-                              weight_block_size_y, weight_block_size_x);
+  dequant_fp8_blockwise_kernel<__half><<<gridDim, blockDim, 0, stream>>>(
+      d_weight, d_scale, d_output, weight_height, weight_width,
+      weight_row_stride, scale_stride, weight_block_size_y,
+      weight_block_size_x);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -94,9 +98,9 @@ extern "C" void launch_dequant_fp8_blockwise_kernel_bf16(
   dim3 blockDim(32, 32);
   dim3 gridDim(grid_x, grid_y);
 
-  dequant_fp8_blockwise_kernel<__nv_bfloat16>
-      <<<gridDim, blockDim, 0, stream>>>(d_weight, d_scale, d_output, weight_height,
-                              weight_width, weight_row_stride, scale_stride,
-                              weight_block_size_y, weight_block_size_x);
+  dequant_fp8_blockwise_kernel<__nv_bfloat16><<<gridDim, blockDim, 0, stream>>>(
+      d_weight, d_scale, d_output, weight_height, weight_width,
+      weight_row_stride, scale_stride, weight_block_size_y,
+      weight_block_size_x);
   CUDA_CHECK(cudaGetLastError());
 }
