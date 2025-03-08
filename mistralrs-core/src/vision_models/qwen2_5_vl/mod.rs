@@ -4,8 +4,8 @@ use std::{any::Any, sync::Arc};
 
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
-use text::Qwen2VLTextModel;
-use vision::Qwen2VLVisionModel;
+use text::Qwen2_5VLTextModel;
+use vision::Qwen2_5VLVisionModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -25,17 +25,17 @@ mod text;
 mod vision;
 
 pub(crate) use config::Config;
-pub(crate) use inputs_processor::Qwen2VLProcessor;
+pub(crate) use inputs_processor::Qwen2_5VLProcessor;
 
-pub struct Qwen2VLModel {
-    text: Qwen2VLTextModel,
-    vision: Qwen2VLVisionModel,
+pub struct Qwen2_5VLModel {
+    text: Qwen2_5VLTextModel,
+    vision: Qwen2_5VLVisionModel,
     spatial_merge_size: usize,
     image_token_id: u32,
     video_token_id: u32,
 }
 
-impl Qwen2VLModel {
+impl Qwen2_5VLModel {
     pub fn new(
         cfg: &Config,
         vb: ShardedVarBuilder,
@@ -47,13 +47,13 @@ impl Qwen2VLModel {
             // TODO!
             candle_core::bail!("Sliding window is unsupported for now!");
         }
-        let vision = Qwen2VLVisionModel::new(
+        let vision = Qwen2_5VLVisionModel::new(
             &cfg.vision_config,
             vb.pp("visual")
                 .set_device(normal_loading_metadata.real_device.clone())
                 .set_dtype(DType::F32),
         )?;
-        let text = Qwen2VLTextModel::new(
+        let text = Qwen2_5VLTextModel::new(
             cfg,
             vb.clone(),
             is_gptx,
@@ -404,7 +404,7 @@ impl Qwen2VLModel {
     }
 }
 
-pub(crate) struct Qwen2VLVisionSpecificArgs {
+pub(crate) struct Qwen2_5VLVisionSpecificArgs {
     input_ids_full: Tensor,
     image_grid_thw: Option<Tensor>, // Some when pixel values are provided
     video_grid_thw: Option<Tensor>, // Some when pixel values are provided
@@ -416,7 +416,7 @@ pub(crate) struct Qwen2VLVisionSpecificArgs {
     video_nums: Vec<usize>,
 }
 
-impl VisionModel for Qwen2VLModel {
+impl VisionModel for Qwen2_5VLModel {
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -428,7 +428,7 @@ impl VisionModel for Qwen2VLModel {
         _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let Qwen2VLVisionSpecificArgs {
+        let Qwen2_5VLVisionSpecificArgs {
             input_ids_full,
             image_grid_thw,
             video_grid_thw,
@@ -440,7 +440,7 @@ impl VisionModel for Qwen2VLModel {
             video_nums,
         } = *model_specific_args
             .downcast()
-            .expect("Cannot downcast into `Qwen2VLVisionSpecificArgs`");
+            .expect("Cannot downcast into `Qwen2_5VLVisionSpecificArgs`");
         let (pixel_values, pixel_values_video) = match (&image_grid_thw, &video_grid_thw) {
             (Some(_), None) => (pixel_values, None),
             (None, Some(_)) => (None, pixel_values),
@@ -487,7 +487,7 @@ impl VisionModel for Qwen2VLModel {
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         assert_eq!(input_ids.dims()[0], 1);
-        Box::new(Qwen2VLVisionSpecificArgs {
+        Box::new(Qwen2_5VLVisionSpecificArgs {
             input_ids_full: input_ids.clone(),
             image_grid_thw: None,
             video_grid_thw: None,
@@ -501,7 +501,7 @@ impl VisionModel for Qwen2VLModel {
     }
 }
 
-impl IsqModel for Qwen2VLModel {
+impl IsqModel for Qwen2_5VLModel {
     fn get_layers(
         &mut self,
     ) -> (
@@ -515,4 +515,4 @@ impl IsqModel for Qwen2VLModel {
     }
 }
 
-impl AnyMoeBaseModelMixin for Qwen2VLModel {}
+impl AnyMoeBaseModelMixin for Qwen2_5VLModel {}

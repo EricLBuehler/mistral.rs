@@ -55,25 +55,39 @@ impl PatchEmbed {
     }
 }
 
-// https://github.com/huggingface/transformers/blob/a769ed45e17c44fd17b85c025863c4e4f2f73634/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L314
+// https://github.com/huggingface/transformers/blob/6a1ab634b6886b6560b0502e7a305c8cd881732e/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L75
 struct VisionMlp {
-    fc1: Arc<dyn QuantMethod>,
-    fc2: Arc<dyn QuantMethod>,
+    gate_proj: Arc<dyn QuantMethod>,
+    up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
     act: Activation,
 }
 
 impl VisionMlp {
     fn new(dim: usize, hidden_dim: usize, act: Activation, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
-            fc1: mistralrs_quant::linear(dim, hidden_dim, &None, vb.pp("fc1"))?,
-            fc2: mistralrs_quant::linear(hidden_dim, dim, &None, vb.pp("fc2"))?,
+            gate_proj: mistralrs_quant::linear(dim, hidden_dim, &None, vb.pp("gate_proj"))?,
+            up_proj: mistralrs_quant::linear(dim, hidden_dim, &None, vb.pp("up_proj"))?,
+            down_proj: mistralrs_quant::linear(hidden_dim, dim, &None, vb.pp("down_proj"))?,
             act,
         })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let fc1 = self.act.forward(&self.fc1.forward(&xs.unsqueeze(0)?)?)?;
-        self.fc2.forward(&fc1)?.squeeze(0)
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.gate_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let lhs = self.gate_proj.forward(&xs.unsqueeze(0)?)?.apply(&self.act)?;
+        let rhs = self.up_proj.forward(&xs.unsqueeze(0)?)?;
+        let mut res = self.down_proj.forward(&(lhs * rhs)?)?;
+
+        res = res.squeeze(0)?;
+        if self.gate_proj.quantized_act_type().is_some() {
+            res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
     }
 }
 
@@ -86,8 +100,8 @@ fn rotate_half(xs: &Tensor) -> Result<Tensor> {
 
 fn apply_rotary_pos_emb_vision(xs: &Tensor, freqs: &Tensor) -> Result<Tensor> {
     let xs = xs.to_dtype(DType::F32)?;
-    let cos = freqs.cos()?;
-    let sin = freqs.sin()?;
+    let cos = freqs.cos()?.unsqueeze(D::Minus2)?;
+    let sin = freqs.sin()?.unsqueeze(D::Minus2)?;
 
     xs.broadcast_mul(&cos)? + rotate_half(&xs)?.broadcast_mul(&sin)
 }
@@ -260,7 +274,7 @@ impl VisionRotaryEmbedding {
     }
 }
 
-pub struct Qwen2VLVisionModel {
+pub struct Qwen2_5VLVisionModel {
     blocks: Vec<VisionBlock>,
     patch_merger: PatchMerger,
     patch_embed: PatchEmbed,
@@ -272,7 +286,7 @@ pub struct Qwen2VLVisionModel {
     fullatt_block_indices: Vec<usize>,
 }
 
-impl Qwen2VLVisionModel {
+impl Qwen2_5VLVisionModel {
     pub fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mut blocks = Vec::new();
         for i in 0..cfg.depth {
@@ -351,7 +365,7 @@ impl Qwen2VLVisionModel {
         let mut window_index_id = 0;
         let vit_merger_window_size = self.window_size / self.spatial_merge_size / self.patch_size;
 
-        for i_thw in grid_thw.to_vec2::<u32>()? {
+        for i_thw in grid_thw.to_vec2::<u32>()?{
             let (t, h, w) = (i_thw[0] as usize, i_thw[1] as usize, i_thw[2] as usize);
             let llm_grid_h = h / self.spatial_merge_size;
             let llm_grid_w = w / self.spatial_merge_size;
@@ -392,10 +406,11 @@ impl Qwen2VLVisionModel {
                 .into_iter()
                 .filter(|x| *x != -100)
                 .collect::<Vec<_>>();
-            window_index.push(Tensor::new(
-                [index_new, vec![window_index_id]].concat(),
-                device,
-            )?);
+            window_index.push(
+                Tensor::new(index_new.iter()
+                                .map(|x| x + window_index_id)
+                                .collect::<Vec<_>>(), device)?
+            );
             let cu_seqlens_tmp = ((seqlens
                 .to_dtype(DType::F32)?
                 .cumsum(0)?
@@ -432,6 +447,7 @@ impl Qwen2VLVisionModel {
         ))?;
         rotary_pos_emb = rotary_pos_emb.index_select(&window_index, 0)?;
         rotary_pos_emb = rotary_pos_emb.reshape((seq_len, ()))?;
+        rotary_pos_emb = Tensor::cat(&vec![&rotary_pos_emb; 2], D::Minus1)?;
 
         let grid_thw = grid_thw.to_device(&Device::Cpu)?;
         let cu_seqlens = (grid_thw.i((.., 1))? * grid_thw.i((.., 2))?)?

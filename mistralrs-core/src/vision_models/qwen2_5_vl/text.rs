@@ -9,7 +9,7 @@ use mistralrs_quant::{
 use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{self, Activation, F32RmsNorm, Qwen2VLRotaryEmbedding, Sdpa},
+    layers::{self, Activation, F32RmsNorm, Qwen2_5VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         extract_logits, text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
@@ -17,7 +17,6 @@ use crate::{
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-
 use super::config::Config;
 
 struct Mlp {
@@ -85,13 +84,13 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    rotary_emb: Arc<Qwen2VLRotaryEmbedding>,
+    rotary_emb: Arc<Qwen2_5VLRotaryEmbedding>,
     sdpa_params: SdpaParams,
 }
 
 impl Attention {
     fn new(
-        rotary_emb: Arc<Qwen2VLRotaryEmbedding>,
+        rotary_emb: Arc<Qwen2_5VLRotaryEmbedding>,
         cfg: &Config,
         vb: ShardedVarBuilder,
         comm: &Arc<mistralrs_quant::Comm>,
@@ -248,7 +247,7 @@ pub struct DecoderLayer {
 
 impl DecoderLayer {
     fn new(
-        rotary_emb: Arc<Qwen2VLRotaryEmbedding>,
+        rotary_emb: Arc<Qwen2_5VLRotaryEmbedding>,
         cfg: &Config,
         vb: ShardedVarBuilder,
         mapper: &dyn DeviceMapper,
@@ -308,7 +307,7 @@ impl DecoderLayer {
     }
 }
 
-pub struct Qwen2VLTextModel {
+pub struct Qwen2_5VLTextModel {
     embed_tokens: Embedding,
     pub(super) norm: F32RmsNorm,
     layers: Vec<DecoderLayer>,
@@ -321,7 +320,7 @@ pub struct Qwen2VLTextModel {
     pub(super) max_seq_len: usize,
 }
 
-impl Qwen2VLTextModel {
+impl Qwen2_5VLTextModel {
     pub fn new(
         cfg: &Config,
         vb: ShardedVarBuilder,
@@ -350,7 +349,7 @@ impl Qwen2VLTextModel {
                 .unwrap_or(&normal_loading_metadata.real_device);
             ropes.insert(
                 device.location(),
-                Arc::new(Qwen2VLRotaryEmbedding::new(
+                Arc::new(Qwen2_5VLRotaryEmbedding::new(
                     cfg.rope_theta as f32,
                     head_dim,
                     device,
@@ -473,7 +472,8 @@ impl Qwen2VLTextModel {
     }
 }
 
-impl IsqModel for Qwen2VLTextModel {
+
+impl IsqModel for Qwen2_5VLTextModel {
     fn get_layers(
         &mut self,
     ) -> (

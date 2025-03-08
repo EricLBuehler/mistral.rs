@@ -42,8 +42,8 @@ use crate::vision_models::phi4::{Phi4MMConfig, Phi4MMModel, PHI4_MM_VISION_CFG};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::qwen2_5_vl::{
-    Config as Qwen2_5VLConfig, Qwen2VLModel as Qwen2_5VLModel,
-    Qwen2VLProcessor as Qwen2_5VLProcessor,
+    Config as Qwen2_5VLConfig, Qwen2_5VLModel,
+    Qwen2_5VLProcessor,
 };
 use crate::vision_models::qwen2vl::{Config as Qwen2VLConfig, Qwen2VLModel, Qwen2VLProcessor};
 use crate::vision_models::{minicpmo, phi4};

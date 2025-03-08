@@ -3,3 +3,4 @@
 .vscode
 *.a
 .DS_Store
+.idea
