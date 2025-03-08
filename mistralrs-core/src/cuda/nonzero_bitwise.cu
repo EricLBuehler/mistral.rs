@@ -9,12 +9,8 @@
   do {                                                                         \
     cudaError_t err = call;                                                    \
     if (err != cudaSuccess) {                                                  \
-      int device = 1000;                                                       \
-      cudaGetDevice(&device);                                                  \
-      int devices = 1000;                                                      \
-      cudaGetDeviceCount(&devices);                                            \
-      fprintf(stderr, "CUDA error at %s:%d (device %d/%d): %s\n", __FILE__,    \
-              __LINE__, device, devices, cudaGetErrorString(err));             \
+      fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,         \
+              cudaGetErrorString(err));                                        \
       exit(err);                                                               \
     }                                                                          \
   } while (0)

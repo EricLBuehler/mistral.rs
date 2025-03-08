@@ -16,6 +16,7 @@
  * limitations under the License.
  */
 #include <stdint.h>
+#include <stdio.h>
 
 #ifdef USE_ROCM
 #include <hip/hip_runtime.h>
@@ -35,6 +36,16 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define DIVIDE_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
 
+#define CUDA_CHECK(call)                                                       \
+  do {                                                                         \
+    cudaError_t err = call;                                                    \
+    if (err != cudaSuccess) {                                                  \
+      fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,         \
+              cudaGetErrorString(err));                                        \
+      exit(err);                                                               \
+    }                                                                          \
+  } while (0)
+  
 namespace vllm {
 
 // Utility function for attention softmax.
@@ -732,6 +743,7 @@ extern "C" void paged_attention_v1(
   } else if (dtype == 1) {
     CALL_V1_LAUNCHER_BLOCK_SIZE(__nv_bfloat16);
   }
+  CUDA_CHECK(cudaGetLastError());
 }
 
 #define LAUNCH_PAGED_ATTENTION_V2(HEAD_SIZE)                                                  \
@@ -917,6 +929,7 @@ extern "C" void paged_attention_v2(
   } else if (dtype == 1) {
     CALL_V2_LAUNCHER_BLOCK_SIZE(__nv_bfloat16);
   }
+  CUDA_CHECK(cudaGetLastError());
 }
 
 #undef WARP_SIZE

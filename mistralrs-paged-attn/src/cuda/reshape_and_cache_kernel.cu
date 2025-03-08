@@ -1,6 +1,7 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "cuda_compat.h"
 
@@ -8,6 +9,16 @@
 #include <cassert>
 #include <map>
 #include <vector>
+
+#define CUDA_CHECK(call)                                                       \
+  do {                                                                         \
+    cudaError_t err = call;                                                    \
+    if (err != cudaSuccess) {                                                  \
+      fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,         \
+              cudaGetErrorString(err));                                        \
+      exit(err);                                                               \
+    }                                                                          \
+  } while (0)
 
 namespace vllm {
 
@@ -104,4 +115,5 @@ extern "C" void reshape_and_cache(
   } else if (dtype == 2) {
     CALL_RESHAPE_AND_CACHE(float);
   }
+  CUDA_CHECK(cudaGetLastError());
 }
