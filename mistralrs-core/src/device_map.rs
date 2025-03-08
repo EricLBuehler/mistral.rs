@@ -155,10 +155,22 @@ impl DeviceMapSetting {
                     for DeviceLayerMapMetadata { ordinal, layers } in
                         device_layers.as_ref().unwrap()
                     {
-                        let dev = match device {
-                            Device::Cpu => Device::Cpu,
-                            Device::Cuda(_) => Device::cuda_if_available(*ordinal)?,
-                            Device::Metal(_) => Device::new_metal(*ordinal)?,
+                        let dev = match device.location() {
+                            DeviceLocation::Cpu => Device::Cpu,
+                            DeviceLocation::Cuda { gpu_id: device_ord } => {
+                                if device_ord == *ordinal {
+                                    device.clone()
+                                } else {
+                                    Device::new_cuda_with_stream(*ordinal)?
+                                }
+                            }
+                            DeviceLocation::Metal { gpu_id: device_ord } => {
+                                if device_ord == *ordinal {
+                                    device.clone()
+                                } else {
+                                    Device::new_metal(*ordinal)?
+                                }
+                            }
                         };
                         if !device.is_cpu() {
                             dev.set_seed(original_seed.unwrap())?;

@@ -132,7 +132,7 @@ void nonzero(const T *d_in, const uint32_t N, const uint32_t num_nonzero,
   if (nthreads > 1024) {
     nthreads = 1024;
   }
-  const int nblocks = MAX((num_nonzero + nthreads - 1) / nthreads, 1);
+  const int nblocks = (num_nonzero + nthreads - 1) / nthreads;
   transform_indices<<<nblocks, nthreads, 0, stream>>>(out_temp, num_nonzero,
                                                       dims, num_dims, d_out);
   CUDA_CHECK(cudaGetLastError());

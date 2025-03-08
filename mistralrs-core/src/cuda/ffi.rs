@@ -175,4 +175,117 @@ extern "C" {
     pub(crate) fn leftshift_u32(d_in1: *const c_void, d_out: *mut c_void, N: u32, k: i32);
     pub(crate) fn leftshift_i64(d_in1: *const c_void, d_out: *mut c_void, N: u32, k: i32);
     pub(crate) fn leftshift_i32(d_in1: *const c_void, d_out: *mut c_void, N: u32, k: i32);
+
+    pub(crate) fn asort_asc_f32(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_asc_f16(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_asc_bf16(
+        x: *const c_void,
+        dst: *const c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_asc_f64(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_asc_u8(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_asc_u32(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_asc_i64(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_desc_f32(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_desc_f16(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_desc_bf16(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_desc_f64(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_desc_u8(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_desc_u32(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
+    pub(crate) fn asort_desc_i64(
+        x: *const c_void,
+        dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        inplace: bool,
+        stream: i64,
+    );
 }

@@ -304,7 +304,7 @@ impl Loader for NormalLoader {
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
             vec![candle_core::Device::new_cuda_with_stream(worker_rank + 1)?]
         } else if use_nccl {
-            vec![candle_core::Device::new_cuda_with_stream(0)?]
+            vec![device.clone()]
         } else {
             device_map::get_all_similar_devices(device)?
         };
@@ -531,7 +531,7 @@ impl Loader for NormalLoader {
                     cmd.env(daemon::IS_DAEMON_FLAG, serde_json::to_string(&data)?);
 
                     cmd.stdout(std::process::Stdio::null());
-                    // cmd.stderr(std::process::Stdio::null());
+                    cmd.stderr(std::process::Stdio::null());
                     cmd.stdin(std::process::Stdio::null());
 
                     children.push(cmd.spawn().expect("Failed to spawn process"));

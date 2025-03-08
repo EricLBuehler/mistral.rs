@@ -317,6 +317,8 @@ async fn main() -> Result<()> {
     let device = if args.cpu {
         args.no_paged_attn = true;
         Device::Cpu
+    } else if mistralrs_core::daemon::is_daemon() {
+        Device::Cpu
     } else {
         Device::cuda_if_available(0)?
     };

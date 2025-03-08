@@ -44,7 +44,11 @@ static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 #[cfg(not(feature = "metal"))]
 fn get_device(seed: Option<u64>) -> &'static Result<Device> {
     DEVICE.get_or_init(|| {
-        let device = Device::cuda_if_available(0)?;
+        let device = if mistralrs_core::daemon::is_daemon() {
+            Device::Cpu
+        } else {
+            Device::cuda_if_available(0)?
+        };
         if let Some(seed) = seed {
             device.set_seed(seed)?;
         }

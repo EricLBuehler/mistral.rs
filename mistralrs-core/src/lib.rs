@@ -55,7 +55,7 @@ mod paged_attention;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 use dummy_paged_attention as paged_attention;
 mod attention;
-pub(crate) mod daemon;
+pub mod daemon;
 mod diffusion_models;
 mod pipeline;
 mod prefix_cacher;

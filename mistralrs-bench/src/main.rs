@@ -370,7 +370,11 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "metal")]
     let device = Device::new_metal(0)?;
     #[cfg(not(feature = "metal"))]
-    let device = Device::cuda_if_available(0)?;
+    let device = if mistralrs_core::daemon::is_daemon() {
+        Device::Cpu
+    } else {
+        Device::cuda_if_available(0)?
+    };
 
     if let Some(seed) = args.seed {
         device.set_seed(seed)?;
