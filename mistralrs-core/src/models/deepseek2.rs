@@ -301,22 +301,12 @@ impl Attention {
 
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
 
-        let mut q = Tensor::zeros(
-            (bs, self.num_attention_heads, seq_len, self.q_head_dim),
-            q_pe.dtype(),
-            q_pe.device(),
-        )?;
-        q = q.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &q_nope)?;
-        q = q.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
-
-        let mut k = Tensor::zeros(
-            (bs, self.num_attention_heads, seq_len, self.q_head_dim),
-            k_pe.dtype(),
-            k_pe.device(),
-        )?;
-        k = k.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &k_nope)?;
-        let k_pe = k_pe.repeat((1, k.dim(1)?, 1, 1))?;
-        k = k.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &k_pe)?;
+        let q = Tensor::cat(&[&q_nope, &q_pe], D::Minus1)?.contiguous()?;
+        let mut k = Tensor::cat(
+            &[&k_nope, &k_pe.repeat((1, self.num_attention_heads, 1, 1))?],
+            D::Minus1,
+        )?
+        .contiguous()?;
 
         let mut attn_out = match &self.paged_attn {
             Some(paged_attn) => match metadata {
