@@ -8,7 +8,7 @@ use crate::pipeline::InputsProcessor;
 use super::preprocessor_config::PreProcessorConfig;
 
 #[allow(dead_code)]
-pub(crate) struct PreprocessedImages {
+pub struct PreprocessedImages {
     /// Without batch size, safe to unsqueeze & concat in dim0
     /// For QwenVL2: may be vision pixel values, depending on if image_thw or video_thw are specified
     pub(crate) pixel_values: Tensor,

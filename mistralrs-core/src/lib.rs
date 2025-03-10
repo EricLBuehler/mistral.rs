@@ -28,7 +28,7 @@ use tracing::info;
 use tracing::warn;
 
 mod cuda;
-mod device_map;
+pub mod device_map;
 mod engine;
 mod lora;
 mod model_loader;
@@ -41,35 +41,35 @@ mod model_selected;
 pub use model_selected::ModelSelected;
 pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
-mod amoe;
+pub mod amoe;
 mod cublaslt;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
-mod dummy_paged_attention;
+pub mod dummy_paged_attention;
 mod gguf;
 pub mod layers;
-mod layers_masker;
+pub mod layers_masker;
 mod layers_utils;
 mod models;
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
-mod paged_attention;
+pub mod paged_attention;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
-use dummy_paged_attention as paged_attention;
-mod attention;
+pub use dummy_paged_attention as paged_attention;
+pub mod attention;
 pub mod daemon;
 mod diffusion_models;
-mod pipeline;
+pub mod pipeline;
 mod prefix_cacher;
 mod prefix_cacher_v2;
 mod request;
 mod response;
 mod sampler;
 mod scheduler;
-mod sequence;
+pub mod sequence;
 mod toml_selector;
 mod tools;
 mod topology;
-mod utils;
-mod vision_models;
+pub mod utils;
+pub mod vision_models;
 mod xlora_models;
 
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};

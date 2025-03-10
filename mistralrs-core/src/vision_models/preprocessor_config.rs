@@ -47,7 +47,7 @@ pub struct PreProcessorConfig {
 }
 
 #[allow(dead_code)]
-pub(crate) trait ToFilter {
+pub trait ToFilter {
     fn to_filter(self) -> Result<FilterType>;
 }
 

@@ -516,7 +516,7 @@ pub mod text_models_inputs_processor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
+    pub fn get_prompt_input<T: WithDType + std::fmt::Debug>(
         toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
@@ -603,7 +603,7 @@ pub mod text_models_inputs_processor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn get_completion_input<T: WithDType + std::fmt::Debug>(
+    pub fn get_completion_input<T: WithDType + std::fmt::Debug>(
         toks: Vec<Vec<T>>,
         input_seqs: &[&mut Sequence],
         device: &Device,
