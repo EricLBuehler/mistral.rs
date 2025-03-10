@@ -11,31 +11,31 @@ use super::preprocessor_config::PreProcessorConfig;
 pub struct PreprocessedImages {
     /// Without batch size, safe to unsqueeze & concat in dim0
     /// For QwenVL2: may be vision pixel values, depending on if image_thw or video_thw are specified
-    pub(crate) pixel_values: Tensor,
+    pub pixel_values: Tensor,
     /// Without batch size, safe to unsqueeze & concat in dim0
-    pub(crate) pixel_attention_mask: Option<Tensor>,
-    pub(crate) image_sizes: Option<(usize, usize)>,
-    pub(crate) num_img_tokens: Option<Vec<usize>>,
+    pub pixel_attention_mask: Option<Tensor>,
+    pub image_sizes: Option<(usize, usize)>,
+    pub num_img_tokens: Option<Vec<usize>>,
     /// Without batch size, safe to unsqueeze & concat in dim0
-    pub(crate) aspect_ratio_ids: Option<Tensor>,
+    pub aspect_ratio_ids: Option<Tensor>,
     /// Without batch size, safe to unsqueeze & concat in dim0
-    pub(crate) aspect_ratio_mask: Option<Tensor>,
+    pub aspect_ratio_mask: Option<Tensor>,
     /// Without batch size
-    pub(crate) num_tiles: Option<Vec<usize>>,
+    pub num_tiles: Option<Vec<usize>>,
     /// Without batch size, safe to unsqueeze & concat in dim0
-    pub(crate) image_grid_thw: Option<Tensor>,
+    pub image_grid_thw: Option<Tensor>,
     /// Without batch size, safe to unsqueeze & concat in dim0
-    pub(crate) video_grid_thw: Option<Tensor>,
+    pub video_grid_thw: Option<Tensor>,
     /// Without batch size
-    pub(crate) rows: Option<Vec<usize>>,
+    pub rows: Option<Vec<usize>>,
     /// Without batch size
-    pub(crate) cols: Option<Vec<usize>>,
+    pub cols: Option<Vec<usize>>,
     /// Without batch size. Only images.
-    pub(crate) pixel_values_list: Option<Vec<Tensor>>,
+    pub pixel_values_list: Option<Vec<Tensor>>,
     /// Without batch size, safe to unsqueeze & concat in dim0
-    pub(crate) tgt_sizes: Option<Tensor>,
+    pub tgt_sizes: Option<Tensor>,
     /// Without batch size. Per image. (w,h).
-    pub(crate) image_sizes_all: Option<Vec<(u32, u32)>>,
+    pub image_sizes_all: Option<Vec<(u32, u32)>>,
 }
 
 /// ImagePreProcessor: process images for the model (similar to `InputsProcessor`, typically called by it)

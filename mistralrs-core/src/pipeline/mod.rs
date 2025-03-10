@@ -44,9 +44,9 @@ use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
 pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths, XLoraPaths};
 pub(crate) use processing::{
-    apply_chat_template, BasicProcessor, MessagesAction, ProcessorCreator,
+    apply_chat_template, BasicProcessor, ProcessorCreator,
 };
-pub use processing::Processor;
+pub use processing::{Processor, MessagesAction};
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
 use std::any::Any;

@@ -480,7 +480,7 @@ impl Sequence {
     }
 
     /// This will also set prompt_len
-    pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
+    pub fn set_toks(&mut self, toks: Vec<u32>) {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
         // Handle possible block engine
