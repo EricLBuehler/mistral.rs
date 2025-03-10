@@ -1,11 +1,16 @@
 use candle_core::Tensor;
+use core::num;
 use either::Either;
-use interprocess::local_socket::{traits::Listener, ListenerOptions};
+use interprocess::local_socket::{
+    traits::{Listener, ListenerExt},
+    ListenerOptions,
+};
 use llguidance::toktrie::TokEnv;
 use once_cell::sync::Lazy;
 use std::{
-    collections::HashMap,
-    io::{BufWriter, Write},
+    collections::{HashMap, HashSet},
+    io::{stdout, BufWriter, Read, Write},
+    process,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -66,6 +71,7 @@ pub struct Engine {
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
+    listener: Option<Arc<interprocess::local_socket::Listener>>,
 }
 
 impl Engine {
@@ -87,6 +93,14 @@ impl Engine {
             || no_prefix_cache
             || no_kv_cache;
 
+        let listener = if !daemon::is_daemon() && mistralrs_quant::distributed::use_nccl() {
+            let name = daemon::ipc_name().unwrap();
+            let listener = Arc::new(ListenerOptions::new().name(name).create_sync().unwrap());
+            Some(listener)
+        } else {
+            None
+        };
+
         Self {
             rx,
             pipeline,
@@ -98,6 +112,7 @@ impl Engine {
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
+            listener,
         }
     }
 
@@ -112,12 +127,12 @@ impl Engine {
                     .get(&self.id),
                 Some(Some(EngineInstruction::Terminate))
             ) {
-                self.replicate_request_to_daemons(&Request::Terminate);
+                self.replicate_request_to_daemons(&Request::Terminate).await;
                 break 'lp;
             }
 
             while let Ok(request) = self.rx.try_recv() {
-                self.replicate_request_to_daemons(&request);
+                self.replicate_request_to_daemons(&request).await;
                 if matches!(request, Request::Terminate) {
                     break 'lp;
                 }
@@ -125,7 +140,8 @@ impl Engine {
             }
 
             if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
-                self.replicate_request_to_daemons(&Request::TerminateAllSeqsNextStep);
+                self.replicate_request_to_daemons(&Request::TerminateAllSeqsNextStep)
+                    .await;
             }
 
             let run_start = Instant::now();
@@ -359,7 +375,7 @@ impl Engine {
                     {
                         // If there is nothing to do, sleep until a request comes in
                         if let Some(request) = self.rx.recv().await {
-                            self.replicate_request_to_daemons(&request);
+                            self.replicate_request_to_daemons(&request).await;
                             if matches!(request, Request::Terminate) {
                                 break 'lp;
                             }
@@ -504,19 +520,38 @@ impl Engine {
         }
     }
 
-    fn replicate_request_to_daemons(&mut self, request: &Request) {
-        if !daemon::is_daemon() && mistralrs_quant::distributed::use_nccl() {
-            let name = daemon::ipc_name().unwrap();
+    async fn replicate_request_to_daemons(&mut self, request: &Request) {
+        if let Some(listener) = &self.listener {
             let num_workers =
                 mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - 1;
-            let listener = ListenerOptions::new().name(name).create_sync().unwrap();
 
-            for _ in 0..num_workers {
-                let stream = listener.accept().unwrap();
-                let mut writer = BufWriter::new(stream);
-                let req = format!("{}\n", serde_json::to_string(&request).unwrap());
-                writer.write_all(req.as_bytes()).unwrap();
+            let mut workers_received = HashSet::new();
+            while workers_received.len() < num_workers {
+                let mut stream = listener.accept().unwrap();
+                {
+                    let mut writer = BufWriter::new(&mut stream);
+                    let req = format!("{}\n", serde_json::to_string(&request).unwrap());
+                    writer.write_all(req.as_bytes()).unwrap();
+                }
+                {
+                    let mut buf = [0; 4];
+                    stream.read(&mut buf).unwrap();
+                    let worker_rank = u32::from_le_bytes(buf);
+                    workers_received.insert(worker_rank);
+                }
             }
+            // let mut threads = Vec::new();
+            // for i in 0..num_workers {
+            //     let request = request.clone();
+            //     let listener = listener.clone();
+            //     threads.push(tokio::spawn(async move {
+            //         let stream = listener.accept().unwrap();
+            //         let mut writer = BufWriter::new(stream);
+            //         let req = format!("{}\n", serde_json::to_string(&request).unwrap());
+            //         writer.write_all(req.as_bytes()).unwrap();
+            //     }));
+            // }
+            // futures::future::join_all(threads).await;
         };
     }
 

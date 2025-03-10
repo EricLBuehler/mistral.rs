@@ -536,7 +536,7 @@ impl Loader for NormalLoader {
                     cmd.env(daemon::IS_DAEMON_FLAG, serde_json::to_string(&data)?);
 
                     cmd.stdout(std::process::Stdio::null());
-                    cmd.stderr(std::process::Stdio::null());
+                    // cmd.stderr(std::process::Stdio::null());
                     cmd.stdin(std::process::Stdio::null());
 
                     children.push(cmd.spawn().expect("Failed to spawn process"));
