@@ -9,7 +9,7 @@ use crate::{
     ShardedVarBuilder, UnquantLinear,
 };
 
-use super::Comm;
+use super::{Comm, DistributedOperation};
 
 fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {
@@ -110,7 +110,7 @@ impl QuantMethod for RowParallelLayer {
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         let mut xs = self.weight.forward(a)?;
-        xs = self.all_reduce.apply(&xs)?;
+        xs = self.all_reduce.sum_all_reduce(&xs)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
         }
