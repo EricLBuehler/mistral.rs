@@ -422,6 +422,10 @@ impl Sequence {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.tokens.is_empty()
+    }
+
     pub fn id(&self) -> &usize {
         &self.id
     }

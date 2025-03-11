@@ -796,7 +796,7 @@ pub trait IsqModel {
 }
 
 /// Trait for loading models with ISQ.
-pub(crate) trait IsqModelLoader {
+pub trait IsqModelLoader {
     /// Regex to match layers which will have standard ISQ applied.
     ///
     /// Only called on non-adapter models!

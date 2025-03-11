@@ -443,7 +443,7 @@ impl AutoDeviceMapParams {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum NonMappedSubModel {
+pub enum NonMappedSubModel {
     Vision,
 }
 

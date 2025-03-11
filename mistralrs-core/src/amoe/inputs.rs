@@ -46,6 +46,10 @@ impl AnyMoeTrainingInputs {
         self.rows.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
     pub fn into_inner(self) -> Vec<AnyMoeTrainingInputRow> {
         self.rows
     }
