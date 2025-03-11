@@ -8,8 +8,9 @@ use tokio::sync::mpsc::{channel, Receiver};
 use crate::{RequestLike, TextMessages};
 
 /// Gets the best device, cpu, cuda if compiled with CUDA, or Metal
+/// Returns CPU if using nccl to avoid context reinitialization
 pub fn best_device(force_cpu: bool) -> Result<Device> {
-    if force_cpu {
+    if force_cpu || cfg!(feature = "nccl") {
         return Ok(Device::Cpu);
     }
     #[cfg(not(feature = "metal"))]

@@ -8,9 +8,6 @@ pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::exceptions::PyValueError;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::time::Instant;
 use std::{
     cell::RefCell,
     error::Error,
@@ -374,63 +371,7 @@ impl MistralRs {
         if daemon::is_daemon() {
             let request_sender = sender.write().unwrap().clone();
             thread::spawn(move || {
-                let rt = Runtime::new().unwrap();
-                rt.block_on(async move {
-                    use interprocess::local_socket::traits::Stream;
-                    use interprocess::local_socket::Stream as LocalStream;
-
-                    loop {
-                        let name = daemon::ipc_name().unwrap();
-                        if let Ok(stream) = LocalStream::connect(name) {
-                            let mut reader = BufReader::new(stream);
-                            let mut buf = String::new();
-                            reader.read_line(&mut buf).unwrap();
-                            let mut req: Request = serde_json::from_str(&buf).unwrap();
-
-                            req = match req {
-                                Request::ActivateAdapters(x) => Request::ActivateAdapters(x),
-                                Request::ReIsq(x) => Request::ReIsq(x),
-                                Request::Terminate => Request::Terminate,
-                                Request::Detokenize(mut x) => {
-                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                                    x.response = sender;
-                                    let req = Request::Detokenize(x);
-
-                                    request_sender.send(req).await.unwrap();
-                                    let resp = receiver.recv().await.unwrap();
-                                    resp.unwrap();
-                                    continue;
-                                }
-                                Request::Tokenize(mut x) => {
-                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                                    x.response = sender;
-                                    let req = Request::Tokenize(x);
-
-                                    request_sender.send(req).await.unwrap();
-                                    let resp = receiver.recv().await.unwrap();
-                                    resp.unwrap();
-                                    continue;
-                                }
-                                Request::Normal(mut x) => {
-                                    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                                    x.is_streaming = false;
-                                    x.response = sender;
-                                    let req = Request::Normal(x);
-
-                                    request_sender.send(req).await.unwrap();
-                                    let resp = receiver.recv().await.unwrap();
-                                    resp.as_result().unwrap();
-                                    continue;
-                                }
-                                Request::TerminateAllSeqsNextStep => {
-                                    Request::TerminateAllSeqsNextStep
-                                }
-                            };
-
-                            request_sender.send(req).await.unwrap();
-                        }
-                    }
-                });
+                daemon::launch_daemon(request_sender);
             });
 
             #[allow(clippy::empty_loop)]
@@ -441,51 +382,51 @@ impl MistralRs {
         let is_multi_threaded = tokio::runtime::Handle::try_current()
             .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
-        // Do a dummy run
-        if !daemon::is_daemon()
-            && is_multi_threaded
-            && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
-        {
-            let clone_sender = sender.read().unwrap().clone();
-            tokio::task::block_in_place(|| {
-                let (tx, mut rx) = channel(1);
-                let req = Request::Normal(NormalRequest {
-                    id: 0,
-                    messages: RequestMessage::Completion {
-                        text: "hello".to_string(),
-                        echo_prompt: false,
-                        best_of: None,
-                    },
-                    sampling_params: SamplingParams {
-                        max_len: Some(1),
-                        ..SamplingParams::deterministic()
-                    },
-                    response: tx,
-                    return_logprobs: false,
-                    is_streaming: false,
-                    constraint: Constraint::None,
-                    suffix: None,
-                    adapters: None,
-                    tool_choice: None,
-                    tools: None,
-                    logits_processors: None,
-                    return_raw_logits: false,
-                });
-                info!("Beginning dummy run.");
-                let start = Instant::now();
-                clone_sender.blocking_send(req).unwrap();
+        // // Do a dummy run
+        // if !daemon::is_daemon()
+        //     && is_multi_threaded
+        //     && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
+        // {
+        //     let clone_sender = sender.read().unwrap().clone();
+        //     tokio::task::block_in_place(|| {
+        //         let (tx, mut rx) = channel(1);
+        //         let req = Request::Normal(NormalRequest {
+        //             id: 0,
+        //             messages: RequestMessage::Completion {
+        //                 text: "hello".to_string(),
+        //                 echo_prompt: false,
+        //                 best_of: None,
+        //             },
+        //             sampling_params: SamplingParams {
+        //                 max_len: Some(1),
+        //                 ..SamplingParams::deterministic()
+        //             },
+        //             response: tx,
+        //             return_logprobs: false,
+        //             is_streaming: false,
+        //             constraint: Constraint::None,
+        //             suffix: None,
+        //             adapters: None,
+        //             tool_choice: None,
+        //             tools: None,
+        //             logits_processors: None,
+        //             return_raw_logits: false,
+        //         });
+        //         info!("Beginning dummy run.");
+        //         let start = Instant::now();
+        //         clone_sender.blocking_send(req).unwrap();
 
-                if let Some(_resp) = rx.blocking_recv() {
-                    let end = Instant::now();
-                    info!(
-                        "Dummy run completed in {}s.",
-                        end.duration_since(start).as_secs_f64()
-                    );
-                } else {
-                    warn!("Dummy run failed!");
-                }
-            });
-        }
+        //         if let Some(_resp) = rx.blocking_recv() {
+        //             let end = Instant::now();
+        //             info!(
+        //                 "Dummy run completed in {}s.",
+        //                 end.duration_since(start).as_secs_f64()
+        //             );
+        //         } else {
+        //             warn!("Dummy run failed!");
+        //         }
+        //     });
+        // }
 
         Arc::new(Self {
             engine_id,
