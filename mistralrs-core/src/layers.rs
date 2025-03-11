@@ -847,9 +847,9 @@ impl Qwen2_5VLRotaryEmbedding {
                 .collect::<Result<Vec<_>>>()?,
             D::Minus1,
         )?
-            .squeeze(0)?
-            .to_dtype(dtype)?
-            .contiguous()?;
+        .squeeze(0)?
+        .to_dtype(dtype)?
+        .contiguous()?;
         let sin = Tensor::cat(
             &sin.split(&self.mrope_section, D::Minus1)?
                 .into_iter()
@@ -858,9 +858,9 @@ impl Qwen2_5VLRotaryEmbedding {
                 .collect::<Result<Vec<_>>>()?,
             D::Minus1,
         )?
-            .squeeze(0)?
-            .to_dtype(dtype)?
-            .contiguous()?;
+        .squeeze(0)?
+        .to_dtype(dtype)?
+        .contiguous()?;
 
         Ok((cos, sin))
     }

@@ -42,8 +42,7 @@ use crate::vision_models::phi4::{Phi4MMConfig, Phi4MMModel, PHI4_MM_VISION_CFG};
 use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::qwen2_5_vl::{
-    Config as Qwen2_5VLConfig, Qwen2_5VLModel,
-    Qwen2_5VLProcessor,
+    Config as Qwen2_5VLConfig, Qwen2_5VLModel, Qwen2_5VLProcessor,
 };
 use crate::vision_models::qwen2vl::{Config as Qwen2VLConfig, Qwen2VLModel, Qwen2VLProcessor};
 use crate::vision_models::{minicpmo, phi4};
@@ -2672,12 +2671,12 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
 
         let max_batch_size = max_batch_size
             * (max_image_shape
-            .0
-            .div_ceil(phi4::inputs_processor::DYHD_BASE_RESOLUTION)
-            * max_image_shape
-            .1
-            .div_ceil(phi4::inputs_processor::DYHD_BASE_RESOLUTION)
-            + 1);
+                .0
+                .div_ceil(phi4::inputs_processor::DYHD_BASE_RESOLUTION)
+                * max_image_shape
+                    .1
+                    .div_ceil(phi4::inputs_processor::DYHD_BASE_RESOLUTION)
+                + 1);
 
         let max_vision_attn = (max_batch_size * max_num_images)
             * vcfg.num_attention_heads
@@ -2685,9 +2684,9 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
             * img_seq_len;
         let max_qkv = 3
             * (max_batch_size
-            * vcfg.num_attention_heads
-            * img_seq_len
-            * (vcfg.hidden_size / vcfg.num_attention_heads));
+                * vcfg.num_attention_heads
+                * img_seq_len
+                * (vcfg.hidden_size / vcfg.num_attention_heads));
 
         Ok(max_vision_attn + max_qkv)
     }

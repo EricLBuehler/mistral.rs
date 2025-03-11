@@ -6,6 +6,7 @@ use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 
+use super::config::Config;
 use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
@@ -17,7 +18,6 @@ use crate::{
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
-use super::config::Config;
 
 struct Mlp {
     gate_proj: Arc<dyn QuantMethod>,
@@ -471,7 +471,6 @@ impl Qwen2_5VLTextModel {
         extract_logits(&self.lm_head.forward(&xs)?, context_lens)
     }
 }
-
 
 impl IsqModel for Qwen2_5VLTextModel {
     fn get_layers(

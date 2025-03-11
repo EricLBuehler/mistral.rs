@@ -1,17 +1,3 @@
-use std::{
-    any::Any,
-    num::NonZeroUsize,
-    sync::{Arc, RwLock},
-};
-use anyhow::Result;
-use candle_core::{Context, Device, IndexOp, Tensor};
-use image::{imageops::FilterType, DynamicImage, GenericImageView};
-use mistralrs_vision::{
-    ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
-};
-use tokenizers::Tokenizer;
-use tracing::warn;
-use mistralrs_quant::set_use_matmul_via_f16;
 use crate::{
     device_map::DeviceMapper,
     pipeline::{
@@ -27,6 +13,20 @@ use crate::{
         ModelInputs,
     },
 };
+use anyhow::Result;
+use candle_core::{Context, Device, IndexOp, Tensor};
+use image::{imageops::FilterType, DynamicImage, GenericImageView};
+use mistralrs_quant::set_use_matmul_via_f16;
+use mistralrs_vision::{
+    ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
+};
+use std::{
+    any::Any,
+    num::NonZeroUsize,
+    sync::{Arc, RwLock},
+};
+use tokenizers::Tokenizer;
+use tracing::warn;
 
 use super::Qwen2_5VLVisionSpecificArgs;
 
@@ -283,8 +283,10 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                             );
                             index += 1;
                         }
-                        *text = text
-                            .replace(Qwen2_5VLProcessor::PLACEHOLDER, Qwen2_5VLProcessor::IMAGE_PAD);
+                        *text = text.replace(
+                            Qwen2_5VLProcessor::PLACEHOLDER,
+                            Qwen2_5VLProcessor::IMAGE_PAD,
+                        );
                     }
                 }
 
@@ -310,8 +312,10 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                             );
                             index += 1;
                         }
-                        *text = text
-                            .replace(Qwen2_5VLProcessor::PLACEHOLDER, Qwen2_5VLProcessor::VIDEO_PAD);
+                        *text = text.replace(
+                            Qwen2_5VLProcessor::PLACEHOLDER,
+                            Qwen2_5VLProcessor::VIDEO_PAD,
+                        );
                     }
                 }
             }
@@ -353,7 +357,8 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             let mut video_nums = Vec::new();
             for seq in input_seqs.iter() {
                 let prompt = seq.get_initial_prompt();
-                let match_indices = find_substring_indices(prompt, Qwen2_5VLProcessor::VISION_START);
+                let match_indices =
+                    find_substring_indices(prompt, Qwen2_5VLProcessor::VISION_START);
                 image_nums.push(
                     match_indices
                         .iter()
@@ -384,8 +389,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             let max_len = all_ids.iter().map(|ids| ids.len()).max().unwrap();
             for ids in all_ids {
                 let pad = max_len - ids.len();
-                all_ids_new
-                    .push(Tensor::new([ids, vec![0; pad]].concat(), device).unwrap());
+                all_ids_new.push(Tensor::new([ids, vec![0; pad]].concat(), device).unwrap());
             }
 
             (
@@ -477,10 +481,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
 
         let seqlens = input_seqs
             .iter()
-            .map(|seq| {
-                seq.prompt_tokens()
-            }
-            )
+            .map(|seq| seq.prompt_tokens())
             .collect::<Vec<_>>();
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {

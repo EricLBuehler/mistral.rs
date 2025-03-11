@@ -79,7 +79,10 @@ impl VisionMlp {
         if let Some(t) = self.gate_proj.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        let lhs = self.gate_proj.forward(&xs.unsqueeze(0)?)?.apply(&self.act)?;
+        let lhs = self
+            .gate_proj
+            .forward(&xs.unsqueeze(0)?)?
+            .apply(&self.act)?;
         let rhs = self.up_proj.forward(&xs.unsqueeze(0)?)?;
         let mut res = self.down_proj.forward(&(lhs * rhs)?)?;
 
@@ -365,7 +368,7 @@ impl Qwen2_5VLVisionModel {
         let mut window_index_id = 0;
         let vit_merger_window_size = self.window_size / self.spatial_merge_size / self.patch_size;
 
-        for i_thw in grid_thw.to_vec2::<u32>()?{
+        for i_thw in grid_thw.to_vec2::<u32>()? {
             let (t, h, w) = (i_thw[0] as usize, i_thw[1] as usize, i_thw[2] as usize);
             let llm_grid_h = h / self.spatial_merge_size;
             let llm_grid_w = w / self.spatial_merge_size;
@@ -406,11 +409,13 @@ impl Qwen2_5VLVisionModel {
                 .into_iter()
                 .filter(|x| *x != -100)
                 .collect::<Vec<_>>();
-            window_index.push(
-                Tensor::new(index_new.iter()
-                                .map(|x| x + window_index_id)
-                                .collect::<Vec<_>>(), device)?
-            );
+            window_index.push(Tensor::new(
+                index_new
+                    .iter()
+                    .map(|x| x + window_index_id)
+                    .collect::<Vec<_>>(),
+                device,
+            )?);
             let cu_seqlens_tmp = ((seqlens
                 .to_dtype(DType::F32)?
                 .cumsum(0)?
@@ -447,7 +452,7 @@ impl Qwen2_5VLVisionModel {
         ))?;
         rotary_pos_emb = rotary_pos_emb.index_select(&window_index, 0)?;
         rotary_pos_emb = rotary_pos_emb.reshape((seq_len, ()))?;
-        rotary_pos_emb = Tensor::cat(&vec![&rotary_pos_emb; 2], D::Minus1)?;
+        rotary_pos_emb = Tensor::cat(&[&rotary_pos_emb; 2], D::Minus1)?;
 
         let grid_thw = grid_thw.to_device(&Device::Cpu)?;
         let cu_seqlens = (grid_thw.i((.., 1))? * grid_thw.i((.., 2))?)?

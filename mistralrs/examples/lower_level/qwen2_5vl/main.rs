@@ -1,8 +1,8 @@
 use clap::Parser;
 use either::Either;
+use image::DynamicImage;
 use indexmap::IndexMap;
 use std::sync::Arc;
-use image::DynamicImage;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::task;
 
@@ -37,7 +37,10 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
 
     //map all layers to gpu
     let device_mapping = DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
-        DeviceLayerMapMetadata { ordinal: 0, layers: 999 },
+        DeviceLayerMapMetadata {
+            ordinal: 0,
+            layers: 999,
+        },
     ]));
 
     // Select a model
@@ -78,7 +81,7 @@ fn setup() -> anyhow::Result<Arc<MistralRs>> {
     .build())
 }
 
-fn gen_request(id: usize, image: DynamicImage, tx: Sender<Response>) -> Request{
+fn gen_request(id: usize, image: DynamicImage, tx: Sender<Response>) -> Request {
     Request::Normal(NormalRequest {
         messages: RequestMessage::VisionChat {
             images: vec![image],
@@ -86,7 +89,10 @@ fn gen_request(id: usize, image: DynamicImage, tx: Sender<Response>) -> Request{
                 ("role".to_string(), Either::Left("user".to_string())),
                 (
                     "content".to_string(),
-                    Either::Left("<|vision_start|><|image_pad|><|vision_end|>What is depicted here?".to_string()),
+                    Either::Left(
+                        "<|vision_start|><|image_pad|><|vision_end|>What is depicted here?"
+                            .to_string(),
+                    ),
                 ),
             ])],
         },
@@ -123,12 +129,14 @@ async fn main() -> anyhow::Result<()> {
 
     let (tx, mut rx) = channel(10_000);
 
-
     let _ = task::spawn_blocking(move || {
-        for _ in 0..3{
+        for _ in 0..3 {
             let id = mistralrs.next_request_id();
             let request = gen_request(id, image.clone(), tx.clone());
-            let _ = mistralrs.get_sender().expect("get sender error").blocking_send(request);
+            let _ = mistralrs
+                .get_sender()
+                .expect("get sender error")
+                .blocking_send(request);
             let response = rx.blocking_recv().unwrap().as_result().unwrap();
             match response {
                 ResponseOk::Done(c) => println!(
@@ -140,7 +148,8 @@ async fn main() -> anyhow::Result<()> {
                 _ => unreachable!(),
             }
         }
-    }).await?;
+    })
+    .await?;
 
     Ok(())
 }

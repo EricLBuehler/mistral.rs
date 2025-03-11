@@ -1,7 +1,11 @@
 use anyhow::Result;
-use mistralrs::{IsqType, TextMessageRole, TextMessages, VisionLoaderType, VisionMessages, VisionModelBuilder};
-use mistralrs_core::{initialize_logging, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting};
-use clap::{Parser};
+use clap::Parser;
+use mistralrs::{
+    IsqType, TextMessageRole, TextMessages, VisionLoaderType, VisionMessages, VisionModelBuilder,
+};
+use mistralrs_core::{
+    initialize_logging, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
+};
 use tokio::task;
 
 #[derive(Parser)]
@@ -28,8 +32,11 @@ async fn main() -> Result<()> {
     let image = image::load_from_memory(&bytes)?;
 
     //force map all layers to gpu
-    let device_mapper =  DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
-        DeviceLayerMapMetadata { ordinal: 0, layers: 999 },
+    let device_mapper = DeviceMapSetting::Map(DeviceMapMetadata::from_num_device_layers(vec![
+        DeviceLayerMapMetadata {
+            ordinal: 0,
+            layers: 999,
+        },
     ]));
 
     let model = VisionModelBuilder::new(args.model_id, VisionLoaderType::Qwen2_5VL)
