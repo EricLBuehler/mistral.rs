@@ -401,11 +401,7 @@
 <a href="#400" id="400">400</a>
 <a href="#401" id="401">401</a>
 <a href="#402" id="402">402</a>
-<a href="#403" id="403">403</a>
-<a href="#404" id="404">404</a>
-<a href="#405" id="405">405</a>
-<a href="#406" id="406">406</a>
-<a href="#407" id="407">407</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#403" id="403">403</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::sync::Arc;
@@ -669,17 +665,13 @@
                 input_ids.extend(item);
             }
             <span class="comment">// NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-            </span>seq.set_toks(
+            </span>seq.set_toks_and_reallocate(
                 input_ids
                     .iter()
                     .map(|x| <span class="kw">if </span><span class="kw-2">*</span>x &lt; <span class="number">0 </span>{ <span class="number">0u32 </span>} <span class="kw">else </span>{ <span class="kw-2">*</span>x <span class="kw">as </span>u32 })
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                paged_attn_metadata.as_mut(),
             );
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>metadata) = paged_attn_metadata {
-                <span class="comment">// Free and then reallocate as appropriate
-                </span>metadata.block_engine.free_sequence(<span class="kw-2">*</span>seq.id());
-                metadata.block_engine.allocate(<span class="kw-2">*</span>seq);
-            }
 
             toks.push(input_ids);
         }

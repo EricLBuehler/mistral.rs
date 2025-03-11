@@ -782,12 +782,7 @@
 <a href="#781" id="781">781</a>
 <a href="#782" id="782">782</a>
 <a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a>
-<a href="#785" id="785">785</a>
-<a href="#786" id="786">786</a>
-<a href="#787" id="787">787</a>
-<a href="#788" id="788">788</a>
-<a href="#789" id="789">789</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#784" id="784">784</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -1104,12 +1099,7 @@
                         .get_ids()
                         .to_vec();
 
-                    seq.set_toks(input_ids.clone());
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>metadata) = paged_attn_metadata {
-                        <span class="comment">// Free and then reallocate as appropriate
-                        </span>metadata.block_engine.free_sequence(<span class="kw-2">*</span>seq.id());
-                        metadata.block_engine.allocate(<span class="kw-2">*</span>seq);
-                    }
+                    seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
 
                     <span class="kw">let </span>image_start_idx = input_ids
                         .iter()

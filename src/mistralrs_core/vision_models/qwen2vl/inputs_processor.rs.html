@@ -737,13 +737,7 @@
 <a href="#736" id="736">736</a>
 <a href="#737" id="737">737</a>
 <a href="#738" id="738">738</a>
-<a href="#739" id="739">739</a>
-<a href="#740" id="740">740</a>
-<a href="#741" id="741">741</a>
-<a href="#742" id="742">742</a>
-<a href="#743" id="743">743</a>
-<a href="#744" id="744">744</a>
-<a href="#745" id="745">745</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#739" id="739">739</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     num::NonZeroUsize,
     sync::{Arc, RwLock},
@@ -1138,13 +1132,7 @@
                 <span class="kw">let </span>continuous_vid_pad = find_sequences(<span class="kw-2">&amp;</span>ids, vid_pad[<span class="number">0</span>]);
                 all_continuous_vid_pad.push(continuous_vid_pad);
 
-                seq.set_toks(ids);
-
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>metadata) = paged_attn_metadata {
-                    <span class="comment">// Free and then reallocate as appropriate
-                    </span>metadata.block_engine.free_sequence(<span class="kw-2">*</span>seq.id());
-                    metadata.block_engine.allocate(<span class="kw-2">*</span>seq);
-                }
+                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
             }
 
             <span class="kw">let </span><span class="kw-2">mut </span>input_ids_searching = Vec::new();

@@ -570,11 +570,7 @@
 <a href="#569" id="569">569</a>
 <a href="#570" id="570">570</a>
 <a href="#571" id="571">571</a>
-<a href="#572" id="572">572</a>
-<a href="#573" id="573">573</a>
-<a href="#574" id="574">574</a>
-<a href="#575" id="575">575</a>
-<a href="#576" id="576">576</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+<a href="#572" id="572">572</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -875,17 +871,13 @@
             }
 
             <span class="comment">// NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-            </span>seq.set_toks(
+            </span>seq.set_toks_and_reallocate(
                 input_ids
                     .iter()
                     .map(|x| <span class="kw">if </span><span class="kw-2">*</span>x &lt; <span class="number">0 </span>{ <span class="number">0u32 </span>} <span class="kw">else </span>{ <span class="kw-2">*</span>x <span class="kw">as </span>u32 })
                     .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+                paged_attn_metadata.as_mut(),
             );
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>metadata) = paged_attn_metadata {
-                <span class="comment">// Free and then reallocate as appropriate
-                </span>metadata.block_engine.free_sequence(<span class="kw-2">*</span>seq.id());
-                metadata.block_engine.allocate(<span class="kw-2">*</span>seq);
-            }
 
             toks.push(input_ids);
         }

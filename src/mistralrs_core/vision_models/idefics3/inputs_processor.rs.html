@@ -602,12 +602,7 @@
 <a href="#601" id="601">601</a>
 <a href="#602" id="602">602</a>
 <a href="#603" id="603">603</a>
-<a href="#604" id="604">604</a>
-<a href="#605" id="605">605</a>
-<a href="#606" id="606">606</a>
-<a href="#607" id="607">607</a>
-<a href="#608" id="608">608</a>
-<a href="#609" id="609">609</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#604" id="604">604</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, cmp, collections::HashMap, num::NonZeroUsize, sync::Arc};
 
@@ -859,13 +854,8 @@
 
                 <span class="kw">let </span>ids = toks.get_ids().to_vec();
                 all_ids.push(ids.clone());
-                seq.set_toks(ids);
 
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>metadata) = paged_attn_metadata {
-                    <span class="comment">// Free and then reallocate as appropriate
-                    </span>metadata.block_engine.free_sequence(<span class="kw-2">*</span>seq.id());
-                    metadata.block_engine.allocate(<span class="kw-2">*</span>seq);
-                }
+                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
             }
 
             <span class="kw">let </span><span class="kw-2">mut </span>all_ids_new = Vec::new();

@@ -662,12 +662,7 @@
 <a href="#661" id="661">661</a>
 <a href="#662" id="662">662</a>
 <a href="#663" id="663">663</a>
-<a href="#664" id="664">664</a>
-<a href="#665" id="665">665</a>
-<a href="#666" id="666">666</a>
-<a href="#667" id="667">667</a>
-<a href="#668" id="668">668</a>
-<a href="#669" id="669">669</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+<a href="#664" id="664">664</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, collections::HashSet, num::NonZeroUsize, sync::Arc};
 
@@ -910,12 +905,13 @@
                 .replace_all(<span class="kw-2">&amp;</span>detokenized, IMAGE_SPECIAL_TOKEN)
                 .to_string();
 
-            seq.set_toks(
+            seq.set_toks_and_reallocate(
                 tokenizer
                     .encode(detokenized.clone(), <span class="bool-val">true</span>)
                     .expect(<span class="string">"Encode failed"</span>)
                     .get_ids()
                     .to_vec(),
+                paged_attn_metadata.as_mut(),
             );
 
             seq.set_initial_prompt(detokenized);
@@ -934,16 +930,10 @@
                 <span class="kw">let </span><span class="kw-2">mut </span>new_ids = seq.get_toks()[..i].to_vec();
                 new_ids.extend(<span class="macro">vec!</span>[token_id; <span class="kw-2">*</span>token_count]);
                 new_ids.extend(seq.get_toks()[i + <span class="number">1</span>..].to_vec());
-                seq.set_toks(new_ids);
+                seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
                 i += token_count;
             }
             toks.push(seq.get_toks().to_vec());
-
-            <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>metadata) = paged_attn_metadata {
-                <span class="comment">// Free and then reallocate as appropriate
-                </span>metadata.block_engine.free_sequence(<span class="kw-2">*</span>seq.id());
-                metadata.block_engine.allocate(<span class="kw-2">*</span>seq);
-            }
         }
 
         <span class="kw">let </span>iter = <span class="kw">if </span>is_prompt {
