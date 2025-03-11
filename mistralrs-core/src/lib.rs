@@ -32,7 +32,7 @@ pub mod device_map;
 mod engine;
 mod lora;
 mod model_loader;
-mod ops;
+pub mod ops;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
