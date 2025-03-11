@@ -74,27 +74,27 @@ pub struct VisionPipeline {
 
 /// A loader for a vision (non-quantized) model.
 pub struct VisionLoader {
-    inner: Box<dyn VisionModelLoader>,
-    model_id: String,
-    config: VisionSpecificConfig,
-    kind: ModelKind,
-    chat_template: Option<String>,
-    tokenizer_json: Option<String>,
-    xlora_model_id: Option<String>,
-    xlora_order: Option<Ordering>,
-    token_source: RwLock<Option<TokenSource>>,
-    revision: RwLock<Option<String>>,
-    from_uqff: RwLock<Option<PathBuf>>,
+    pub inner: Box<dyn VisionModelLoader>,
+    pub model_id: String,
+    pub config: VisionSpecificConfig,
+    pub kind: ModelKind,
+    pub chat_template: Option<String>,
+    pub tokenizer_json: Option<String>,
+    pub xlora_model_id: Option<String>,
+    pub xlora_order: Option<Ordering>,
+    pub token_source: RwLock<Option<TokenSource>>,
+    pub revision: RwLock<Option<String>>,
+    pub from_uqff: RwLock<Option<PathBuf>>,
 }
 
 #[derive(Default)]
 /// A builder for a loader for a vision (non-quantized) model.
 pub struct VisionLoaderBuilder {
-    model_id: Option<String>,
-    config: VisionSpecificConfig,
-    kind: ModelKind,
-    chat_template: Option<String>,
-    tokenizer_json: Option<String>,
+    pub model_id: Option<String>,
+    pub config: VisionSpecificConfig,
+    pub kind: ModelKind,
+    pub chat_template: Option<String>,
+    pub tokenizer_json: Option<String>,
 }
 
 #[derive(Clone, Default)]
