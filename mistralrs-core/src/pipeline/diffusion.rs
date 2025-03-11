@@ -161,7 +161,7 @@ impl Loader for DiffusionLoader {
             .map(std::fs::read_to_string)
             .collect::<io::Result<Vec<_>>>()?;
 
-        let mapper = mapper.into_mapper(usize::MAX, device, None)?;
+        let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
         let attention_mechanism = if paged_attn_config.is_some() {
