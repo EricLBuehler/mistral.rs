@@ -1181,8 +1181,8 @@
 <span class="kw">use </span>candle_core::{Context, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Embedding, Module};
 <span class="kw">use </span>mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder, SumAllReduce,
+    distributed::DistributedOperation, ColumnParallelLayer, QuantMethod, QuantizedConfig,
+    ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce,
 };
 <span class="kw">use </span>serde::Deserialize;
 
@@ -1798,7 +1798,7 @@
         }
 
         <span class="kw">if </span><span class="self">self</span>.world_size &gt; <span class="number">1 </span>{
-            y = <span class="self">self</span>.all_reduce.apply(<span class="kw-2">&amp;</span>y)<span class="question-mark">?</span>;
+            y = <span class="self">self</span>.all_reduce.sum_all_reduce(<span class="kw-2">&amp;</span>y)<span class="question-mark">?</span>;
         }
 
         <span class="prelude-val">Ok</span>(y)

@@ -246,9 +246,14 @@
 <a href="#245" id="245">245</a>
 <a href="#246" id="246">246</a>
 <a href="#247" id="247">247</a>
-<a href="#248" id="248">248</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Barrier};
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fmt::Debug, sync::Barrier};
 
-<span class="kw">use </span>candle_core::Result;
+<span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">pub use </span>ops::{Comm, Id, SumAllReduce};
 <span class="kw">pub mod </span>layers;
 <span class="kw">pub mod </span>socket;
@@ -280,6 +285,10 @@
     (std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_err()
         || std::env::var(<span class="string">"MISTRALRS_NO_NCCL"</span>).is_ok_and(|x| x != <span class="string">"1"</span>))
         &amp;&amp; (<span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) &amp;&amp; <span class="macro">cfg!</span>(feature = <span class="string">"cuda"</span>))
+}
+
+<span class="kw">pub trait </span>DistributedOperation {
+    <span class="kw">fn </span>sum_all_reduce(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
 }
 
 <span class="attr">#[cfg(all(feature = <span class="string">"cuda"</span>, feature = <span class="string">"nccl"</span>))]
@@ -347,12 +356,11 @@
         <span class="kw">pub fn </span>new(comm: <span class="kw-2">&amp;</span>Arc&lt;Comm&gt;) -&gt; <span class="self">Self </span>{
             <span class="self">Self </span>{ comm: comm.clone() }
         }
+    }
 
-        <span class="kw">pub fn </span>apply(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-            <span class="comment">// use candle_core::cuda::cudarc::driver::result;
-            // unsafe { result::ctx::set_current(*self.comm.comm.device().cu_primary_ctx()) }.unwrap();
-            // self.comm.barrier.wait()?;
-            </span>xs.apply_op1_no_bwd(<span class="self">self</span>)
+    <span class="kw">impl </span><span class="kw">super</span>::DistributedOperation <span class="kw">for </span>SumAllReduce {
+        <span class="kw">fn </span>sum_all_reduce(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+            xs.apply_op1_no_bwd(<span class="self">self</span>)
         }
     }
 
@@ -488,8 +496,10 @@
         <span class="kw">pub fn </span>new(_comm: <span class="kw-2">&amp;</span>Arc&lt;Comm&gt;) -&gt; <span class="self">Self </span>{
             <span class="self">Self
         </span>}
+    }
 
-        <span class="kw">pub fn </span>apply(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+    <span class="kw">impl </span><span class="kw">super</span>::DistributedOperation <span class="kw">for </span>SumAllReduce {
+        <span class="kw">fn </span>sum_all_reduce(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
             <span class="prelude-val">Ok</span>(xs.clone())
         }
     }

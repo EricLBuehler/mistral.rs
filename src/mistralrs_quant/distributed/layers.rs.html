@@ -550,7 +550,7 @@
     ShardedVarBuilder, UnquantLinear,
 };
 
-<span class="kw">use </span><span class="kw">super</span>::Comm;
+<span class="kw">use super</span>::{Comm, DistributedOperation};
 
 <span class="kw">fn </span>shard(dim: usize, rank: usize, world_size: usize) -&gt; Shard {
     Shard::Simple {
@@ -651,7 +651,7 @@
 
     <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>xs = <span class="self">self</span>.weight.forward(a)<span class="question-mark">?</span>;
-        xs = <span class="self">self</span>.all_reduce.apply(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
+        xs = <span class="self">self</span>.all_reduce.sum_all_reduce(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="kw-2">&amp;</span><span class="self">self</span>.bias {
             xs = xs.broadcast_add(bias)<span class="question-mark">?</span>;
         }
