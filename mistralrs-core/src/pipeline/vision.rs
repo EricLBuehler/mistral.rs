@@ -308,17 +308,17 @@ impl Loader for VisionLoader {
         }
 
         let pipeline_mapper = mapper.into_mapper(
-            self.inner.get_total_device_mapping_num_layers(&config)?,
+            self.inner.num_layers(&config)?,
             device,
             self.config.topology.as_ref(),
         )?;
         let mapper = mapper.into_mapper(
-            self.inner.get_total_device_mapping_num_layers(&config)?,
+            self.inner.num_layers(&config)?,
             device,
             self.config.topology.as_ref(),
         )?;
         let mut layer_devices = Vec::new();
-        for layer in 0..self.inner.get_total_device_mapping_num_layers(&config)? {
+        for layer in 0..self.inner.num_layers(&config)? {
             let device = mapper.device_for(layer, false).cloned();
             layer_devices.push(device);
         }

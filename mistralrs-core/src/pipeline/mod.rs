@@ -29,6 +29,7 @@ pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 use image::DynamicImage;
 pub use inputs_processor::InputProcessorOutput;
+pub(crate) use isq::IsqModelLoader;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization};
 pub use loaders::{
     AdapterKind, AutoDeviceMapParams, AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader,

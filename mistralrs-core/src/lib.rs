@@ -55,8 +55,8 @@ mod paged_attention;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 use dummy_paged_attention as paged_attention;
 mod attention;
-pub mod daemon;
 mod diffusion_models;
+pub mod distributed;
 mod pipeline;
 mod prefix_cacher;
 mod prefix_cacher_v2;
@@ -371,7 +371,7 @@ impl MistralRs {
 
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
 
-        if daemon::is_daemon() {
+        if distributed::is_daemon() {
             let request_sender = sender.write().unwrap().clone();
             thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
@@ -380,7 +380,7 @@ impl MistralRs {
                     use interprocess::local_socket::Stream as LocalStream;
 
                     loop {
-                        let name = daemon::ipc_name().unwrap();
+                        let name = distributed::ipc_name().unwrap();
                         if let Ok(stream) = LocalStream::connect(name) {
                             let mut reader = BufReader::new(stream);
                             let mut buf = String::new();
@@ -442,7 +442,7 @@ impl MistralRs {
             .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
         // Do a dummy run
-        if !daemon::is_daemon()
+        if !distributed::is_daemon()
             && is_multi_threaded
             && matches!(category, ModelCategory::Text | ModelCategory::Vision { .. })
         {
