@@ -105,8 +105,8 @@ __global__ void dequantize_4bit_u8_kernel(unsigned char *Wq_packed, T *scale,
   // //Second chunk
   W_r[i] = ((T)((Wq_packed[i] & 0xF0) >> 4) - zero[j]) * scale[j]; // First
                                                                    // chunk
-  W_r[i + n] = ((T)((Wq_packed[i] & 0x0F)) - zero[j]) * scale[j]; // Second
-                                                                  // chunk
+  W_r[i + n] = ((T)((Wq_packed[i] & 0x0F)) - zero[j]) * scale[j];  // Second
+                                                                   // chunk
 }
 
 extern "C" void dequantize_4bit_u8_kernel_f32(unsigned char *Wq_packed,
@@ -231,7 +231,8 @@ extern "C" void dequantize_2bit_u8_kernel_bf16(unsigned char *Wq_packed,
 // template <typename scalar_t>
 // __global__ void dequantize_2bit_u8_kernel(unsigned char* Wq_packed, scalar_t*
 // scale, scalar_t* zero, scalar_t* W_r, int h, int w) { 	int i =
-// blockIdx.x*blockDim.x + threadIdx.x; 	int n = h*w; 	int s = threadIdx.x;
+// blockIdx.x*blockDim.x + threadIdx.x; 	int n = h*w; 	int s =
+// threadIdx.x;
 
 // 	if(i>=n) return;
 
@@ -345,8 +346,8 @@ extern "C" void dequantize_1bit_u8_kernel_bf16(unsigned char *Wq_packed,
 // template <typename scalar_t>
 // __global__ void dequantize_1bit_u8_kernel(unsigned char* Wq_packed, scalar_t*
 // scale, scalar_t* zero, scalar_t* W_r, int h, int w) { 	int i =
-// blockIdx.x*blockDim.x + threadIdx.x; 	int s = threadIdx.x; 	int n = h*w;
-// 	if(i>=n) return;
+// blockIdx.x*blockDim.x + threadIdx.x; 	int s = threadIdx.x; 	int n =
+// h*w; 	if(i>=n) return;
 
 // 	__shared__ unsigned char shared[BLOCK_SIZE];
 // 	__shared__ scalar_t shared_meta[BLOCK_SIZE][2];
