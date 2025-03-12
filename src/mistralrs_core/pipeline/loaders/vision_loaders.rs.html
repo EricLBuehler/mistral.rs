@@ -2797,7 +2797,294 @@
 <a href="#2796" id="2796">2796</a>
 <a href="#2797" id="2797">2797</a>
 <a href="#2798" id="2798">2798</a>
-<a href="#2799" id="2799">2799</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#2799" id="2799">2799</a>
+<a href="#2800" id="2800">2800</a>
+<a href="#2801" id="2801">2801</a>
+<a href="#2802" id="2802">2802</a>
+<a href="#2803" id="2803">2803</a>
+<a href="#2804" id="2804">2804</a>
+<a href="#2805" id="2805">2805</a>
+<a href="#2806" id="2806">2806</a>
+<a href="#2807" id="2807">2807</a>
+<a href="#2808" id="2808">2808</a>
+<a href="#2809" id="2809">2809</a>
+<a href="#2810" id="2810">2810</a>
+<a href="#2811" id="2811">2811</a>
+<a href="#2812" id="2812">2812</a>
+<a href="#2813" id="2813">2813</a>
+<a href="#2814" id="2814">2814</a>
+<a href="#2815" id="2815">2815</a>
+<a href="#2816" id="2816">2816</a>
+<a href="#2817" id="2817">2817</a>
+<a href="#2818" id="2818">2818</a>
+<a href="#2819" id="2819">2819</a>
+<a href="#2820" id="2820">2820</a>
+<a href="#2821" id="2821">2821</a>
+<a href="#2822" id="2822">2822</a>
+<a href="#2823" id="2823">2823</a>
+<a href="#2824" id="2824">2824</a>
+<a href="#2825" id="2825">2825</a>
+<a href="#2826" id="2826">2826</a>
+<a href="#2827" id="2827">2827</a>
+<a href="#2828" id="2828">2828</a>
+<a href="#2829" id="2829">2829</a>
+<a href="#2830" id="2830">2830</a>
+<a href="#2831" id="2831">2831</a>
+<a href="#2832" id="2832">2832</a>
+<a href="#2833" id="2833">2833</a>
+<a href="#2834" id="2834">2834</a>
+<a href="#2835" id="2835">2835</a>
+<a href="#2836" id="2836">2836</a>
+<a href="#2837" id="2837">2837</a>
+<a href="#2838" id="2838">2838</a>
+<a href="#2839" id="2839">2839</a>
+<a href="#2840" id="2840">2840</a>
+<a href="#2841" id="2841">2841</a>
+<a href="#2842" id="2842">2842</a>
+<a href="#2843" id="2843">2843</a>
+<a href="#2844" id="2844">2844</a>
+<a href="#2845" id="2845">2845</a>
+<a href="#2846" id="2846">2846</a>
+<a href="#2847" id="2847">2847</a>
+<a href="#2848" id="2848">2848</a>
+<a href="#2849" id="2849">2849</a>
+<a href="#2850" id="2850">2850</a>
+<a href="#2851" id="2851">2851</a>
+<a href="#2852" id="2852">2852</a>
+<a href="#2853" id="2853">2853</a>
+<a href="#2854" id="2854">2854</a>
+<a href="#2855" id="2855">2855</a>
+<a href="#2856" id="2856">2856</a>
+<a href="#2857" id="2857">2857</a>
+<a href="#2858" id="2858">2858</a>
+<a href="#2859" id="2859">2859</a>
+<a href="#2860" id="2860">2860</a>
+<a href="#2861" id="2861">2861</a>
+<a href="#2862" id="2862">2862</a>
+<a href="#2863" id="2863">2863</a>
+<a href="#2864" id="2864">2864</a>
+<a href="#2865" id="2865">2865</a>
+<a href="#2866" id="2866">2866</a>
+<a href="#2867" id="2867">2867</a>
+<a href="#2868" id="2868">2868</a>
+<a href="#2869" id="2869">2869</a>
+<a href="#2870" id="2870">2870</a>
+<a href="#2871" id="2871">2871</a>
+<a href="#2872" id="2872">2872</a>
+<a href="#2873" id="2873">2873</a>
+<a href="#2874" id="2874">2874</a>
+<a href="#2875" id="2875">2875</a>
+<a href="#2876" id="2876">2876</a>
+<a href="#2877" id="2877">2877</a>
+<a href="#2878" id="2878">2878</a>
+<a href="#2879" id="2879">2879</a>
+<a href="#2880" id="2880">2880</a>
+<a href="#2881" id="2881">2881</a>
+<a href="#2882" id="2882">2882</a>
+<a href="#2883" id="2883">2883</a>
+<a href="#2884" id="2884">2884</a>
+<a href="#2885" id="2885">2885</a>
+<a href="#2886" id="2886">2886</a>
+<a href="#2887" id="2887">2887</a>
+<a href="#2888" id="2888">2888</a>
+<a href="#2889" id="2889">2889</a>
+<a href="#2890" id="2890">2890</a>
+<a href="#2891" id="2891">2891</a>
+<a href="#2892" id="2892">2892</a>
+<a href="#2893" id="2893">2893</a>
+<a href="#2894" id="2894">2894</a>
+<a href="#2895" id="2895">2895</a>
+<a href="#2896" id="2896">2896</a>
+<a href="#2897" id="2897">2897</a>
+<a href="#2898" id="2898">2898</a>
+<a href="#2899" id="2899">2899</a>
+<a href="#2900" id="2900">2900</a>
+<a href="#2901" id="2901">2901</a>
+<a href="#2902" id="2902">2902</a>
+<a href="#2903" id="2903">2903</a>
+<a href="#2904" id="2904">2904</a>
+<a href="#2905" id="2905">2905</a>
+<a href="#2906" id="2906">2906</a>
+<a href="#2907" id="2907">2907</a>
+<a href="#2908" id="2908">2908</a>
+<a href="#2909" id="2909">2909</a>
+<a href="#2910" id="2910">2910</a>
+<a href="#2911" id="2911">2911</a>
+<a href="#2912" id="2912">2912</a>
+<a href="#2913" id="2913">2913</a>
+<a href="#2914" id="2914">2914</a>
+<a href="#2915" id="2915">2915</a>
+<a href="#2916" id="2916">2916</a>
+<a href="#2917" id="2917">2917</a>
+<a href="#2918" id="2918">2918</a>
+<a href="#2919" id="2919">2919</a>
+<a href="#2920" id="2920">2920</a>
+<a href="#2921" id="2921">2921</a>
+<a href="#2922" id="2922">2922</a>
+<a href="#2923" id="2923">2923</a>
+<a href="#2924" id="2924">2924</a>
+<a href="#2925" id="2925">2925</a>
+<a href="#2926" id="2926">2926</a>
+<a href="#2927" id="2927">2927</a>
+<a href="#2928" id="2928">2928</a>
+<a href="#2929" id="2929">2929</a>
+<a href="#2930" id="2930">2930</a>
+<a href="#2931" id="2931">2931</a>
+<a href="#2932" id="2932">2932</a>
+<a href="#2933" id="2933">2933</a>
+<a href="#2934" id="2934">2934</a>
+<a href="#2935" id="2935">2935</a>
+<a href="#2936" id="2936">2936</a>
+<a href="#2937" id="2937">2937</a>
+<a href="#2938" id="2938">2938</a>
+<a href="#2939" id="2939">2939</a>
+<a href="#2940" id="2940">2940</a>
+<a href="#2941" id="2941">2941</a>
+<a href="#2942" id="2942">2942</a>
+<a href="#2943" id="2943">2943</a>
+<a href="#2944" id="2944">2944</a>
+<a href="#2945" id="2945">2945</a>
+<a href="#2946" id="2946">2946</a>
+<a href="#2947" id="2947">2947</a>
+<a href="#2948" id="2948">2948</a>
+<a href="#2949" id="2949">2949</a>
+<a href="#2950" id="2950">2950</a>
+<a href="#2951" id="2951">2951</a>
+<a href="#2952" id="2952">2952</a>
+<a href="#2953" id="2953">2953</a>
+<a href="#2954" id="2954">2954</a>
+<a href="#2955" id="2955">2955</a>
+<a href="#2956" id="2956">2956</a>
+<a href="#2957" id="2957">2957</a>
+<a href="#2958" id="2958">2958</a>
+<a href="#2959" id="2959">2959</a>
+<a href="#2960" id="2960">2960</a>
+<a href="#2961" id="2961">2961</a>
+<a href="#2962" id="2962">2962</a>
+<a href="#2963" id="2963">2963</a>
+<a href="#2964" id="2964">2964</a>
+<a href="#2965" id="2965">2965</a>
+<a href="#2966" id="2966">2966</a>
+<a href="#2967" id="2967">2967</a>
+<a href="#2968" id="2968">2968</a>
+<a href="#2969" id="2969">2969</a>
+<a href="#2970" id="2970">2970</a>
+<a href="#2971" id="2971">2971</a>
+<a href="#2972" id="2972">2972</a>
+<a href="#2973" id="2973">2973</a>
+<a href="#2974" id="2974">2974</a>
+<a href="#2975" id="2975">2975</a>
+<a href="#2976" id="2976">2976</a>
+<a href="#2977" id="2977">2977</a>
+<a href="#2978" id="2978">2978</a>
+<a href="#2979" id="2979">2979</a>
+<a href="#2980" id="2980">2980</a>
+<a href="#2981" id="2981">2981</a>
+<a href="#2982" id="2982">2982</a>
+<a href="#2983" id="2983">2983</a>
+<a href="#2984" id="2984">2984</a>
+<a href="#2985" id="2985">2985</a>
+<a href="#2986" id="2986">2986</a>
+<a href="#2987" id="2987">2987</a>
+<a href="#2988" id="2988">2988</a>
+<a href="#2989" id="2989">2989</a>
+<a href="#2990" id="2990">2990</a>
+<a href="#2991" id="2991">2991</a>
+<a href="#2992" id="2992">2992</a>
+<a href="#2993" id="2993">2993</a>
+<a href="#2994" id="2994">2994</a>
+<a href="#2995" id="2995">2995</a>
+<a href="#2996" id="2996">2996</a>
+<a href="#2997" id="2997">2997</a>
+<a href="#2998" id="2998">2998</a>
+<a href="#2999" id="2999">2999</a>
+<a href="#3000" id="3000">3000</a>
+<a href="#3001" id="3001">3001</a>
+<a href="#3002" id="3002">3002</a>
+<a href="#3003" id="3003">3003</a>
+<a href="#3004" id="3004">3004</a>
+<a href="#3005" id="3005">3005</a>
+<a href="#3006" id="3006">3006</a>
+<a href="#3007" id="3007">3007</a>
+<a href="#3008" id="3008">3008</a>
+<a href="#3009" id="3009">3009</a>
+<a href="#3010" id="3010">3010</a>
+<a href="#3011" id="3011">3011</a>
+<a href="#3012" id="3012">3012</a>
+<a href="#3013" id="3013">3013</a>
+<a href="#3014" id="3014">3014</a>
+<a href="#3015" id="3015">3015</a>
+<a href="#3016" id="3016">3016</a>
+<a href="#3017" id="3017">3017</a>
+<a href="#3018" id="3018">3018</a>
+<a href="#3019" id="3019">3019</a>
+<a href="#3020" id="3020">3020</a>
+<a href="#3021" id="3021">3021</a>
+<a href="#3022" id="3022">3022</a>
+<a href="#3023" id="3023">3023</a>
+<a href="#3024" id="3024">3024</a>
+<a href="#3025" id="3025">3025</a>
+<a href="#3026" id="3026">3026</a>
+<a href="#3027" id="3027">3027</a>
+<a href="#3028" id="3028">3028</a>
+<a href="#3029" id="3029">3029</a>
+<a href="#3030" id="3030">3030</a>
+<a href="#3031" id="3031">3031</a>
+<a href="#3032" id="3032">3032</a>
+<a href="#3033" id="3033">3033</a>
+<a href="#3034" id="3034">3034</a>
+<a href="#3035" id="3035">3035</a>
+<a href="#3036" id="3036">3036</a>
+<a href="#3037" id="3037">3037</a>
+<a href="#3038" id="3038">3038</a>
+<a href="#3039" id="3039">3039</a>
+<a href="#3040" id="3040">3040</a>
+<a href="#3041" id="3041">3041</a>
+<a href="#3042" id="3042">3042</a>
+<a href="#3043" id="3043">3043</a>
+<a href="#3044" id="3044">3044</a>
+<a href="#3045" id="3045">3045</a>
+<a href="#3046" id="3046">3046</a>
+<a href="#3047" id="3047">3047</a>
+<a href="#3048" id="3048">3048</a>
+<a href="#3049" id="3049">3049</a>
+<a href="#3050" id="3050">3050</a>
+<a href="#3051" id="3051">3051</a>
+<a href="#3052" id="3052">3052</a>
+<a href="#3053" id="3053">3053</a>
+<a href="#3054" id="3054">3054</a>
+<a href="#3055" id="3055">3055</a>
+<a href="#3056" id="3056">3056</a>
+<a href="#3057" id="3057">3057</a>
+<a href="#3058" id="3058">3058</a>
+<a href="#3059" id="3059">3059</a>
+<a href="#3060" id="3060">3060</a>
+<a href="#3061" id="3061">3061</a>
+<a href="#3062" id="3062">3062</a>
+<a href="#3063" id="3063">3063</a>
+<a href="#3064" id="3064">3064</a>
+<a href="#3065" id="3065">3065</a>
+<a href="#3066" id="3066">3066</a>
+<a href="#3067" id="3067">3067</a>
+<a href="#3068" id="3068">3068</a>
+<a href="#3069" id="3069">3069</a>
+<a href="#3070" id="3070">3070</a>
+<a href="#3071" id="3071">3071</a>
+<a href="#3072" id="3072">3072</a>
+<a href="#3073" id="3073">3073</a>
+<a href="#3074" id="3074">3074</a>
+<a href="#3075" id="3075">3075</a>
+<a href="#3076" id="3076">3076</a>
+<a href="#3077" id="3077">3077</a>
+<a href="#3078" id="3078">3078</a>
+<a href="#3079" id="3079">3079</a>
+<a href="#3080" id="3080">3080</a>
+<a href="#3081" id="3081">3081</a>
+<a href="#3082" id="3082">3082</a>
+<a href="#3083" id="3083">3083</a>
+<a href="#3084" id="3084">3084</a>
+<a href="#3085" id="3085">3085</a>
+<a href="#3086" id="3086">3086</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -2840,6 +3127,9 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::phi4::{Phi4MMConfig, Phi4MMModel, PHI4_MM_VISION_CFG};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::preprocessor_config::PreProcessorConfig;
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig;
+<span class="kw">use </span><span class="kw">crate</span>::vision_models::qwen2_5_vl::{
+    Config <span class="kw">as </span>Qwen2_5VLConfig, Qwen2_5VLModel, Qwen2_5VLProcessor,
+};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::qwen2vl::{Config <span class="kw">as </span>Qwen2VLConfig, Qwen2VLModel, Qwen2VLProcessor};
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::{minicpmo, phi4};
 
@@ -2938,6 +3228,8 @@
     </span>MiniCpmO,
     <span class="attr">#[serde(rename = <span class="string">"phi4mm"</span>)]
     </span>Phi4MM,
+    <span class="attr">#[serde(rename = <span class="string">"qwen2_5vl"</span>)]
+    </span>Qwen2_5VL,
 }
 
 <span class="kw">impl </span>FromStr <span class="kw">for </span>VisionLoaderType {
@@ -2953,7 +3245,8 @@
             <span class="string">"idefics3" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Idefics3),
             <span class="string">"minicpmo" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::MiniCpmO),
             <span class="string">"phi4mm" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Phi4MM),
-            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`."</span>)),
+            <span class="string">"qwen2_5vl" </span>=&gt; <span class="prelude-val">Ok</span>(<span class="self">Self</span>::Qwen2_5VL),
+            a =&gt; <span class="prelude-val">Err</span>(<span class="macro">format!</span>(<span class="string">"Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`."</span>)),
         }
     }
 }
@@ -5587,6 +5880,287 @@
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.head_dim(),
             v_head_dim: cfg.head_dim(),
+        };
+
+        <span class="prelude-val">Ok</span>(Box::new(cfg))
+    }
+
+    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
+        <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[NonMappedSubModel::Vision])
+    }
+}
+
+<span class="comment">// ======================== Qwen2_5VL Loader
+
+</span><span class="doccomment">/// [`VisionLoader`] for an Qwen2_5VL model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+</span><span class="kw">pub struct </span>Qwen2_5VLLoader;
+
+<span class="kw">pub struct </span>Qwen2_5VLPrefixer;
+
+<span class="kw">impl </span>VisionPromptPrefixer <span class="kw">for </span>Qwen2_5VLPrefixer {
+    <span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, _image_index: usize, prompt: <span class="kw-2">&amp;</span>str) -&gt; String {
+        <span class="macro">format!</span>(
+            <span class="string">"{}{}{}{prompt}"</span>,
+            Qwen2_5VLProcessor::VISION_START,
+            Qwen2_5VLProcessor::IMAGE_PAD,
+            Qwen2_5VLProcessor::VISION_END
+        )
+    }
+}
+
+<span class="kw">impl </span>VisionModelLoader <span class="kw">for </span>Qwen2_5VLLoader {
+    <span class="kw">fn </span>load(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        _use_flash_attn: bool,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;&gt; {
+        <span class="kw">let </span>config: Qwen2_5VLConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(Box::new(Qwen2_5VLModel::new(
+            <span class="kw-2">&amp;</span>config,
+            vb,
+            <span class="self">self</span>.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )<span class="question-mark">?</span>))
+    }
+    <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">true
+    </span>}
+    <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str, _use_flash_attn: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt; {
+        <span class="kw">let </span>config: Qwen2_5VLConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(Box::new(config))
+    }
+    <span class="kw">fn </span>get_processor(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _model_config: <span class="kw-2">&amp;</span>str,
+        _processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
+        _preprocessor_config: PreProcessorConfig,
+        max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
+    ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
+        Arc::new(Qwen2_5VLProcessor::new(max_edge))
+    }
+    <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="bool-val">false
+    </span>}
+    <span class="kw">fn </span>prefixer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>VisionPromptPrefixer&gt; {
+        Arc::new(Qwen2_5VLPrefixer)
+    }
+}
+
+<span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Qwen2_5VLLoader {
+    <span class="kw">fn </span>isq_layer_regexes(<span class="kw-2">&amp;</span><span class="self">self</span>, _config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;Regex&gt;&gt; {
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            Regex::new(<span class="string">r"lm_head\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// Attention
+            </span>Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            <span class="comment">// MLP
+            </span>Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+            Regex::new(<span class="string">r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$"</span>)<span class="question-mark">?</span>,
+        ])
+    }
+}
+
+<span class="kw">impl </span>DeviceMappedModelLoader <span class="kw">for </span>Qwen2_5VLLoader {
+    <span class="kw">fn </span>mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+        _prompt_chunksize: usize,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg: Qwen2_5VLConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>img_seq_len = {
+            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.vision_config;
+            <span class="kw">let </span>grid_t = max_num_images / cfg.temporal_patch_size;
+            <span class="kw">let </span>grid_h = max_image_shape.<span class="number">0 </span>/ cfg.patch_size;
+            <span class="kw">let </span>grid_w = max_image_shape.<span class="number">1 </span>/ cfg.patch_size;
+            grid_t * grid_h * grid_w
+        };
+        <span class="kw">let </span>img_seq_len = img_seq_len * max_num_images;
+
+        <span class="kw">let </span>max_text_attn = {
+            <span class="comment">// This model injects the vision information directly into the input embeddings
+            </span><span class="kw">let </span>max_seq_len = img_seq_len + max_seq_len;
+            max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len
+        };
+
+        <span class="prelude-val">Ok</span>(max_text_attn)
+    }
+
+    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>AutoDeviceMapParams::Vision {
+            max_seq_len: <span class="kw">_</span>,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        <span class="kw">else </span>{
+            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
+        };
+
+        <span class="kw">let </span>cfg: Qwen2_5VLConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>img_seq_len = {
+            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.vision_config;
+            <span class="kw">let </span>grid_t = max_num_images / cfg.temporal_patch_size;
+            <span class="kw">let </span>grid_h = max_image_shape.<span class="number">0 </span>/ cfg.patch_size;
+            <span class="kw">let </span>grid_w = max_image_shape.<span class="number">1 </span>/ cfg.patch_size;
+            grid_t * grid_h * grid_w
+        };
+
+        <span class="kw">let </span>max_vision_attn = {
+            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.vision_config;
+            (max_batch_size * max_num_images) * cfg.num_heads * img_seq_len * img_seq_len
+        };
+
+        <span class="prelude-val">Ok</span>(max_vision_attn)
+    }
+
+    <span class="kw">fn </span>non_mapped_size_in_bytes(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>cfg: Qwen2_5VLConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="kw">let </span>text_elems = {
+            <span class="kw">let </span>embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size
+            } <span class="kw">else </span>{
+                <span class="number">0
+            </span>};
+            <span class="kw">let </span>norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+
+        <span class="kw">let </span>patch_merger = {
+            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.vision_config;
+            <span class="kw">let </span>hidden_size = cfg.hidden_size * cfg.spatial_merge_size.pow(<span class="number">2</span>);
+
+            <span class="kw">let </span>mlp0 = hidden_size * hidden_size + hidden_size;
+            <span class="kw">let </span>mlp2 = hidden_size * cfg.hidden_size + cfg.hidden_size;
+
+            <span class="kw">let </span>ln_q = cfg.hidden_size + <span class="macro">bias_if!</span>(<span class="bool-val">true</span>, cfg.hidden_size);
+
+            mlp0 + mlp2 + ln_q
+        };
+
+        <span class="kw">let </span>patch_embed = {
+            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.vision_config;
+            <span class="kw">let </span>conv_cfg = Conv3dConfig {
+                stride: cfg.patch_size,
+                ..Default::default()
+            };
+            <span class="kw">let </span>kernel_sizes = [cfg.temporal_patch_size, cfg.patch_size, cfg.patch_size];
+            cfg.in_chans * cfg.hidden_size / conv_cfg.groups
+                * kernel_sizes[<span class="number">0</span>]
+                * kernel_sizes[<span class="number">1</span>]
+                * kernel_sizes[<span class="number">2</span>]
+        };
+
+        <span class="kw">let </span>encoder_layer = {
+            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.vision_config;
+            <span class="kw">let </span>norm1 = cfg.hidden_size + <span class="macro">bias_if!</span>(<span class="bool-val">true</span>, cfg.hidden_size);
+            <span class="kw">let </span>norm2 = cfg.hidden_size + <span class="macro">bias_if!</span>(<span class="bool-val">true</span>, cfg.hidden_size);
+
+            <span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+            </span><span class="kw">let </span>fc1 = cfg.hidden_size * cfg.intermediate_size + cfg.intermediate_size;
+            <span class="kw">let </span>fc2 = cfg.hidden_size * cfg.intermediate_size + cfg.hidden_size;
+
+            <span class="kw">let </span>qkv = cfg.hidden_size * cfg.hidden_size * <span class="number">3 </span>+ cfg.hidden_size * <span class="number">3</span>;
+            <span class="kw">let </span>out = cfg.hidden_size * cfg.hidden_size + cfg.hidden_size;
+
+            norm1 + norm2 + fc1 + fc2 + qkv + out
+        };
+
+        <span class="kw">let </span>elems =
+            text_elems + patch_merger + patch_embed + encoder_layer * cfg.vision_config.depth;
+
+        <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
+    }
+
+    <span class="kw">fn </span>layer_sizes_in_bytes(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        config: <span class="kw-2">&amp;</span>str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
+        <span class="kw">let </span>cfg: Qwen2_5VLConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="kw">let </span>per_layer_elems = {
+            <span class="kw">let </span>input_layernorm = cfg.hidden_size;
+            <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size;
+
+            <span class="kw">let </span>size_in = cfg.hidden_size;
+            <span class="kw">let </span>size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            <span class="kw">let </span>size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            <span class="kw">let </span>q_proj = size_in * size_q / weight_pack_factor + size_q;
+            <span class="kw">let </span>k_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            <span class="kw">let </span>v_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            <span class="kw">let </span>o_proj = size_q * size_in / weight_pack_factor;
+
+            <span class="kw">let </span>h_size = cfg.hidden_size;
+            <span class="kw">let </span>i_size = cfg.intermediate_size;
+            <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
+            <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
+            <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+        <span class="kw">let </span>cfg: Qwen2_5VLConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>(cfg.num_hidden_layers)
+    }
+
+    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+        <span class="kw">let </span>cfg: Qwen2_5VLConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
+
+        <span class="kw">let </span>cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         <span class="prelude-val">Ok</span>(Box::new(cfg))

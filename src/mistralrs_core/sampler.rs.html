@@ -791,7 +791,7 @@
     </span><span class="kw">pub fn </span>deterministic() -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             temperature: <span class="prelude-val">None</span>,
-            top_k: <span class="prelude-val">None</span>,
+            top_k: <span class="prelude-val">Some</span>(<span class="number">1</span>),
             top_p: <span class="prelude-val">None</span>,
             min_p: <span class="prelude-val">None</span>,
             top_n_logprobs: <span class="number">0</span>,

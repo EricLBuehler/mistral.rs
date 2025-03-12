@@ -451,7 +451,7 @@
                             </span>.t()
                     } <span class="kw">else </span>{
                         <span class="kw">let </span><span class="kw-2">mut </span>out = b.contiguous()<span class="question-mark">?</span>;
-                        a.matmul_with_alpha_beta(<span class="kw-2">&amp;</span>w, <span class="kw-2">&amp;mut </span>out, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
+                        a.matmul_with_alpha_beta(<span class="kw-2">&amp;</span>w.t()<span class="question-mark">?</span>, <span class="kw-2">&amp;mut </span>out, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
                         <span class="prelude-val">Ok</span>(out)
                     }
                 }
