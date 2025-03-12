@@ -215,8 +215,62 @@
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
-<a href="#217" id="217">217</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
-<span class="kw">use </span>std::{num::NonZeroUsize, path::PathBuf};
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a>
+<a href="#260" id="260">260</a>
+<a href="#261" id="261">261</a>
+<a href="#262" id="262">262</a>
+<a href="#263" id="263">263</a>
+<a href="#264" id="264">264</a>
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<span class="kw">use </span>std::{
+    num::NonZeroUsize,
+    ops::{Deref, DerefMut},
+    path::PathBuf,
+};
 
 <span class="kw">use crate</span>::{best_device, Model};
 
@@ -431,5 +485,51 @@
 
         <span class="prelude-val">Ok</span>(Model::new(runner.build()))
     }
+}
+
+<span class="attr">#[derive(Clone)]
+</span><span class="doccomment">/// Configure a UQFF text model with the various parameters for loading, running, and other inference behaviors.
+/// This wraps and implements `DerefMut` for the VisionModelBuilder, so users should take care to not call UQFF-related methods.
+</span><span class="kw">pub struct </span>UqffVisionModelBuilder(VisionModelBuilder);
+
+<span class="kw">impl </span>UqffVisionModelBuilder {
+    <span class="doccomment">/// A few defaults are applied here:
+    /// - Token source is from the cache (.cache/huggingface/token)
+    /// - Maximum number of sequences running is 32
+    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    </span><span class="kw">pub fn </span>new(model_id: <span class="kw">impl </span>ToString, loader_type: VisionLoaderType, uqff_file: PathBuf) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span><span class="kw-2">mut </span>inner = VisionModelBuilder::new(model_id, loader_type);
+        inner = inner.from_uqff(uqff_file);
+        <span class="self">Self</span>(inner)
+    }
+
+    <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
+        <span class="self">self</span>.<span class="number">0</span>.build().<span class="kw">await
+    </span>}
+
+    <span class="doccomment">/// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related methods.
+    </span><span class="kw">pub fn </span>into_inner(<span class="self">self</span>) -&gt; VisionModelBuilder {
+        <span class="self">self</span>.<span class="number">0
+    </span>}
+}
+
+<span class="kw">impl </span>Deref <span class="kw">for </span>UqffVisionModelBuilder {
+    <span class="kw">type </span>Target = VisionModelBuilder;
+
+    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0
+    </span>}
+}
+
+<span class="kw">impl </span>DerefMut <span class="kw">for </span>UqffVisionModelBuilder {
+    <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="self">Self</span>::Target {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.<span class="number">0
+    </span>}
+}
+
+<span class="kw">impl </span>From&lt;UqffVisionModelBuilder&gt; <span class="kw">for </span>VisionModelBuilder {
+    <span class="kw">fn </span>from(value: UqffVisionModelBuilder) -&gt; <span class="self">Self </span>{
+        value.<span class="number">0
+    </span>}
 }
 </code></pre></div></section></main></body></html>

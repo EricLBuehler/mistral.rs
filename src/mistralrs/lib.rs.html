@@ -135,7 +135,9 @@
 <a href="#134" id="134">134</a>
 <a href="#135" id="135">135</a>
 <a href="#136" id="136">136</a>
-<a href="#137" id="137">137</a></pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous API to `mistral.rs`.
+<a href="#137" id="137">137</a>
+<a href="#138" id="138">138</a>
+<a href="#139" id="139">139</a></pre></div><pre class="rust"><code><span class="doccomment">//! This crate provides an asynchronous API to `mistral.rs`.
 //!
 //! To get started loading a model, check out the following builders:
 //! - [`TextModelBuilder`]
@@ -262,8 +264,10 @@
     };
     <span class="kw">pub use </span><span class="kw">super</span>::model::{best_device, Model};
     <span class="kw">pub use </span><span class="kw">super</span>::speculative::TextSpeculativeBuilder;
-    <span class="kw">pub use </span><span class="kw">super</span>::text_model::{PagedAttentionMetaBuilder, TextModelBuilder};
-    <span class="kw">pub use </span><span class="kw">super</span>::vision_model::VisionModelBuilder;
+    <span class="kw">pub use </span><span class="kw">super</span>::text_model::{
+        PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder,
+    };
+    <span class="kw">pub use </span><span class="kw">super</span>::vision_model::{UqffVisionModelBuilder, VisionModelBuilder};
     <span class="kw">pub use </span><span class="kw">super</span>::xlora_model::XLoraModelBuilder;
 }
 
