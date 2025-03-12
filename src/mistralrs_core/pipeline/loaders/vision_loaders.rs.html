@@ -2797,52 +2797,7 @@
 <a href="#2796" id="2796">2796</a>
 <a href="#2797" id="2797">2797</a>
 <a href="#2798" id="2798">2798</a>
-<a href="#2799" id="2799">2799</a>
-<a href="#2800" id="2800">2800</a>
-<a href="#2801" id="2801">2801</a>
-<a href="#2802" id="2802">2802</a>
-<a href="#2803" id="2803">2803</a>
-<a href="#2804" id="2804">2804</a>
-<a href="#2805" id="2805">2805</a>
-<a href="#2806" id="2806">2806</a>
-<a href="#2807" id="2807">2807</a>
-<a href="#2808" id="2808">2808</a>
-<a href="#2809" id="2809">2809</a>
-<a href="#2810" id="2810">2810</a>
-<a href="#2811" id="2811">2811</a>
-<a href="#2812" id="2812">2812</a>
-<a href="#2813" id="2813">2813</a>
-<a href="#2814" id="2814">2814</a>
-<a href="#2815" id="2815">2815</a>
-<a href="#2816" id="2816">2816</a>
-<a href="#2817" id="2817">2817</a>
-<a href="#2818" id="2818">2818</a>
-<a href="#2819" id="2819">2819</a>
-<a href="#2820" id="2820">2820</a>
-<a href="#2821" id="2821">2821</a>
-<a href="#2822" id="2822">2822</a>
-<a href="#2823" id="2823">2823</a>
-<a href="#2824" id="2824">2824</a>
-<a href="#2825" id="2825">2825</a>
-<a href="#2826" id="2826">2826</a>
-<a href="#2827" id="2827">2827</a>
-<a href="#2828" id="2828">2828</a>
-<a href="#2829" id="2829">2829</a>
-<a href="#2830" id="2830">2830</a>
-<a href="#2831" id="2831">2831</a>
-<a href="#2832" id="2832">2832</a>
-<a href="#2833" id="2833">2833</a>
-<a href="#2834" id="2834">2834</a>
-<a href="#2835" id="2835">2835</a>
-<a href="#2836" id="2836">2836</a>
-<a href="#2837" id="2837">2837</a>
-<a href="#2838" id="2838">2838</a>
-<a href="#2839" id="2839">2839</a>
-<a href="#2840" id="2840">2840</a>
-<a href="#2841" id="2841">2841</a>
-<a href="#2842" id="2842">2842</a>
-<a href="#2843" id="2843">2843</a>
-<a href="#2844" id="2844">2844</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#2799" id="2799">2799</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -2923,8 +2878,6 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;&gt;;
     <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
     <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str, use_flash_attn: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt;;
-    <span class="doccomment">/// Get total num_hidden_layers for the layers which will be device mapped.
-    </span><span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
     <span class="kw">fn </span>get_processor(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         model_config: <span class="kw-2">&amp;</span>str,
@@ -3109,10 +3062,6 @@
         _max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
         Phi3Processor::new_processor(processor_config, preprocessor_config)
-    }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>config: Phi3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(config.num_hidden_layers)
     }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true
@@ -3380,11 +3329,6 @@
             preprocessor_config,
             max_edge,
         ))
-    }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>config: Idefics2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="comment">// We only apply device mapping to text model
-        </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
     }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true
@@ -3710,11 +3654,6 @@
     ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
         Arc::new(LLaVANextProcessor::new(model_config))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>config: LLaVAConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="comment">// We only apply device mapping to text model
-        </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
-    }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true
     </span>}
@@ -3963,11 +3902,6 @@
     ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
         Arc::new(LLaVAProcessor::new(model_config))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>config: LLaVAConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="comment">// We only apply device mapping to text model
-        </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
-    }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true
     </span>}
@@ -4207,11 +4141,6 @@
         _max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
         Arc::new(MLlamaProcessor::new())
-    }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>config: MLlamaConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="comment">// We only apply device mapping to text model
-        </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
     }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">false
@@ -4590,11 +4519,6 @@
     ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
         Arc::new(Qwen2VLProcessor::new(max_edge))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>config: Qwen2VLConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="comment">// We only apply device mapping to text model
-        </span><span class="prelude-val">Ok</span>(config.num_hidden_layers)
-    }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">false
     </span>}
@@ -4879,11 +4803,6 @@
             max_edge,
         ))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>config: Idefics3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="comment">// We only apply device mapping to text model
-        </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
-    }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true
     </span>}
@@ -5160,11 +5079,6 @@
             max_edge,
         ))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>config: MiniCpmOConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="comment">// We only apply device mapping to text model
-        </span><span class="prelude-val">Ok</span>(config.text_config.num_hidden_layers)
-    }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true
     </span>}
@@ -5426,10 +5340,6 @@
         _max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
         Phi4MMProcessor::new_processor(processor_config, preprocessor_config)
-    }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="kw">let </span>config: Phi4MMConfig = serde_json::from_str(config)<span class="question-mark">?</span>;
-        <span class="prelude-val">Ok</span>(config.num_hidden_layers)
     }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true

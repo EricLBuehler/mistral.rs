@@ -939,7 +939,60 @@
 <a href="#938" id="938">938</a>
 <a href="#939" id="939">939</a>
 <a href="#940" id="940">940</a>
-<a href="#941" id="941">941</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#941" id="941">941</a>
+<a href="#942" id="942">942</a>
+<a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a>
+<a href="#972" id="972">972</a>
+<a href="#973" id="973">973</a>
+<a href="#974" id="974">974</a>
+<a href="#975" id="975">975</a>
+<a href="#976" id="976">976</a>
+<a href="#977" id="977">977</a>
+<a href="#978" id="978">978</a>
+<a href="#979" id="979">979</a>
+<a href="#980" id="980">980</a>
+<a href="#981" id="981">981</a>
+<a href="#982" id="982">982</a>
+<a href="#983" id="983">983</a>
+<a href="#984" id="984">984</a>
+<a href="#985" id="985">985</a>
+<a href="#986" id="986">986</a>
+<a href="#987" id="987">987</a>
+<a href="#988" id="988">988</a>
+<a href="#989" id="989">989</a>
+<a href="#990" id="990">990</a>
+<a href="#991" id="991">991</a>
+<a href="#992" id="992">992</a>
+<a href="#993" id="993">993</a>
+<a href="#994" id="994">994</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -953,6 +1006,7 @@
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
 };
 <span class="kw">use </span><span class="kw">crate</span>::device_map::{<span class="self">self</span>, DeviceMapper};
+<span class="kw">use </span><span class="kw">crate</span>::distributed::{<span class="self">self</span>, WorkerTransferData};
 <span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::llg::build_tok_env;
@@ -969,8 +1023,8 @@
 <span class="kw">use </span><span class="kw">crate</span>::vision_models::ModelInputs;
 <span class="kw">use crate</span>::{
     api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
-    AnyMoeExpertType, DeviceMapSetting, Ordering, PagedAttentionConfig, Pipeline, Topology,
-    TryIntoDType,
+    vision_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, Ordering,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
@@ -981,12 +1035,12 @@
 <span class="kw">use </span>regex_automata::meta::Regex;
 <span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::borrow::Cow;
-<span class="kw">use </span>std::fs;
 <span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::path::{Path, PathBuf};
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::{Arc, RwLock};
 <span class="kw">use </span>std::time::Instant;
+<span class="kw">use </span>std::{env, fs};
 <span class="kw">use </span>tokenizers::Tokenizer;
 <span class="kw">use </span>tokio::sync::Mutex;
 <span class="kw">use </span>tracing::{info, warn};
@@ -1154,11 +1208,31 @@
             paged_attn_config = <span class="prelude-val">None</span>;
         }
 
-        <span class="comment">// If auto, convert to Map
-        </span><span class="kw">if let </span>DeviceMapSetting::Auto(params) = mapper.clone() {
-            <span class="kw">let </span>devices = device_map::get_all_similar_devices(device)<span class="question-mark">?</span>;
+        <span class="kw">let </span>use_nccl = mistralrs_quant::distributed::use_nccl();
+
+        <span class="kw">let </span>available_devices = <span class="kw">if let </span><span class="prelude-val">Ok</span>(payload) = env::var(distributed::IS_DAEMON_FLAG) {
+            <span class="kw">let </span>payload: WorkerTransferData = serde_json::from_str(<span class="kw-2">&amp;</span>payload)<span class="question-mark">?</span>;
+            <span class="kw">let </span>WorkerTransferData::Init { id: <span class="kw">_</span>, worker_rank } = payload;
+            <span class="macro">vec!</span>[candle_core::Device::new_cuda_with_stream(worker_rank + <span class="number">1</span>)<span class="question-mark">?</span>]
+        } <span class="kw">else if </span>use_nccl {
+            <span class="macro">vec!</span>[candle_core::Device::new_cuda_with_stream(<span class="number">0</span>)<span class="question-mark">?</span>]
+        } <span class="kw">else </span>{
+            device_map::get_all_similar_devices(device)<span class="question-mark">?
+        </span>};
+        <span class="kw">let </span>device = <span class="kw">if </span>use_nccl {
+            available_devices[<span class="number">0</span>].clone()
+        } <span class="kw">else </span>{
+            device.clone()
+        };
+
+        <span class="comment">// If auto, convert to Map if not using nccl
+        </span><span class="kw">if </span>use_nccl {
+            mapper = DeviceMapSetting::DummyNccl {
+                nm_device: available_devices[<span class="number">0</span>].clone(),
+            };
+        } <span class="kw">else if let </span>DeviceMapSetting::Auto(params) = mapper.clone() {
             <span class="comment">// Initial dtype
-            </span><span class="kw">let </span>dtype = dtype.try_into_dtype(<span class="kw-2">&amp;</span>devices.iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())<span class="question-mark">?</span>;
+            </span><span class="kw">let </span>dtype = dtype.try_into_dtype(<span class="kw-2">&amp;</span>available_devices.iter().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;())<span class="question-mark">?</span>;
 
             <span class="comment">// ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
@@ -1232,14 +1306,13 @@
                     )
                 };
 
-            <span class="comment">// NOTE: Vision models don't support prompt chunking yet, so just using max seq len
-            </span><span class="kw">let </span>new = <span class="self">self</span>.inner.get_device_layers(
+            <span class="kw">let </span>new = <span class="self">self</span>.inner.get_device_layers(
                 <span class="kw-2">&amp;</span>config,
                 <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
                 layer_sizes_in_bytes,
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
-                <span class="kw-2">&amp;</span>devices,
+                <span class="kw-2">&amp;</span>available_devices,
                 dtype,
                 <span class="kw-2">&amp;</span>params,
                 params.max_seq_len(),
@@ -1249,17 +1322,17 @@
         }
 
         <span class="kw">let </span>pipeline_mapper = mapper.into_mapper(
-            <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
-            device,
+            <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;</span>device,
             <span class="self">self</span>.config.topology.as_ref(),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>mapper = mapper.into_mapper(
-            <span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
-            device,
+            <span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>,
+            <span class="kw-2">&amp;</span>device,
             <span class="self">self</span>.config.topology.as_ref(),
         )<span class="question-mark">?</span>;
         <span class="kw">let </span><span class="kw-2">mut </span>layer_devices = Vec::new();
-        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.inner.get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">? </span>{
+        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..<span class="self">self</span>.inner.num_layers(<span class="kw-2">&amp;</span>config)<span class="question-mark">? </span>{
             <span class="kw">let </span>device = mapper.device_for(layer, <span class="bool-val">false</span>).cloned();
             layer_devices.push(device);
         }
@@ -1308,25 +1381,58 @@
         };
 
         <span class="kw">let </span>multi_progress = Arc::new(MultiProgress::new());
-        <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">match </span><span class="self">self</span>.kind {
-            ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader!</span>(
-                paths,
-                <span class="prelude-val">Some</span>(dtype),
+
+        <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">if </span>use_nccl {
+            <span class="kw">let </span>(mapper, sharded_vb) = distributed::prepare_distributed_mapper(
+                dtype,
+                <span class="kw-2">&amp;</span>device,
                 <span class="kw-2">&amp;</span>load_device,
-                layer_devices.clone(),
-                config,
-                <span class="self">self</span>.inner,
-                <span class="self">self</span>.config.use_flash_attn,
-                silent,
-                mapper,
+                <span class="kw-2">&amp;</span>available_devices,
+                <span class="kw-2">&amp;</span>config,
                 loading_isq,
                 <span class="self">self</span>.config.from_uqff.is_some(),
-                device.clone(),
-                attention_mechanism,
-                multi_progress,
-            ),
-            <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+                IsqOrganization::Default,
+                <span class="kw-2">&amp;*</span><span class="self">self</span>.inner,
+                paths.as_ref(),
+            )<span class="question-mark">?</span>;
+
+            <span class="comment">// Special case for where things can be more optimially loaded.
+            </span><span class="kw">match </span><span class="self">self</span>.kind {
+                ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader_sharded!</span>(
+                    sharded_vb,
+                    config,
+                    <span class="self">self</span>.inner,
+                    <span class="self">self</span>.config.use_flash_attn,
+                    mapper,
+                    loading_isq,
+                    device.clone(),
+                    attention_mechanism,
+                    multi_progress.clone(),
+                ),
+                <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+            }
+        } <span class="kw">else </span>{
+            <span class="kw">match </span><span class="self">self</span>.kind {
+                ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader!</span>(
+                    paths,
+                    <span class="prelude-val">Some</span>(dtype),
+                    <span class="kw-2">&amp;</span>load_device,
+                    layer_devices.clone(),
+                    config,
+                    <span class="self">self</span>.inner,
+                    <span class="self">self</span>.config.use_flash_attn,
+                    silent,
+                    mapper,
+                    loading_isq,
+                    <span class="self">self</span>.config.from_uqff.is_some(),
+                    device.clone(),
+                    attention_mechanism,
+                    multi_progress,
+                ),
+                <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+            }
         };
+
         <span class="kw">let </span>preprocessor_config: PreProcessorConfig = serde_json::from_str(
             <span class="kw-2">&amp;</span>fs::read_to_string(
                 paths
@@ -1488,12 +1594,12 @@
                 paged_attn_config.block_size,
                 dtype,
                 model.config(),
-                device,
+                <span class="kw-2">&amp;</span>device,
                 <span class="kw-2">&amp;</span>layer_devices,
                 silent,
             )<span class="question-mark">?</span>;
             <span class="kw">let </span>cache_engine =
-                CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, device, layer_devices)<span class="question-mark">?</span>;
+                CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, <span class="kw-2">&amp;</span>device, layer_devices)<span class="question-mark">?</span>;
             (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
         } <span class="kw">else </span>{
             (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)

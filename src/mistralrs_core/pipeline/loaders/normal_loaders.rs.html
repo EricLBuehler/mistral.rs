@@ -3329,54 +3329,7 @@
 <a href="#3328" id="3328">3328</a>
 <a href="#3329" id="3329">3329</a>
 <a href="#3330" id="3330">3330</a>
-<a href="#3331" id="3331">3331</a>
-<a href="#3332" id="3332">3332</a>
-<a href="#3333" id="3333">3333</a>
-<a href="#3334" id="3334">3334</a>
-<a href="#3335" id="3335">3335</a>
-<a href="#3336" id="3336">3336</a>
-<a href="#3337" id="3337">3337</a>
-<a href="#3338" id="3338">3338</a>
-<a href="#3339" id="3339">3339</a>
-<a href="#3340" id="3340">3340</a>
-<a href="#3341" id="3341">3341</a>
-<a href="#3342" id="3342">3342</a>
-<a href="#3343" id="3343">3343</a>
-<a href="#3344" id="3344">3344</a>
-<a href="#3345" id="3345">3345</a>
-<a href="#3346" id="3346">3346</a>
-<a href="#3347" id="3347">3347</a>
-<a href="#3348" id="3348">3348</a>
-<a href="#3349" id="3349">3349</a>
-<a href="#3350" id="3350">3350</a>
-<a href="#3351" id="3351">3351</a>
-<a href="#3352" id="3352">3352</a>
-<a href="#3353" id="3353">3353</a>
-<a href="#3354" id="3354">3354</a>
-<a href="#3355" id="3355">3355</a>
-<a href="#3356" id="3356">3356</a>
-<a href="#3357" id="3357">3357</a>
-<a href="#3358" id="3358">3358</a>
-<a href="#3359" id="3359">3359</a>
-<a href="#3360" id="3360">3360</a>
-<a href="#3361" id="3361">3361</a>
-<a href="#3362" id="3362">3362</a>
-<a href="#3363" id="3363">3363</a>
-<a href="#3364" id="3364">3364</a>
-<a href="#3365" id="3365">3365</a>
-<a href="#3366" id="3366">3366</a>
-<a href="#3367" id="3367">3367</a>
-<a href="#3368" id="3368">3368</a>
-<a href="#3369" id="3369">3369</a>
-<a href="#3370" id="3370">3370</a>
-<a href="#3371" id="3371">3371</a>
-<a href="#3372" id="3372">3372</a>
-<a href="#3373" id="3373">3373</a>
-<a href="#3374" id="3374">3374</a>
-<a href="#3375" id="3375">3375</a>
-<a href="#3376" id="3376">3376</a>
-<a href="#3377" id="3377">3377</a>
-<a href="#3378" id="3378">3378</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#3331" id="3331">3331</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
@@ -3490,8 +3443,6 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>NormalModel + Send + Sync&gt;&gt;;
     <span class="kw">fn </span>is_gptx(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt;;
     <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str, use_flash_attn: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt;;
-    <span class="doccomment">/// Get total num_hidden_layers for the layers which will be device mapped.
-    </span><span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
     <span class="kw">fn </span>get_device_for_tensor(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         config: <span class="kw-2">&amp;</span>str,
@@ -3702,9 +3653,6 @@
             preload_adapters,
         )
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.get_total_device_mapping_num_layers(config)
-    }
     <span class="kw">fn </span>get_config_repr(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str, use_flash_attn: bool) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>Debug&gt;&gt; {
         <span class="self">Self</span>::get_loader(config)<span class="question-mark">?</span>.get_config_repr(config, use_flash_attn)
     }
@@ -3854,9 +3802,6 @@
             config,
             use_flash_attn,
         )<span class="question-mark">?</span>))
-    }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(MistralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>.num_hidden_layers)
     }
 }
 
@@ -4094,9 +4039,6 @@
             use_flash_attn,
         )<span class="question-mark">?</span>))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(GemmaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>.num_hidden_layers)
-    }
 }
 
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>GemmaLoader {
@@ -4333,9 +4275,6 @@
             use_flash_attn,
         )<span class="question-mark">?</span>))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(LlamaBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>.num_hidden_layers)
-    }
 }
 
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>LlamaLoader {
@@ -4560,9 +4499,6 @@
             config,
             use_flash_attn,
         )<span class="question-mark">?</span>))
-    }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(MixtralBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>.num_hidden_layers)
     }
 }
 
@@ -4795,9 +4731,6 @@
             use_flash_attn,
         )<span class="question-mark">?</span>))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(Phi2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>.num_hidden_layers)
-    }
 }
 
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Phi2Loader {
@@ -5025,9 +4958,6 @@
             use_flash_attn,
         )<span class="question-mark">?</span>))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(Phi3BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>.num_hidden_layers)
-    }
 }
 
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Phi3Loader {
@@ -5235,9 +5165,6 @@
             config,
             use_flash_attn,
         )<span class="question-mark">?</span>))
-    }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(Qwen2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>.num_hidden_layers)
     }
 }
 
@@ -5480,9 +5407,6 @@
             use_flash_attn,
         )<span class="question-mark">?</span>))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(Gemma2BasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>.num_hidden_layers)
-    }
 }
 
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Gemma2Loader {
@@ -5711,9 +5635,6 @@
         <span class="prelude-val">Ok</span>(Box::new(serde_json::from_str::&lt;Starcoder2BasicConfig&gt;(
             config,
         )<span class="question-mark">?</span>))
-    }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(serde_json::from_str::&lt;Starcoder2BasicConfig&gt;(config)<span class="question-mark">?</span>.num_hidden_layers)
     }
 }
 
@@ -5949,9 +5870,6 @@
             use_flash_attn,
         )<span class="question-mark">?</span>))
     }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(Phi3_5MoEBasicConfig::deserialize(config, <span class="bool-val">false</span>)<span class="question-mark">?</span>.num_hidden_layers)
-    }
 }
 
 <span class="kw">impl </span>IsqModelLoader <span class="kw">for </span>Phi3_5MoELoader {
@@ -6143,12 +6061,6 @@
         <span class="kw">let </span><span class="kw-2">mut </span>config: <span class="kw">crate</span>::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)<span class="question-mark">?</span>;
         config.use_flash_attn = use_flash_attn;
         <span class="prelude-val">Ok</span>(Box::new(config))
-    }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(
-            serde_json::from_str::&lt;<span class="kw">crate</span>::models::deepseek2::DeepSeekV2Config&gt;(config)<span class="question-mark">?
-                </span>.num_hidden_layers,
-        )
     }
 }
 
@@ -6471,12 +6383,6 @@
         <span class="kw">let </span><span class="kw-2">mut </span>config: <span class="kw">crate</span>::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)<span class="question-mark">?</span>;
         config.use_flash_attn = use_flash_attn;
         <span class="prelude-val">Ok</span>(Box::new(config))
-    }
-    <span class="kw">fn </span>get_total_device_mapping_num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-        <span class="prelude-val">Ok</span>(
-            serde_json::from_str::&lt;<span class="kw">crate</span>::models::deepseek3::DeepSeekV3Config&gt;(config)<span class="question-mark">?
-                </span>.num_hidden_layers,
-        )
     }
 }
 

@@ -689,8 +689,8 @@
 <span class="attr">#[cfg(not(any(all(feature = <span class="string">"cuda"</span>, target_family = <span class="string">"unix"</span>), feature = <span class="string">"metal"</span>)))]
 </span><span class="kw">use </span>dummy_paged_attention <span class="kw">as </span>paged_attention;
 <span class="kw">mod </span>attention;
-<span class="kw">pub mod </span>daemon;
 <span class="kw">mod </span>diffusion_models;
+<span class="kw">pub mod </span>distributed;
 <span class="kw">mod </span>pipeline;
 <span class="kw">mod </span>prefix_cacher;
 <span class="kw">mod </span>prefix_cacher_v2;
@@ -1005,7 +1005,7 @@
 
         <span class="kw">let </span>engine_id = ENGINE_ID.fetch_add(<span class="number">1</span>, atomic::Ordering::SeqCst);
 
-        <span class="kw">if </span>daemon::is_daemon() {
+        <span class="kw">if </span>distributed::is_daemon() {
             <span class="kw">let </span>request_sender = sender.write().unwrap().clone();
             thread::spawn(<span class="kw">move </span>|| {
                 <span class="kw">let </span>rt = Runtime::new().unwrap();
@@ -1014,7 +1014,7 @@
                     <span class="kw">use </span>interprocess::local_socket::Stream <span class="kw">as </span>LocalStream;
 
                     <span class="kw">loop </span>{
-                        <span class="kw">let </span>name = daemon::ipc_name().unwrap();
+                        <span class="kw">let </span>name = distributed::ipc_name().unwrap();
                         <span class="kw">if let </span><span class="prelude-val">Ok</span>(stream) = LocalStream::connect(name) {
                             <span class="kw">let </span><span class="kw-2">mut </span>reader = BufReader::new(stream);
                             <span class="kw">let </span><span class="kw-2">mut </span>buf = String::new();
@@ -1076,7 +1076,7 @@
             .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
         <span class="comment">// Do a dummy run
-        </span><span class="kw">if </span>!daemon::is_daemon()
+        </span><span class="kw">if </span>!distributed::is_daemon()
             &amp;&amp; is_multi_threaded
             &amp;&amp; <span class="macro">matches!</span>(category, ModelCategory::Text | ModelCategory::Vision { .. })
         {

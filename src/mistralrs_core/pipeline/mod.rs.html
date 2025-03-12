@@ -936,7 +936,8 @@
 <a href="#935" id="935">935</a>
 <a href="#936" id="936">936</a>
 <a href="#937" id="937">937</a>
-<a href="#938" id="938">938</a></pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a></pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
 <span class="kw">mod </span>diffusion;
@@ -967,6 +968,7 @@
 <span class="kw">pub use </span>gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 <span class="kw">use </span>image::DynamicImage;
 <span class="kw">pub use </span>inputs_processor::InputProcessorOutput;
+<span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>isq::IsqModelLoader;
 <span class="kw">pub use </span>isq::{parse_isq_value, IsqModel, IsqOrganization};
 <span class="kw">pub use </span>loaders::{
     AdapterKind, AutoDeviceMapParams, AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader,

@@ -1090,7 +1090,7 @@
 <span class="kw">use </span>tokio::sync::{mpsc::Receiver, Mutex};
 
 <span class="kw">use crate</span>::{
-    daemon,
+    distributed,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -1580,8 +1580,8 @@
     }
 
     <span class="kw">fn </span>replicate_request_to_daemons(<span class="kw-2">&amp;mut </span><span class="self">self</span>, request: <span class="kw-2">&amp;</span>Request) {
-        <span class="kw">if </span>!daemon::is_daemon() &amp;&amp; mistralrs_quant::distributed::use_nccl() {
-            <span class="kw">let </span>name = daemon::ipc_name().unwrap();
+        <span class="kw">if </span>!distributed::is_daemon() &amp;&amp; mistralrs_quant::distributed::use_nccl() {
+            <span class="kw">let </span>name = distributed::ipc_name().unwrap();
             <span class="kw">let </span>num_workers =
                 mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - <span class="number">1</span>;
             <span class="kw">let </span>listener = ListenerOptions::new().name(name).create_sync().unwrap();

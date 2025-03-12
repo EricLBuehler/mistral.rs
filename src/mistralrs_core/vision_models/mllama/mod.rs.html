@@ -291,7 +291,8 @@
 <a href="#290" id="290">290</a>
 <a href="#291" id="291">291</a>
 <a href="#292" id="292">292</a>
-<a href="#293" id="293">293</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">mod </span>config;
 <span class="kw">mod </span>inputs_processor;
@@ -386,6 +387,7 @@
                 <span class="kw-2">&amp;</span>cfg.vision_config,
                 vb.pp(<span class="string">"vision_model"</span>),
                 <span class="kw-2">&amp;</span>real_dev,
+                <span class="kw-2">&amp;</span>normal_loading_metadata.mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>,
             )<span class="question-mark">?</span>,
             language_model: MLlamaTextModel::new(
                 <span class="kw-2">&amp;</span>cfg.text_config,
