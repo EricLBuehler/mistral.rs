@@ -187,7 +187,6 @@ pub struct MistralRsBuilder {
     no_prefix_cache: Option<bool>,
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
-    gemm_full_precision_f16: Option<bool>,
     throughput_logging_enabled: Option<()>,
 }
 
@@ -202,7 +201,6 @@ impl MistralRsBuilder {
             no_prefix_cache: None,
             prefix_cache_n: None,
             disable_eos_stop: None,
-            gemm_full_precision_f16: None,
             throughput_logging_enabled: None,
         }
     }
@@ -234,11 +232,6 @@ impl MistralRsBuilder {
         self.disable_eos_stop = Some(disable_eos_stop);
         self
     }
-    /// This setting is only applicable on CUDA. If set to false or not specified, this setting enables f16/bf16 reduced precision matmul for GPUs which support it. If set to true, this setting has no effect.
-    pub fn with_gemm_full_precision_f16(mut self, gemm_full_precision: bool) -> Self {
-        self.gemm_full_precision_f16 = Some(gemm_full_precision);
-        self
-    }
     pub fn with_throughput_logging(mut self) -> Self {
         self.throughput_logging_enabled = Some(());
         self
@@ -248,42 +241,6 @@ impl MistralRsBuilder {
         MistralRs::new(self)
     }
 }
-
-#[cfg(feature = "cuda")]
-fn set_gemm_reduced_precision_f16(device: candle_core::Device) {
-    use mistralrs_quant::INHIBIT_GEMM_F16;
-
-    use candle_core::{DType, Tensor};
-
-    let a = Tensor::zeros((2, 2), DType::BF16, &device).unwrap();
-    candle_core::cuda::set_gemm_reduced_precision_bf16(true);
-    match a.matmul(&a) {
-        Ok(_) => tracing::info!("Enabling GEMM reduced precision in BF16."),
-        Err(e) => {
-            if format!("{e:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
-                tracing::info!("GEMM reduced precision in BF16 not supported.");
-                candle_core::cuda::set_gemm_reduced_precision_bf16(false);
-                INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-    }
-
-    let a = Tensor::zeros((2, 2), DType::F16, &device).unwrap();
-    candle_core::cuda::set_gemm_reduced_precision_f16(true);
-    match a.matmul(&a) {
-        Ok(_) => tracing::info!("Enabling GEMM reduced precision in F16."),
-        Err(e) => {
-            if format!("{e:?}").contains("CUBLAS_STATUS_NOT_SUPPORTED") {
-                tracing::info!("GEMM reduced precision in F16 not supported.");
-                candle_core::cuda::set_gemm_reduced_precision_f16(false);
-                INHIBIT_GEMM_F16.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-    }
-}
-
-#[cfg(not(feature = "cuda"))]
-fn set_gemm_reduced_precision_f16(_device: candle_core::Device) {}
 
 impl Drop for MistralRs {
     fn drop(&mut self) {
@@ -305,19 +262,10 @@ impl MistralRs {
             no_prefix_cache,
             prefix_cache_n,
             disable_eos_stop,
-            gemm_full_precision_f16,
             throughput_logging_enabled,
         } = config;
 
         let category = pipeline.try_lock().unwrap().category();
-        let model_supports_reduced_gemm = match category {
-            ModelCategory::Text => true,
-            ModelCategory::Vision { has_conv2d, .. } => !has_conv2d,
-            ModelCategory::Diffusion => true,
-        };
-        if !gemm_full_precision_f16.unwrap_or(false) && model_supports_reduced_gemm {
-            set_gemm_reduced_precision_f16(get_mut_arcmutex!(pipeline).device());
-        }
         setup_cublas_lt_wrapper(get_mut_arcmutex!(pipeline).device());
 
         let truncate_sequence = truncate_sequence.unwrap_or(false);
