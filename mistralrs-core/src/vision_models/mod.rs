@@ -22,6 +22,7 @@ pub(crate) mod idefics3;
 pub(crate) mod minicpmo;
 pub(crate) mod phi4;
 pub(crate) use phi4::inputs_processor;
+pub(crate) mod gemma3;
 pub(crate) mod siglip;
 
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
