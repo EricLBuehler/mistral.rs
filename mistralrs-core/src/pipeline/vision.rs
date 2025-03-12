@@ -399,7 +399,7 @@ impl Loader for VisionLoader {
                 self.config.from_uqff.is_some(),
                 IsqOrganization::Default,
                 &*self.inner,
-                paths,
+                paths.as_ref(),
             )?;
 
             // Special case for where things can be more optimially loaded.

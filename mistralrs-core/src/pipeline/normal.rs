@@ -480,7 +480,7 @@ impl Loader for NormalLoader {
                 self.config.from_uqff.is_some(),
                 self.config.organization,
                 &*self.inner,
-                paths,
+                paths.as_ref(),
             )?;
 
             // Special case for where things can be more optimially loaded.

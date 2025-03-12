@@ -41,6 +41,7 @@ pub(crate) fn ipc_name() -> anyhow::Result<Name<'static>> {
     Ok(printname.to_ns_name::<GenericNamespaced>()?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_distributed_mapper<
     'a,
     T: DeviceMappedModelLoader + IsqModelLoader + ?Sized,
@@ -54,7 +55,7 @@ pub(crate) fn prepare_distributed_mapper<
     from_uqff: bool,
     organization: IsqOrganization,
     model: &T,
-    paths: &Box<dyn ModelPaths>,
+    paths: &dyn ModelPaths,
 ) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder<'a>)> {
     #[cfg(not(feature = "nccl"))]
     warn!("NCCL support was included in the build, be sure to build with `--features nccl`.");
@@ -175,7 +176,7 @@ pub(crate) fn prepare_distributed_mapper<
     // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
     let comm = mistralrs_quant::Comm::from_device(
         id,
-        &device,
+        device,
         local_rank + rank_offset,
         global_world_size,
     )?;
@@ -184,9 +185,9 @@ pub(crate) fn prepare_distributed_mapper<
         // Dummy weights for the layers which will be overwritten...
         Some(std::sync::Arc::new(
             if matches!(organization, IsqOrganization::MoeExpertsOnly) {
-                model.isq_layer_regexes_moqe(&config)?
+                model.isq_layer_regexes_moqe(config)?
             } else {
-                model.isq_layer_regexes(&config)?
+                model.isq_layer_regexes(config)?
             },
         ))
     } else {
@@ -197,7 +198,7 @@ pub(crate) fn prepare_distributed_mapper<
         ShardedSafeTensors::sharded(
             paths.get_weight_filenames(),
             dtype,
-            &load_device,
+            load_device,
             make_dummy_regexes,
         )?
     };
@@ -208,7 +209,7 @@ pub(crate) fn prepare_distributed_mapper<
         nm_device: available_devices[0].clone(),
         comm: Arc::new(comm),
     }
-    .into_mapper(model.num_layers(&config)?, &device, None)?;
+    .into_mapper(model.num_layers(config)?, device, None)?;
 
     let sharded_vb = if !loading_isq {
         sharded_vb.clone().set_device(device.clone())
