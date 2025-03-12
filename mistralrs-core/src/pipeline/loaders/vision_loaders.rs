@@ -23,13 +23,11 @@ use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConf
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::{
-    BasicProcessor, EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer,
-};
+use crate::pipeline::{EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
 use crate::vision_models::gemma3::config::Gemma3Config;
-use crate::vision_models::gemma3::Gemma3Model;
+use crate::vision_models::gemma3::{Gemma3Model, Gemma3Processor};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
@@ -3139,8 +3137,7 @@ impl VisionModelLoader for Gemma3Loader {
         _preprocessor_config: PreProcessorConfig,
         max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
-        // TODO
-        Arc::new(BasicProcessor)
+        Arc::new(Gemma3Processor)
     }
     fn supports_paged_attention(&self) -> bool {
         true

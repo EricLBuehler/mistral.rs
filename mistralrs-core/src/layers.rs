@@ -1301,7 +1301,6 @@ pub enum Gemmma3ScaledRopeType {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Gemma3RopeScalingConfig {
     factor: f64,
-    #[serde(rename = "type")]
     rope_type: Gemmma3ScaledRopeType,
 }
 

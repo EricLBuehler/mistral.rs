@@ -17,7 +17,9 @@ use crate::{
 };
 
 pub mod config;
+mod inputs_processor;
 mod text;
+pub(crate) use inputs_processor::Gemma3Processor;
 
 pub struct Gemma3Model {
     language_model: TextModel,
@@ -79,6 +81,8 @@ impl IsqModel for Gemma3Model {
     }
 }
 
+pub struct Gemma3SpecificArgs;
+
 impl VisionModel for Gemma3Model {
     fn forward(
         &self,
@@ -100,8 +104,7 @@ impl VisionModel for Gemma3Model {
         )
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn std::any::Any> {
-        // TODO
-        Box::new(())
+        Box::new(Gemma3SpecificArgs)
     }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
@@ -119,7 +122,8 @@ impl VisionModel for Gemma3Model {
         self.language_model.config()
     }
     fn has_conv2d(&self) -> bool {
-        todo!()
+        // TODO
+        false
     }
 }
 

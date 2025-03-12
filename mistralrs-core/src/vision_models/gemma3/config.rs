@@ -7,7 +7,7 @@ use crate::{
 
 serde_default_fn!(bool, attention_bias, false);
 serde_default_fn!(usize, head_dim, 256);
-serde_default_fn!(Activation, hidden_activation, Activation::GeluPytorchTanh);
+serde_default_fn!(Activation, hidden_activation, Activation::Gelu);
 serde_default_fn!(f64, rms_norm_eps, 1e-6);
 serde_default_fn!(f64, rope_theta, 1000000.);
 serde_default_fn!(usize, vocab_size, 262208);

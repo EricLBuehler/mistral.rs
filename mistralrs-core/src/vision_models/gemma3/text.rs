@@ -105,12 +105,12 @@ impl Attention {
         };
 
         let q_norm = RmsNorm::new_gemma(
-            cfg.hidden_size,
+            cfg.head_dim,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("q_norm"), false),
         )?;
         let k_norm = RmsNorm::new_gemma(
-            cfg.hidden_size,
+            cfg.head_dim,
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("k_norm"), false),
         )?;
