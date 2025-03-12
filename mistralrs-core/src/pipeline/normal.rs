@@ -18,8 +18,8 @@ use super::{
     Qwen2Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
-use crate::daemon::{self, BigCCharArray, WorkerTransferData};
 use crate::device_map::{self, DeviceMapper};
+use crate::distributed::{self, WorkerTransferData};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
@@ -39,21 +39,17 @@ use crate::{
     normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
     PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
-use interprocess::local_socket::traits::{Listener, Stream};
-use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
-use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType, ShardedSafeTensors};
+use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
-use std::io::{BufRead, BufReader, Write};
 use std::num::{NonZero, NonZeroUsize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
@@ -299,7 +295,7 @@ impl Loader for NormalLoader {
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
 
-        let available_devices = if let Ok(payload) = env::var(daemon::IS_DAEMON_FLAG) {
+        let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
             vec![candle_core::Device::new_cuda_with_stream(worker_rank + 1)?]
@@ -411,17 +407,17 @@ impl Loader for NormalLoader {
         }
 
         let pipeline_mapper = mapper.into_mapper(
-            self.inner.get_total_device_mapping_num_layers(&config)?,
+            self.inner.num_layers(&config)?,
             &device,
             self.config.topology.as_ref(),
         )?;
         let mapper = mapper.into_mapper(
-            self.inner.get_total_device_mapping_num_layers(&config)?,
+            self.inner.num_layers(&config)?,
             &device,
             self.config.topology.as_ref(),
         )?;
         let mut layer_devices = Vec::new();
-        for layer in 0..self.inner.get_total_device_mapping_num_layers(&config)? {
+        for layer in 0..self.inner.num_layers(&config)? {
             let device = mapper.device_for(layer, false).cloned();
             layer_devices.push(device);
         }
@@ -474,180 +470,20 @@ impl Loader for NormalLoader {
         let multi_progress = Arc::new(MultiProgress::new());
 
         let mut model = if use_nccl {
-            let device = available_devices[0].clone();
-            #[cfg(not(feature = "nccl"))]
-            warn!(
-                "NCCL support was included in the build, be sure to build with `--features nccl`."
-            );
-
-            // NCCL case!
-
-            let local_world_size = available_devices.len();
-            let global_world_size = if let Ok(x) = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE") {
-                usize::from_str(&x).context("MISTRALRS_MN_GLOBAL_WORLD_SIZE")?
-            } else {
-                mistralrs_quant::distributed::get_global_tp_size_from_devices()?
-            };
-
-            let use_multi_node = std::env::var("MISTRALRS_MN_GLOBAL_WORLD_SIZE").is_ok();
-            if use_multi_node {
-                info!("MISTRALRS_MN_GLOBAL_WORLD_SIZE is set, entering multi-node.");
-            }
-
-            if global_world_size < local_world_size || global_world_size % local_world_size != 0 {
-                anyhow::bail!("Global world size {global_world_size} must both be at least and divide the local world size {local_world_size}");
-            }
-
-            info!("Local tensor parallel world size is {local_world_size}");
-            info!("Global tensor parallel world size is {global_world_size}");
-
-            // TP uses parallel pipelines.
-            let name = daemon::ipc_name()?;
-            let mut id;
-            let local_rank = if let Ok(payload) = env::var(daemon::IS_DAEMON_FLAG) {
-                let payload: WorkerTransferData = serde_json::from_str(&payload)?;
-                let WorkerTransferData::Init {
-                    id: new_id,
-                    worker_rank,
-                } = payload;
-                id = mistralrs_quant::Id::uninit(new_id.0);
-
-                let mut stream = LocalStream::connect(name)?;
-                stream.write_all(b"ready\n")?;
-                worker_rank + 1
-            } else {
-                id = mistralrs_quant::Id::new();
-                let num_workers =
-                    mistralrs_quant::distributed::get_global_tp_size_from_devices()? - 1;
-                let mut children = Vec::new();
-                for worker_rank in 0..num_workers {
-                    let exe_path = env::current_exe().expect("Failed to get current exe");
-
-                    let args: Vec<String> = env::args().collect();
-
-                    let mut cmd = Command::new(exe_path);
-                    cmd.args(&args[1..]);
-
-                    let data = WorkerTransferData::Init {
-                        id: BigCCharArray(*id.internal()),
-                        worker_rank,
-                    };
-
-                    cmd.env(daemon::IS_DAEMON_FLAG, serde_json::to_string(&data)?);
-
-                    cmd.stdout(std::process::Stdio::null());
-                    cmd.stderr(std::process::Stdio::null());
-                    cmd.stdin(std::process::Stdio::null());
-
-                    children.push(cmd.spawn().expect("Failed to spawn process"));
-                }
-
-                let listener = ListenerOptions::new().name(name).create_sync()?;
-                let mut ready_count = 0;
-
-                while ready_count < num_workers {
-                    let stream = listener.accept()?;
-                    let mut reader = BufReader::new(stream);
-                    let mut message = String::new();
-                    reader.read_line(&mut message)?;
-                    if message.trim() == "ready" {
-                        ready_count += 1;
-                    }
-                }
-                info!("All workers have received the ids!");
-
-                0
-            };
-
-            if use_multi_node {
-                if let Ok(n_nodes) = env::var("MISTRALRS_MN_HEAD_NUM_WORKERS") {
-                    let n_nodes =
-                        usize::from_str(&n_nodes).context("MISTRALRS_MN_HEAD_NUM_WORKERS")?;
-                    info!("Head node managing {n_nodes} workers.");
-                    let Ok(port) = env::var("MISTRALRS_MN_HEAD_PORT") else {
-                        anyhow::bail!(
-                            "Got MISTRALRS_MN_HEAD_NUM_WORKERS, expected MISTRALRS_MN_HEAD_PORT"
-                        );
-                    };
-                    info!("Head node initializing connection on {port}.");
-                    let server = mistralrs_quant::Server::new(
-                        &format!("0.0.0.0:{port}"),
-                        n_nodes,
-                        local_world_size,
-                    )?;
-
-                    server.broadcast_id(&id)?;
-                } else if let Ok(addr) = env::var("MISTRALRS_MN_WORKER_SERVER_ADDR") {
-                    info!("Worker node connecting to {addr}.");
-                    let client = mistralrs_quant::Client::new(addr.parse()?, local_world_size)?;
-
-                    id = client.receive_id()?;
-                }
-            }
-
-            let rank_offset = if env::var("MISTRALRS_MN_WORKER_SERVER_ADDR").is_ok() {
-                let Ok(node_id) = env::var("MISTRALRS_MN_WORKER_ID") else {
-                    anyhow::bail!(
-                        "Got MISTRALRS_MN_WORKER_SERVER_ADDR, expected MISTRALRS_MN_WORKER_ID"
-                    );
-                };
-                let node_id = usize::from_str(&node_id).context("MISTRALRS_MN_WORKER_ID")?;
-                info!("Worker ID is {node_id}.");
-                (node_id + 1) * local_world_size
-            } else {
-                0
-            };
-
-            // They each block on each other
-            // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/api/comms.html?ncclcomminitrank#ncclcomminitrank
-            let comm = mistralrs_quant::Comm::from_device(
-                id,
+            let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
+                dtype,
                 &device,
-                local_rank + rank_offset,
-                global_world_size,
+                &load_device,
+                &available_devices,
+                &config,
+                loading_isq,
+                self.config.from_uqff.is_some(),
+                self.config.organization,
+                &*self.inner,
+                paths.as_ref(),
             )?;
 
-            let make_dummy_regexes = if loading_isq && self.config.from_uqff.is_some() {
-                // Dummy weights for the layers which will be overwritten...
-                Some(std::sync::Arc::new(
-                    if matches!(self.config.organization, IsqOrganization::MoeExpertsOnly) {
-                        self.inner.isq_layer_regexes_moqe(&config)?
-                    } else {
-                        self.inner.isq_layer_regexes(&config)?
-                    },
-                ))
-            } else {
-                None
-            };
-
-            let sharded_vb = unsafe {
-                ShardedSafeTensors::sharded(
-                    paths.get_weight_filenames(),
-                    dtype,
-                    &load_device,
-                    make_dummy_regexes,
-                )?
-            };
-
-            info!("Loading all ranks.");
-            // The mapper is specific to this pipeline
-            let mapper = DeviceMapSetting::Nccl {
-                nm_device: available_devices[0].clone(),
-                comm: Arc::new(comm),
-            }
-            .into_mapper(
-                self.inner.get_total_device_mapping_num_layers(&config)?,
-                &device,
-                None,
-            )?;
-
-            let sharded_vb = if !loading_isq {
-                sharded_vb.clone().set_device(device.clone())
-            } else {
-                sharded_vb.clone()
-            };
-
-            // Special case for normal models which support nccl so should be more optimially loaded.
+            // Special case for where things can be more optimially loaded.
             match self.kind {
                 ModelKind::Normal => normal_model_loader_sharded!(
                     sharded_vb,
@@ -656,7 +492,7 @@ impl Loader for NormalLoader {
                     self.config.use_flash_attn,
                     mapper,
                     loading_isq,
-                    device,
+                    device.clone(),
                     attention_mechanism,
                     multi_progress.clone(),
                 ),
@@ -673,7 +509,7 @@ impl Loader for NormalLoader {
                     silent,
                     mapper,
                     loading_isq,
-                    device,
+                    device.clone(),
                     multi_progress.clone(),
                 ),
                 ModelKind::Adapter {
@@ -689,7 +525,7 @@ impl Loader for NormalLoader {
                     silent,
                     mapper,
                     loading_isq,
-                    device,
+                    device.clone(),
                     multi_progress.clone(),
                 ),
                 _ => unreachable!(),
@@ -915,7 +751,7 @@ impl Loader for NormalLoader {
             )?;
 
             let mut layer_devices = Vec::new();
-            for layer in 0..self.inner.get_total_device_mapping_num_layers(&config)? {
+            for layer in 0..self.inner.num_layers(&config)? {
                 let device = model.get_layers().1.device_for(layer, false).cloned();
                 layer_devices.push(device);
             }

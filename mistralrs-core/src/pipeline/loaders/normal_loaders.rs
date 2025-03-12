@@ -112,8 +112,6 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self, config: &str) -> Result<bool>;
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
-    /// Get total num_hidden_layers for the layers which will be device mapped.
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize>;
     fn get_device_for_tensor(
         &self,
         config: &str,
@@ -324,9 +322,6 @@ impl NormalModelLoader for AutoLoader {
             preload_adapters,
         )
     }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Self::get_loader(config)?.get_total_device_mapping_num_layers(config)
-    }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Self::get_loader(config)?.get_config_repr(config, use_flash_attn)
     }
@@ -476,9 +471,6 @@ impl NormalModelLoader for MistralLoader {
             config,
             use_flash_attn,
         )?))
-    }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(MistralBasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }
 
@@ -716,9 +708,6 @@ impl NormalModelLoader for GemmaLoader {
             use_flash_attn,
         )?))
     }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(GemmaBasicConfig::deserialize(config, false)?.num_hidden_layers)
-    }
 }
 
 impl IsqModelLoader for GemmaLoader {
@@ -955,9 +944,6 @@ impl NormalModelLoader for LlamaLoader {
             use_flash_attn,
         )?))
     }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(LlamaBasicConfig::deserialize(config, false)?.num_hidden_layers)
-    }
 }
 
 impl IsqModelLoader for LlamaLoader {
@@ -1182,9 +1168,6 @@ impl NormalModelLoader for MixtralLoader {
             config,
             use_flash_attn,
         )?))
-    }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(MixtralBasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }
 
@@ -1417,9 +1400,6 @@ impl NormalModelLoader for Phi2Loader {
             use_flash_attn,
         )?))
     }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(Phi2BasicConfig::deserialize(config, false)?.num_hidden_layers)
-    }
 }
 
 impl IsqModelLoader for Phi2Loader {
@@ -1647,9 +1627,6 @@ impl NormalModelLoader for Phi3Loader {
             use_flash_attn,
         )?))
     }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(Phi3BasicConfig::deserialize(config, false)?.num_hidden_layers)
-    }
 }
 
 impl IsqModelLoader for Phi3Loader {
@@ -1857,9 +1834,6 @@ impl NormalModelLoader for Qwen2Loader {
             config,
             use_flash_attn,
         )?))
-    }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(Qwen2BasicConfig::deserialize(config, false)?.num_hidden_layers)
     }
 }
 
@@ -2102,9 +2076,6 @@ impl NormalModelLoader for Gemma2Loader {
             use_flash_attn,
         )?))
     }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(Gemma2BasicConfig::deserialize(config, false)?.num_hidden_layers)
-    }
 }
 
 impl IsqModelLoader for Gemma2Loader {
@@ -2333,9 +2304,6 @@ impl NormalModelLoader for Starcoder2Loader {
         Ok(Box::new(serde_json::from_str::<Starcoder2BasicConfig>(
             config,
         )?))
-    }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(serde_json::from_str::<Starcoder2BasicConfig>(config)?.num_hidden_layers)
     }
 }
 
@@ -2571,9 +2539,6 @@ impl NormalModelLoader for Phi3_5MoELoader {
             use_flash_attn,
         )?))
     }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(Phi3_5MoEBasicConfig::deserialize(config, false)?.num_hidden_layers)
-    }
 }
 
 impl IsqModelLoader for Phi3_5MoELoader {
@@ -2765,12 +2730,6 @@ impl NormalModelLoader for DeepSeekV2Loader {
         let mut config: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         config.use_flash_attn = use_flash_attn;
         Ok(Box::new(config))
-    }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(
-            serde_json::from_str::<crate::models::deepseek2::DeepSeekV2Config>(config)?
-                .num_hidden_layers,
-        )
     }
 }
 
@@ -3093,12 +3052,6 @@ impl NormalModelLoader for DeepSeekV3Loader {
         let mut config: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
         config.use_flash_attn = use_flash_attn;
         Ok(Box::new(config))
-    }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        Ok(
-            serde_json::from_str::<crate::models::deepseek3::DeepSeekV3Config>(config)?
-                .num_hidden_layers,
-        )
     }
 }
 

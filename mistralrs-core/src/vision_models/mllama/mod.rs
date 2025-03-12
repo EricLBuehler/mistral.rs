@@ -93,6 +93,7 @@ impl MLlamaModel {
                 &cfg.vision_config,
                 vb.pp("vision_model"),
                 &real_dev,
+                &normal_loading_metadata.mapper.get_comm_for(0)?,
             )?,
             language_model: MLlamaTextModel::new(
                 &cfg.text_config,
