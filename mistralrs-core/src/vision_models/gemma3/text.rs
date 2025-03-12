@@ -44,6 +44,7 @@ struct Attention {
 }
 
 impl Attention {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb_global: Arc<Gemma3RotaryEmbedding>,
         rotary_emb_local: Arc<RotaryEmbedding>,
@@ -98,7 +99,7 @@ impl Attention {
             comm,
             vb.pp("o_proj"),
         )?;
-        let sliding_window = if (layer_idx + 1) % cfg.sliding_window_pattern == 0 {
+        let sliding_window = if (layer_idx + 1) % cfg.sliding_window_pattern != 0 {
             Some(cfg.sliding_window)
         } else {
             None
@@ -376,7 +377,6 @@ pub struct TextModel {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
-    hidden_size: usize,
     device: Device,
     cache: EitherCache,
     max_seq_len: usize,
@@ -514,7 +514,6 @@ impl TextModel {
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            hidden_size: cfg.hidden_size,
             cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,
                 cfg.max_position_embeddings,
@@ -545,8 +544,7 @@ impl TextModel {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let xs = self.embed_tokens.forward(input_ids)?;
-        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
+        let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,

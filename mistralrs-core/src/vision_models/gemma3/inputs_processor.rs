@@ -27,14 +27,7 @@ use super::Gemma3SpecificArgs;
 
 struct Gemma3ImageProcessor;
 
-// Processor
 pub struct Gemma3Processor;
-
-impl Gemma3Processor {
-    pub fn new() -> Self {
-        Self
-    }
-}
 
 impl Processor for Gemma3Processor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
@@ -155,11 +148,11 @@ impl ImagePreProcessor for Gemma3ImageProcessor {
 
     fn preprocess(
         &self,
-        images: Vec<DynamicImage>,
-        videos: Vec<Vec<DynamicImage>>,
-        config: &PreProcessorConfig,
-        device: &Device,
-        (bs, max_num_images): (usize, usize),
+        _images: Vec<DynamicImage>,
+        _videos: Vec<Vec<DynamicImage>>,
+        _config: &PreProcessorConfig,
+        _device: &Device,
+        (_bs, _max_num_images): (usize, usize),
     ) -> Result<PreprocessedImages> {
         todo!()
     }

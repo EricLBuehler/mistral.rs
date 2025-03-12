@@ -17,6 +17,8 @@ serde_default_fn!(usize, max_position_embeddings, 131072);
 serde_default_fn!(bool, use_flash_attn, false);
 serde_default_fn!(f64, rope_local_base_freq, 10000.);
 serde_default_fn!(usize, sliding_window_pattern, 6);
+serde_default_fn!(usize, num_attention_heads, 8);
+serde_default_fn!(usize, num_key_value_heads, 4);
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Gemma3TextConfig {
@@ -28,8 +30,10 @@ pub struct Gemma3TextConfig {
     pub hidden_activation: Activation,
     pub hidden_size: usize,
     pub intermediate_size: usize,
+    #[serde(default = "num_attention_heads")]
     pub num_attention_heads: usize,
     pub num_hidden_layers: usize,
+    #[serde(default = "num_key_value_heads")]
     pub num_key_value_heads: usize,
     #[serde(default = "rms_norm_eps")]
     pub rms_norm_eps: f64,

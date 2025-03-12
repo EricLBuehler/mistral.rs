@@ -3101,7 +3101,8 @@ pub struct Gemma3Prefixer;
 
 impl VisionPromptPrefixer for Gemma3Prefixer {
     fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
-        todo!()
+        // TODO vision
+        prompt.to_string()
     }
 }
 
@@ -3135,7 +3136,7 @@ impl VisionModelLoader for Gemma3Loader {
         _model_config: &str,
         _processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
-        max_edge: Option<u32>,
+        _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Gemma3Processor)
     }
@@ -3172,10 +3173,10 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
-            max_seq_len,
+            max_seq_len: _,
             max_batch_size,
-            max_image_shape,
-            max_num_images,
+            max_image_shape: _,
+            max_num_images: _,
         } = params
         else {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
@@ -3196,15 +3197,15 @@ impl DeviceMappedModelLoader for Gemma3Loader {
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
             max_seq_len: _,
-            max_batch_size,
-            max_image_shape,
-            max_num_images,
+            max_batch_size: _,
+            max_image_shape: _,
+            max_num_images: _,
         } = params
         else {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
-        let cfg: Gemma3Config = serde_json::from_str(config)?;
+        let _cfg: Gemma3Config = serde_json::from_str(config)?;
 
         Ok(0)
     }
@@ -3216,7 +3217,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         weight_pack_factor: usize,
     ) -> Result<usize> {
         let cfg: Gemma3Config = serde_json::from_str(config)?;
-        // TODO
+        // TODO vision
         let text_elems = {
             let cfg = &cfg.text_config;
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;

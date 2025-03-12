@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::Arc;
 
 use candle_core::{Device, Result, Tensor};
@@ -87,11 +89,11 @@ impl VisionModel for Gemma3Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        pixel_values: Option<Tensor>,
+        _pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        model_specific_args: Box<dyn std::any::Any>, // pixel attention mask, or image sizes, or anything else
+        _model_specific_args: Box<dyn std::any::Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
@@ -103,7 +105,7 @@ impl VisionModel for Gemma3Model {
             flash_params,
         )
     }
-    fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn std::any::Any> {
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
         Box::new(Gemma3SpecificArgs)
     }
     fn cache(&self) -> &EitherCache {
