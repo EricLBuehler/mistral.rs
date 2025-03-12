@@ -222,7 +222,7 @@ impl VisionModelBuilder {
 
 #[derive(Clone)]
 /// Configure a UQFF text model with the various parameters for loading, running, and other inference behaviors.
-/// This wraps and implementes `DerefMut` for the VisionModelBuilder, so users should take care to not call UQFF-related mehtods.
+/// This wraps and implements `DerefMut` for the VisionModelBuilder, so users should take care to not call UQFF-related methods.
 pub struct UqffVisionModelBuilder(VisionModelBuilder);
 
 impl UqffVisionModelBuilder {
@@ -240,7 +240,7 @@ impl UqffVisionModelBuilder {
         self.0.build().await
     }
 
-    /// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related mehtods.
+    /// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related methods.
     pub fn into_inner(self) -> VisionModelBuilder {
         self.0
     }
