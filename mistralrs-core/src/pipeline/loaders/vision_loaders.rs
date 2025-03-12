@@ -2858,11 +2858,6 @@ impl VisionModelLoader for Qwen2_5VLLoader {
     ) -> Arc<dyn Processor + Send + Sync> {
         Arc::new(Qwen2_5VLProcessor::new(max_edge))
     }
-    fn get_total_device_mapping_num_layers(&self, config: &str) -> Result<usize> {
-        let config: Qwen2_5VLConfig = serde_json::from_str(config)?;
-        // We only apply device mapping to text model
-        Ok(config.num_hidden_layers)
-    }
     fn supports_paged_attention(&self) -> bool {
         false
     }

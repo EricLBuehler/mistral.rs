@@ -16,7 +16,6 @@ use crate::{
 use anyhow::Result;
 use candle_core::{Context, Device, IndexOp, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
-use mistralrs_quant::set_use_matmul_via_f16;
 use mistralrs_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
 };
@@ -349,13 +348,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 let continuous_vid_pad = find_sequences(&ids, vid_pad[0]);
                 all_continuous_vid_pad.push(continuous_vid_pad);
 
-                seq.set_toks(ids);
-
-                if let Some(ref mut metadata) = paged_attn_metadata {
-                    // Free and then reallocate as appropriate
-                    metadata.block_engine.free_sequence(*seq.id());
-                    metadata.block_engine.allocate(*seq);
-                }
+                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
             }
 
             let mut input_ids_searching = Vec::new();
@@ -470,12 +463,6 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             .unwrap()
             .unwrap()
         };
-
-        // todo: set_use_matmul_via_f16(true) from "pipline/inputs_processor" cause a significant loss of precision.
-        // It’s hard to figure it out during subsequent debugging
-        // Anyhow, globally setting matmul precision MAY not be a ideal solution.
-        // For now, change the precision back
-        set_use_matmul_via_f16(false);
 
         let (input, input_ids_full) = match (new_input, is_prompt) {
             (Some(new_input), true) => (new_input.clone(), new_input),
