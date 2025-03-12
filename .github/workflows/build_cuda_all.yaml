@@ -43,6 +43,7 @@ jobs:
                   ${{ runner.os }}-buildx-
 
             - name: Inject slug/short variables
+              id: slug
               uses: rlespinasse/github-slug-action@v4.5.0
 
             - name: Login to GitHub Container Registry
@@ -58,14 +59,14 @@ jobs:
               uses: docker/metadata-action@v5
               with:
                   images: |
-                    ghcr.io/${{env.GITHUB_REPOSITORY_OWNER_PART}}/${{env.GITHUB_REPOSITORY_NAME_PART}}
+                    ghcr.io/${{ github.repository_owner }}/$(basename ${{ github.repository }})
                   flavor: |
                     latest=false
                   tags: |
                     type=semver,pattern=cuda-${{matrix.compute_capability}}-{{version}}
                     type=semver,pattern=cuda-${{matrix.compute_capability}}-{{major}}.{{minor}}
-                    type=raw,value=cuda-${{matrix.compute_capability}}-latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-                    type=raw,value=cuda-${{matrix.compute_capability}}-sha-${{ env.GITHUB_SHA_SHORT }}
+                    type=raw,value=cuda-${{matrix.compute_capability}}-sha-${{ steps.slug.outputs.short_sha }}
+                    type=raw,value=cuda-${{matrix.compute_capability}}-sha-${{ github.sha }}
             - name: Build and push Docker image
               id: build-and-push-cuda
               uses: docker/build-push-action@v6
