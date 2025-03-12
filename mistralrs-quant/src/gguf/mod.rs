@@ -57,15 +57,6 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    fn forward_via_half(&self, a: &Tensor) -> Result<Tensor> {
-        let x = self.w.forward_via_f16(a)?;
-        if let Some(ref b) = self.b {
-            x.broadcast_add(b)
-        } else {
-            Ok(x)
-        }
-    }
-
     fn quantized_act_type(&self) -> Option<DType> {
         Some(DType::F32)
     }
