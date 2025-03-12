@@ -536,15 +536,19 @@ impl TextModel {
         })
     }
 
-    pub fn forward(
+    pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(input_ids)
+    }
+
+    pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
+        mut xs: Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
         let cache = &mut self.cache.normal().0;
         let attention_mask = CausalMasker.make_causal_mask_matrix(
             input_ids,

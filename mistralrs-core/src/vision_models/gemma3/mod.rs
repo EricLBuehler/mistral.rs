@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{Device, Result, Tensor, D};
 use config::Gemma3Config;
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mmproj::Gemma3MultiModalProjector;
 use text::TextModel;
 
 use crate::{
@@ -20,11 +21,17 @@ use crate::{
 
 pub mod config;
 mod inputs_processor;
+mod mmproj;
 mod text;
 pub(crate) use inputs_processor::Gemma3Processor;
 
+use super::siglip::SiglipVisionTransformer;
+
 pub struct Gemma3Model {
     language_model: TextModel,
+    multi_modal_projector: Gemma3MultiModalProjector,
+    vision_tower: SiglipVisionTransformer,
+    cfg: Gemma3Config,
 }
 
 impl Gemma3Model {
@@ -35,6 +42,7 @@ impl Gemma3Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        assert!(cfg.image_token_index < cfg.text_config.vocab_size);
         Ok(Self {
             language_model: TextModel::new(
                 &cfg.text_config,
@@ -43,19 +51,42 @@ impl Gemma3Model {
                 normal_loading_metadata,
                 attention_mechanism,
             )?,
+            multi_modal_projector: Gemma3MultiModalProjector::new(
+                cfg,
+                vb.pp("multi_modal_projector"),
+            )?,
+            vision_tower: SiglipVisionTransformer::new(&cfg.vision_config, vb.pp("vision_tower"))?,
+            cfg: cfg.clone(),
         })
     }
 
     fn forward(
         &self,
         input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        self.language_model.forward(
+        let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
+        if let Some(pixel_values) = pixel_values {
+            let vision_outputs = self.vision_tower.forward(&pixel_values, None, None)?;
+            let image_features = self.multi_modal_projector.forward(&vision_outputs)?;
+
+            let special_image_mask = input_ids
+                .eq(self.cfg.image_token_index as f64)?
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(input_embeds.shape())?;
+
+            let current_vals = input_embeds.gather(&special_image_mask, 1)?;
+            let delta = image_features.broadcast_sub(&current_vals)?;
+
+            input_embeds = input_embeds.scatter_add(&special_image_mask, &delta, 1)?;
+        };
+        self.language_model.forward_embeds(
             input_ids,
+            input_embeds,
             seqlen_offsets,
             context_lens,
             metadata,
@@ -89,7 +120,7 @@ impl VisionModel for Gemma3Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        _pixel_values: Option<Tensor>,
+        pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
@@ -99,6 +130,7 @@ impl VisionModel for Gemma3Model {
     ) -> candle_core::Result<Tensor> {
         self.forward(
             input_ids,
+            pixel_values,
             seqlen_offsets,
             context_lens,
             metadata,

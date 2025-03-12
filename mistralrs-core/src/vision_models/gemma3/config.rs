@@ -3,6 +3,7 @@ use mistralrs_quant::QuantizedConfig;
 use crate::{
     layers::{Activation, Gemma3RopeScalingConfig},
     serde_default_fn,
+    vision_models::siglip::SiglipVisionConfig,
 };
 
 serde_default_fn!(bool, attention_bias, false);
@@ -63,4 +64,7 @@ pub struct Gemma3TextConfig {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Gemma3Config {
     pub text_config: Gemma3TextConfig,
+    pub vision_config: SiglipVisionConfig,
+    pub image_token_index: usize,
+    pub mm_tokens_per_image: usize,
 }
