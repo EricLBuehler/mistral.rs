@@ -31,6 +31,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
+- 💎💎💎 Run the **Gemma 3** Model (*text only for now, vision coming very soon!*):
+
+    ```
+    ./mistralrs-server -i vision-plain -m google/gemma-3-4b-it -a gemma3
+    ```
+
 - 🐋🐋🐋 Run the Deepseek R1/V3 model: [documentation](docs/DEEPSEEKV3.md)
 
     ```
@@ -58,12 +64,6 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 
     ```
     ./mistralrs-server -i vision-plain -m microsoft/Phi-4-multimodal-instruct -a phi4mm
-    ```
-
-- 🤗📷 Run the **Smol VLM** Model: [documentation and guide here](docs/IDEFICS3.md)
-
-    ```
-    ./mistralrs-server -i vision-plain -m HuggingFaceTB/SmolVLM-Instruct -a idefics3
     ```
 
 - φ⁴ Run the new **Phi 4/Phi 4 Mini** models with 128K context window
@@ -169,6 +169,8 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |DeepseekV3|✅| |✅| |
 |MinCPM-O 2.6|✅| |✅| |
 |Phi 4 Multimodal|✅| |✅| |
+|Qwen2.5-VL|✅| |✅| |
+|Gemma 3|✅| |✅|✅|
 
 ## APIs and Integrations
 
@@ -439,6 +441,8 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `idefics3`
 - `minicpmo`
 - `phi4mm`
+- `qwen2_5vl`
+- `gemma3`
 
 ### Supported GGUF architectures
 
@@ -539,6 +543,8 @@ Please submit more benchmarks via raising an issue!
 |Deepseek V2| | |✅|
 |Deepseek V3| | |✅|
 |MiniCPM-O 2.6| | |✅|
+|Qwen2.5-VL| | |✅|
+|Gemma 3| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -570,6 +576,8 @@ Please submit more benchmarks via raising an issue!
 |Deepseek V2| | | |
 |Deepseek V3| | | |
 |MiniCPM-O 2.6| | | |
+|Qwen2.5-VL| | | |
+|Gemma 3| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -594,7 +602,8 @@ Please submit more benchmarks via raising an issue!
 |Deepseek V2| |
 |Deepseek V3| |
 |MiniCPM-O 2.6| |
-
+|Qwen2.5-VL| |
+|Gemma 3|✅|
 
 ### Using derivative model
 

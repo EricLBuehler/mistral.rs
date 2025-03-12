@@ -93,6 +93,8 @@ class VisionArchitecture(Enum):
     Idefics3 = "idefics3"
     MiniCpmO = "minicpmo"
     Phi4MM = "phi4mm"
+    Qwen2_5VL = "qwen2_5vl"
+    Gemma3 = "gemma3"
 
 @dataclass
 class DiffusionArchitecture(Enum):
