@@ -88,7 +88,7 @@ impl QuantMethod for UnquantLinear {
                             .t()
                     } else {
                         let mut out = b.contiguous()?;
-                        a.matmul_with_alpha_beta(&w, &mut out, None)?;
+                        a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
                         Ok(out)
                     }
                 }
