@@ -2,10 +2,7 @@ use std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicUsize, Arc},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -160,26 +157,11 @@ pub enum QuantMethodConfig {
 }
 
 /// Device/configurable intelligent matrix multiplication
-/// - Configurable to be via f16 (to use the faster GEMM kernels) optionally.
 /// - Handles limitation of `accelerate` which requires f32
 pub struct MatMul;
 
-pub static INHIBIT_GEMM_F16: AtomicBool = AtomicBool::new(false);
-
-/// Set the matmuls to go via f16
-pub(crate) static USE_MATMUL_VIA_F16: AtomicBool = AtomicBool::new(false);
-
-pub fn set_use_matmul_via_f16(via_f16: bool) {
-    if !INHIBIT_GEMM_F16.load(Ordering::Relaxed) {
-        USE_MATMUL_VIA_F16.store(via_f16, Ordering::Relaxed)
-    }
-}
-pub fn get_use_matmul_via_f16() -> bool {
-    USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
-}
-
 impl MatMul {
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    /// Compute matrix-matrix product.
     pub fn matmul(&self, a: &Tensor, b: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "accelerate")]
         {
@@ -192,50 +174,37 @@ impl MatMul {
         {
             if a.device().is_cpu() {
                 let original_dtype = a.dtype();
-                return a
-                    .to_dtype(DType::F16)?
+                a.to_dtype(DType::F16)?
                     .matmul(&b.to_dtype(DType::F16)?)?
-                    .to_dtype(original_dtype);
-            } else if !get_use_matmul_via_f16() {
-                return a.matmul(b);
+                    .to_dtype(original_dtype)
+            } else {
+                a.matmul(b)
             }
-            let original_dtype = a.dtype();
-            a.to_dtype(DType::F16)?
-                .matmul(&b.to_dtype(DType::F16)?)?
-                .to_dtype(original_dtype)
         }
     }
 
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    /// Compute matrix-matrix product.
     /// The result will be divided by the `scale` parameter in an affine division.
     pub fn matmul_affine_div(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
         // TODO(EricLBuehler): Optimize this by using the gemm parameter?
         self.matmul(a, b)? / scale
     }
 
-    /// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    /// Compute matrix-matrix product.
     /// The result will be divided by the `scale` parameter in an affine multiplication.
     pub fn matmul_affine_mul(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
         // TODO(EricLBuehler): Optimize this by using the gemm parameter?
         self.matmul(a, b)? * scale
     }
 
-    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    /// Compute quantized matrix-matrix product.
     pub fn qmatmul(&self, x: &Tensor, matmul: &QMatMul) -> Result<Tensor> {
-        if get_use_matmul_via_f16() {
-            matmul.forward_via_f16(x)
-        } else {
-            matmul.forward(x)
-        }
+        matmul.forward(x)
     }
 
-    /// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    /// Compute quantized matrix-matrix product.
     pub fn qmethod_matmul(&self, x: &Tensor, matmul: &dyn QuantMethod) -> Result<Tensor> {
-        if get_use_matmul_via_f16() {
-            matmul.forward_via_half(x)
-        } else {
-            matmul.forward(x)
-        }
+        matmul.forward(x)
     }
 }
 
@@ -437,12 +406,6 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     fn forward(&self, a: &Tensor) -> Result<Tensor>;
-
-    /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// This may go via half precision if it is supported.
-    fn forward_via_half(&self, a: &Tensor) -> Result<Tensor> {
-        self.forward(a)
-    }
 
     /// If a quantized method, return the activation dtype.
     fn quantized_act_type(&self) -> Option<DType>;
