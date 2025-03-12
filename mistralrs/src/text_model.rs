@@ -1,5 +1,9 @@
 use mistralrs_core::*;
-use std::{num::NonZeroUsize, path::PathBuf};
+use std::{
+    num::NonZeroUsize,
+    ops::{Deref, DerefMut},
+    path::PathBuf,
+};
 
 use crate::{best_device, Model};
 
@@ -316,5 +320,53 @@ impl TextModelBuilder {
         }
 
         Ok(Model::new(runner.build()))
+    }
+}
+
+#[derive(Clone)]
+/// Configure a UQFF text model with the various parameters for loading, running, and other inference behaviors.
+/// This wraps and implements `DerefMut` for the TextModelBuilder, so users should take care to not call UQFF-related methods.
+pub struct UqffTextModelBuilder(TextModelBuilder);
+
+impl UqffTextModelBuilder {
+    /// A few defaults are applied here:
+    /// - MoQE ISQ organization
+    /// - Token source is from the cache (.cache/huggingface/token)
+    /// - Maximum number of sequences running is 32
+    /// - Number of sequences to hold in prefix cache is 16.
+    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    pub fn new(model_id: impl ToString, uqff_file: PathBuf) -> Self {
+        let mut inner = TextModelBuilder::new(model_id);
+        inner = inner.from_uqff(uqff_file);
+        Self(inner)
+    }
+
+    pub async fn build(self) -> anyhow::Result<Model> {
+        self.0.build().await
+    }
+
+    /// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related methods.
+    pub fn into_inner(self) -> TextModelBuilder {
+        self.0
+    }
+}
+
+impl Deref for UqffTextModelBuilder {
+    type Target = TextModelBuilder;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for UqffTextModelBuilder {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<UqffTextModelBuilder> for TextModelBuilder {
+    fn from(value: UqffTextModelBuilder) -> Self {
+        value.0
     }
 }
