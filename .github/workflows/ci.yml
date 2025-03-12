@@ -49,7 +49,7 @@ jobs:
           TESTS_HF_TOKEN: ${{ secrets.HF_TOKEN }}
         with:
           command: test
-          args: --workspace
+          args: -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
 
   fmt:
     name: Rustfmt

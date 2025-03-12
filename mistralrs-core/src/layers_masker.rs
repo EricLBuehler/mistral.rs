@@ -3,7 +3,6 @@
 use std::ops::Add;
 
 use candle_core::{DType, Device, Result, Tensor, WithDType};
-use mistralrs_quant::get_use_matmul_via_f16;
 
 use crate::pipeline::KvCache;
 
@@ -230,7 +229,7 @@ impl CausalMasker {
         };
 
         // IMPORTANT: this must match the logic in attention.rs. Assume the cublaslt handle will be initialized
-        if causal_mask.device().is_cuda() && !get_use_matmul_via_f16() {
+        if causal_mask.device().is_cuda() {
             causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
         }
 
@@ -290,7 +289,7 @@ impl CausalMasker {
         };
 
         // IMPORTANT: this must match the logic in attention.rs. Assume the cublaslt handle will be initialized
-        if causal_mask.device().is_cuda() && !get_use_matmul_via_f16() {
+        if causal_mask.device().is_cuda() {
             causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
         }
 

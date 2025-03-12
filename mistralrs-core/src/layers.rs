@@ -12,8 +12,7 @@ use candle_nn::{
 use float8::F8E4M3;
 use half::{bf16, f16};
 use mistralrs_quant::{
-    get_use_matmul_via_f16, ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer,
-    ShardedVarBuilder,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1376,17 +1375,13 @@ impl Module for QLinear {
         } else {
             xs.clone()
         };
-        let forward_fn = if !get_use_matmul_via_f16() {
-            QMatMul::forward
-        } else {
-            QMatMul::forward_via_f16
-        };
         if let Some(bias) = &self.bias {
-            forward_fn(&self.inner, &xs)?
+            self.inner
+                .forward(&xs)?
                 .broadcast_add(bias)?
                 .to_dtype(self.dtype)
         } else {
-            forward_fn(&self.inner, &xs)?.to_dtype(self.dtype)
+            self.inner.forward(&xs)?.to_dtype(self.dtype)
         }
     }
 }

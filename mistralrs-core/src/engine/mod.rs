@@ -15,7 +15,7 @@ use std::{
 use tokio::sync::{mpsc::Receiver, Mutex};
 
 use crate::{
-    daemon,
+    distributed,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -505,8 +505,8 @@ impl Engine {
     }
 
     fn replicate_request_to_daemons(&mut self, request: &Request) {
-        if !daemon::is_daemon() && mistralrs_quant::distributed::use_nccl() {
-            let name = daemon::ipc_name().unwrap();
+        if !distributed::is_daemon() && mistralrs_quant::distributed::use_nccl() {
+            let name = distributed::ipc_name().unwrap();
             let num_workers =
                 mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - 1;
             let listener = ListenerOptions::new().name(name).create_sync().unwrap();

@@ -125,8 +125,10 @@ pub mod v0_4_api {
     };
     pub use super::model::{best_device, Model};
     pub use super::speculative::TextSpeculativeBuilder;
-    pub use super::text_model::{PagedAttentionMetaBuilder, TextModelBuilder};
-    pub use super::vision_model::VisionModelBuilder;
+    pub use super::text_model::{
+        PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder,
+    };
+    pub use super::vision_model::{UqffVisionModelBuilder, VisionModelBuilder};
     pub use super::xlora_model::XLoraModelBuilder;
 }
 

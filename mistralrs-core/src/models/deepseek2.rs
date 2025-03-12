@@ -5,8 +5,8 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder, SumAllReduce,
+    distributed::DistributedOperation, ColumnParallelLayer, QuantMethod, QuantizedConfig,
+    ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce,
 };
 use serde::Deserialize;
 
@@ -622,7 +622,7 @@ impl Moe {
         }
 
         if self.world_size > 1 {
-            y = self.all_reduce.apply(&y)?;
+            y = self.all_reduce.sum_all_reduce(&y)?;
         }
 
         Ok(y)

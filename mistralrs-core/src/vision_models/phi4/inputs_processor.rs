@@ -241,12 +241,13 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
                 .to_string();
 
-            seq.set_toks(
+            seq.set_toks_and_reallocate(
                 tokenizer
                     .encode(detokenized.clone(), true)
                     .expect("Encode failed")
                     .get_ids()
                     .to_vec(),
+                paged_attn_metadata.as_mut(),
             );
 
             seq.set_initial_prompt(detokenized);
@@ -265,16 +266,10 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 let mut new_ids = seq.get_toks()[..i].to_vec();
                 new_ids.extend(vec![token_id; *token_count]);
                 new_ids.extend(seq.get_toks()[i + 1..].to_vec());
-                seq.set_toks(new_ids);
+                seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
                 i += token_count;
             }
             toks.push(seq.get_toks().to_vec());
-
-            if let Some(ref mut metadata) = paged_attn_metadata {
-                // Free and then reallocate as appropriate
-                metadata.block_engine.free_sequence(*seq.id());
-                metadata.block_engine.allocate(*seq);
-            }
         }
 
         let iter = if is_prompt {

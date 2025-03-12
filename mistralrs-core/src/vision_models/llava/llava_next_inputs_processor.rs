@@ -306,17 +306,13 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 input_ids.extend(item);
             }
             // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-            seq.set_toks(
+            seq.set_toks_and_reallocate(
                 input_ids
                     .iter()
                     .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
                     .collect::<Vec<_>>(),
+                paged_attn_metadata.as_mut(),
             );
-            if let Some(ref mut metadata) = paged_attn_metadata {
-                // Free and then reallocate as appropriate
-                metadata.block_engine.free_sequence(*seq.id());
-                metadata.block_engine.allocate(*seq);
-            }
 
             toks.push(input_ids);
         }
