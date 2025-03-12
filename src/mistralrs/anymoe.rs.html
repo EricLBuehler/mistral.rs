@@ -121,8 +121,7 @@
 <a href="#120" id="120">120</a>
 <a href="#121" id="121">121</a>
 <a href="#122" id="122">122</a>
-<a href="#123" id="123">123</a>
-<a href="#124" id="124">124</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::{
+<a href="#123" id="123">123</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::{
     initialize_logging, AnyMoeConfig, AnyMoeLoader, AutoDeviceMapParams, DefaultSchedulerMethod,
     DeviceMapSetting, Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
     SchedulerConfig,
@@ -236,7 +235,6 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(pipeline, scheduler_method)
             .with_no_kv_cache(<span class="self">self</span>.base.no_kv_cache)
-            .with_gemm_full_precision_f16(<span class="bool-val">true</span>)
             .with_no_prefix_cache(<span class="self">self</span>.base.prefix_cache_n.is_none());
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.base.prefix_cache_n {

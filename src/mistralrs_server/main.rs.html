@@ -512,9 +512,7 @@
 <a href="#511" id="511">511</a>
 <a href="#512" id="512">512</a>
 <a href="#513" id="513">513</a>
-<a href="#514" id="514">514</a>
-<a href="#515" id="515">515</a>
-<a href="#516" id="516">516</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#514" id="514">514</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
@@ -994,11 +992,9 @@
         .with_opt_log(args.log)
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
-        .with_prefix_cache_n(args.prefix_cache_n)
-        .with_gemm_full_precision_f16(args.cpu)
-        .with_gemm_full_precision_f16(args.cpu); <span class="comment">// Required to allow `cuda` build to use `--cpu`, #1056
+        .with_prefix_cache_n(args.prefix_cache_n);
 
-    </span><span class="kw">if </span>args.interactive_mode {
+    <span class="kw">if </span>args.interactive_mode {
         interactive_mode(builder.build(), args.throughput_log).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }

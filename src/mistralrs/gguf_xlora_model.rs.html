@@ -100,8 +100,7 @@
 <a href="#99" id="99">99</a>
 <a href="#100" id="100">100</a>
 <a href="#101" id="101">101</a>
-<a href="#102" id="102">102</a>
-<a href="#103" id="103">103</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#102" id="102">102</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 
 <span class="kw">use crate</span>::{best_device, GgufModelBuilder, Model};
 
@@ -194,7 +193,6 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(pipeline, scheduler_method)
             .with_no_kv_cache(<span class="self">self</span>.gguf_model.no_kv_cache)
-            .with_gemm_full_precision_f16(<span class="bool-val">true</span>)
             .with_no_prefix_cache(<span class="self">self</span>.gguf_model.prefix_cache_n.is_none());
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.gguf_model.prefix_cache_n {

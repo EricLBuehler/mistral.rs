@@ -97,8 +97,7 @@
 <a href="#96" id="96">96</a>
 <a href="#97" id="97">97</a>
 <a href="#98" id="98">98</a>
-<a href="#99" id="99">99</a>
-<a href="#100" id="100">100</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
+<a href="#99" id="99">99</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>mistralrs_core::{
     initialize_logging, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceMapSetting,
@@ -192,8 +191,7 @@
             <span class="self">self</span>.speculative_config,
         )<span class="question-mark">?</span>));
 
-        <span class="kw">let </span>runner =
-            MistralRsBuilder::new(pipeline, scheduler_method).with_gemm_full_precision_f16(<span class="bool-val">true</span>);
+        <span class="kw">let </span>runner = MistralRsBuilder::new(pipeline, scheduler_method);
 
         <span class="prelude-val">Ok</span>(Model::new(runner.build()))
     }

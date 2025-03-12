@@ -107,8 +107,7 @@
 <a href="#106" id="106">106</a>
 <a href="#107" id="107">107</a>
 <a href="#108" id="108">108</a>
-<a href="#109" id="109">109</a>
-<a href="#110" id="110">110</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#109" id="109">109</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 
 <span class="kw">use crate</span>::{best_device, Model};
 
@@ -212,8 +211,7 @@
             method: DefaultSchedulerMethod::Fixed(<span class="self">self</span>.max_num_seqs.try_into()<span class="question-mark">?</span>),
         };
 
-        <span class="kw">let </span>runner =
-            MistralRsBuilder::new(pipeline, scheduler_method).with_gemm_full_precision_f16(<span class="bool-val">true</span>);
+        <span class="kw">let </span>runner = MistralRsBuilder::new(pipeline, scheduler_method);
 
         <span class="prelude-val">Ok</span>(Model::new(runner.build()))
     }

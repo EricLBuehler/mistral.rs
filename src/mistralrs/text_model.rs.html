@@ -318,8 +318,7 @@
 <a href="#317" id="317">317</a>
 <a href="#318" id="318">318</a>
 <a href="#319" id="319">319</a>
-<a href="#320" id="320">320</a>
-<a href="#321" id="321">321</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#320" id="320">320</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{num::NonZeroUsize, path::PathBuf};
 
 <span class="kw">use crate</span>::{best_device, Model};
@@ -630,7 +629,6 @@
 
         <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(pipeline, scheduler_method)
             .with_no_kv_cache(<span class="self">self</span>.no_kv_cache)
-            .with_gemm_full_precision_f16(<span class="bool-val">true</span>)
             .with_no_prefix_cache(<span class="self">self</span>.prefix_cache_n.is_none());
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.prefix_cache_n {
