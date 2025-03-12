@@ -385,12 +385,7 @@
 <a href="#384" id="384">384</a>
 <a href="#385" id="385">385</a>
 <a href="#386" id="386">386</a>
-<a href="#387" id="387">387</a>
-<a href="#388" id="388">388</a>
-<a href="#389" id="389">389</a>
-<a href="#390" id="390">390</a>
-<a href="#391" id="391">391</a>
-<a href="#392" id="392">392</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#387" id="387">387</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -400,7 +395,7 @@
 };
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>mistralrs_quant::{get_use_matmul_via_f16, MatMul};
+<span class="kw">use </span>mistralrs_quant::MatMul;
 
 <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="doccomment">/// Initial, sentinel value is usize::MAX
@@ -713,69 +708,64 @@
         <span class="comment">// TODO: bench?
         </span><span class="attr">#[allow(unused)]
         </span><span class="kw">if let </span>(Device::Cuda(<span class="kw">_</span>), <span class="prelude-val">Some</span>(cublaslt)) = (q.device(), <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap()) {
-            <span class="kw">if </span>!get_use_matmul_via_f16() {
-                <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-                </span>{
-                    <span class="comment">// cuBLASLt batch matmul implementation requires inputs to be dims3
-                    </span><span class="kw">let </span>k = k.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>q = q.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>v = v.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
-                    <span class="kw">let </span>attention_bias = <span class="kw">match </span>mask {
-                        <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1 </span>=&gt; {
-                            <span class="prelude-val">Some</span>(mask.repeat((n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>)
-                        }
-                        <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>=&gt; <span class="prelude-val">Some</span>(mask.clone()),
-                        <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">4 </span>=&gt; <span class="prelude-val">Some</span>(mask.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>),
-                        <span class="prelude-val">Some</span>(mask) =&gt; {
-                            <span class="macro">candle_core::bail!</span>(<span class="string">"cublaslt attn mask: rank must be 3 or 4"</span>)
-                        }
-                        <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
-                    };
-
-                    <span class="comment">// If attention_bias is set, we fuse the add by giving it as the output matrix
-                    // and setting beta to 1.0
-                    </span><span class="kw">let </span>beta = <span class="kw">match </span>attention_bias.is_some() {
-                        <span class="bool-val">true </span>=&gt; <span class="prelude-val">Some</span>(<span class="number">1.0</span>),
-                        <span class="bool-val">false </span>=&gt; <span class="prelude-val">None</span>,
-                    };
-
-                    <span class="comment">// Batch matrix multiplication
-                    // Fuse softmax scale and attention_bias add
-                    </span><span class="kw">let </span><span class="kw-2">mut </span>attention_scores = cublaslt.batch_matmul(
-                        <span class="kw-2">&amp;</span>k,
-                        <span class="kw-2">&amp;</span>q,
-                        attention_bias.as_ref(),
-                        <span class="prelude-val">Some</span>(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(<span class="number">1.0</span>)),
-                        beta,
-                        <span class="prelude-val">None</span>,
-                        <span class="prelude-val">None</span>,
-                    )<span class="question-mark">?</span>;
-                    <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
-                        attention_scores = (attention_scores.tanh()<span class="question-mark">? </span>* softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
+            <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
+            </span>{
+                <span class="comment">// cuBLASLt batch matmul implementation requires inputs to be dims3
+                </span><span class="kw">let </span>k = k.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>q = q.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>v = v.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>attention_bias = <span class="kw">match </span>mask {
+                    <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1 </span>=&gt; {
+                        <span class="prelude-val">Some</span>(mask.repeat((n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>)
                     }
-                    candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>attention_scores)<span class="question-mark">?</span>;
+                    <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>=&gt; <span class="prelude-val">Some</span>(mask.clone()),
+                    <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">4 </span>=&gt; <span class="prelude-val">Some</span>(mask.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>),
+                    <span class="prelude-val">Some</span>(mask) =&gt; {
+                        <span class="macro">candle_core::bail!</span>(<span class="string">"cublaslt attn mask: rank must be 3 or 4"</span>)
+                    }
+                    <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+                };
 
-                    <span class="kw">let </span>context_layer = cublaslt.batch_matmul(
-                        <span class="kw-2">&amp;</span>v.t()<span class="question-mark">?</span>.contiguous().unwrap(),
-                        <span class="kw-2">&amp;</span>attention_scores,
-                        <span class="comment">// We save one allocation
-                        </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>q),
-                        <span class="prelude-val">None</span>,
-                        <span class="prelude-val">None</span>,
-                        <span class="prelude-val">None</span>,
-                        <span class="prelude-val">None</span>,
-                    )<span class="question-mark">?</span>;
+                <span class="comment">// If attention_bias is set, we fuse the add by giving it as the output matrix
+                // and setting beta to 1.0
+                </span><span class="kw">let </span>beta = <span class="kw">match </span>attention_bias.is_some() {
+                    <span class="bool-val">true </span>=&gt; <span class="prelude-val">Some</span>(<span class="number">1.0</span>),
+                    <span class="bool-val">false </span>=&gt; <span class="prelude-val">None</span>,
+                };
 
-                    <span class="comment">// Reshape to dims4
-                    </span>context_layer.reshape((b_sz, n_attn_heads, seq_len, v_head_dim))
+                <span class="comment">// Batch matrix multiplication
+                // Fuse softmax scale and attention_bias add
+                </span><span class="kw">let </span><span class="kw-2">mut </span>attention_scores = cublaslt.batch_matmul(
+                    <span class="kw-2">&amp;</span>k,
+                    <span class="kw-2">&amp;</span>q,
+                    attention_bias.as_ref(),
+                    <span class="prelude-val">Some</span>(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(<span class="number">1.0</span>)),
+                    beta,
+                    <span class="prelude-val">None</span>,
+                    <span class="prelude-val">None</span>,
+                )<span class="question-mark">?</span>;
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
+                    attention_scores = (attention_scores.tanh()<span class="question-mark">? </span>* softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
                 }
-                <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
-                </span>{
-                    <span class="macro">candle_core::bail!</span>(<span class="string">"`cuda` feature is not enabled"</span>)
-                }
-            } <span class="kw">else </span>{
-                <span class="comment">// Use the f16 kernels here if quantized (ISQ or GGML), and a large enough prompt
-                </span>naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params)
+                candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>attention_scores)<span class="question-mark">?</span>;
+
+                <span class="kw">let </span>context_layer = cublaslt.batch_matmul(
+                    <span class="kw-2">&amp;</span>v.t()<span class="question-mark">?</span>.contiguous().unwrap(),
+                    <span class="kw-2">&amp;</span>attention_scores,
+                    <span class="comment">// We save one allocation
+                    </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>q),
+                    <span class="prelude-val">None</span>,
+                    <span class="prelude-val">None</span>,
+                    <span class="prelude-val">None</span>,
+                    <span class="prelude-val">None</span>,
+                )<span class="question-mark">?</span>;
+
+                <span class="comment">// Reshape to dims4
+                </span>context_layer.reshape((b_sz, n_attn_heads, seq_len, v_head_dim))
+            }
+            <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
+            </span>{
+                <span class="macro">candle_core::bail!</span>(<span class="string">"`cuda` feature is not enabled"</span>)
             }
         } <span class="kw">else </span>{
             naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params)

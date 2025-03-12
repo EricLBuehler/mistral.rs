@@ -530,51 +530,11 @@
 <a href="#529" id="529">529</a>
 <a href="#530" id="530">530</a>
 <a href="#531" id="531">531</a>
-<a href="#532" id="532">532</a>
-<a href="#533" id="533">533</a>
-<a href="#534" id="534">534</a>
-<a href="#535" id="535">535</a>
-<a href="#536" id="536">536</a>
-<a href="#537" id="537">537</a>
-<a href="#538" id="538">538</a>
-<a href="#539" id="539">539</a>
-<a href="#540" id="540">540</a>
-<a href="#541" id="541">541</a>
-<a href="#542" id="542">542</a>
-<a href="#543" id="543">543</a>
-<a href="#544" id="544">544</a>
-<a href="#545" id="545">545</a>
-<a href="#546" id="546">546</a>
-<a href="#547" id="547">547</a>
-<a href="#548" id="548">548</a>
-<a href="#549" id="549">549</a>
-<a href="#550" id="550">550</a>
-<a href="#551" id="551">551</a>
-<a href="#552" id="552">552</a>
-<a href="#553" id="553">553</a>
-<a href="#554" id="554">554</a>
-<a href="#555" id="555">555</a>
-<a href="#556" id="556">556</a>
-<a href="#557" id="557">557</a>
-<a href="#558" id="558">558</a>
-<a href="#559" id="559">559</a>
-<a href="#560" id="560">560</a>
-<a href="#561" id="561">561</a>
-<a href="#562" id="562">562</a>
-<a href="#563" id="563">563</a>
-<a href="#564" id="564">564</a>
-<a href="#565" id="565">565</a>
-<a href="#566" id="566">566</a>
-<a href="#567" id="567">567</a>
-<a href="#568" id="568">568</a>
-<a href="#569" id="569">569</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#532" id="532">532</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicUsize, Arc},
 };
 
 <span class="kw">use </span>blockwise_fp8::blockwise_fp8_linear_b;
@@ -729,26 +689,11 @@
 }
 
 <span class="doccomment">/// Device/configurable intelligent matrix multiplication
-/// - Configurable to be via f16 (to use the faster GEMM kernels) optionally.
 /// - Handles limitation of `accelerate` which requires f32
 </span><span class="kw">pub struct </span>MatMul;
 
-<span class="kw">pub static </span>INHIBIT_GEMM_F16: AtomicBool = AtomicBool::new(<span class="bool-val">false</span>);
-
-<span class="doccomment">/// Set the matmuls to go via f16
-</span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">static </span>USE_MATMUL_VIA_F16: AtomicBool = AtomicBool::new(<span class="bool-val">false</span>);
-
-<span class="kw">pub fn </span>set_use_matmul_via_f16(via_f16: bool) {
-    <span class="kw">if </span>!INHIBIT_GEMM_F16.load(Ordering::Relaxed) {
-        USE_MATMUL_VIA_F16.store(via_f16, Ordering::Relaxed)
-    }
-}
-<span class="kw">pub fn </span>get_use_matmul_via_f16() -&gt; bool {
-    USE_MATMUL_VIA_F16.load(Ordering::Relaxed)
-}
-
 <span class="kw">impl </span>MatMul {
-    <span class="doccomment">/// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    <span class="doccomment">/// Compute matrix-matrix product.
     </span><span class="kw">pub fn </span>matmul(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor, b: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="attr">#[cfg(feature = <span class="string">"accelerate"</span>)]
         </span>{
@@ -761,50 +706,37 @@
         </span>{
             <span class="kw">if </span>a.device().is_cpu() {
                 <span class="kw">let </span>original_dtype = a.dtype();
-                <span class="kw">return </span>a
-                    .to_dtype(DType::F16)<span class="question-mark">?
+                a.to_dtype(DType::F16)<span class="question-mark">?
                     </span>.matmul(<span class="kw-2">&amp;</span>b.to_dtype(DType::F16)<span class="question-mark">?</span>)<span class="question-mark">?
-                    </span>.to_dtype(original_dtype);
-            } <span class="kw">else if </span>!get_use_matmul_via_f16() {
-                <span class="kw">return </span>a.matmul(b);
+                    </span>.to_dtype(original_dtype)
+            } <span class="kw">else </span>{
+                a.matmul(b)
             }
-            <span class="kw">let </span>original_dtype = a.dtype();
-            a.to_dtype(DType::F16)<span class="question-mark">?
-                </span>.matmul(<span class="kw-2">&amp;</span>b.to_dtype(DType::F16)<span class="question-mark">?</span>)<span class="question-mark">?
-                </span>.to_dtype(original_dtype)
         }
     }
 
-    <span class="doccomment">/// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    <span class="doccomment">/// Compute matrix-matrix product.
     /// The result will be divided by the `scale` parameter in an affine division.
     </span><span class="kw">pub fn </span>matmul_affine_div(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor, b: <span class="kw-2">&amp;</span>Tensor, scale: f64) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="comment">// TODO(EricLBuehler): Optimize this by using the gemm parameter?
         </span><span class="self">self</span>.matmul(a, b)<span class="question-mark">? </span>/ scale
     }
 
-    <span class="doccomment">/// Compute matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    <span class="doccomment">/// Compute matrix-matrix product.
     /// The result will be divided by the `scale` parameter in an affine multiplication.
     </span><span class="kw">pub fn </span>matmul_affine_mul(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor, b: <span class="kw-2">&amp;</span>Tensor, scale: f64) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="comment">// TODO(EricLBuehler): Optimize this by using the gemm parameter?
         </span><span class="self">self</span>.matmul(a, b)<span class="question-mark">? </span>* scale
     }
 
-    <span class="doccomment">/// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    <span class="doccomment">/// Compute quantized matrix-matrix product.
     </span><span class="kw">pub fn </span>qmatmul(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, matmul: <span class="kw-2">&amp;</span>QMatMul) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">if </span>get_use_matmul_via_f16() {
-            matmul.forward_via_f16(x)
-        } <span class="kw">else </span>{
-            matmul.forward(x)
-        }
+        matmul.forward(x)
     }
 
-    <span class="doccomment">/// Compute quantized matrix-matrix product, optionally casting to f16 to use specialized GEMM kernels.
+    <span class="doccomment">/// Compute quantized matrix-matrix product.
     </span><span class="kw">pub fn </span>qmethod_matmul(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span>Tensor, matmul: <span class="kw-2">&amp;</span><span class="kw">dyn </span>QuantMethod) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="kw">if </span>get_use_matmul_via_f16() {
-            matmul.forward_via_half(x)
-        } <span class="kw">else </span>{
-            matmul.forward(x)
-        }
+        matmul.forward(x)
     }
 }
 
@@ -1006,12 +938,6 @@
 
     <span class="doccomment">/// Compute matmul of `self` and `a`. `self` should contain the weights.
     </span><span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
-
-    <span class="doccomment">/// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// This may go via half precision if it is supported.
-    </span><span class="kw">fn </span>forward_via_half(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.forward(a)
-    }
 
     <span class="doccomment">/// If a quantized method, return the activation dtype.
     </span><span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DType&gt;;

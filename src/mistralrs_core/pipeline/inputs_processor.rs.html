@@ -872,18 +872,7 @@
 <a href="#871" id="871">871</a>
 <a href="#872" id="872">872</a>
 <a href="#873" id="873">873</a>
-<a href="#874" id="874">874</a>
-<a href="#875" id="875">875</a>
-<a href="#876" id="876">876</a>
-<a href="#877" id="877">877</a>
-<a href="#878" id="878">878</a>
-<a href="#879" id="879">879</a>
-<a href="#880" id="880">880</a>
-<a href="#881" id="881">881</a>
-<a href="#882" id="882">882</a>
-<a href="#883" id="883">883</a>
-<a href="#884" id="884">884</a>
-<a href="#885" id="885">885</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
+<a href="#874" id="874">874</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -942,7 +931,6 @@
 
     <span class="kw">use </span>anyhow::Result;
     <span class="kw">use </span>candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
-    <span class="kw">use </span>mistralrs_quant::set_use_matmul_via_f16;
     <span class="kw">use </span>tokenizers::Tokenizer;
 
     <span class="kw">use crate</span>::{
@@ -952,8 +940,6 @@
     };
 
     <span class="kw">use super</span>::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
-
-    <span class="kw">const </span>VIA_F16_TOK_THRESHOLD: usize = <span class="number">512</span>;
 
     <span class="kw">fn </span>_make_tensor_with_pad&lt;D: WithDType&gt;(
         x: Vec&lt;Vec&lt;D&gt;&gt;,
@@ -1152,12 +1138,6 @@
         }
 
         <span class="kw">let </span>input = Tensor::cat(<span class="kw-2">&amp;</span>seqs_tensors, <span class="number">0</span>).unwrap();
-        <span class="comment">// Only use matmul via f16 if prompt and seqlen &gt; 512
-        </span><span class="kw">if </span>input.dim(<span class="number">1</span>)<span class="question-mark">? </span>&gt; VIA_F16_TOK_THRESHOLD {
-            set_use_matmul_via_f16(<span class="bool-val">true</span>);
-        } <span class="kw">else </span>{
-            set_use_matmul_via_f16(<span class="bool-val">false</span>);
-        }
 
         <span class="kw">let </span>paged_attn_meta = <span class="kw">if </span>paged_attn_metadata.is_some() {
             <span class="kw">let </span>max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
@@ -1329,8 +1309,6 @@
             seqlens_q_map.insert(device.location(), seqlens_q.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
             seqlens_k_map.insert(device.location(), seqlens_k.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>);
         }
-
-        set_use_matmul_via_f16(<span class="bool-val">false</span>);
 
         <span class="kw">let </span>paged_attn_meta = <span class="kw">if </span>paged_attn_metadata.is_some() {
             <span class="kw">let </span>slot_mappings = _make_tensor_with_pad(slot_mappings, <span class="number">1</span>, _PAD_SLOT_ID, device)<span class="question-mark">?</span>;

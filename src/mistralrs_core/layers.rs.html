@@ -1895,12 +1895,7 @@
 <a href="#1894" id="1894">1894</a>
 <a href="#1895" id="1895">1895</a>
 <a href="#1896" id="1896">1896</a>
-<a href="#1897" id="1897">1897</a>
-<a href="#1898" id="1898">1898</a>
-<a href="#1899" id="1899">1899</a>
-<a href="#1900" id="1900">1900</a>
-<a href="#1901" id="1901">1901</a>
-<a href="#1902" id="1902">1902</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1897" id="1897">1897</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
@@ -1914,8 +1909,7 @@
 <span class="kw">use </span>float8::F8E4M3;
 <span class="kw">use </span>half::{bf16, f16};
 <span class="kw">use </span>mistralrs_quant::{
-    get_use_matmul_via_f16, ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer,
-    ShardedVarBuilder,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder,
 };
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
@@ -3202,17 +3196,13 @@
         </span>} <span class="kw">else </span>{
             xs.clone()
         };
-        <span class="kw">let </span>forward_fn = <span class="kw">if </span>!get_use_matmul_via_f16() {
-            QMatMul::forward
-        } <span class="kw">else </span>{
-            QMatMul::forward_via_f16
-        };
         <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="kw-2">&amp;</span><span class="self">self</span>.bias {
-            forward_fn(<span class="kw-2">&amp;</span><span class="self">self</span>.inner, <span class="kw-2">&amp;</span>xs)<span class="question-mark">?
+            <span class="self">self</span>.inner
+                .forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?
                 </span>.broadcast_add(bias)<span class="question-mark">?
                 </span>.to_dtype(<span class="self">self</span>.dtype)
         } <span class="kw">else </span>{
-            forward_fn(<span class="kw-2">&amp;</span><span class="self">self</span>.inner, <span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>.to_dtype(<span class="self">self</span>.dtype)
+            <span class="self">self</span>.inner.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>.to_dtype(<span class="self">self</span>.dtype)
         }
     }
 }

@@ -317,13 +317,11 @@
 <a href="#316" id="316">316</a>
 <a href="#317" id="317">317</a>
 <a href="#318" id="318">318</a>
-<a href="#319" id="319">319</a>
-<a href="#320" id="320">320</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#319" id="319">319</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::ops::Add;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, WithDType};
-<span class="kw">use </span>mistralrs_quant::get_use_matmul_via_f16;
 
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::KvCache;
 
@@ -550,7 +548,7 @@
         };
 
         <span class="comment">// IMPORTANT: this must match the logic in attention.rs. Assume the cublaslt handle will be initialized
-        </span><span class="kw">if </span>causal_mask.device().is_cuda() &amp;&amp; !get_use_matmul_via_f16() {
+        </span><span class="kw">if </span>causal_mask.device().is_cuda() {
             causal_mask = causal_mask.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.repeat((n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>;
         }
 
@@ -610,7 +608,7 @@
         };
 
         <span class="comment">// IMPORTANT: this must match the logic in attention.rs. Assume the cublaslt handle will be initialized
-        </span><span class="kw">if </span>causal_mask.device().is_cuda() &amp;&amp; !get_use_matmul_via_f16() {
+        </span><span class="kw">if </span>causal_mask.device().is_cuda() {
             causal_mask = causal_mask.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.repeat((n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>;
         }
 
