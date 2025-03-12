@@ -12,6 +12,7 @@ use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, VisionLoaderType,
 };
 use crate::device_map::{self, DeviceMapper};
+use crate::distributed::{self, WorkerTransferData};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_tok_env;
@@ -28,8 +29,8 @@ use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
-    AnyMoeExpertType, DeviceMapSetting, Ordering, PagedAttentionConfig, Pipeline, Topology,
-    TryIntoDType,
+    vision_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, Ordering,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -40,12 +41,12 @@ use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
 use std::borrow::Cow;
-use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
+use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
@@ -213,11 +214,31 @@ impl Loader for VisionLoader {
             paged_attn_config = None;
         }
 
-        // If auto, convert to Map
-        if let DeviceMapSetting::Auto(params) = mapper.clone() {
-            let devices = device_map::get_all_similar_devices(device)?;
+        let use_nccl = mistralrs_quant::distributed::use_nccl();
+
+        let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
+            let payload: WorkerTransferData = serde_json::from_str(&payload)?;
+            let WorkerTransferData::Init { id: _, worker_rank } = payload;
+            vec![candle_core::Device::new_cuda_with_stream(worker_rank + 1)?]
+        } else if use_nccl {
+            vec![candle_core::Device::new_cuda_with_stream(0)?]
+        } else {
+            device_map::get_all_similar_devices(device)?
+        };
+        let device = if use_nccl {
+            available_devices[0].clone()
+        } else {
+            device.clone()
+        };
+
+        // If auto, convert to Map if not using nccl
+        if use_nccl {
+            mapper = DeviceMapSetting::DummyNccl {
+                nm_device: available_devices[0].clone(),
+            };
+        } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
             // Initial dtype
-            let dtype = dtype.try_into_dtype(&devices.iter().collect::<Vec<_>>())?;
+            let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
@@ -291,14 +312,13 @@ impl Loader for VisionLoader {
                     )
                 };
 
-            // NOTE: Vision models don't support prompt chunking yet, so just using max seq len
             let new = self.inner.get_device_layers(
                 &config,
                 self.inner.num_layers(&config)?,
                 layer_sizes_in_bytes,
                 non_mapped_size_in_bytes,
                 total_model_size_in_bytes,
-                &devices,
+                &available_devices,
                 dtype,
                 &params,
                 params.max_seq_len(),
@@ -309,12 +329,12 @@ impl Loader for VisionLoader {
 
         let pipeline_mapper = mapper.into_mapper(
             self.inner.num_layers(&config)?,
-            device,
+            &device,
             self.config.topology.as_ref(),
         )?;
         let mapper = mapper.into_mapper(
             self.inner.num_layers(&config)?,
-            device,
+            &device,
             self.config.topology.as_ref(),
         )?;
         let mut layer_devices = Vec::new();
@@ -367,25 +387,58 @@ impl Loader for VisionLoader {
         };
 
         let multi_progress = Arc::new(MultiProgress::new());
-        let mut model = match self.kind {
-            ModelKind::Normal => vision_normal_model_loader!(
-                paths,
-                Some(dtype),
+
+        let mut model = if use_nccl {
+            let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
+                dtype,
+                &device,
                 &load_device,
-                layer_devices.clone(),
-                config,
-                self.inner,
-                self.config.use_flash_attn,
-                silent,
-                mapper,
+                &available_devices,
+                &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
-                device.clone(),
-                attention_mechanism,
-                multi_progress,
-            ),
-            _ => unreachable!(),
+                IsqOrganization::Default,
+                &*self.inner,
+                paths,
+            )?;
+
+            // Special case for where things can be more optimially loaded.
+            match self.kind {
+                ModelKind::Normal => vision_normal_model_loader_sharded!(
+                    sharded_vb,
+                    config,
+                    self.inner,
+                    self.config.use_flash_attn,
+                    mapper,
+                    loading_isq,
+                    device.clone(),
+                    attention_mechanism,
+                    multi_progress.clone(),
+                ),
+                _ => unreachable!(),
+            }
+        } else {
+            match self.kind {
+                ModelKind::Normal => vision_normal_model_loader!(
+                    paths,
+                    Some(dtype),
+                    &load_device,
+                    layer_devices.clone(),
+                    config,
+                    self.inner,
+                    self.config.use_flash_attn,
+                    silent,
+                    mapper,
+                    loading_isq,
+                    self.config.from_uqff.is_some(),
+                    device.clone(),
+                    attention_mechanism,
+                    multi_progress,
+                ),
+                _ => unreachable!(),
+            }
         };
+
         let preprocessor_config: PreProcessorConfig = serde_json::from_str(
             &fs::read_to_string(
                 paths
@@ -547,12 +600,12 @@ impl Loader for VisionLoader {
                 paged_attn_config.block_size,
                 dtype,
                 model.config(),
-                device,
+                &device,
                 &layer_devices,
                 silent,
             )?;
             let cache_engine =
-                CacheEngine::new(model.config(), &cache_config, dtype, device, layer_devices)?;
+                CacheEngine::new(model.config(), &cache_config, dtype, &device, layer_devices)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)

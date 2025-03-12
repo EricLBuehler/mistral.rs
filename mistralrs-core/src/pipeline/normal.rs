@@ -483,7 +483,7 @@ impl Loader for NormalLoader {
                 paths,
             )?;
 
-            // Special case for normal models which support nccl so should be more optimially loaded.
+            // Special case for where things can be more optimially loaded.
             match self.kind {
                 ModelKind::Normal => normal_model_loader_sharded!(
                     sharded_vb,
