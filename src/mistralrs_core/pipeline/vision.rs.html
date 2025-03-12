@@ -994,15 +994,16 @@
 <a href="#993" id="993">993</a>
 <a href="#994" id="994">994</a>
 <a href="#995" id="995">995</a>
-<a href="#996" id="996">996</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
-    CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
-    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, Phi4MMLoader,
-    PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel,
-    VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
+    CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader, GeneralMetadata,
+    IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths,
+    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader,
+    VisionModel, VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
 };
 <span class="kw">use super</span>::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2_5VLLoader,
@@ -1136,6 +1137,7 @@
             VisionLoaderType::MiniCpmO =&gt; Box::new(MiniCpmOLoader),
             VisionLoaderType::Phi4MM =&gt; Box::new(Phi4MMLoader),
             VisionLoaderType::Qwen2_5VL =&gt; Box::new(Qwen2_5VLLoader),
+            VisionLoaderType::Gemma3 =&gt; Box::new(Gemma3Loader),
         };
         Box::new(VisionLoader {
             inner: loader,

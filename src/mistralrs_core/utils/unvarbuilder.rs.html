@@ -173,7 +173,13 @@
 <a href="#172" id="172">172</a>
 <a href="#173" id="173">173</a>
 <a href="#174" id="174">174</a>
-<a href="#175" id="175">175</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     sync::{Arc, RwLock},
 };
@@ -183,7 +189,7 @@
 <span class="kw">use </span>itertools::Itertools;
 <span class="kw">use </span>mistralrs_quant::QuantMethod;
 
-<span class="kw">use </span><span class="kw">crate</span>::layers::{F32RmsNorm, QLinear, RmsNorm};
+<span class="kw">use </span><span class="kw">crate</span>::layers::{F32RmsNorm, QLinear, RmsNorm, ScaledEmbedding};
 
 <span class="kw">pub trait </span>ToTensors {
     <span class="doccomment">/// Tensor names to tensors
@@ -191,6 +197,12 @@
 }
 
 <span class="kw">impl </span>ToTensors <span class="kw">for </span>Embedding {
+    <span class="kw">fn </span>to_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashMap&lt;String, Tensor&gt; {
+        HashMap::from_iter([(<span class="string">"weight"</span>.to_string(), <span class="self">self</span>.embeddings().clone())])
+    }
+}
+
+<span class="kw">impl </span>ToTensors <span class="kw">for </span>ScaledEmbedding {
     <span class="kw">fn </span>to_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; HashMap&lt;String, Tensor&gt; {
         HashMap::from_iter([(<span class="string">"weight"</span>.to_string(), <span class="self">self</span>.embeddings().clone())])
     }

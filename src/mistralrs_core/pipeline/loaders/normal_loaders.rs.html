@@ -5531,8 +5531,8 @@
             hidden_size: cfg.hidden_size,
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
-            sliding_window: <span class="prelude-val">Some</span>(cfg.sliding_window),
-            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            sliding_window: <span class="prelude-val">None</span>, <span class="comment">// None to be more forgiving, some do not
+            </span>k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
