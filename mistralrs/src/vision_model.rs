@@ -210,7 +210,6 @@ impl VisionModelBuilder {
 
         let runner = MistralRsBuilder::new(pipeline, scheduler_method)
             .with_no_kv_cache(false)
-            .with_gemm_full_precision_f16(true)
             .with_no_prefix_cache(false);
 
         Ok(Model::new(runner.build()))
