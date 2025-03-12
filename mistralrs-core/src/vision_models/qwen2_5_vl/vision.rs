@@ -363,6 +363,7 @@ impl Qwen2_5VLVisionModel {
     }
 
     fn get_window_index(&self, grid_thw: &Tensor, device: &Device) -> Result<(Tensor, Vec<i64>)> {
+        const PADDING_VALUE: i32 = -100;
         let mut window_index = Vec::new();
         let mut cu_window_seqlens = vec![0];
         let mut window_index_id = 0;
@@ -379,8 +380,8 @@ impl Qwen2_5VLVisionModel {
             let num_windows_h = (llm_grid_h + pad_h) / vit_merger_window_size;
             let num_windows_w = (llm_grid_w + pad_w) / vit_merger_window_size;
             let index_padded = {
-                let h = Tensor::full(-100i32, (t, pad_h, llm_grid_w), &Device::Cpu)?;
-                let w = Tensor::full(-100i32, (t, pad_h + llm_grid_h, pad_w), &Device::Cpu)?;
+                let h = Tensor::full(PADDING_VALUE, (t, pad_h, llm_grid_w), &Device::Cpu)?;
+                let w = Tensor::full(PADDING_VALUE, (t, pad_h + llm_grid_h, pad_w), &Device::Cpu)?;
                 let mut index = Tensor::cat(&[index, h], D::Minus2)?;
                 index = Tensor::cat(&[index, w], D::Minus1)?;
                 index = index.reshape((
@@ -399,7 +400,7 @@ impl Qwen2_5VLVisionModel {
                 index
             };
             let seqlens = index_padded
-                .ne(-100.)?
+                .ne(PADDING_VALUE)?
                 .to_dtype(index_padded.dtype())?
                 .sum((2, 3))?
                 .flatten_all()?;
@@ -407,7 +408,7 @@ impl Qwen2_5VLVisionModel {
                 .flatten_all()?
                 .to_vec1::<i32>()?
                 .into_iter()
-                .filter(|x| *x != -100)
+                .filter(|x| *x != PADDING_VALUE)
                 .collect::<Vec<_>>();
             window_index.push(Tensor::new(
                 index_new

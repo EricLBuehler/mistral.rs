@@ -234,8 +234,8 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                     };
 
                 pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
-                image_grid_thw_accum.push(image_grid_thw); //.map(|img| img.unsqueeze(0).unwrap()));
-                video_grid_thw_accum.push(video_grid_thw); //.map(|vid| vid.unsqueeze(0).unwrap()));
+                image_grid_thw_accum.push(image_grid_thw);
+                video_grid_thw_accum.push(video_grid_thw);
             }
 
             let image_grid_thw_accum = if image_grid_thw_accum.iter().any(|img| img.is_none()) {
@@ -350,6 +350,12 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 all_continuous_vid_pad.push(continuous_vid_pad);
 
                 seq.set_toks(ids);
+
+                if let Some(ref mut metadata) = paged_attn_metadata {
+                    // Free and then reallocate as appropriate
+                    metadata.block_engine.free_sequence(*seq.id());
+                    metadata.block_engine.allocate(*seq);
+                }
             }
 
             let mut input_ids_searching = Vec::new();
@@ -467,7 +473,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
 
         // todo: set_use_matmul_via_f16(true) from "pipline/inputs_processor" cause a significant loss of precision.
         // It’s hard to figure it out during subsequent debugging
-        // Anyhow, globally setting matnuml precision MAY not be a ideal solution.
+        // Anyhow, globally setting matmul precision MAY not be a ideal solution.
         // For now, change the precision back
         set_use_matmul_via_f16(false);
 

@@ -204,7 +204,13 @@ impl Attention {
             (q, k, v)
         };
 
-        self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
+        // we share cos_sin amount all layers, but when some layers are in different device from layers[0],
+        // need to move cos_sin to corresponding device
+        let cos_sin_relocated = &(
+            cos_sin.0.to_device(q.device())?,
+            cos_sin.1.to_device(q.device())?,
+        );
+        self.rotary_emb.forward(cos_sin_relocated, &mut q, &mut k)?;
 
         let mut attn_output = {
             let (k, v) = kv_cache.append(&k, &v)?;
