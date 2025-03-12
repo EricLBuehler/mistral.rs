@@ -3,10 +3,10 @@ use super::isq::ImatrixDataSource;
 use super::isq::UqffFullSer;
 use super::{
     get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
-    CacheManagerMixin, EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader,
-    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, Phi4MMLoader,
-    PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader, VisionModel,
-    VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
+    CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader, GeneralMetadata,
+    IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths,
+    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader,
+    VisionModel, VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
 };
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2_5VLLoader,
@@ -140,6 +140,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::MiniCpmO => Box::new(MiniCpmOLoader),
             VisionLoaderType::Phi4MM => Box::new(Phi4MMLoader),
             VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
+            VisionLoaderType::Gemma3 => Box::new(Gemma3Loader),
         };
         Box::new(VisionLoader {
             inner: loader,

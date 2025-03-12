@@ -2200,7 +2200,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
             hidden_size: cfg.hidden_size,
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
-            sliding_window: Some(cfg.sliding_window),
+            sliding_window: None, // None to be more forgiving, some do not
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
