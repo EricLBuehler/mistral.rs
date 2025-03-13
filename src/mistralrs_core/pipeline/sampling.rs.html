@@ -439,7 +439,21 @@
 <a href="#438" id="438">438</a>
 <a href="#439" id="439">439</a>
 <a href="#440" id="440">440</a>
-<a href="#441" id="441">441</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
+<a href="#441" id="441">441</a>
+<a href="#442" id="442">442</a>
+<a href="#443" id="443">443</a>
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a>
+<a href="#455" id="455">455</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
@@ -452,6 +466,18 @@
 };
 
 <span class="kw">use </span><span class="kw">super</span>::Pipeline;
+
+<span class="macro">macro_rules!</span> fixup_sentencepiece {
+    (<span class="macro-nonterminal">$txt</span>:expr) =&gt; {
+        <span class="macro-nonterminal">$txt</span>.to_string().replace(<span class="string">"▁"</span>, <span class="string">" "</span>)
+    };
+    (<span class="prelude-ty">Option</span> <span class="macro-nonterminal">$txt</span>:expr) =&gt; {
+        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="macro-nonterminal">$txt </span>{
+            <span class="prelude-val">Some</span>(txt) =&gt; <span class="prelude-val">Some</span>(<span class="macro">fixup_sentencepiece!</span>(txt)),
+            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+        }
+    };
+}
 
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">async fn </span>finish_or_add_toks_to_seq(
     this: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
@@ -497,7 +523,9 @@
                     };
                     seq.add_streaming_chunk_choice_to_group(<span class="kw">crate</span>::ChunkChoice {
                         delta: <span class="kw">crate</span>::Delta {
-                            content: text_new.map(ToString::to_string),
+                            content: <span class="macro">fixup_sentencepiece!</span>(
+                                <span class="prelude-ty">Option</span> text_new.map(ToString::to_string)
+                            ),
                             role: <span class="string">"assistant"</span>.to_string(),
                             tool_calls: <span class="prelude-val">Some</span>(tool_calls),
                         },
@@ -517,7 +545,7 @@
                 } <span class="kw">else </span>{
                     seq.add_streaming_completion_chunk_choice_to_group(
                         <span class="kw">crate</span>::CompletionChunkChoice {
-                            text: delta.clone(),
+                            text: <span class="macro">fixup_sentencepiece!</span>(delta),
                             index: seq.get_response_index(),
                             finish_reason: is_done.map(|x| x.to_string()),
                             logprobs: <span class="kw">if </span>seq.return_logprobs() {
@@ -631,7 +659,7 @@
                 <span class="kw">let </span>(text_new, tool_calls) = parse_text_tools(text.as_str(), seq.tools.clone())
                     .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
                 <span class="kw">let </span>choice = <span class="kw">crate</span>::Choice {
-                    finish_reason: reason.to_string(),
+                    finish_reason: <span class="macro">fixup_sentencepiece!</span>(reason),
                     index: seq.get_response_index(),
                     message: <span class="kw">crate</span>::ResponseMessage {
                         content: text_new.map(ToString::to_string),
@@ -643,7 +671,7 @@
                 seq.add_choice_to_group(choice);
             } <span class="kw">else </span>{
                 <span class="kw">let </span>choice = <span class="kw">crate</span>::CompletionChoice {
-                    finish_reason: reason.to_string(),
+                    finish_reason: <span class="macro">fixup_sentencepiece!</span>(reason),
                     index: seq.get_response_index(),
                     text,
                     logprobs: <span class="prelude-val">None</span>,
