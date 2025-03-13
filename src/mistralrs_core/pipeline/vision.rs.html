@@ -993,9 +993,7 @@
 <a href="#992" id="992">992</a>
 <a href="#993" id="993">993</a>
 <a href="#994" id="994">994</a>
-<a href="#995" id="995">995</a>
-<a href="#996" id="996">996</a>
-<a href="#997" id="997">997</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#995" id="995">995</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -1439,16 +1437,14 @@
             }
         };
 
-        <span class="kw">let </span>preprocessor_config: PreProcessorConfig = serde_json::from_str(
-            <span class="kw-2">&amp;</span>fs::read_to_string(
-                paths
-                    .get_preprocessor_config()
-                    .as_ref()
-                    .expect(<span class="string">"Need preprocessor config"</span>),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        <span class="comment">// Handle the Gemma 3 1b case here
+        </span><span class="kw">let </span>preprocessor_config: PreProcessorConfig = <span class="kw">match </span>paths.get_preprocessor_config().as_ref()
+        {
+            <span class="prelude-val">Some</span>(preprocessor_config) =&gt; {
+                serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(preprocessor_config).unwrap()).unwrap()
+            }
+            <span class="prelude-val">None </span>=&gt; PreProcessorConfig::default(),
+        };
         <span class="kw">let </span>processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt; = paths
             .get_processor_config()
             .as_ref()

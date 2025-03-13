@@ -225,7 +225,33 @@
 <a href="#224" id="224">224</a>
 <a href="#225" id="225">225</a>
 <a href="#226" id="226">226</a>
-<a href="#227" id="227">227</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>either::Either;
@@ -233,7 +259,7 @@
 <span class="kw">use </span>tracing::info;
 
 <span class="kw">use crate</span>::{
-    pipeline::{KvCache, SingleCache},
+    pipeline::{KvCache, RotatingCache, SingleCache},
     sequence::Sequence,
 };
 
@@ -317,29 +343,43 @@
         {
             <span class="kw">let </span>device = devices.left_or_else(|layers| layers[i].as_ref().unwrap());
 
-            <span class="kw-2">*</span>layer = KvCache {
-                k: SingleCache {
-                    all_data: layer
-                        .k
-                        .all_data
-                        .as_ref()
-                        .map(|x| x.to_device(device).unwrap()),
-                    dim: layer.k.dim,
-                    current_seq_len: layer.k.current_seq_len,
-                    max_seq_len: layer.k.max_seq_len,
-                    capacity_seq_len: layer.k.capacity_seq_len,
-                },
-                v: SingleCache {
-                    all_data: layer
-                        .v
-                        .all_data
-                        .as_ref()
-                        .map(|x| x.to_device(device).unwrap()),
-                    dim: layer.v.dim,
-                    current_seq_len: layer.v.current_seq_len,
-                    max_seq_len: layer.v.max_seq_len,
-                    capacity_seq_len: layer.v.capacity_seq_len,
-                },
+            <span class="kw">match </span>layer {
+                KvCache::Normal { k, v } =&gt; {
+                    <span class="kw-2">*</span>layer = KvCache::Normal {
+                        k: SingleCache {
+                            all_data: k.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: k.dim,
+                            current_seq_len: k.current_seq_len,
+                            max_seq_len: k.max_seq_len,
+                            capacity_seq_len: k.capacity_seq_len,
+                        },
+                        v: SingleCache {
+                            all_data: v.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: v.dim,
+                            current_seq_len: v.current_seq_len,
+                            max_seq_len: v.max_seq_len,
+                            capacity_seq_len: v.capacity_seq_len,
+                        },
+                    }
+                }
+                KvCache::Rotating { k, v } =&gt; {
+                    <span class="kw-2">*</span>layer = KvCache::Rotating {
+                        k: RotatingCache {
+                            all_data: k.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: k.dim,
+                            current_seq_len: k.current_seq_len,
+                            max_seq_len: k.max_seq_len,
+                            offset: k.offset,
+                        },
+                        v: RotatingCache {
+                            all_data: v.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: v.dim,
+                            current_seq_len: v.current_seq_len,
+                            max_seq_len: v.max_seq_len,
+                            offset: v.offset,
+                        },
+                    }
+                }
             }
         }
         <span class="prelude-val">Ok</span>(())
@@ -357,12 +397,16 @@
             <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
                 <span class="kw">continue</span>;
             };
-            <span class="kw">let </span>cache_device = first_non_none
-                .k
-                .all_data()
-                .as_ref()
-                .expect(<span class="string">"No KV cache data"</span>)
-                .device();
+
+            <span class="kw">let </span>cache_device = <span class="kw">match </span>first_non_none {
+                KvCache::Normal { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
+                }
+                KvCache::Rotating { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
+                }
+            };
+
             <span class="kw">if </span>!<span class="macro">matches!</span>(cache_device, Device::Cpu) {
                 n_on_device += <span class="number">1</span>;
             }
@@ -377,12 +421,16 @@
             <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
                 <span class="kw">continue</span>;
             };
-            <span class="kw">let </span>cache_device = first_non_none
-                .k
-                .all_data()
-                .as_ref()
-                .expect(<span class="string">"No KV cache data"</span>)
-                .device();
+
+            <span class="kw">let </span>cache_device = <span class="kw">match </span>first_non_none {
+                KvCache::Normal { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
+                }
+                KvCache::Rotating { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
+                }
+            };
+
             <span class="kw">if </span>!<span class="macro">matches!</span>(cache_device, Device::Cpu) {
                 <span class="self">Self</span>::cache_to(<span class="kw-2">&amp;mut </span>cache.cache, Either::Left(<span class="kw-2">&amp;</span>Device::Cpu))<span class="question-mark">?</span>;
                 n_evicted += <span class="number">1</span>;
@@ -402,12 +450,16 @@
             <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
                 <span class="kw">continue</span>;
             };
-            <span class="kw">let </span>cache_device = first_non_none
-                .k
-                .all_data()
-                .as_ref()
-                .expect(<span class="string">"No KV cache data"</span>)
-                .device();
+
+            <span class="kw">let </span>cache_device = <span class="kw">match </span>first_non_none {
+                KvCache::Normal { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
+                }
+                KvCache::Rotating { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
+                }
+            };
+
             <span class="kw">if </span>!<span class="macro">matches!</span>(cache_device, Device::Cpu) {
                 <span class="self">Self</span>::cache_to(<span class="kw-2">&amp;mut </span>cache.cache, Either::Left(<span class="kw-2">&amp;</span>Device::Cpu))<span class="question-mark">?</span>;
             }

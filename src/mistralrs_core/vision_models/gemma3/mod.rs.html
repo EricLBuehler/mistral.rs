@@ -215,11 +215,50 @@
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
-<a href="#217" id="217">217</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a>
+<a href="#254" id="254">254</a>
+<a href="#255" id="255">255</a>
+<a href="#256" id="256">256</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
-<span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
+<span class="kw">use </span>candle_core::{Context, DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>config::Gemma3Config;
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 <span class="kw">use </span>mmproj::Gemma3MultiModalProjector;
@@ -248,8 +287,8 @@
 
 <span class="kw">pub struct </span>Gemma3Model {
     language_model: TextModel,
-    multi_modal_projector: Gemma3MultiModalProjector,
-    vision_tower: SiglipVisionTransformer,
+    multi_modal_projector: <span class="prelude-ty">Option</span>&lt;Gemma3MultiModalProjector&gt;,
+    vision_tower: <span class="prelude-ty">Option</span>&lt;SiglipVisionTransformer&gt;,
     cfg: Gemma3Config,
 }
 
@@ -261,25 +300,46 @@
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-        <span class="macro">assert!</span>(cfg.image_token_index &lt; cfg.text_config.vocab_size);
-        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            language_model: TextModel::new(
-                <span class="kw-2">&amp;</span>cfg.text_config,
-                vb.pp(<span class="string">"language_model"</span>),
-                is_gptx,
-                normal_loading_metadata,
-                attention_mechanism,
-            )<span class="question-mark">?</span>,
-            multi_modal_projector: Gemma3MultiModalProjector::new(
-                cfg,
-                vb.pp(<span class="string">"multi_modal_projector"</span>),
-            )<span class="question-mark">?</span>,
-            vision_tower: SiglipVisionTransformer::new(
-                <span class="kw-2">&amp;</span>cfg.vision_config,
-                vb.pp(<span class="string">"vision_tower"</span>).pp(<span class="string">"vision_model"</span>),
-            )<span class="question-mark">?</span>,
-            cfg: cfg.clone(),
-        })
+        <span class="kw">match </span>cfg {
+            Gemma3Config::Text(text_cfg) =&gt; <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+                language_model: TextModel::new(
+                    text_cfg,
+                    vb,
+                    is_gptx,
+                    normal_loading_metadata,
+                    attention_mechanism,
+                )<span class="question-mark">?</span>,
+                multi_modal_projector: <span class="prelude-val">None</span>,
+                vision_tower: <span class="prelude-val">None</span>,
+                cfg: cfg.clone(),
+            }),
+            Gemma3Config::WithVision {
+                text_config,
+                vision_config,
+                image_token_index,
+                mm_tokens_per_image: <span class="kw">_</span>,
+            } =&gt; {
+                <span class="macro">assert!</span>(<span class="kw-2">*</span>image_token_index &lt; text_config.vocab_size);
+                <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+                    language_model: TextModel::new(
+                        text_config,
+                        vb.pp(<span class="string">"language_model"</span>),
+                        is_gptx,
+                        normal_loading_metadata,
+                        attention_mechanism,
+                    )<span class="question-mark">?</span>,
+                    multi_modal_projector: <span class="prelude-val">Some</span>(Gemma3MultiModalProjector::new(
+                        cfg,
+                        vb.pp(<span class="string">"multi_modal_projector"</span>),
+                    )<span class="question-mark">?</span>),
+                    vision_tower: <span class="prelude-val">Some</span>(SiglipVisionTransformer::new(
+                        vision_config,
+                        vb.pp(<span class="string">"vision_tower"</span>).pp(<span class="string">"vision_model"</span>),
+                    )<span class="question-mark">?</span>),
+                    cfg: cfg.clone(),
+                })
+            }
+        }
     }
 
     <span class="kw">fn </span>forward(
@@ -293,14 +353,25 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>input_embeds = <span class="self">self</span>.language_model.embed_tokens(input_ids)<span class="question-mark">?</span>;
         <span class="kw">if let </span><span class="prelude-val">Some</span>(pixel_values) = pixel_values {
-            <span class="kw">let </span>dtype = <span class="self">self</span>.vision_tower.dtype();
+            <span class="kw">let </span>vision_tower = <span class="self">self
+                </span>.vision_tower
+                .as_ref()
+                .context(<span class="string">"This model does not support vision."</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>multi_modal_projector = <span class="self">self</span>.multi_modal_projector.as_ref().unwrap();
+            <span class="kw">let </span>Gemma3Config::WithVision {
+                image_token_index, ..
+            } = <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
+            <span class="kw">else </span>{
+                <span class="macro">unreachable!</span>()
+            };
+
+            <span class="kw">let </span>dtype = vision_tower.dtype();
             <span class="kw">let </span>vision_outputs =
-                <span class="self">self</span>.vision_tower
-                    .forward(<span class="kw-2">&amp;</span>pixel_values.to_dtype(dtype)<span class="question-mark">?</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
-            <span class="kw">let </span>image_features = <span class="self">self</span>.multi_modal_projector.forward(<span class="kw-2">&amp;</span>vision_outputs)<span class="question-mark">?</span>;
+                vision_tower.forward(<span class="kw-2">&amp;</span>pixel_values.to_dtype(dtype)<span class="question-mark">?</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>image_features = multi_modal_projector.forward(<span class="kw-2">&amp;</span>vision_outputs)<span class="question-mark">?</span>;
 
             <span class="kw">let </span>special_image_mask = input_ids
-                .eq(<span class="self">self</span>.cfg.image_token_index <span class="kw">as </span>f64)<span class="question-mark">?
+                .eq(<span class="kw-2">*</span>image_token_index <span class="kw">as </span>f64)<span class="question-mark">?
                 </span>.unsqueeze(D::Minus1)<span class="question-mark">?
                 </span>.broadcast_as(input_embeds.shape())<span class="question-mark">?
                 </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
@@ -338,17 +409,24 @@
     }
 
     <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
-        <span class="kw">let </span>uvb = UnVarBuilder::new();
+        <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.cfg {
+            Gemma3Config::Text(<span class="kw">_</span>) =&gt; <span class="self">self</span>.language_model.residual_tensors(),
+            Gemma3Config::WithVision { .. } =&gt; {
+                <span class="kw">let </span>vision_tower = <span class="self">self</span>.vision_tower.as_ref().unwrap();
+                <span class="kw">let </span>multi_modal_projector = <span class="self">self</span>.multi_modal_projector.as_ref().unwrap();
 
-        uvb.pp(<span class="string">"multi_modal_projector"</span>)
-            .extend(<span class="self">self</span>.multi_modal_projector.residual_tensors());
-        uvb.pp(<span class="string">"language_model"</span>)
-            .extend(<span class="self">self</span>.language_model.residual_tensors());
-        uvb.pp(<span class="string">"vision_tower"</span>)
-            .pp(<span class="string">"vision_model"</span>)
-            .extend(<span class="self">self</span>.vision_tower.residual_tensors());
+                <span class="kw">let </span>uvb = UnVarBuilder::new();
+                uvb.pp(<span class="string">"multi_modal_projector"</span>)
+                    .extend(multi_modal_projector.residual_tensors());
+                uvb.pp(<span class="string">"language_model"</span>)
+                    .extend(<span class="self">self</span>.language_model.residual_tensors());
+                uvb.pp(<span class="string">"vision_tower"</span>)
+                    .pp(<span class="string">"vision_model"</span>)
+                    .extend(vision_tower.residual_tensors());
 
-        uvb.to_safetensors()
+                uvb.to_safetensors()
+            }
+        }
     }
 
     <span class="kw">fn </span>imatrix_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; candle_core::Result&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;&gt; {

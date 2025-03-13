@@ -628,9 +628,7 @@
 <a href="#627" id="627">627</a>
 <a href="#628" id="628">628</a>
 <a href="#629" id="629">629</a>
-<a href="#630" id="630">630</a>
-<a href="#631" id="631">631</a>
-<a href="#632" id="632">632</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#630" id="630">630</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, collections::HashMap, sync::Arc};
 
@@ -669,7 +667,6 @@
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc&lt;Phi4MMRotaryEmbedding&gt;,
-    sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     sdpa_params: SdpaParams,
 }
@@ -708,7 +705,6 @@
             num_heads,
             num_kv_heads,
             head_dim,
-            sliding_window: cfg.sliding_window,
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: num_heads / num_kv_heads,
@@ -806,14 +802,13 @@
                 </span>}
             },
             <span class="prelude-val">None </span>=&gt; {
-                <span class="kw">let </span>(k, v, attn_mask) =
-                    kv_cache.append_sliding_window(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, attention_mask, <span class="self">self</span>.sliding_window)<span class="question-mark">?</span>;
+                <span class="kw">let </span>(k, v) = kv_cache.append(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
 
                 Sdpa.run_attention(
                     <span class="kw-2">&amp;</span>q,
                     <span class="kw-2">&amp;</span>k,
                     <span class="kw-2">&amp;</span>v,
-                    attn_mask.as_ref(),
+                    attention_mask,
                     <span class="prelude-val">Some</span>(flash_params),
                     <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
                 )<span class="question-mark">?
@@ -1070,9 +1065,10 @@
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            cache: EitherCache::Normal(NormalCache::new(
+            cache: EitherCache::Normal(NormalCache::new_sliding(
                 cfg.num_hidden_layers,
                 cfg.max_position_embeddings,
+                cfg.sliding_window,
             )),
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.sliding_window,

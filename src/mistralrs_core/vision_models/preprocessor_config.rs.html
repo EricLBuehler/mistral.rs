@@ -78,7 +78,7 @@
 <span class="kw">use </span>image::imageops::FilterType;
 <span class="kw">use </span>serde::Deserialize;
 
-<span class="attr">#[derive(Deserialize, Debug, Clone)]
+<span class="attr">#[derive(Deserialize, Debug, Clone, Default)]
 #[allow(dead_code)]
 </span><span class="kw">pub struct </span>PreProcessorConfig {
     <span class="kw">pub</span>(<span class="kw">crate</span>) do_convert_rgb: <span class="prelude-ty">Option</span>&lt;bool&gt;,

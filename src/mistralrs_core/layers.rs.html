@@ -2067,7 +2067,14 @@
 <a href="#2066" id="2066">2066</a>
 <a href="#2067" id="2067">2067</a>
 <a href="#2068" id="2068">2068</a>
-<a href="#2069" id="2069">2069</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#2069" id="2069">2069</a>
+<a href="#2070" id="2070">2070</a>
+<a href="#2071" id="2071">2071</a>
+<a href="#2072" id="2072">2072</a>
+<a href="#2073" id="2073">2073</a>
+<a href="#2074" id="2074">2074</a>
+<a href="#2075" id="2075">2075</a>
+<a href="#2076" id="2076">2076</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
@@ -3965,10 +3972,17 @@
         }
         <span class="kw">let </span>lhs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.gate)<span class="question-mark">?</span>;
         <span class="kw">let </span>rhs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>xs, <span class="kw-2">&amp;*</span><span class="self">self</span>.up)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>res = MatMul.qmethod_matmul(
-            <span class="kw-2">&amp;</span>candle_nn::ops::mul_and_act(<span class="kw-2">&amp;</span>lhs, <span class="kw-2">&amp;</span>rhs, <span class="self">self</span>.act.try_into()<span class="question-mark">?</span>)<span class="question-mark">?</span>,
-            <span class="kw-2">&amp;*</span><span class="self">self</span>.down,
-        )<span class="question-mark">?</span>;
+        <span class="kw">let </span><span class="kw-2">mut </span>res = <span class="kw">if </span><span class="macro">matches!</span>(
+            <span class="self">self</span>.act,
+            Activation::Gelu | Activation::Silu | Activation::Relu
+        ) {
+            MatMul.qmethod_matmul(
+                <span class="kw-2">&amp;</span>candle_nn::ops::mul_and_act(<span class="kw-2">&amp;</span>lhs, <span class="kw-2">&amp;</span>rhs, <span class="self">self</span>.act.try_into()<span class="question-mark">?</span>)<span class="question-mark">?</span>,
+                <span class="kw-2">&amp;*</span><span class="self">self</span>.down,
+            )<span class="question-mark">?
+        </span>} <span class="kw">else </span>{
+            MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>(<span class="kw-2">&amp;</span>lhs.apply(<span class="kw-2">&amp;</span><span class="self">self</span>.act)<span class="question-mark">? </span>* <span class="kw-2">&amp;</span>rhs)<span class="question-mark">?</span>, <span class="kw-2">&amp;*</span><span class="self">self</span>.down)<span class="question-mark">?
+        </span>};
         <span class="kw">if </span><span class="self">self</span>.gate.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)<span class="question-mark">?</span>;
         }

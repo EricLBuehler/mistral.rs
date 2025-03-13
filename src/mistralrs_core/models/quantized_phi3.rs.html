@@ -413,7 +413,8 @@
 <a href="#412" id="412">412</a>
 <a href="#413" id="413">413</a>
 <a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
@@ -469,7 +470,6 @@
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
-    sliding_window: usize,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     sdpa_params: SdpaParams,
     dtype: DType,
@@ -548,10 +548,9 @@
                 )<span class="question-mark">?
             </span>}
             <span class="prelude-val">None </span>=&gt; {
-                <span class="kw">let </span>(k, v, attn_mask) =
-                    kv_cache.append_sliding_window(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, <span class="prelude-val">Some</span>(<span class="self">self</span>.sliding_window))<span class="question-mark">?</span>;
+                <span class="kw">let </span>(k, v) = kv_cache.append(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
 
-                Sdpa.run_attention(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, attn_mask.as_ref(), <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params)<span class="question-mark">?
+                Sdpa.run_attention(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, <span class="prelude-val">None</span>, <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params)<span class="question-mark">?
             </span>}
         };
 
@@ -749,7 +748,6 @@
                 head_dim,
                 cos: cos.to_device(device)<span class="question-mark">?</span>,
                 sin: sin.to_device(device)<span class="question-mark">?</span>,
-                sliding_window: context_window,
                 paged_attn,
                 sdpa_params: SdpaParams {
                     n_kv_groups: head_count / head_count_kv,
@@ -768,7 +766,11 @@
             output,
             mapper: <span class="prelude-val">Some</span>(mapper),
             device: device.clone(),
-            cache: EitherCache::Normal(NormalCache::new(block_count, context_window)),
+            cache: EitherCache::Normal(NormalCache::new_sliding(
+                block_count,
+                context_window,
+                <span class="prelude-val">Some</span>(context_window),
+            )),
             max_seq_len: context_window,
             dtype,
         })

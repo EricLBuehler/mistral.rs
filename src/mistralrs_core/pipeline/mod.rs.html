@@ -937,7 +937,8 @@
 <a href="#936" id="936">936</a>
 <a href="#937" id="937">937</a>
 <a href="#938" id="938">938</a>
-<a href="#939" id="939">939</a></pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a></pre></div><pre class="rust"><code><span class="kw">mod </span>amoe;
 <span class="kw">mod </span>cache_manager;
 <span class="kw">pub mod </span>chat_template;
 <span class="kw">mod </span>diffusion;
@@ -1002,7 +1003,8 @@
 <span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
 
 <span class="kw">pub use </span><span class="self">self</span>::cache_manager::{
-    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, SingleCache,
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
+    RotatingCache, SingleCache,
 };
 <span class="kw">pub use </span><span class="self">self</span>::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,

@@ -841,7 +841,12 @@
 <a href="#840" id="840">840</a>
 <a href="#841" id="841">841</a>
 <a href="#842" id="842">842</a>
-<a href="#843" id="843">843</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
+<a href="#843" id="843">843</a>
+<a href="#844" id="844">844</a>
+<a href="#845" id="845">845</a>
+<a href="#846" id="846">846</a>
+<a href="#847" id="847">847</a>
+<a href="#848" id="848">848</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 
 <span class="kw">use </span>candle_core::{Device, Module, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>mistralrs_quant::{
@@ -861,12 +866,19 @@
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalCacheType, NormalLoadingMetadata,
+        VisionModel,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 <span class="kw">use </span><span class="kw">super</span>::config::Gemma3TextConfig;
+
+<span class="macro">macro_rules!</span> is_sliding {
+    (<span class="macro-nonterminal">$layer_idx</span>:expr, <span class="macro-nonterminal">$cfg</span>:expr) =&gt; {
+        (<span class="macro-nonterminal">$layer_idx </span>+ <span class="number">1</span>) % <span class="macro-nonterminal">$cfg</span>.sliding_window_pattern != <span class="number">0
+    </span>};
+}
 
 <span class="kw">struct </span>Attention {
     q_proj: Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;,
@@ -879,7 +891,6 @@
     rotary_emb_global: Arc&lt;Gemma3RotaryEmbedding&gt;,
     rotary_emb_local: Arc&lt;RotaryEmbedding&gt;,
     use_sliding_window: bool,
-    sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     paged_attn: <span class="prelude-ty">Option</span>&lt;PagedAttention&gt;,
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
@@ -942,7 +953,7 @@
             comm,
             vb.pp(<span class="string">"o_proj"</span>),
         )<span class="question-mark">?</span>;
-        <span class="kw">let </span>sliding_window = <span class="kw">if </span>(layer_idx + <span class="number">1</span>) % cfg.sliding_window_pattern != <span class="number">0 </span>{
+        <span class="kw">let </span>sliding_window = <span class="kw">if </span><span class="macro">is_sliding!</span>(layer_idx, cfg) {
             <span class="prelude-val">Some</span>(cfg.sliding_window)
         } <span class="kw">else </span>{
             <span class="prelude-val">None
@@ -969,7 +980,6 @@
             rotary_emb_global,
             rotary_emb_local,
             use_sliding_window: sliding_window.is_some(),
-            sliding_window,
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
@@ -1080,17 +1090,9 @@
             },
             <span class="prelude-val">None </span>=&gt; {
                 <span class="comment">// self.sliding_window is None if !self.use_sliding_window
-                </span><span class="kw">let </span>(k, v, mask) =
-                    kv_cache.append_sliding_window(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, <span class="self">self</span>.sliding_window)<span class="question-mark">?</span>;
+                </span><span class="kw">let </span>(k, v) = kv_cache.append(<span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
 
-                Sdpa.run_attention(
-                    <span class="kw-2">&amp;</span>q,
-                    <span class="kw-2">&amp;</span>k,
-                    <span class="kw-2">&amp;</span>v,
-                    mask.as_ref(),
-                    <span class="prelude-val">Some</span>(flash_params),
-                    <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params,
-                )<span class="question-mark">?
+                Sdpa.run_attention(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, <span class="prelude-val">Some</span>(flash_params), <span class="kw-2">&amp;</span><span class="self">self</span>.sdpa_params)<span class="question-mark">?
             </span>}
         };
 
@@ -1351,16 +1353,24 @@
                 <span class="prelude-val">None</span>,
             ))<span class="question-mark">?
         </span>};
+        <span class="kw">let </span>cache_types = (<span class="number">0</span>..cfg.num_hidden_layers)
+            .map(|layer_idx| {
+                <span class="macro">is_sliding!</span>(layer_idx, cfg)
+                    .then(|| NormalCacheType::SlidingWindow {
+                        window: cfg.sliding_window,
+                    })
+                    .unwrap_or(NormalCacheType::Normal {
+                        max_seq_len: cfg.max_position_embeddings,
+                    })
+            })
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             embed_tokens,
             layers,
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            cache: EitherCache::Normal(NormalCache::new(
-                cfg.num_hidden_layers,
-                cfg.max_position_embeddings,
-            )),
+            cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.sliding_window,
             final_logit_softcapping: cfg.final_logit_softcapping,

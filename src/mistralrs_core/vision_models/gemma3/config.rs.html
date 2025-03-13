@@ -68,7 +68,12 @@
 <a href="#67" id="67">67</a>
 <a href="#68" id="68">68</a>
 <a href="#69" id="69">69</a>
-<a href="#70" id="70">70</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_quant::QuantizedConfig;
+<a href="#70" id="70">70</a>
+<a href="#71" id="71">71</a>
+<a href="#72" id="72">72</a>
+<a href="#73" id="73">73</a>
+<a href="#74" id="74">74</a>
+<a href="#75" id="75">75</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_quant::QuantizedConfig;
 
 <span class="kw">use crate</span>::{
     layers::{Activation, Gemma3RopeScalingConfig},
@@ -78,7 +83,7 @@
 
 <span class="macro">serde_default_fn!</span>(bool, attention_bias, <span class="bool-val">false</span>);
 <span class="macro">serde_default_fn!</span>(usize, head_dim, <span class="number">256</span>);
-<span class="macro">serde_default_fn!</span>(Activation, hidden_activation, Activation::Gelu);
+<span class="macro">serde_default_fn!</span>(Activation, hidden_activation, Activation::GeluPytorchTanh);
 <span class="macro">serde_default_fn!</span>(f64, rms_norm_eps, <span class="number">1e-6</span>);
 <span class="macro">serde_default_fn!</span>(f64, rope_theta, <span class="number">1000000.</span>);
 <span class="macro">serde_default_fn!</span>(usize, vocab_size, <span class="number">262208</span>);
@@ -132,10 +137,15 @@
 }
 
 <span class="attr">#[derive(Debug, Clone, serde::Deserialize)]
-</span><span class="kw">pub struct </span>Gemma3Config {
-    <span class="kw">pub </span>text_config: Gemma3TextConfig,
-    <span class="kw">pub </span>vision_config: SiglipVisionConfig,
-    <span class="kw">pub </span>image_token_index: usize,
-    <span class="kw">pub </span>mm_tokens_per_image: usize,
+</span><span class="kw">pub enum </span>Gemma3Config {
+    <span class="attr">#[serde(untagged)]
+    </span>WithVision {
+        text_config: Gemma3TextConfig,
+        vision_config: SiglipVisionConfig,
+        image_token_index: usize,
+        mm_tokens_per_image: usize,
+    },
+    <span class="attr">#[serde(untagged)]
+    </span>Text(Gemma3TextConfig),
 }
 </code></pre></div></section></main></body></html>
