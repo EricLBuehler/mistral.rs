@@ -710,16 +710,17 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     let template_cache_dim = k.dim;
                     let template_cache_msl = k.max_seq_len;
 
+                    // Rotating cache is not preallocated.
                     let cache = KvCache::Rotating {
                         k: RotatingCache {
-                            all_data: Some(k_cache.zeros_like().unwrap()),
+                            all_data: None,
                             dim: template_cache_dim,
                             current_seq_len: 0,
                             max_seq_len: template_cache_msl,
                             offset: 0,
                         },
                         v: RotatingCache {
-                            all_data: Some(v_cache.zeros_like().unwrap()),
+                            all_data: None,
                             dim: template_cache_dim,
                             current_seq_len: 0,
                             max_seq_len: template_cache_msl,
