@@ -26,7 +26,7 @@
 - [Docs](QUANTS.md)
 - [ISQ](ISQ.md)
 - [UQFF](UQFF.md)
-- [Topology](TOPOLOLGY.md)
+- [Topology](TOPOLOGY.md)
 
 ## Other
 - [Chat templates and tokenizers](CHAT_TOK.md)
