@@ -161,25 +161,12 @@ impl CausalMasker {
             return Ok(None);
         }
 
-        let mut causal_mask = {
+        let causal_mask = {
             let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
             let diagonal = past_kv_len as isize - sliding_window as isize - 1;
             let context_mask = apply_tril(&mask.ones_like()?, diagonal)?;
 
-            masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?
-                .to_dtype(DType::U8)?
-        };
-
-        let zero = Tensor::new(0.0f32, input_ids.device())?;
-        causal_mask = {
-            let mask = causal_mask.broadcast_as((causal_mask.dims()[0], causal_mask.dims()[1]))?;
-            // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-
-            masked_fill(
-                &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
-                &mask,
-                f32::NEG_INFINITY,
-            )?
+            masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?.to_dtype(dtype)?
         };
 
         Ok(Some(causal_mask))

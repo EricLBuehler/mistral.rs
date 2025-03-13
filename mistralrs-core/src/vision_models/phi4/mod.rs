@@ -37,7 +37,6 @@ struct Attention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<Phi4MMRotaryEmbedding>,
-    sliding_window: Option<usize>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -76,7 +75,6 @@ impl Attention {
             num_heads,
             num_kv_heads,
             head_dim,
-            sliding_window: cfg.sliding_window,
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: num_heads / num_kv_heads,
@@ -174,14 +172,13 @@ impl Attention {
                 }
             },
             None => {
-                let (k, v, attn_mask) =
-                    kv_cache.append_sliding_window(&k, &v, attention_mask, self.sliding_window)?;
+                let (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(
                     &q,
                     &k,
                     &v,
-                    attn_mask.as_ref(),
+                    attention_mask,
                     Some(flash_params),
                     &self.sdpa_params,
                 )?
@@ -438,9 +435,10 @@ impl Phi4MMModel {
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            cache: EitherCache::Normal(NormalCache::new(
+            cache: EitherCache::Normal(NormalCache::new_sliding(
                 cfg.num_hidden_layers,
                 cfg.max_position_embeddings,
+                cfg.sliding_window,
             )),
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.sliding_window,
