@@ -50,8 +50,8 @@ impl Qwen2_5VLModel {
         let vision = Qwen2_5VLVisionModel::new(
             &cfg.vision_config,
             vb.pp("visual")
-                .set_device(normal_loading_metadata.real_device.clone())
-                .set_dtype(DType::F32),
+                .set_device(normal_loading_metadata.real_device.clone()),
+            &normal_loading_metadata.mapper.get_comm_for(0)?,
         )?;
         let text = Qwen2_5VLTextModel::new(
             cfg,

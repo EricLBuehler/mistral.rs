@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Linear, Module};
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
 
 use crate::{
     layers::{self, Activation, Conv3dConfig, Conv3dNoBias, MatMul, RmsNorm},
@@ -64,11 +64,38 @@ struct VisionMlp {
 }
 
 impl VisionMlp {
-    fn new(dim: usize, hidden_dim: usize, act: Activation, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        dim: usize,
+        hidden_dim: usize,
+        act: Activation,
+        vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         Ok(Self {
-            gate_proj: mistralrs_quant::linear(dim, hidden_dim, &None, vb.pp("gate_proj"))?,
-            up_proj: mistralrs_quant::linear(dim, hidden_dim, &None, vb.pp("up_proj"))?,
-            down_proj: mistralrs_quant::linear(hidden_dim, dim, &None, vb.pp("down_proj"))?,
+            gate_proj: ColumnParallelLayer::new(
+                dim,
+                hidden_dim,
+                &None,
+                true,
+                comm,
+                vb.pp("gate_proj"),
+            )?,
+            up_proj: ColumnParallelLayer::new(
+                dim,
+                hidden_dim,
+                &None,
+                true,
+                comm,
+                vb.pp("up_proj"),
+            )?,
+            down_proj: RowParallelLayer::new(
+                hidden_dim,
+                dim,
+                &None,
+                true,
+                comm,
+                vb.pp("down_proj"),
+            )?,
             act,
         })
     }
@@ -102,11 +129,10 @@ fn rotate_half(xs: &Tensor) -> Result<Tensor> {
 }
 
 fn apply_rotary_pos_emb_vision(xs: &Tensor, freqs: &Tensor) -> Result<Tensor> {
-    let xs = xs.to_dtype(DType::F32)?;
-    let cos = freqs.cos()?.unsqueeze(D::Minus2)?;
-    let sin = freqs.sin()?.unsqueeze(D::Minus2)?;
+    let cos = freqs.cos()?.unsqueeze(D::Minus2)?.to_dtype(xs.dtype())?;
+    let sin = freqs.sin()?.unsqueeze(D::Minus2)?.to_dtype(xs.dtype())?;
 
-    xs.broadcast_mul(&cos)? + rotate_half(&xs)?.broadcast_mul(&sin)
+    xs.broadcast_mul(&cos)? + rotate_half(xs)?.broadcast_mul(&sin)
 }
 
 // https://github.com/huggingface/transformers/blob/a769ed45e17c44fd17b85c025863c4e4f2f73634/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L325
@@ -182,7 +208,11 @@ struct VisionBlock {
 }
 
 impl VisionBlock {
-    fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &VisionConfig,
+        vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let norm1 = RmsNorm::new(cfg.hidden_size, 1e-6, vb.pp("norm1"))?;
         let norm2 = RmsNorm::new(cfg.hidden_size, 1e-6, vb.pp("norm2"))?;
 
@@ -191,6 +221,7 @@ impl VisionBlock {
             cfg.intermediate_size,
             cfg.hidden_act,
             vb.pp("mlp"),
+            comm,
         )?;
         let attn = VisionAttention::new(cfg.hidden_size, cfg.num_heads, vb.pp("attn"))?;
 
@@ -290,10 +321,14 @@ pub struct Qwen2_5VLVisionModel {
 }
 
 impl Qwen2_5VLVisionModel {
-    pub fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
+    pub fn new(
+        cfg: &VisionConfig,
+        vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let mut blocks = Vec::new();
         for i in 0..cfg.depth {
-            blocks.push(VisionBlock::new(cfg, vb.pp(format!("blocks.{i}")))?);
+            blocks.push(VisionBlock::new(cfg, vb.pp(format!("blocks.{i}")), comm)?);
         }
 
         let patch_merger = PatchMerger::new(
@@ -454,6 +489,7 @@ impl Qwen2_5VLVisionModel {
         rotary_pos_emb = rotary_pos_emb.index_select(&window_index, 0)?;
         rotary_pos_emb = rotary_pos_emb.reshape((seq_len, ()))?;
         rotary_pos_emb = Tensor::cat(&[&rotary_pos_emb; 2], D::Minus1)?;
+        rotary_pos_emb = rotary_pos_emb.to_dtype(xs.dtype())?;
 
         let grid_thw = grid_thw.to_device(&Device::Cpu)?;
         let cu_seqlens = (grid_thw.i((.., 1))? * grid_thw.i((.., 2))?)?
@@ -470,13 +506,13 @@ impl Qwen2_5VLVisionModel {
             cu_seqlens => {
                 let mut attention_mask =
                     Tensor::full(f32::MIN, (1, seq_len, seq_len), xs.device())?
-                        .to_dtype(DType::F32)?;
+                        .to_dtype(xs.dtype())?;
                 for i in 1..cu_seqlens.len() {
                     let a = cu_seqlens[i - 1] as usize;
                     let b = cu_seqlens[i] as usize;
                     attention_mask = attention_mask.slice_assign(
                         &[&.., &(a..b), &(a..b)],
-                        &Tensor::zeros((1, b - a, b - a), DType::F32, xs.device())?,
+                        &Tensor::zeros((1, b - a, b - a), xs.dtype(), xs.device())?,
                     )?;
                 }
                 Some(attention_mask)
@@ -487,13 +523,13 @@ impl Qwen2_5VLVisionModel {
             cu_seqlens => {
                 let mut attention_mask =
                     Tensor::full(f32::MIN, (1, seq_len, seq_len), xs.device())?
-                        .to_dtype(DType::F32)?;
+                        .to_dtype(xs.dtype())?;
                 for i in 1..cu_seqlens.len() {
                     let a = cu_seqlens[i - 1] as usize;
                     let b = cu_seqlens[i] as usize;
                     attention_mask = attention_mask.slice_assign(
                         &[&.., &(a..b), &(a..b)],
-                        &Tensor::zeros((1, b - a, b - a), DType::F32, xs.device())?,
+                        &Tensor::zeros((1, b - a, b - a), xs.dtype(), xs.device())?,
                     )?;
                 }
                 Some(attention_mask)
