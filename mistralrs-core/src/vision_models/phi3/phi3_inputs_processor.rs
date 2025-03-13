@@ -139,6 +139,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                     pixel_values_list: _,
                     tgt_sizes: _,
                     image_sizes_all: _,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         imgs,
@@ -567,6 +568,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             pixel_values_list: None,
             tgt_sizes: None,
             image_sizes_all: None,
+            num_crops: None,
         })
     }
 }

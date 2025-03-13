@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use candle_core::{Device, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use config::Gemma3Config;
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use mmproj::Gemma3MultiModalProjector;
@@ -55,7 +55,10 @@ impl Gemma3Model {
                 cfg,
                 vb.pp("multi_modal_projector"),
             )?,
-            vision_tower: SiglipVisionTransformer::new(&cfg.vision_config, vb.pp("vision_tower"))?,
+            vision_tower: SiglipVisionTransformer::new(
+                &cfg.vision_config,
+                vb.pp("vision_tower").pp("vision_model"),
+            )?,
             cfg: cfg.clone(),
         })
     }
@@ -71,15 +74,19 @@ impl Gemma3Model {
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
         if let Some(pixel_values) = pixel_values {
-            let vision_outputs = self.vision_tower.forward(&pixel_values, None, None)?;
+            let dtype = self.vision_tower.dtype();
+            let vision_outputs =
+                self.vision_tower
+                    .forward(&pixel_values.to_dtype(dtype)?, None, None)?;
             let image_features = self.multi_modal_projector.forward(&vision_outputs)?;
 
             let special_image_mask = input_ids
                 .eq(self.cfg.image_token_index as f64)?
                 .unsqueeze(D::Minus1)?
-                .broadcast_as(input_embeds.shape())?;
+                .broadcast_as(input_embeds.shape())?
+                .to_dtype(DType::U32)?;
 
-            let current_vals = input_embeds.gather(&special_image_mask, 1)?;
+            let current_vals = input_embeds.gather(&special_image_mask.contiguous()?, 1)?;
             let delta = image_features.broadcast_sub(&current_vals)?;
 
             input_embeds = input_embeds.scatter_add(&special_image_mask, &delta, 1)?;
@@ -106,6 +113,7 @@ impl IsqModel for Gemma3Model {
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        todo!();
         self.language_model.residual_tensors()
     }
 

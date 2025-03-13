@@ -215,6 +215,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                             pixel_values_list: _,
                             tgt_sizes: _,
                             image_sizes_all: _,
+                            num_crops: _,
                         } = self
                             .preprocess(
                                 seq.clone_images()
@@ -696,6 +697,7 @@ impl ImagePreProcessor for Qwen2_5VLImageProcessor {
                 pixel_values_list: None,
                 tgt_sizes: None,
                 image_sizes_all: None,
+                num_crops: None,
             });
         }
 
@@ -735,6 +737,7 @@ impl ImagePreProcessor for Qwen2_5VLImageProcessor {
                 pixel_values_list: None,
                 tgt_sizes: None,
                 image_sizes_all: None,
+                num_crops: None,
             });
         }
         unreachable!()

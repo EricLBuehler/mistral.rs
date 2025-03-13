@@ -208,6 +208,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                     pixel_values_list,
                     tgt_sizes,
                     image_sizes_all,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -779,6 +780,7 @@ impl ImagePreProcessor for MiniCpmOImageProcessor {
             pixel_values_list: Some(pixel_values),
             tgt_sizes: Some(tgt_sizes),
             image_sizes_all: Some(image_sizes),
+            num_crops: None,
         })
     }
 }

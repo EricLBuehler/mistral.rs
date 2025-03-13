@@ -56,6 +56,6 @@ impl Gemma3MultiModalProjector {
 
         let normed_vision_outputs = self.mm_soft_emb_norm.forward(&pooled_vision_outputs)?;
 
-        normed_vision_outputs.matmul(&self.mm_input_projection_weight)
+        normed_vision_outputs.broadcast_matmul(&self.mm_input_projection_weight)
     }
 }
