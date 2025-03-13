@@ -31,7 +31,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
-- 💎💎💎 Run the **Gemma 3** Model (*text only for now, vision coming very soon!*):
+- 💎💎💎 Run the **Gemma 3** Model with 128k context length and vision support: [documentation](docs/GEMMA3.md)
 
     ```
     ./mistralrs-server -i vision-plain -m google/gemma-3-4b-it -a gemma3
