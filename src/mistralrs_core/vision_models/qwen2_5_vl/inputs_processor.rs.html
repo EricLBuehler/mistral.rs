@@ -740,7 +740,10 @@
 <a href="#739" id="739">739</a>
 <a href="#740" id="740">740</a>
 <a href="#741" id="741">741</a>
-<a href="#742" id="742">742</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
+<a href="#742" id="742">742</a>
+<a href="#743" id="743">743</a>
+<a href="#744" id="744">744</a>
+<a href="#745" id="745">745</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
     device_map::DeviceMapper,
     pipeline::{
         text_models_inputs_processor::{
@@ -957,6 +960,7 @@
                             pixel_values_list: <span class="kw">_</span>,
                             tgt_sizes: <span class="kw">_</span>,
                             image_sizes_all: <span class="kw">_</span>,
+                            num_crops: <span class="kw">_</span>,
                         } = <span class="self">self
                             </span>.preprocess(
                                 seq.clone_images()
@@ -1068,7 +1072,7 @@
                 seq.set_initial_prompt(detok.clone());
 
                 <span class="kw">let </span>toks = tokenizer
-                    .encode(detok, <span class="bool-val">true</span>)
+                    .encode(detok, <span class="bool-val">false</span>)
                     .expect(<span class="string">"Detokenization failed!"</span>);
 
                 <span class="kw">let </span>ids = toks.get_ids().to_vec();
@@ -1120,7 +1124,7 @@
                 );
 
                 <span class="kw">let </span>ids = tokenizer
-                    .encode(prompt, <span class="bool-val">true</span>)
+                    .encode(prompt, <span class="bool-val">false</span>)
                     .expect(<span class="string">"Tokenization failed!"</span>);
 
                 input_ids_searching.push(ids.get_ids().to_vec());
@@ -1438,6 +1442,7 @@
                 pixel_values_list: <span class="prelude-val">None</span>,
                 tgt_sizes: <span class="prelude-val">None</span>,
                 image_sizes_all: <span class="prelude-val">None</span>,
+                num_crops: <span class="prelude-val">None</span>,
             });
         }
 
@@ -1477,6 +1482,7 @@
                 pixel_values_list: <span class="prelude-val">None</span>,
                 tgt_sizes: <span class="prelude-val">None</span>,
                 image_sizes_all: <span class="prelude-val">None</span>,
+                num_crops: <span class="prelude-val">None</span>,
             });
         }
         <span class="macro">unreachable!</span>()

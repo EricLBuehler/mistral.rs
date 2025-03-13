@@ -613,7 +613,7 @@
 
         candle_nn::ops::inplace_attn_softmax_last_dim(
             <span class="kw-2">&amp;mut </span>att,
-            <span class="kw-2">&amp;</span>mask,
+            <span class="kw-2">&amp;</span>mask.contiguous()<span class="question-mark">?</span>,
             sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(<span class="number">1.0</span>),
         )<span class="question-mark">?</span>;
 

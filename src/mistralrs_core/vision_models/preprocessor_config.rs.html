@@ -65,7 +65,14 @@
 <a href="#64" id="64">64</a>
 <a href="#65" id="65">65</a>
 <a href="#66" id="66">66</a>
-<a href="#67" id="67">67</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#67" id="67">67</a>
+<a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
+<a href="#70" id="70">70</a>
+<a href="#71" id="71">71</a>
+<a href="#72" id="72">72</a>
+<a href="#73" id="73">73</a>
+<a href="#74" id="74">74</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::Result;
 <span class="kw">use </span>image::imageops::FilterType;
@@ -86,7 +93,8 @@
     <span class="attr">#[serde(alias = <span class="string">"norm_std"</span>)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) image_std: <span class="prelude-ty">Option</span>&lt;[f64; <span class="number">3</span>]&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) rescale_factor: <span class="prelude-ty">Option</span>&lt;f64&gt;,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) resampling: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="attr">#[serde(alias = <span class="string">"resample"</span>)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) resampling: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) max_image_size: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, u32&gt;&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) size: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, u32&gt;&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) crop_size: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, u32&gt;&gt;,
@@ -111,6 +119,12 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) im_id_start: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) im_id_end: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) dynamic_hd: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="attr">#[serde(alias = <span class="string">"image_seq_length"</span>)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) image_seq_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) pan_and_scan_min_crop_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) pan_and_scan_max_num_crops: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) pan_and_scan_min_ratio_to_activate: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) do_pan_and_scan: <span class="prelude-ty">Option</span>&lt;bool&gt;,
 }
 
 <span class="attr">#[allow(dead_code)]

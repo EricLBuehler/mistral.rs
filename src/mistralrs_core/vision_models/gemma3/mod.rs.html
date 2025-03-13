@@ -158,33 +158,99 @@
 <a href="#157" id="157">157</a>
 <a href="#158" id="158">158</a>
 <a href="#159" id="159">159</a>
-<a href="#160" id="160">160</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a>
+<a href="#163" id="163">163</a>
+<a href="#164" id="164">164</a>
+<a href="#165" id="165">165</a>
+<a href="#166" id="166">166</a>
+<a href="#167" id="167">167</a>
+<a href="#168" id="168">168</a>
+<a href="#169" id="169">169</a>
+<a href="#170" id="170">170</a>
+<a href="#171" id="171">171</a>
+<a href="#172" id="172">172</a>
+<a href="#173" id="173">173</a>
+<a href="#174" id="174">174</a>
+<a href="#175" id="175">175</a>
+<a href="#176" id="176">176</a>
+<a href="#177" id="177">177</a>
+<a href="#178" id="178">178</a>
+<a href="#179" id="179">179</a>
+<a href="#180" id="180">180</a>
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a>
+<a href="#185" id="185">185</a>
+<a href="#186" id="186">186</a>
+<a href="#187" id="187">187</a>
+<a href="#188" id="188">188</a>
+<a href="#189" id="189">189</a>
+<a href="#190" id="190">190</a>
+<a href="#191" id="191">191</a>
+<a href="#192" id="192">192</a>
+<a href="#193" id="193">193</a>
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a>
+<a href="#198" id="198">198</a>
+<a href="#199" id="199">199</a>
+<a href="#200" id="200">200</a>
+<a href="#201" id="201">201</a>
+<a href="#202" id="202">202</a>
+<a href="#203" id="203">203</a>
+<a href="#204" id="204">204</a>
+<a href="#205" id="205">205</a>
+<a href="#206" id="206">206</a>
+<a href="#207" id="207">207</a>
+<a href="#208" id="208">208</a>
+<a href="#209" id="209">209</a>
+<a href="#210" id="210">210</a>
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
-<span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
+<span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>config::Gemma3Config;
 <span class="kw">use </span>mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+<span class="kw">use </span>mmproj::Gemma3MultiModalProjector;
 <span class="kw">use </span>text::TextModel;
 
 <span class="kw">use crate</span>::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
+    ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
+    utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
 };
 
 <span class="kw">pub mod </span>config;
 <span class="kw">mod </span>inputs_processor;
+<span class="kw">mod </span>mmproj;
 <span class="kw">mod </span>text;
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span>inputs_processor::Gemma3Processor;
 
+<span class="kw">use </span><span class="kw">super</span>::siglip::SiglipVisionTransformer;
+
 <span class="kw">pub struct </span>Gemma3Model {
     language_model: TextModel,
+    multi_modal_projector: Gemma3MultiModalProjector,
+    vision_tower: SiglipVisionTransformer,
+    cfg: Gemma3Config,
 }
 
 <span class="kw">impl </span>Gemma3Model {
@@ -195,6 +261,7 @@
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+        <span class="macro">assert!</span>(cfg.image_token_index &lt; cfg.text_config.vocab_size);
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
             language_model: TextModel::new(
                 <span class="kw-2">&amp;</span>cfg.text_config,
@@ -203,19 +270,55 @@
                 normal_loading_metadata,
                 attention_mechanism,
             )<span class="question-mark">?</span>,
+            multi_modal_projector: Gemma3MultiModalProjector::new(
+                cfg,
+                vb.pp(<span class="string">"multi_modal_projector"</span>),
+            )<span class="question-mark">?</span>,
+            vision_tower: SiglipVisionTransformer::new(
+                <span class="kw-2">&amp;</span>cfg.vision_config,
+                vb.pp(<span class="string">"vision_tower"</span>).pp(<span class="string">"vision_model"</span>),
+            )<span class="question-mark">?</span>,
+            cfg: cfg.clone(),
         })
     }
 
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
+        pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         context_lens: Vec&lt;(usize, usize)&gt;,
         metadata: <span class="prelude-ty">Option</span>&lt;(Vec&lt;(Tensor, Tensor)&gt;, <span class="kw-2">&amp;</span>PagedAttentionInputMetadata)&gt;,
         flash_params: <span class="kw-2">&amp;</span>FlashParams,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-        <span class="self">self</span>.language_model.forward(
+        <span class="kw">let </span><span class="kw-2">mut </span>input_embeds = <span class="self">self</span>.language_model.embed_tokens(input_ids)<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(pixel_values) = pixel_values {
+            <span class="kw">let </span>dtype = <span class="self">self</span>.vision_tower.dtype();
+            <span class="kw">let </span>vision_outputs =
+                <span class="self">self</span>.vision_tower
+                    .forward(<span class="kw-2">&amp;</span>pixel_values.to_dtype(dtype)<span class="question-mark">?</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>image_features = <span class="self">self</span>.multi_modal_projector.forward(<span class="kw-2">&amp;</span>vision_outputs)<span class="question-mark">?</span>;
+
+            <span class="kw">let </span>special_image_mask = input_ids
+                .eq(<span class="self">self</span>.cfg.image_token_index <span class="kw">as </span>f64)<span class="question-mark">?
+                </span>.unsqueeze(D::Minus1)<span class="question-mark">?
+                </span>.broadcast_as(input_embeds.shape())<span class="question-mark">?
+                </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
+
+            <span class="kw">let </span>mask_flat = special_image_mask.flatten_all()<span class="question-mark">?</span>;
+            <span class="kw">let </span><span class="kw-2">mut </span>x_flat = input_embeds.flatten_all()<span class="question-mark">?</span>;
+            <span class="kw">let </span>src_flat = image_features.flatten_all()<span class="question-mark">?</span>;
+
+            <span class="kw">let </span>indices = mask_flat.nonzero()<span class="question-mark">?</span>.squeeze(<span class="number">1</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>current_vals = x_flat.gather(<span class="kw-2">&amp;</span>indices, <span class="number">0</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>diff = (src_flat - current_vals)<span class="question-mark">?</span>;
+            x_flat = x_flat.scatter_add(<span class="kw-2">&amp;</span>indices, <span class="kw-2">&amp;</span>diff, <span class="number">0</span>)<span class="question-mark">?</span>;
+
+            input_embeds = x_flat.reshape(input_embeds.shape())<span class="question-mark">?</span>;
+        };
+        <span class="self">self</span>.language_model.forward_embeds(
             input_ids,
+            input_embeds,
             seqlen_offsets,
             context_lens,
             metadata,
@@ -235,7 +338,17 @@
     }
 
     <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
-        <span class="self">self</span>.language_model.residual_tensors()
+        <span class="kw">let </span>uvb = UnVarBuilder::new();
+
+        uvb.pp(<span class="string">"multi_modal_projector"</span>)
+            .extend(<span class="self">self</span>.multi_modal_projector.residual_tensors());
+        uvb.pp(<span class="string">"language_model"</span>)
+            .extend(<span class="self">self</span>.language_model.residual_tensors());
+        uvb.pp(<span class="string">"vision_tower"</span>)
+            .pp(<span class="string">"vision_model"</span>)
+            .extend(<span class="self">self</span>.vision_tower.residual_tensors());
+
+        uvb.to_safetensors()
     }
 
     <span class="kw">fn </span>imatrix_names(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; candle_core::Result&lt;Vec&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;&gt; {
@@ -249,7 +362,7 @@
     <span class="kw">fn </span>forward(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         input_ids: <span class="kw-2">&amp;</span>Tensor,
-        _pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
+        pixel_values: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
         context_lens: Vec&lt;(usize, usize)&gt;,
         _position_ids: Vec&lt;usize&gt;,
@@ -259,6 +372,7 @@
     ) -&gt; candle_core::Result&lt;Tensor&gt; {
         <span class="self">self</span>.forward(
             input_ids,
+            pixel_values,
             seqlen_offsets,
             context_lens,
             metadata,

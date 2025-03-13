@@ -6442,11 +6442,11 @@
     <span class="kw">fn </span>get_processor(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
         _model_config: <span class="kw-2">&amp;</span>str,
-        _processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
+        processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
         _preprocessor_config: PreProcessorConfig,
         _max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
-        Arc::new(Gemma3Processor)
+        Arc::new(Gemma3Processor::new(processor_config.unwrap()))
     }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true

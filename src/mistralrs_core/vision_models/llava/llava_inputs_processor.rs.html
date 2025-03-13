@@ -401,7 +401,9 @@
 <a href="#400" id="400">400</a>
 <a href="#401" id="401">401</a>
 <a href="#402" id="402">402</a>
-<a href="#403" id="403">403</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::sync::Arc;
@@ -544,6 +546,7 @@
                     pixel_values_list: <span class="kw">_</span>,
                     tgt_sizes: <span class="kw">_</span>,
                     image_sizes_all: <span class="kw">_</span>,
+                    num_crops: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         imgs.clone(),
@@ -641,7 +644,7 @@
                 .map(|s| {
                     <span class="comment">// we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
                     </span>tokenizer
-                        .encode(<span class="kw-2">*</span>s, <span class="bool-val">true</span>)
+                        .encode(<span class="kw-2">*</span>s, <span class="bool-val">false</span>)
                         .unwrap()
                         .get_ids()
                         .to_vec()
@@ -801,6 +804,7 @@
             pixel_values_list: <span class="prelude-val">None</span>,
             tgt_sizes: <span class="prelude-val">None</span>,
             image_sizes_all: <span class="prelude-val">None</span>,
+            num_crops: <span class="prelude-val">None</span>,
         })
     }
 }

@@ -662,7 +662,9 @@
 <a href="#661" id="661">661</a>
 <a href="#662" id="662">662</a>
 <a href="#663" id="663">663</a>
-<a href="#664" id="664">664</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+<a href="#664" id="664">664</a>
+<a href="#665" id="665">665</a>
+<a href="#666" id="666">666</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
 </span><span class="kw">use </span>std::{any::Any, collections::HashSet, num::NonZeroUsize, sync::Arc};
 
@@ -801,6 +803,7 @@
                     pixel_values_list: <span class="kw">_</span>,
                     tgt_sizes: <span class="kw">_</span>,
                     image_sizes_all,
+                    num_crops: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         imgs,
@@ -907,7 +910,7 @@
 
             seq.set_toks_and_reallocate(
                 tokenizer
-                    .encode(detokenized.clone(), <span class="bool-val">true</span>)
+                    .encode(detokenized.clone(), <span class="bool-val">false</span>)
                     .expect(<span class="string">"Encode failed"</span>)
                     .get_ids()
                     .to_vec(),
@@ -1323,6 +1326,7 @@
             pixel_values_list: <span class="prelude-val">None</span>,
             tgt_sizes: <span class="prelude-val">None</span>,
             image_sizes_all: <span class="prelude-val">Some</span>(image_sizes),
+            num_crops: <span class="prelude-val">None</span>,
         })
     }
 }

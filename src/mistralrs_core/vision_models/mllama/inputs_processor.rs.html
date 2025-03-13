@@ -831,7 +831,9 @@
 <a href="#830" id="830">830</a>
 <a href="#831" id="831">831</a>
 <a href="#832" id="832">832</a>
-<a href="#833" id="833">833</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{
     any::Any,
@@ -1143,6 +1145,7 @@
                     pixel_values_list: <span class="kw">_</span>,
                     tgt_sizes: <span class="kw">_</span>,
                     image_sizes_all: <span class="kw">_</span>,
+                    num_crops: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         seq.take_images()
@@ -1661,6 +1664,7 @@
             pixel_values_list: <span class="prelude-val">None</span>,
             tgt_sizes: <span class="prelude-val">None</span>,
             image_sizes_all: <span class="prelude-val">None</span>,
+            num_crops: <span class="prelude-val">None</span>,
         })
     }
 }

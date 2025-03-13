@@ -602,7 +602,9 @@
 <a href="#601" id="601">601</a>
 <a href="#602" id="602">602</a>
 <a href="#603" id="603">603</a>
-<a href="#604" id="604">604</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#604" id="604">604</a>
+<a href="#605" id="605">605</a>
+<a href="#606" id="606">606</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, cmp, collections::HashMap, num::NonZeroUsize, sync::Arc};
 
@@ -813,6 +815,7 @@
                     pixel_values_list: <span class="kw">_</span>,
                     tgt_sizes: <span class="kw">_</span>,
                     image_sizes_all: <span class="kw">_</span>,
+                    num_crops: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         seq.take_images()
@@ -849,7 +852,7 @@
 
                 seq.set_initial_prompt(sample.clone());
                 <span class="kw">let </span>toks = tokenizer
-                    .encode(sample, <span class="bool-val">true</span>)
+                    .encode(sample, <span class="bool-val">false</span>)
                     .expect(<span class="string">"Detokenization failed!"</span>);
 
                 <span class="kw">let </span>ids = toks.get_ids().to_vec();
@@ -1203,6 +1206,7 @@
             pixel_values_list: <span class="prelude-val">None</span>,
             tgt_sizes: <span class="prelude-val">None</span>,
             image_sizes_all: <span class="prelude-val">None</span>,
+            num_crops: <span class="prelude-val">None</span>,
         })
     }
 }

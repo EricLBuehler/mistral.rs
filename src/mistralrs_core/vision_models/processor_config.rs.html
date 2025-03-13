@@ -6,12 +6,14 @@
 <a href="#5" id="5">5</a>
 <a href="#6" id="6">6</a>
 <a href="#7" id="7">7</a>
-<a href="#8" id="8">8</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde::Deserialize;
+<a href="#8" id="8">8</a>
+<a href="#9" id="9">9</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde::Deserialize;
 
 <span class="attr">#[allow(dead_code)]
 #[derive(Deserialize, Debug, Default)]
 </span><span class="kw">pub struct </span>ProcessorConfig {
     <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) image_seq_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="attr">#[serde(alias = <span class="string">"image_seq_length"</span>)]
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) image_seq_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 </code></pre></div></section></main></body></html>

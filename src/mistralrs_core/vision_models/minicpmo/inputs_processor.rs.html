@@ -782,7 +782,9 @@
 <a href="#781" id="781">781</a>
 <a href="#782" id="782">782</a>
 <a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#784" id="784">784</a>
+<a href="#785" id="785">785</a>
+<a href="#786" id="786">786</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -992,6 +994,7 @@
                     pixel_values_list,
                     tgt_sizes,
                     image_sizes_all,
+                    num_crops: <span class="kw">_</span>,
                 } = <span class="self">self
                     </span>.preprocess(
                         seq.take_images()
@@ -1058,7 +1061,7 @@
                                 .im_start_token
                                 .clone()
                                 .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
-                            <span class="bool-val">true</span>,
+                            <span class="bool-val">false</span>,
                         )
                         .unwrap()
                         .get_ids()[<span class="number">0</span>];
@@ -1068,7 +1071,7 @@
                                 .im_end_token
                                 .clone()
                                 .unwrap_or(DEFAULT_IM_END_TOKEN.to_string()),
-                            <span class="bool-val">true</span>,
+                            <span class="bool-val">false</span>,
                         )
                         .unwrap()
                         .get_ids()[<span class="number">0</span>];
@@ -1078,7 +1081,7 @@
                                 .slice_start_token
                                 .clone()
                                 .unwrap_or(DEFAULT_SLICE_START_TOKEN.to_string()),
-                            <span class="bool-val">true</span>,
+                            <span class="bool-val">false</span>,
                         )
                         .unwrap()
                         .get_ids()[<span class="number">0</span>];
@@ -1088,13 +1091,13 @@
                                 .slice_end_token
                                 .clone()
                                 .unwrap_or(DEFAULT_SLICE_END_TOKEN.to_string()),
-                            <span class="bool-val">true</span>,
+                            <span class="bool-val">false</span>,
                         )
                         .unwrap()
                         .get_ids()[<span class="number">0</span>];
 
                     <span class="kw">let </span>input_ids = tokenizer
-                        .encode(final_text, <span class="bool-val">true</span>)
+                        .encode(final_text, <span class="bool-val">false</span>)
                         .unwrap()
                         .get_ids()
                         .to_vec();
@@ -1563,6 +1566,7 @@
             pixel_values_list: <span class="prelude-val">Some</span>(pixel_values),
             tgt_sizes: <span class="prelude-val">Some</span>(tgt_sizes),
             image_sizes_all: <span class="prelude-val">Some</span>(image_sizes),
+            num_crops: <span class="prelude-val">None</span>,
         })
     }
 }

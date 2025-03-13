@@ -64,11 +64,16 @@
 <a href="#63" id="63">63</a>
 <a href="#64" id="64">64</a>
 <a href="#65" id="65">65</a>
-<a href="#66" id="66">66</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_quant::QuantizedConfig;
+<a href="#66" id="66">66</a>
+<a href="#67" id="67">67</a>
+<a href="#68" id="68">68</a>
+<a href="#69" id="69">69</a>
+<a href="#70" id="70">70</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_quant::QuantizedConfig;
 
 <span class="kw">use crate</span>::{
     layers::{Activation, Gemma3RopeScalingConfig},
     serde_default_fn,
+    vision_models::siglip::SiglipVisionConfig,
 };
 
 <span class="macro">serde_default_fn!</span>(bool, attention_bias, <span class="bool-val">false</span>);
@@ -129,5 +134,8 @@
 <span class="attr">#[derive(Debug, Clone, serde::Deserialize)]
 </span><span class="kw">pub struct </span>Gemma3Config {
     <span class="kw">pub </span>text_config: Gemma3TextConfig,
+    <span class="kw">pub </span>vision_config: SiglipVisionConfig,
+    <span class="kw">pub </span>image_token_index: usize,
+    <span class="kw">pub </span>mm_tokens_per_image: usize,
 }
 </code></pre></div></section></main></body></html>
