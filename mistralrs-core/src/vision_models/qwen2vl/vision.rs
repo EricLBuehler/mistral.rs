@@ -94,7 +94,7 @@ fn apply_rotary_pos_emb_vision(xs: &Tensor, freqs: &Tensor) -> Result<Tensor> {
     let cos = freqs.cos()?;
     let sin = freqs.sin()?;
 
-    xs.broadcast_mul(&cos)? + rotate_half(&xs)?.broadcast_mul(&sin)
+    xs.broadcast_mul(&cos)? + rotate_half(xs)?.broadcast_mul(&sin)
 }
 
 // https://github.com/huggingface/transformers/blob/a769ed45e17c44fd17b85c025863c4e4f2f73634/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L325
