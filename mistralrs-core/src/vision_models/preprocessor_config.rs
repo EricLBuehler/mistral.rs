@@ -4,7 +4,7 @@ use candle_core::Result;
 use image::imageops::FilterType;
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct PreProcessorConfig {
     pub(crate) do_convert_rgb: Option<bool>,

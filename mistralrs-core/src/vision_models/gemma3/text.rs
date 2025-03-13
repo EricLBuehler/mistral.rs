@@ -18,12 +18,19 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, VisionModel,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalCacheType, NormalLoadingMetadata,
+        VisionModel,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 use super::config::Gemma3TextConfig;
+
+macro_rules! is_sliding {
+    ($layer_idx:expr, $cfg:expr) => {
+        ($layer_idx + 1) % $cfg.sliding_window_pattern != 0
+    };
+}
 
 struct Attention {
     q_proj: Arc<dyn QuantMethod>,
@@ -36,7 +43,6 @@ struct Attention {
     rotary_emb_global: Arc<Gemma3RotaryEmbedding>,
     rotary_emb_local: Arc<RotaryEmbedding>,
     use_sliding_window: bool,
-    sliding_window: Option<usize>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
@@ -99,7 +105,7 @@ impl Attention {
             comm,
             vb.pp("o_proj"),
         )?;
-        let sliding_window = if (layer_idx + 1) % cfg.sliding_window_pattern != 0 {
+        let sliding_window = if is_sliding!(layer_idx, cfg) {
             Some(cfg.sliding_window)
         } else {
             None
@@ -126,7 +132,6 @@ impl Attention {
             rotary_emb_global,
             rotary_emb_local,
             use_sliding_window: sliding_window.is_some(),
-            sliding_window,
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
@@ -237,17 +242,9 @@ impl Attention {
             },
             None => {
                 // self.sliding_window is None if !self.use_sliding_window
-                let (k, v, mask) =
-                    kv_cache.append_sliding_window(&k, &v, mask, self.sliding_window)?;
+                let (k, v) = kv_cache.append(&k, &v)?;
 
-                Sdpa.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    mask.as_ref(),
-                    Some(flash_params),
-                    &self.sdpa_params,
-                )?
+                Sdpa.run_attention(&q, &k, &v, mask, Some(flash_params), &self.sdpa_params)?
             }
         };
 
@@ -508,16 +505,24 @@ impl TextModel {
                 None,
             ))?
         };
+        let cache_types = (0..cfg.num_hidden_layers)
+            .map(|layer_idx| {
+                is_sliding!(layer_idx, cfg)
+                    .then(|| NormalCacheType::SlidingWindow {
+                        window: cfg.sliding_window,
+                    })
+                    .unwrap_or(NormalCacheType::Normal {
+                        max_seq_len: cfg.max_position_embeddings,
+                    })
+            })
+            .collect::<Vec<_>>();
         Ok(Self {
             embed_tokens,
             layers,
             norm,
             lm_head,
             device: normal_loading_metadata.real_device,
-            cache: EitherCache::Normal(NormalCache::new(
-                cfg.num_hidden_layers,
-                cfg.max_position_embeddings,
-            )),
+            cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.sliding_window,
             final_logit_softcapping: cfg.final_logit_softcapping,

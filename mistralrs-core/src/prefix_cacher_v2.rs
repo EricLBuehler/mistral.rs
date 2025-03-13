@@ -6,7 +6,7 @@ use itertools::Itertools;
 use tracing::info;
 
 use crate::{
-    pipeline::{KvCache, SingleCache},
+    pipeline::{KvCache, RotatingCache, SingleCache},
     sequence::Sequence,
 };
 
@@ -90,29 +90,43 @@ impl PrefixCacheManagerV2 {
         {
             let device = devices.left_or_else(|layers| layers[i].as_ref().unwrap());
 
-            *layer = KvCache {
-                k: SingleCache {
-                    all_data: layer
-                        .k
-                        .all_data
-                        .as_ref()
-                        .map(|x| x.to_device(device).unwrap()),
-                    dim: layer.k.dim,
-                    current_seq_len: layer.k.current_seq_len,
-                    max_seq_len: layer.k.max_seq_len,
-                    capacity_seq_len: layer.k.capacity_seq_len,
-                },
-                v: SingleCache {
-                    all_data: layer
-                        .v
-                        .all_data
-                        .as_ref()
-                        .map(|x| x.to_device(device).unwrap()),
-                    dim: layer.v.dim,
-                    current_seq_len: layer.v.current_seq_len,
-                    max_seq_len: layer.v.max_seq_len,
-                    capacity_seq_len: layer.v.capacity_seq_len,
-                },
+            match layer {
+                KvCache::Normal { k, v } => {
+                    *layer = KvCache::Normal {
+                        k: SingleCache {
+                            all_data: k.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: k.dim,
+                            current_seq_len: k.current_seq_len,
+                            max_seq_len: k.max_seq_len,
+                            capacity_seq_len: k.capacity_seq_len,
+                        },
+                        v: SingleCache {
+                            all_data: v.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: v.dim,
+                            current_seq_len: v.current_seq_len,
+                            max_seq_len: v.max_seq_len,
+                            capacity_seq_len: v.capacity_seq_len,
+                        },
+                    }
+                }
+                KvCache::Rotating { k, v } => {
+                    *layer = KvCache::Rotating {
+                        k: RotatingCache {
+                            all_data: k.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: k.dim,
+                            current_seq_len: k.current_seq_len,
+                            max_seq_len: k.max_seq_len,
+                            offset: k.offset,
+                        },
+                        v: RotatingCache {
+                            all_data: v.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: v.dim,
+                            current_seq_len: v.current_seq_len,
+                            max_seq_len: v.max_seq_len,
+                            offset: v.offset,
+                        },
+                    }
+                }
             }
         }
         Ok(())
@@ -130,12 +144,16 @@ impl PrefixCacheManagerV2 {
             let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
-            let cache_device = first_non_none
-                .k
-                .all_data()
-                .as_ref()
-                .expect("No KV cache data")
-                .device();
+
+            let cache_device = match first_non_none {
+                KvCache::Normal { k, .. } => {
+                    k.all_data().as_ref().expect("No KV cache data").device()
+                }
+                KvCache::Rotating { k, .. } => {
+                    k.all_data().as_ref().expect("No KV cache data").device()
+                }
+            };
+
             if !matches!(cache_device, Device::Cpu) {
                 n_on_device += 1;
             }
@@ -150,12 +168,16 @@ impl PrefixCacheManagerV2 {
             let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
-            let cache_device = first_non_none
-                .k
-                .all_data()
-                .as_ref()
-                .expect("No KV cache data")
-                .device();
+
+            let cache_device = match first_non_none {
+                KvCache::Normal { k, .. } => {
+                    k.all_data().as_ref().expect("No KV cache data").device()
+                }
+                KvCache::Rotating { k, .. } => {
+                    k.all_data().as_ref().expect("No KV cache data").device()
+                }
+            };
+
             if !matches!(cache_device, Device::Cpu) {
                 Self::cache_to(&mut cache.cache, Either::Left(&Device::Cpu))?;
                 n_evicted += 1;
@@ -175,12 +197,16 @@ impl PrefixCacheManagerV2 {
             let Some(Some(first_non_none)) = first_non_none else {
                 continue;
             };
-            let cache_device = first_non_none
-                .k
-                .all_data()
-                .as_ref()
-                .expect("No KV cache data")
-                .device();
+
+            let cache_device = match first_non_none {
+                KvCache::Normal { k, .. } => {
+                    k.all_data().as_ref().expect("No KV cache data").device()
+                }
+                KvCache::Rotating { k, .. } => {
+                    k.all_data().as_ref().expect("No KV cache data").device()
+                }
+            };
+
             if !matches!(cache_device, Device::Cpu) {
                 Self::cache_to(&mut cache.cache, Either::Left(&Device::Cpu))?;
             }

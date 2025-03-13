@@ -60,7 +60,6 @@ struct Attention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<RotaryEmbedding>,
-    sliding_window: Option<usize>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -125,7 +124,6 @@ impl Attention {
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
             rotary_emb,
-            sliding_window: cfg.sliding_window,
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
@@ -220,14 +218,13 @@ impl Attention {
                 }
             },
             None => {
-                let (k, v, attn_mask) =
-                    kv_cache.append_sliding_window(&k, &v, attention_mask, self.sliding_window)?;
+                let (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(
                     &q,
                     &k,
                     &v,
-                    attn_mask.as_ref(),
+                    attention_mask,
                     Some(flash_params),
                     &self.sdpa_params,
                 )?
@@ -605,9 +602,10 @@ impl Model {
             lm_head,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
-            cache: EitherCache::Normal(NormalCache::new(
+            cache: EitherCache::Normal(NormalCache::new_sliding(
                 cfg.num_hidden_layers,
                 cfg.max_position_embeddings,
+                cfg.sliding_window,
             )),
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {

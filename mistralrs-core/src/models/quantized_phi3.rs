@@ -54,7 +54,6 @@ struct LayerWeights {
     head_dim: usize,
     cos: Tensor,
     sin: Tensor,
-    sliding_window: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     dtype: DType,
@@ -133,10 +132,9 @@ impl LayerWeights {
                 )?
             }
             None => {
-                let (k, v, attn_mask) =
-                    kv_cache.append_sliding_window(&k, &v, mask, Some(self.sliding_window))?;
+                let (k, v) = kv_cache.append(&k, &v)?;
 
-                Sdpa.run_attention(&q, &k, &v, attn_mask.as_ref(), None, &self.sdpa_params)?
+                Sdpa.run_attention(&q, &k, &v, mask, None, &self.sdpa_params)?
             }
         };
 
@@ -334,7 +332,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 head_dim,
                 cos: cos.to_device(device)?,
                 sin: sin.to_device(device)?,
-                sliding_window: context_window,
                 paged_attn,
                 sdpa_params: SdpaParams {
                     n_kv_groups: head_count / head_count_kv,
@@ -353,7 +350,11 @@ impl ModelConfig::FromGGUF for ModelWeights {
             output,
             mapper: Some(mapper),
             device: device.clone(),
-            cache: EitherCache::Normal(NormalCache::new(block_count, context_window)),
+            cache: EitherCache::Normal(NormalCache::new_sliding(
+                block_count,
+                context_window,
+                Some(context_window),
+            )),
             max_seq_len: context_window,
             dtype,
         })

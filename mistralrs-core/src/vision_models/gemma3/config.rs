@@ -8,7 +8,7 @@ use crate::{
 
 serde_default_fn!(bool, attention_bias, false);
 serde_default_fn!(usize, head_dim, 256);
-serde_default_fn!(Activation, hidden_activation, Activation::Gelu);
+serde_default_fn!(Activation, hidden_activation, Activation::GeluPytorchTanh);
 serde_default_fn!(f64, rms_norm_eps, 1e-6);
 serde_default_fn!(f64, rope_theta, 1000000.);
 serde_default_fn!(usize, vocab_size, 262208);
@@ -62,9 +62,14 @@ pub struct Gemma3TextConfig {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct Gemma3Config {
-    pub text_config: Gemma3TextConfig,
-    pub vision_config: SiglipVisionConfig,
-    pub image_token_index: usize,
-    pub mm_tokens_per_image: usize,
+pub enum Gemma3Config {
+    #[serde(untagged)]
+    WithVision {
+        text_config: Gemma3TextConfig,
+        vision_config: SiglipVisionConfig,
+        image_token_index: usize,
+        mm_tokens_per_image: usize,
+    },
+    #[serde(untagged)]
+    Text(Gemma3TextConfig),
 }

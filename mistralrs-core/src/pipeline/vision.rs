@@ -442,16 +442,14 @@ impl Loader for VisionLoader {
             }
         };
 
-        let preprocessor_config: PreProcessorConfig = serde_json::from_str(
-            &fs::read_to_string(
-                paths
-                    .get_preprocessor_config()
-                    .as_ref()
-                    .expect("Need preprocessor config"),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        // Handle the Gemma 3 1b case here
+        let preprocessor_config: PreProcessorConfig = match paths.get_preprocessor_config().as_ref()
+        {
+            Some(preprocessor_config) => {
+                serde_json::from_str(&fs::read_to_string(preprocessor_config).unwrap()).unwrap()
+            }
+            None => PreProcessorConfig::default(),
+        };
         let processor_config: Option<ProcessorConfig> = paths
             .get_processor_config()
             .as_ref()
