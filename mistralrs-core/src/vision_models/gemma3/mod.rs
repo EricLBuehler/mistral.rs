@@ -11,6 +11,7 @@ use text::TextModel;
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
+    ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -86,10 +87,16 @@ impl Gemma3Model {
                 .broadcast_as(input_embeds.shape())?
                 .to_dtype(DType::U32)?;
 
-            let current_vals = input_embeds.gather(&special_image_mask.contiguous()?, 1)?;
-            let delta = image_features.broadcast_sub(&current_vals)?;
+            let mask_flat = special_image_mask.flatten_all()?;
+            let mut x_flat = input_embeds.flatten_all()?;
+            let src_flat = image_features.flatten_all()?;
 
-            input_embeds = input_embeds.scatter_add(&special_image_mask, &delta, 1)?;
+            let indices = mask_flat.nonzero()?.squeeze(1)?;
+            let current_vals = x_flat.gather(&indices, 0)?;
+            let diff = (src_flat - current_vals)?;
+            x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+
+            input_embeds = x_flat.reshape(input_embeds.shape())?;
         };
         self.language_model.forward_embeds(
             input_ids,

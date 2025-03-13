@@ -34,8 +34,8 @@ struct Gemma3ImageProcessor {
 }
 
 const IMAGE_TOKEN: &str = "<image_soft_token>";
-const BOI_TOKEN: &str = "<end_of_image>";
-const EOI_TOKEN: &str = "<eoi_token>";
+const BOI_TOKEN: &str = "<start_of_image>";
+const EOI_TOKEN: &str = "<end_of_image>";
 
 pub struct Gemma3Processor {
     full_image_sequence: String,
@@ -61,11 +61,11 @@ impl Processor for Gemma3Processor {
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
-        &[]
+        &[BOI_TOKEN, EOI_TOKEN, IMAGE_TOKEN]
     }
 
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::FlattenOnlyText
+        MessagesAction::Keep
     }
 }
 
