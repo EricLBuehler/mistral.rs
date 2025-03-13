@@ -514,11 +514,47 @@
 <a href="#513" id="513">513</a>
 <a href="#514" id="514">514</a>
 <a href="#515" id="515">515</a>
-<a href="#516" id="516">516</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a>
+<a href="#520" id="520">520</a>
+<a href="#521" id="521">521</a>
+<a href="#522" id="522">522</a>
+<a href="#523" id="523">523</a>
+<a href="#524" id="524">524</a>
+<a href="#525" id="525">525</a>
+<a href="#526" id="526">526</a>
+<a href="#527" id="527">527</a>
+<a href="#528" id="528">528</a>
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a>
+<a href="#538" id="538">538</a>
+<a href="#539" id="539">539</a>
+<a href="#540" id="540">540</a>
+<a href="#541" id="541">541</a>
+<a href="#542" id="542">542</a>
+<a href="#543" id="543">543</a>
+<a href="#544" id="544">544</a>
+<a href="#545" id="545">545</a>
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor, D};
 <span class="kw">use </span>candle_nn::{Linear, Module};
-<span class="kw">use </span>mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+<span class="kw">use </span>mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
 
 <span class="kw">use crate</span>::{
     layers::{<span class="self">self</span>, Activation, Conv3dConfig, Conv3dNoBias, MatMul, RmsNorm},
@@ -580,11 +616,38 @@
 }
 
 <span class="kw">impl </span>VisionMlp {
-    <span class="kw">fn </span>new(dim: usize, hidden_dim: usize, act: Activation, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(
+        dim: usize,
+        hidden_dim: usize,
+        act: Activation,
+        vb: ShardedVarBuilder,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-            gate_proj: mistralrs_quant::linear(dim, hidden_dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"gate_proj"</span>))<span class="question-mark">?</span>,
-            up_proj: mistralrs_quant::linear(dim, hidden_dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"up_proj"</span>))<span class="question-mark">?</span>,
-            down_proj: mistralrs_quant::linear(hidden_dim, dim, <span class="kw-2">&amp;</span><span class="prelude-val">None</span>, vb.pp(<span class="string">"down_proj"</span>))<span class="question-mark">?</span>,
+            gate_proj: ColumnParallelLayer::new(
+                dim,
+                hidden_dim,
+                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                <span class="bool-val">true</span>,
+                comm,
+                vb.pp(<span class="string">"gate_proj"</span>),
+            )<span class="question-mark">?</span>,
+            up_proj: ColumnParallelLayer::new(
+                dim,
+                hidden_dim,
+                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                <span class="bool-val">true</span>,
+                comm,
+                vb.pp(<span class="string">"up_proj"</span>),
+            )<span class="question-mark">?</span>,
+            down_proj: RowParallelLayer::new(
+                hidden_dim,
+                dim,
+                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+                <span class="bool-val">true</span>,
+                comm,
+                vb.pp(<span class="string">"down_proj"</span>),
+            )<span class="question-mark">?</span>,
             act,
         })
     }
@@ -618,11 +681,10 @@
 }
 
 <span class="kw">fn </span>apply_rotary_pos_emb_vision(xs: <span class="kw-2">&amp;</span>Tensor, freqs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="kw">let </span>xs = xs.to_dtype(DType::F32)<span class="question-mark">?</span>;
-    <span class="kw">let </span>cos = freqs.cos()<span class="question-mark">?</span>.unsqueeze(D::Minus2)<span class="question-mark">?</span>;
-    <span class="kw">let </span>sin = freqs.sin()<span class="question-mark">?</span>.unsqueeze(D::Minus2)<span class="question-mark">?</span>;
+    <span class="kw">let </span>cos = freqs.cos()<span class="question-mark">?</span>.unsqueeze(D::Minus2)<span class="question-mark">?</span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
+    <span class="kw">let </span>sin = freqs.sin()<span class="question-mark">?</span>.unsqueeze(D::Minus2)<span class="question-mark">?</span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
 
-    xs.broadcast_mul(<span class="kw-2">&amp;</span>cos)<span class="question-mark">? </span>+ rotate_half(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>.broadcast_mul(<span class="kw-2">&amp;</span>sin)
+    xs.broadcast_mul(<span class="kw-2">&amp;</span>cos)<span class="question-mark">? </span>+ rotate_half(xs)<span class="question-mark">?</span>.broadcast_mul(<span class="kw-2">&amp;</span>sin)
 }
 
 <span class="comment">// https://github.com/huggingface/transformers/blob/a769ed45e17c44fd17b85c025863c4e4f2f73634/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L325
@@ -698,7 +760,11 @@
 }
 
 <span class="kw">impl </span>VisionBlock {
-    <span class="kw">fn </span>new(cfg: <span class="kw-2">&amp;</span>VisionConfig, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">fn </span>new(
+        cfg: <span class="kw-2">&amp;</span>VisionConfig,
+        vb: ShardedVarBuilder,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>norm1 = RmsNorm::new(cfg.hidden_size, <span class="number">1e-6</span>, vb.pp(<span class="string">"norm1"</span>))<span class="question-mark">?</span>;
         <span class="kw">let </span>norm2 = RmsNorm::new(cfg.hidden_size, <span class="number">1e-6</span>, vb.pp(<span class="string">"norm2"</span>))<span class="question-mark">?</span>;
 
@@ -707,6 +773,7 @@
             cfg.intermediate_size,
             cfg.hidden_act,
             vb.pp(<span class="string">"mlp"</span>),
+            comm,
         )<span class="question-mark">?</span>;
         <span class="kw">let </span>attn = VisionAttention::new(cfg.hidden_size, cfg.num_heads, vb.pp(<span class="string">"attn"</span>))<span class="question-mark">?</span>;
 
@@ -806,10 +873,14 @@
 }
 
 <span class="kw">impl </span>Qwen2_5VLVisionModel {
-    <span class="kw">pub fn </span>new(cfg: <span class="kw-2">&amp;</span>VisionConfig, vb: ShardedVarBuilder) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
+    <span class="kw">pub fn </span>new(
+        cfg: <span class="kw-2">&amp;</span>VisionConfig,
+        vb: ShardedVarBuilder,
+        comm: <span class="kw-2">&amp;</span>Arc&lt;mistralrs_quant::Comm&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>blocks = Vec::new();
         <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..cfg.depth {
-            blocks.push(VisionBlock::new(cfg, vb.pp(<span class="macro">format!</span>(<span class="string">"blocks.{i}"</span>)))<span class="question-mark">?</span>);
+            blocks.push(VisionBlock::new(cfg, vb.pp(<span class="macro">format!</span>(<span class="string">"blocks.{i}"</span>)), comm)<span class="question-mark">?</span>);
         }
 
         <span class="kw">let </span>patch_merger = PatchMerger::new(
@@ -970,6 +1041,7 @@
         rotary_pos_emb = rotary_pos_emb.index_select(<span class="kw-2">&amp;</span>window_index, <span class="number">0</span>)<span class="question-mark">?</span>;
         rotary_pos_emb = rotary_pos_emb.reshape((seq_len, ()))<span class="question-mark">?</span>;
         rotary_pos_emb = Tensor::cat(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>rotary_pos_emb; <span class="number">2</span>], D::Minus1)<span class="question-mark">?</span>;
+        rotary_pos_emb = rotary_pos_emb.to_dtype(xs.dtype())<span class="question-mark">?</span>;
 
         <span class="kw">let </span>grid_thw = grid_thw.to_device(<span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
         <span class="kw">let </span>cu_seqlens = (grid_thw.i((.., <span class="number">1</span>))<span class="question-mark">? </span>* grid_thw.i((.., <span class="number">2</span>))<span class="question-mark">?</span>)<span class="question-mark">?
@@ -986,13 +1058,13 @@
             cu_seqlens =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>attention_mask =
                     Tensor::full(f32::MIN, (<span class="number">1</span>, seq_len, seq_len), xs.device())<span class="question-mark">?
-                        </span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+                        </span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
                 <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..cu_seqlens.len() {
                     <span class="kw">let </span>a = cu_seqlens[i - <span class="number">1</span>] <span class="kw">as </span>usize;
                     <span class="kw">let </span>b = cu_seqlens[i] <span class="kw">as </span>usize;
                     attention_mask = attention_mask.slice_assign(
                         <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(a..b), <span class="kw-2">&amp;</span>(a..b)],
-                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), DType::F32, xs.device())<span class="question-mark">?</span>,
+                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), xs.dtype(), xs.device())<span class="question-mark">?</span>,
                     )<span class="question-mark">?</span>;
                 }
                 <span class="prelude-val">Some</span>(attention_mask)
@@ -1003,13 +1075,13 @@
             cu_seqlens =&gt; {
                 <span class="kw">let </span><span class="kw-2">mut </span>attention_mask =
                     Tensor::full(f32::MIN, (<span class="number">1</span>, seq_len, seq_len), xs.device())<span class="question-mark">?
-                        </span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
+                        </span>.to_dtype(xs.dtype())<span class="question-mark">?</span>;
                 <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..cu_seqlens.len() {
                     <span class="kw">let </span>a = cu_seqlens[i - <span class="number">1</span>] <span class="kw">as </span>usize;
                     <span class="kw">let </span>b = cu_seqlens[i] <span class="kw">as </span>usize;
                     attention_mask = attention_mask.slice_assign(
                         <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>.., <span class="kw-2">&amp;</span>(a..b), <span class="kw-2">&amp;</span>(a..b)],
-                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), DType::F32, xs.device())<span class="question-mark">?</span>,
+                        <span class="kw-2">&amp;</span>Tensor::zeros((<span class="number">1</span>, b - a, b - a), xs.dtype(), xs.device())<span class="question-mark">?</span>,
                     )<span class="question-mark">?</span>;
                 }
                 <span class="prelude-val">Some</span>(attention_mask)
