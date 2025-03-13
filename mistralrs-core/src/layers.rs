@@ -1896,10 +1896,17 @@ impl MlpLayer for Mlp {
         }
         let lhs = MatMul.qmethod_matmul(&xs, &*self.gate)?;
         let rhs = MatMul.qmethod_matmul(&xs, &*self.up)?;
-        let mut res = MatMul.qmethod_matmul(
-            &candle_nn::ops::mul_and_act(&lhs, &rhs, self.act.try_into()?)?,
-            &*self.down,
-        )?;
+        let mut res = if matches!(
+            self.act,
+            Activation::Gelu | Activation::Silu | Activation::Relu
+        ) {
+            MatMul.qmethod_matmul(
+                &candle_nn::ops::mul_and_act(&lhs, &rhs, self.act.try_into()?)?,
+                &*self.down,
+            )?
+        } else {
+            MatMul.qmethod_matmul(&(&lhs.apply(&self.act)? * &rhs)?, &*self.down)?
+        };
         if self.gate.quantized_act_type().is_some() {
             res = res.to_dtype(original_dtype)?;
         }
