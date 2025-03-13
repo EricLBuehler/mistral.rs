@@ -3,12 +3,11 @@ use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, Visi
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model =
-        VisionModelBuilder::new("google/gemma-3-12b-it", VisionLoaderType::Gemma3)
-            .with_isq(IsqType::Q4K)
-            .with_logging()
-            .build()
-            .await?;
+    let model = VisionModelBuilder::new("google/gemma-3-12b-it", VisionLoaderType::Gemma3)
+        .with_isq(IsqType::Q4K)
+        .with_logging()
+        .build()
+        .await?;
 
     let bytes = match reqwest::blocking::get(
         "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
