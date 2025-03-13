@@ -209,6 +209,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     pixel_values_list: _,
                     tgt_sizes: _,
                     image_sizes_all: _,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -245,7 +246,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
 
                 seq.set_initial_prompt(sample.clone());
                 let toks = tokenizer
-                    .encode(sample, true)
+                    .encode(sample, false)
                     .expect("Detokenization failed!");
 
                 let ids = toks.get_ids().to_vec();
@@ -599,6 +600,7 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             pixel_values_list: None,
             tgt_sizes: None,
             image_sizes_all: None,
+            num_crops: None,
         })
     }
 }

@@ -137,6 +137,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                     pixel_values_list: _,
                     tgt_sizes: _,
                     image_sizes_all,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         imgs,
@@ -243,7 +244,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
 
             seq.set_toks_and_reallocate(
                 tokenizer
-                    .encode(detokenized.clone(), true)
+                    .encode(detokenized.clone(), false)
                     .expect("Encode failed")
                     .get_ids()
                     .to_vec(),
@@ -659,6 +660,7 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
             pixel_values_list: None,
             tgt_sizes: None,
             image_sizes_all: Some(image_sizes),
+            num_crops: None,
         })
     }
 }

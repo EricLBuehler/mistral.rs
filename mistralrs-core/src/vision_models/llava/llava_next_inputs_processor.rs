@@ -154,6 +154,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     pixel_values_list: _,
                     tgt_sizes: _,
                     image_sizes_all: _,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         imgs.clone(),
@@ -282,7 +283,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 .map(|s| {
                     // we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
                     tokenizer
-                        .encode(*s, true)
+                        .encode(*s, false)
                         .unwrap()
                         .get_ids()
                         .to_vec()
@@ -458,6 +459,7 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
             pixel_values_list: None,
             tgt_sizes: None,
             image_sizes_all: None,
+            num_crops: None,
         })
     }
 }

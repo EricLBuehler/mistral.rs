@@ -215,6 +215,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                             pixel_values_list: _,
                             tgt_sizes: _,
                             image_sizes_all: _,
+                            num_crops: _,
                         } = self
                             .preprocess(
                                 seq.clone_images()
@@ -326,7 +327,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 seq.set_initial_prompt(detok.clone());
 
                 let toks = tokenizer
-                    .encode(detok, true)
+                    .encode(detok, false)
                     .expect("Detokenization failed!");
 
                 let ids = toks.get_ids().to_vec();
@@ -378,7 +379,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 );
 
                 let ids = tokenizer
-                    .encode(prompt, true)
+                    .encode(prompt, false)
                     .expect("Tokenization failed!");
 
                 input_ids_searching.push(ids.get_ids().to_vec());
@@ -696,6 +697,7 @@ impl ImagePreProcessor for Qwen2_5VLImageProcessor {
                 pixel_values_list: None,
                 tgt_sizes: None,
                 image_sizes_all: None,
+                num_crops: None,
             });
         }
 
@@ -735,6 +737,7 @@ impl ImagePreProcessor for Qwen2_5VLImageProcessor {
                 pixel_values_list: None,
                 tgt_sizes: None,
                 image_sizes_all: None,
+                num_crops: None,
             });
         }
         unreachable!()
