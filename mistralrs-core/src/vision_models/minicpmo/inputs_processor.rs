@@ -275,7 +275,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                                 .im_start_token
                                 .clone()
                                 .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
-                            true,
+                            false,
                         )
                         .unwrap()
                         .get_ids()[0];
@@ -285,7 +285,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                                 .im_end_token
                                 .clone()
                                 .unwrap_or(DEFAULT_IM_END_TOKEN.to_string()),
-                            true,
+                            false,
                         )
                         .unwrap()
                         .get_ids()[0];
@@ -295,7 +295,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                                 .slice_start_token
                                 .clone()
                                 .unwrap_or(DEFAULT_SLICE_START_TOKEN.to_string()),
-                            true,
+                            false,
                         )
                         .unwrap()
                         .get_ids()[0];
@@ -305,13 +305,13 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                                 .slice_end_token
                                 .clone()
                                 .unwrap_or(DEFAULT_SLICE_END_TOKEN.to_string()),
-                            true,
+                            false,
                         )
                         .unwrap()
                         .get_ids()[0];
 
                     let input_ids = tokenizer
-                        .encode(final_text, true)
+                        .encode(final_text, false)
                         .unwrap()
                         .get_ids()
                         .to_vec();

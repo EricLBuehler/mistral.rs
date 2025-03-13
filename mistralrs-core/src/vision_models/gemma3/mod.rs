@@ -17,6 +17,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, VisionModel,
     },
+    utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
 };
 
@@ -120,8 +121,17 @@ impl IsqModel for Gemma3Model {
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        todo!();
-        self.language_model.residual_tensors()
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("multi_modal_projector")
+            .extend(self.multi_modal_projector.residual_tensors());
+        uvb.pp("language_model")
+            .extend(self.language_model.residual_tensors());
+        uvb.pp("vision_tower")
+            .pp("vision_model")
+            .extend(self.vision_tower.residual_tensors());
+
+        uvb.to_safetensors()
     }
 
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {

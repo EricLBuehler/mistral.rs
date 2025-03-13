@@ -2,7 +2,10 @@ use candle_core::{Result, Tensor};
 use candle_nn::Module;
 use mistralrs_quant::ShardedVarBuilder;
 
-use crate::layers::{AvgPool2d, RmsNorm};
+use crate::{
+    layers::{AvgPool2d, RmsNorm},
+    utils::unvarbuilder::UnVarBuilder,
+};
 
 use super::config::Gemma3Config;
 
@@ -57,5 +60,18 @@ impl Gemma3MultiModalProjector {
         let normed_vision_outputs = self.mm_soft_emb_norm.forward(&pooled_vision_outputs)?;
 
         normed_vision_outputs.broadcast_matmul(&self.mm_input_projection_weight)
+    }
+
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.add_tensor(
+            "mm_input_projection_weight",
+            self.mm_input_projection_weight.clone(),
+        );
+        uvb.pp("mm_soft_emb_norm")
+            .add(&self.mm_soft_emb_norm.undo_gemma().unwrap());
+
+        uvb.to_safetensors()
     }
 }

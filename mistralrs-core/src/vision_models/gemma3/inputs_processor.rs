@@ -166,6 +166,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
         let (new_input, pixel_values) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut all_ids = Vec::new();
+            let re = Regex::new(BOI_TOKEN).unwrap();
             for seq in input_seqs.iter_mut() {
                 let PreprocessedImages {
                     pixel_values,
@@ -203,7 +204,6 @@ impl InputsProcessor for Gemma3ImageProcessor {
                     .decode(seq.get_toks(), false)
                     .expect("Detokenization failed!");
 
-                let re = Regex::new(BOI_TOKEN).unwrap();
                 let image_indexes: Vec<usize> =
                     re.find_iter(&prompt).map(|mat| mat.start()).collect();
 
@@ -226,7 +226,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
 
                 seq.set_initial_prompt(prompt.clone());
                 let toks = tokenizer
-                    .encode(prompt, true)
+                    .encode(prompt, false)
                     .expect("Detokenization failed!");
 
                 let ids = toks.get_ids().to_vec();
@@ -424,13 +424,13 @@ impl ImagePreProcessor for Gemma3ImageProcessor {
         let mut pixel_values = Vec::new();
         for mut image in images {
             if do_resize {
-                image = image.resize_exact(width as u32, height as u32, resample);
+                image = image.resize_exact(width, height, resample);
             }
 
             let transforms = Transforms {
                 input: &ToTensorNoNorm,
                 inner_transforms: &[
-                    &do_rescale.then(|| Rescale {
+                    &do_rescale.then_some(Rescale {
                         factor: Some(rescale_factor),
                     }),
                     &do_normalize.then(|| Normalize {

@@ -372,7 +372,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 seq.set_initial_prompt(detok.clone());
 
                 let toks = tokenizer
-                    .encode(detok, true)
+                    .encode(detok, false)
                     .expect("Detokenization failed!");
 
                 let ids = toks.get_ids().to_vec();
@@ -423,7 +423,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 );
 
                 let ids = tokenizer
-                    .encode(prompt, true)
+                    .encode(prompt, false)
                     .expect("Tokenization failed!");
 
                 input_ids_searching.push(ids.get_ids().to_vec());
