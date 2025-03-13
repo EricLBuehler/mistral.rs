@@ -226,7 +226,7 @@ fn naive_sdpa(
 
         candle_nn::ops::inplace_attn_softmax_last_dim(
             &mut att,
-            &mask,
+            &mask.contiguous()?,
             sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0),
         )?;
 
