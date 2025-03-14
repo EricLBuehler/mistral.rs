@@ -5,8 +5,9 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    distributed::DistributedOperation, ColumnParallelLayer, QuantMethod, QuantizedConfig,
-    ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce, QuantMethodConfig, UnquantLinear
+    distributed::DistributedOperation, ColumnParallelLayer, QuantMethod, QuantMethodConfig,
+    QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce,
+    UnquantLinear,
 };
 use serde::Deserialize;
 

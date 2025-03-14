@@ -11,7 +11,7 @@ use candle_core::{Device, Error, Result, Tensor, D};
 use pyo3::pyclass;
 
 use once_cell::sync::Lazy;
-use rand::distributions::{Distribution, WeightedIndex};
+use rand::distr::{Distribution, weighted::WeightedIndex};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
