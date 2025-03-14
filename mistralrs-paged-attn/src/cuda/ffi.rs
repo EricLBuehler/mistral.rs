@@ -76,4 +76,23 @@ extern "C" {
 
         dtype: u32,
     );
+
+    pub fn concat_and_cache_mla(
+        kv_c: *const c_void,         // [num_tokens, kv_lora_rank]
+        k_pe: *const c_void,         // [num_tokens, pe_dim]
+        kv_cache: *mut c_void,       // [num_blocks, block_size, (kv_lora_rank + pe_dim)]
+        slot_mapping: *const c_long, // [num_tokens] or [num_actual_tokens]
+
+        num_tokens: c_int,
+        kv_lora_rank: c_int,
+        pe_dim: c_int,
+        block_size: c_int,
+
+        kv_c_stride: c_int,
+        k_pe_stride: c_int,
+        block_stride: c_int,
+        entry_stride: c_int,
+
+        dtype: u32, // 0 => f16; 1 => bf16; 2 => f32
+    );
 }

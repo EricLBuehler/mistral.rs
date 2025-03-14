@@ -17,7 +17,7 @@ candle-core.workspace = true
 candle-nn.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "2002e7a", optional = true }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "ea6ba141", optional = true }
 dirs = "5.0.1"
 hf-hub = { version = "0.3.3", package = "candle-hf-hub" }
 thiserror = "1.0.57"
@@ -32,7 +32,7 @@ half.workspace = true
 accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 tracing.workspace = true
-rand = "0.8.5"
+rand = "0.9.0"
 regex-automata = { version = "0.4.6", features = ["meta"] }
 rustc-hash = "2.0.0"
 vob = "3.0.3"
@@ -81,7 +81,8 @@ llguidance = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97
 toktrie_hf_tokenizers = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc" }
 objc = { version = "0.2.7", optional = true }
 metal = { workspace = true, optional = true }
-candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "2002e7a", optional = true }
+candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "ea6ba141", optional = true }
+candle-flash-mla = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "ea6ba141", optional = true }
 safetensors.workspace = true
 serde-big-array = "0.5.1"
 interprocess = "2.2.2"
@@ -96,6 +97,7 @@ cuda = [
     "dep:mistralrs-paged-attn",
     "mistralrs-paged-attn/cuda",
     "float8/cuda",
+    "dep:candle-flash-mla",
 ]
 cudnn = ["candle-core/cudnn"]
 metal = [

@@ -12,7 +12,7 @@ use candle_core::{
 };
 
 pub use cache::{copy_blocks, swap_blocks};
-pub use paged_attention::{paged_attention, reshape_and_cache};
+pub use paged_attention::{concat_and_cache_mla, paged_attention, reshape_and_cache};
 
 const COPY_BLOCKS_KERNEL_NAME: &str = "copy_blocks_kernel";
 
