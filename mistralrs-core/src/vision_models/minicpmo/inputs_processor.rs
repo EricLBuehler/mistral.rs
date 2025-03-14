@@ -174,9 +174,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let (new_input, pixel_values_all, image_bound, tgt_sizes) = if has_images {
             const IMAGE_TAG: &str = "(<image>./</image>)";
@@ -208,6 +206,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                     pixel_values_list,
                     tgt_sizes,
                     image_sizes_all,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -274,7 +273,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                                 .im_start_token
                                 .clone()
                                 .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
-                            true,
+                            false,
                         )
                         .unwrap()
                         .get_ids()[0];
@@ -284,7 +283,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                                 .im_end_token
                                 .clone()
                                 .unwrap_or(DEFAULT_IM_END_TOKEN.to_string()),
-                            true,
+                            false,
                         )
                         .unwrap()
                         .get_ids()[0];
@@ -294,7 +293,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                                 .slice_start_token
                                 .clone()
                                 .unwrap_or(DEFAULT_SLICE_START_TOKEN.to_string()),
-                            true,
+                            false,
                         )
                         .unwrap()
                         .get_ids()[0];
@@ -304,18 +303,18 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                                 .slice_end_token
                                 .clone()
                                 .unwrap_or(DEFAULT_SLICE_END_TOKEN.to_string()),
-                            true,
+                            false,
                         )
                         .unwrap()
                         .get_ids()[0];
 
                     let input_ids = tokenizer
-                        .encode(final_text, true)
+                        .encode(final_text, false)
                         .unwrap()
                         .get_ids()
                         .to_vec();
 
-                    seq.set_toks(input_ids.clone());
+                    seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
 
                     let image_start_idx = input_ids
                         .iter()
@@ -779,6 +778,7 @@ impl ImagePreProcessor for MiniCpmOImageProcessor {
             pixel_values_list: Some(pixel_values),
             tgt_sizes: Some(tgt_sizes),
             image_sizes_all: Some(image_sizes),
+            num_crops: None,
         })
     }
 }

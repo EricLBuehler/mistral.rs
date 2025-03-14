@@ -211,9 +211,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let (
             new_input,
@@ -264,6 +262,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                             pixel_values_list: _,
                             tgt_sizes: _,
                             image_sizes_all: _,
+                            num_crops: _,
                         } = self
                             .preprocess(
                                 seq.clone_images()
@@ -371,7 +370,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 seq.set_initial_prompt(detok.clone());
 
                 let toks = tokenizer
-                    .encode(detok, true)
+                    .encode(detok, false)
                     .expect("Detokenization failed!");
 
                 let ids = toks.get_ids().to_vec();
@@ -393,7 +392,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 let continuous_vid_pad = find_sequences(&ids, vid_pad[0]);
                 all_continuous_vid_pad.push(continuous_vid_pad);
 
-                seq.set_toks(ids);
+                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
             }
 
             let mut input_ids_searching = Vec::new();
@@ -422,7 +421,7 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                 );
 
                 let ids = tokenizer
-                    .encode(prompt, true)
+                    .encode(prompt, false)
                     .expect("Tokenization failed!");
 
                 input_ids_searching.push(ids.get_ids().to_vec());
@@ -693,6 +692,7 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 pixel_values_list: None,
                 tgt_sizes: None,
                 image_sizes_all: None,
+                num_crops: None,
             });
         }
 
@@ -732,6 +732,7 @@ impl ImagePreProcessor for Qwen2VLImageProcessor {
                 pixel_values_list: None,
                 tgt_sizes: None,
                 image_sizes_all: None,
+                num_crops: None,
             });
         }
         unreachable!()

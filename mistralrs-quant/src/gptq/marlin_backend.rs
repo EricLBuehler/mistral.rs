@@ -90,6 +90,7 @@ impl GPTQMatMul {
                     size_n as i32,
                     workspace_ptr,
                     groupsize,
+                    *dev.cu_stream(),
                 );
             }
         } else if x.dtype() == DType::BF16 {
@@ -104,6 +105,7 @@ impl GPTQMatMul {
                     size_n as i32,
                     workspace_ptr,
                     groupsize,
+                    *dev.cu_stream(),
                 );
             }
         }

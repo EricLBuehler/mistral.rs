@@ -3,10 +3,12 @@
 #[cfg(feature = "metal")]
 use std::sync::atomic::AtomicUsize;
 
-use crate::{cublaslt::CUBLASLT_HANDLE, pipeline::text_models_inputs_processor::FlashParams};
+use crate::{
+    cublaslt::CUBLASLT_HANDLE, pipeline::text_models_inputs_processor::FlashParams, MemoryUsage,
+};
 
 use candle_core::{Device, Result, Tensor};
-use mistralrs_quant::{get_use_matmul_via_f16, MatMul};
+use mistralrs_quant::MatMul;
 
 #[cfg(feature = "metal")]
 /// Initial, sentinel value is usize::MAX
@@ -208,7 +210,10 @@ fn naive_sdpa(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    q.device().synchronize()?;
+    // If less that 4 GB available, synchronize
+    if MemoryUsage.get_memory_available(q.device())? < 4 * 1024 * (1024 * 1024) {
+        q.device().synchronize()?;
+    }
 
     // Use faster softmax if mask is rank 2 or it's rank 3
     if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && supports_attn_softmax()? {
@@ -221,7 +226,7 @@ fn naive_sdpa(
 
         candle_nn::ops::inplace_attn_softmax_last_dim(
             &mut att,
-            &mask,
+            &mask.contiguous()?,
             sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0),
         )?;
 
@@ -316,69 +321,64 @@ impl Sdpa {
         // TODO: bench?
         #[allow(unused)]
         if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
-            if !get_use_matmul_via_f16() {
-                #[cfg(feature = "cuda")]
-                {
-                    // cuBLASLt batch matmul implementation requires inputs to be dims3
-                    let k = k.flatten(0, 1)?;
-                    let q = q.flatten(0, 1)?;
-                    let v = v.flatten(0, 1)?;
-                    let attention_bias = match mask {
-                        Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => {
-                            Some(mask.repeat((n_attn_heads, 1, 1))?)
-                        }
-                        Some(mask) if mask.rank() == 3 => Some(mask.clone()),
-                        Some(mask) if mask.rank() == 4 => Some(mask.flatten(0, 1)?),
-                        Some(mask) => {
-                            candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
-                        }
-                        None => None,
-                    };
-
-                    // If attention_bias is set, we fuse the add by giving it as the output matrix
-                    // and setting beta to 1.0
-                    let beta = match attention_bias.is_some() {
-                        true => Some(1.0),
-                        false => None,
-                    };
-
-                    // Batch matrix multiplication
-                    // Fuse softmax scale and attention_bias add
-                    let mut attention_scores = cublaslt.batch_matmul(
-                        &k,
-                        &q,
-                        attention_bias.as_ref(),
-                        Some(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)),
-                        beta,
-                        None,
-                        None,
-                    )?;
-                    if let Some(softcap) = sdpa_params.softcap {
-                        attention_scores = (attention_scores.tanh()? * softcap as f64)?;
+            #[cfg(feature = "cuda")]
+            {
+                // cuBLASLt batch matmul implementation requires inputs to be dims3
+                let k = k.flatten(0, 1)?;
+                let q = q.flatten(0, 1)?;
+                let v = v.flatten(0, 1)?;
+                let attention_bias = match mask {
+                    Some(mask) if mask.rank() == 3 && mask.dims()[0] == 1 => {
+                        Some(mask.repeat((n_attn_heads, 1, 1))?)
                     }
-                    candle_nn::ops::inplace_softmax_last_dim(&mut attention_scores)?;
+                    Some(mask) if mask.rank() == 3 => Some(mask.clone()),
+                    Some(mask) if mask.rank() == 4 => Some(mask.flatten(0, 1)?),
+                    Some(mask) => {
+                        candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
+                    }
+                    None => None,
+                };
 
-                    let context_layer = cublaslt.batch_matmul(
-                        &v.t()?.contiguous().unwrap(),
-                        &attention_scores,
-                        // We save one allocation
-                        Some(&q),
-                        None,
-                        None,
-                        None,
-                        None,
-                    )?;
+                // If attention_bias is set, we fuse the add by giving it as the output matrix
+                // and setting beta to 1.0
+                let beta = match attention_bias.is_some() {
+                    true => Some(1.0),
+                    false => None,
+                };
 
-                    // Reshape to dims4
-                    context_layer.reshape((b_sz, n_attn_heads, seq_len, v_head_dim))
+                // Batch matrix multiplication
+                // Fuse softmax scale and attention_bias add
+                let mut attention_scores = cublaslt.batch_matmul(
+                    &k,
+                    &q,
+                    attention_bias.as_ref(),
+                    Some(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)),
+                    beta,
+                    None,
+                    None,
+                )?;
+                if let Some(softcap) = sdpa_params.softcap {
+                    attention_scores = (attention_scores.tanh()? * softcap as f64)?;
                 }
-                #[cfg(not(feature = "cuda"))]
-                {
-                    candle_core::bail!("`cuda` feature is not enabled")
-                }
-            } else {
-                // Use the f16 kernels here if quantized (ISQ or GGML), and a large enough prompt
-                naive_sdpa(q, &k, &v, mask, sdpa_params)
+                candle_nn::ops::inplace_softmax_last_dim(&mut attention_scores)?;
+
+                let context_layer = cublaslt.batch_matmul(
+                    &v.t()?.contiguous().unwrap(),
+                    &attention_scores,
+                    // We save one allocation
+                    Some(&q),
+                    None,
+                    None,
+                    None,
+                    None,
+                )?;
+
+                // Reshape to dims4
+                context_layer.reshape((b_sz, n_attn_heads, seq_len, v_head_dim))
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                candle_core::bail!("`cuda` feature is not enabled")
             }
         } else {
             naive_sdpa(q, &k, &v, mask, sdpa_params)

@@ -102,8 +102,7 @@ impl DiffusionModelBuilder {
             method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
         };
 
-        let runner =
-            MistralRsBuilder::new(pipeline, scheduler_method).with_gemm_full_precision_f16(true);
+        let runner = MistralRsBuilder::new(pipeline, scheduler_method);
 
         Ok(Model::new(runner.build()))
     }

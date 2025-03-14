@@ -52,7 +52,7 @@ impl QuantMethod for UnquantLinear {
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
-        maybe_init_cublas_lt_wrapper();
+        maybe_init_cublas_lt_wrapper(a.device().clone());
 
         let w = match *a.dims() {
             [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
@@ -88,16 +88,14 @@ impl QuantMethod for UnquantLinear {
                             .t()
                     } else {
                         let mut out = b.contiguous()?;
-                        a.matmul_with_alpha_beta(&w, &mut out, None)?;
+                        a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
                         Ok(out)
                     }
                 }
                 DeviceLocation::Metal { .. } => {
-                    let mut out = b.contiguous()?.to_dtype(DType::F32)?;
-                    a.to_dtype(DType::F32)?
-                        .matmul_with_alpha_beta(&w.to_dtype(DType::F32)?.t()?, &mut out, None)
-                        .unwrap();
-                    out.to_dtype(a.dtype())
+                    let mut out = b.contiguous()?;
+                    a.matmul_with_alpha_beta(&w.t()?, &mut out, None)?;
+                    Ok(out)
                 }
                 DeviceLocation::Cpu => {
                     #[cfg(feature = "accelerate")]

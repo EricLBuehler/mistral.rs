@@ -534,6 +534,35 @@ macro_rules! vision_normal_model_loader {
 
 #[doc(hidden)]
 #[macro_export]
+macro_rules! vision_normal_model_loader_sharded {
+    (
+        $vb:expr,
+        $config:expr,
+        $loader:expr,
+        $use_flash_attn:expr,
+        $mapper:expr,
+        $loading_isq:expr,
+        $real_device:expr,
+        $attention_mechanism:expr,
+        $multi_progress:expr,
+    ) => {{
+        $loader.load(
+            &$config,
+            $use_flash_attn,
+            $vb,
+            $crate::pipeline::NormalLoadingMetadata {
+                mapper: $mapper,
+                loading_isq: $loading_isq,
+                real_device: $real_device,
+                multi_progress: $multi_progress,
+            },
+            $attention_mechanism,
+        )?
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
 macro_rules! xlora_model_loader {
     (
         $paths:expr,

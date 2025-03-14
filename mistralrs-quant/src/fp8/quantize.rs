@@ -116,7 +116,7 @@ mod tests {
         let mut x = Tensor::rand(0., 1., (1, 16, 32), &dev)?.to_dtype(DType::F32)?;
 
         // Batch matrix multiplication
-        maybe_init_cublas_lt_wrapper();
+        maybe_init_cublas_lt_wrapper(x.device().clone());
 
         let handle = CUBLASLT_HANDLE.lock().unwrap().unwrap();
 

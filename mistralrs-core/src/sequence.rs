@@ -1,6 +1,6 @@
 use crate::{
     get_mut_group,
-    pipeline::LayerCaches,
+    pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     ChatCompletionResponse, Usage,
@@ -480,7 +480,11 @@ impl Sequence {
     }
 
     /// This will also set prompt_len
-    pub(crate) fn set_toks(&mut self, toks: Vec<u32>) {
+    pub(crate) fn set_toks_and_reallocate(
+        &mut self,
+        toks: Vec<u32>,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+    ) {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
         // Handle possible block engine
@@ -495,6 +499,12 @@ impl Sequence {
         }
         self.custom_metadata
             .append_tokens_to_blocks(toks.iter().map(|x| *x as usize).collect::<Vec<_>>());
+
+        if let Some(metadata) = paged_attn_metadata {
+            // Free and then reallocate as appropriate
+            metadata.block_engine.free_sequence(*self.id());
+            metadata.block_engine.allocate(self);
+        }
     }
 
     pub fn completion_bytes(&self) -> &[u8] {
@@ -784,6 +794,12 @@ impl Sequence {
 
     pub fn images(&self) -> Option<&[image::DynamicImage]> {
         self.input_images.as_deref()
+    }
+
+    pub fn has_images(&self) -> bool {
+        self.input_images
+            .as_ref()
+            .is_some_and(|images| !images.is_empty())
     }
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {

@@ -126,9 +126,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
             *config.crop_size.as_ref().unwrap().get("height").unwrap(),
         );
 
-        let has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let (pixel_values, image_sizes, num_img_tokens, num_image_samples) = if has_images {
             let mut pixel_values_accum = Vec::new();
@@ -154,6 +152,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                     pixel_values_list: _,
                     tgt_sizes: _,
                     image_sizes_all: _,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         imgs.clone(),
@@ -282,7 +281,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 .map(|s| {
                     // we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
                     tokenizer
-                        .encode(*s, true)
+                        .encode(*s, false)
                         .unwrap()
                         .get_ids()
                         .to_vec()
@@ -306,17 +305,13 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 input_ids.extend(item);
             }
             // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-            seq.set_toks(
+            seq.set_toks_and_reallocate(
                 input_ids
                     .iter()
                     .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
                     .collect::<Vec<_>>(),
+                paged_attn_metadata.as_mut(),
             );
-            if let Some(ref mut metadata) = paged_attn_metadata {
-                // Free and then reallocate as appropriate
-                metadata.block_engine.free_sequence(*seq.id());
-                metadata.block_engine.allocate(*seq);
-            }
 
             toks.push(input_ids);
         }
@@ -462,6 +457,7 @@ impl ImagePreProcessor for LLaVANextInputProcessor {
             pixel_values_list: None,
             tgt_sizes: None,
             image_sizes_all: None,
+            num_crops: None,
         })
     }
 }

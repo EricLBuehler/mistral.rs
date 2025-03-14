@@ -185,9 +185,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let (new_input, pixel_values, pixel_attention_mask) = if has_images {
             let mut pixel_values_accum = Vec::new();
@@ -209,6 +207,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     pixel_values_list: _,
                     tgt_sizes: _,
                     image_sizes_all: _,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -245,12 +244,13 @@ impl InputsProcessor for Idefics3ImageProcessor {
 
                 seq.set_initial_prompt(sample.clone());
                 let toks = tokenizer
-                    .encode(sample, true)
+                    .encode(sample, false)
                     .expect("Detokenization failed!");
 
                 let ids = toks.get_ids().to_vec();
                 all_ids.push(ids.clone());
-                seq.set_toks(ids);
+
+                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
             }
 
             let mut all_ids_new = Vec::new();
@@ -598,6 +598,7 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             pixel_values_list: None,
             tgt_sizes: None,
             image_sizes_all: None,
+            num_crops: None,
         })
     }
 }

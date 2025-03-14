@@ -20,7 +20,6 @@ __global__ void bitwise_or__kernel(const T *d_in1, const T *d_in2, T *d_out,
   }
 }
 
-
 template <typename T>
 void bitwise_or(const T *d_in1, const T *d_in2, T *d_out, int N) {
   int nthreads = mq_next_power_of_2(N);
@@ -29,13 +28,12 @@ void bitwise_or(const T *d_in1, const T *d_in2, T *d_out, int N) {
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
   bitwise_or__kernel<<<nblocks, nthreads>>>(d_in1, d_in2, d_out, N);
-  cudaDeviceSynchronize();
 }
 
 #define BITWISE_OP(TYPENAME, RUST_NAME)                                        \
-  extern "C" void mq_bitwise_or_##RUST_NAME(const TYPENAME *d_in1,                \
-                                         const TYPENAME *d_in2,                \
-                                         TYPENAME *d_out, uint32_t N) {        \
+  extern "C" void mq_bitwise_or_##RUST_NAME(const TYPENAME *d_in1,             \
+                                            const TYPENAME *d_in2,             \
+                                            TYPENAME *d_out, uint32_t N) {     \
     bitwise_or(d_in1, d_in2, d_out, N);                                        \
   }
 
@@ -45,8 +43,8 @@ BITWISE_OP(int64_t, i64)
 BITWISE_OP(int32_t, i32)
 
 template <typename T>
-__global__ void leftshift_kernel(const T *d_in1, T *d_out,
-                                   const uint32_t N, const int32_t k) {
+__global__ void leftshift_kernel(const T *d_in1, T *d_out, const uint32_t N,
+                                 const int32_t k) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < N) {
     d_out[idx] = d_in1[idx] << k;
@@ -61,13 +59,12 @@ void leftshift(const T *d_in1, T *d_out, int N, const int32_t k) {
   }
   const int nblocks = (N + nthreads - 1) / nthreads;
   leftshift_kernel<<<nblocks, nthreads>>>(d_in1, d_out, N, k);
-  cudaDeviceSynchronize();
 }
 
-#define LEFTSHIFT_OP(TYPENAME, RUST_NAME)                                                 \
-  extern "C" void mq_leftshift_##RUST_NAME(const TYPENAME *d_in1,                            \
-                                         TYPENAME *d_out, uint32_t N, int32_t k) {        \
-    leftshift(d_in1, d_out, N, k);                                                        \
+#define LEFTSHIFT_OP(TYPENAME, RUST_NAME)                                      \
+  extern "C" void mq_leftshift_##RUST_NAME(                                    \
+      const TYPENAME *d_in1, TYPENAME *d_out, uint32_t N, int32_t k) {         \
+    leftshift(d_in1, d_out, N, k);                                             \
   }
 
 LEFTSHIFT_OP(uint8_t, u8)

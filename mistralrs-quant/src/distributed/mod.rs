@@ -1,6 +1,6 @@
 use std::{fmt::Debug, sync::Barrier};
 
-use candle_core::Result;
+use candle_core::{Result, Tensor};
 pub use ops::{Comm, Id, SumAllReduce};
 pub mod layers;
 pub mod socket;
@@ -32,6 +32,10 @@ pub fn use_nccl() -> bool {
     (std::env::var("MISTRALRS_NO_NCCL").is_err()
         || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"))
         && (cfg!(feature = "nccl") && cfg!(feature = "cuda"))
+}
+
+pub trait DistributedOperation {
+    fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor>;
 }
 
 #[cfg(all(feature = "cuda", feature = "nccl"))]
@@ -69,6 +73,7 @@ mod ops {
     impl Comm {
         pub fn from_device(id: Id, dev: &Device, rank: usize, world_size: usize) -> Result<Self> {
             let device = dev.as_cuda_device()?.cuda_device();
+            assert_eq!(rank, device.ordinal());
             Ok(Self {
                 comm: cudarc::nccl::Comm::from_rank(device, rank, world_size, id.0)
                     .map_err(|e| e.0)
@@ -98,11 +103,10 @@ mod ops {
         pub fn new(comm: &Arc<Comm>) -> Self {
             Self { comm: comm.clone() }
         }
+    }
 
-        pub fn apply(&self, xs: &Tensor) -> Result<Tensor> {
-            // use candle_core::cuda::cudarc::driver::result;
-            // unsafe { result::ctx::set_current(*self.comm.comm.device().cu_primary_ctx()) }.unwrap();
-            // self.comm.barrier.wait()?;
+    impl super::DistributedOperation for SumAllReduce {
+        fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
             xs.apply_op1_no_bwd(self)
         }
     }
@@ -133,6 +137,8 @@ mod ops {
                         Some((0, l)) if l == s.len() => s,
                         Some(_) | None => candle_core::bail!("input has to be contiguous"),
                     };
+                    assert_eq!(dev.ordinal(), self.comm.rank());
+                    assert!(elem_count > 0);
                     let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
                     self.comm
                         .comm
@@ -198,13 +204,8 @@ mod ops {
         }
 
         pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
-            &[
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            ]
+            static ZEROED_ID: [::core::ffi::c_char; 128] = [0; 128];
+            &ZEROED_ID
         }
     }
 
@@ -237,8 +238,10 @@ mod ops {
         pub fn new(_comm: &Arc<Comm>) -> Self {
             Self
         }
+    }
 
-        pub fn apply(&self, xs: &Tensor) -> Result<Tensor> {
+    impl super::DistributedOperation for SumAllReduce {
+        fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
             Ok(xs.clone())
         }
     }

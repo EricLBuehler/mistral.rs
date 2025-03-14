@@ -121,9 +121,9 @@ impl Client {
         let mut buffer = [0u8; 128];
         stream.read_exact(&mut buffer)?;
 
-        let mut id_bytes = [0i8; 128];
+        let mut id_bytes: [core::ffi::c_char; 128] = [0; 128];
         for (i, &b) in buffer.iter().enumerate() {
-            id_bytes[i] = b as i8;
+            id_bytes[i] = b as core::ffi::c_char;
         }
         Ok(Id::uninit(id_bytes))
     }

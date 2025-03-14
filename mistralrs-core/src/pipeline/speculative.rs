@@ -21,7 +21,7 @@ use crate::{
         },
         AdapterInstruction,
     },
-    prefix_cacher_v2::PrefixCacheManagerV2,
+    prefix_cacher::PrefixCacheManagerV2,
     sequence::{Sequence, SequenceRecognizer},
     DeviceMapSetting, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource, TryIntoDType,
 };
@@ -559,7 +559,9 @@ impl Pipeline for SpeculativePipeline {
                     }
                     EitherCache::Normal(normal) => {
                         for cache in &mut *normal.lock().unwrap().0 {
-                            cache.set_len(cache.current_seq_len() - n_not_accepted);
+                            cache
+                                .set_len(cache.current_seq_len() - n_not_accepted)
+                                .map_err(|_| candle_core::Error::msg("KV cache set_len failed."))?;
                         }
                     }
                 }
@@ -585,7 +587,9 @@ impl Pipeline for SpeculativePipeline {
                     }
                     EitherCache::Normal(normal) => {
                         for cache in &mut *normal.lock().unwrap().0 {
-                            cache.set_len(cache.current_seq_len() - n_not_accepted);
+                            cache
+                                .set_len(cache.current_seq_len() - n_not_accepted)
+                                .map_err(|_| candle_core::Error::msg("KV cache set_len failed."))?;
                         }
                     }
                 }

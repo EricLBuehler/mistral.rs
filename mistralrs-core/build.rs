@@ -7,7 +7,7 @@ fn main() {
         use std::{path::PathBuf, vec};
         println!("cargo:rerun-if-changed=build.rs");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        let lib_files = vec!["src/cuda/nonzero_bitwise.cu"];
+        let lib_files = vec!["src/cuda/nonzero_bitwise.cu", "src/cuda/sort.cu"];
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
         }
@@ -23,7 +23,9 @@ fn main() {
             .arg("--expt-relaxed-constexpr")
             .arg("--expt-extended-lambda")
             .arg("--use_fast_math")
-            .arg("--verbose");
+            .arg("--verbose")
+            .arg("--compiler-options")
+            .arg("-fPIC");
 
         // https://github.com/EricLBuehler/mistral.rs/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {

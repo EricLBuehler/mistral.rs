@@ -22,7 +22,7 @@ use crate::{
     amoe::{AnyMoeConfig, AnyMoeTrainingInputRow, AnyMoeTrainingInputs, AnyMoeTrainingResult},
     device_map::DeviceMapper,
     get_mut_arcmutex,
-    prefix_cacher_v2::PrefixCacheManagerV2,
+    prefix_cacher::PrefixCacheManagerV2,
     sampler::Sampler,
     sequence::{SeqStepType, Sequence, SequenceGroup, SequenceRecognizer},
     utils::progress::NiceProgressBar,

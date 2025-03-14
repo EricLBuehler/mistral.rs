@@ -65,7 +65,7 @@ try:
                 "Enter topology used to make UQFF with multiple quantizations: "
             )
             topologies[file] = topology
-            output += f"|{",".join(quants)} (see topology for this file)|"
+            output += f"|{','.join(quants)} (see topology for this file)|"
         else:
             output += f"|{quants.strip().upper()}|"
 

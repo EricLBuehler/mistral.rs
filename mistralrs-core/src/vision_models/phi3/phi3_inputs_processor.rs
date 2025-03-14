@@ -109,9 +109,7 @@ impl InputsProcessor for Phi3InputsProcessor {
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let (pixel_values, image_sizes, num_img_tokens, n_images) = if has_images {
             let mut pixel_values_accum = Vec::new();
@@ -139,6 +137,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                     pixel_values_list: _,
                     tgt_sizes: _,
                     image_sizes_all: _,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         imgs,
@@ -299,17 +298,13 @@ impl InputsProcessor for Phi3InputsProcessor {
             }
 
             // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-            seq.set_toks(
+            seq.set_toks_and_reallocate(
                 input_ids
                     .iter()
                     .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
                     .collect::<Vec<_>>(),
+                paged_attn_metadata.as_mut(),
             );
-            if let Some(ref mut metadata) = paged_attn_metadata {
-                // Free and then reallocate as appropriate
-                metadata.block_engine.free_sequence(*seq.id());
-                metadata.block_engine.allocate(*seq);
-            }
 
             toks.push(input_ids);
         }
@@ -571,6 +566,7 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             pixel_values_list: None,
             tgt_sizes: None,
             image_sizes_all: None,
+            num_crops: None,
         })
     }
 }

@@ -9,7 +9,7 @@ use crate::device_map::DeviceMapper;
 use crate::diffusion_models::processor::{DiffusionProcessor, ModelInputs};
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
-use crate::prefix_cacher_v2::PrefixCacheManagerV2;
+use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -161,7 +161,7 @@ impl Loader for DiffusionLoader {
             .map(std::fs::read_to_string)
             .collect::<io::Result<Vec<_>>>()?;
 
-        let mapper = mapper.into_mapper(usize::MAX, device, None)?;
+        let mapper = DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
         let attention_mechanism = if paged_attn_config.is_some() {

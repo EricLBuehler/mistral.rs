@@ -52,7 +52,7 @@ impl SamplingParams {
     pub fn deterministic() -> Self {
         Self {
             temperature: None,
-            top_k: None,
+            top_k: Some(1),
             top_p: None,
             min_p: None,
             top_n_logprobs: 0,

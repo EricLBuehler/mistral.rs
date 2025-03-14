@@ -254,9 +254,7 @@ impl InputsProcessor for MLlamaImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let (pixel_values, aspect_ratio_ids, aspect_ratio_mask, cross_attn_mask) = if has_images {
             let mut pixel_values_accum = Vec::new();
@@ -310,6 +308,7 @@ impl InputsProcessor for MLlamaImageProcessor {
                     pixel_values_list: _,
                     tgt_sizes: _,
                     image_sizes_all: _,
+                    num_crops: _,
                 } = self
                     .preprocess(
                         seq.take_images()
@@ -828,6 +827,7 @@ impl ImagePreProcessor for MLlamaImageProcessor {
             pixel_values_list: None,
             tgt_sizes: None,
             image_sizes_all: None,
+            num_crops: None,
         })
     }
 }

@@ -15,13 +15,13 @@ use std::{
 use tokio::sync::{mpsc::Receiver, Mutex};
 
 use crate::{
-    daemon,
+    distributed,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
         AdapterInstruction, CacheBackendMetadata, CacheInstruction, NormalCache,
     },
-    prefix_cacher_v2::PrefixCacheManagerV2,
+    prefix_cacher::PrefixCacheManagerV2,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
@@ -76,22 +76,17 @@ impl Engine {
         config: SchedulerConfig,
         truncate_sequence: bool,
         mut no_kv_cache: bool,
-        mut _no_prefix_cache: bool,
+        mut no_prefix_cache: bool,
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
     ) -> Self {
-        let device = get_mut_arcmutex!(pipeline).device().clone();
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
-        // TODO: We need a nice fix, when prefix caching is enabled setting the non-PA pre op to
-        // Nothing makes it work but breaks all other cases. This requires more investigation!!
-        // no_prefix_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache;
-        // TODO: Prefix caching is always disabled if using PagedAttention for now.
-        // let no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
-        //     || no_prefix_cache
-        //     || no_kv_cache;
-        let no_prefix_cache = true;
+        no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
+            || no_prefix_cache
+            || no_kv_cache;
+
         Self {
             rx,
             pipeline,
@@ -99,7 +94,7 @@ impl Engine {
             id: 0,
             truncate_sequence,
             no_kv_cache,
-            prefix_cacher: PrefixCacheManagerV2::new(device, prefix_cache_n, no_prefix_cache),
+            prefix_cacher: PrefixCacheManagerV2::new(prefix_cache_n, no_prefix_cache),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
@@ -248,8 +243,18 @@ impl Engine {
                                 "All sequences must either return raw logits, or not."
                             );
 
-                            // Reset non granular state because the old sequence must be dead.
-                            // Technically we don't need to do this but it is better to be safe.
+                            // This comes from prefix caching
+                            // The invariant where all token offsets are the same is handled by the scheduler
+                            let pre_op = if scheduled.prompt[0].token_offset() != 0 {
+                                CacheInstruction::In(adapter_inst)
+                            } else {
+                                CacheInstruction::Reset {
+                                    load_preallocated_cache: true,
+                                    reset_non_granular: false,
+                                    adapter_inst,
+                                }
+                            };
+
                             pipeline
                                 .step(
                                     &mut scheduled.prompt,
@@ -258,14 +263,7 @@ impl Engine {
                                     &mut self.prefix_cacher,
                                     self.disable_eos_stop,
                                     rng.clone(),
-                                    CacheBackendMetadata::DefaultInstructions {
-                                        pre_op: CacheInstruction::Reset {
-                                            load_preallocated_cache: true,
-                                            reset_non_granular: false,
-                                            adapter_inst,
-                                        },
-                                        post_op,
-                                    },
+                                    CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
                                 )
                                 .await
                         };
@@ -507,8 +505,8 @@ impl Engine {
     }
 
     fn replicate_request_to_daemons(&mut self, request: &Request) {
-        if !daemon::is_daemon() && mistralrs_quant::distributed::use_nccl() {
-            let name = daemon::ipc_name().unwrap();
+        if !distributed::is_daemon() && mistralrs_quant::distributed::use_nccl() {
+            let name = distributed::ipc_name().unwrap();
             let num_workers =
                 mistralrs_quant::distributed::get_global_tp_size_from_devices().unwrap() - 1;
             let listener = ListenerOptions::new().name(name).create_sync().unwrap();

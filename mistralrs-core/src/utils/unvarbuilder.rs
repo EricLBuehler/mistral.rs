@@ -8,7 +8,7 @@ use candle_nn::{Conv2d, Embedding, LayerNorm, Linear};
 use itertools::Itertools;
 use mistralrs_quant::QuantMethod;
 
-use crate::layers::{F32RmsNorm, QLinear, RmsNorm};
+use crate::layers::{F32RmsNorm, QLinear, RmsNorm, ScaledEmbedding};
 
 pub trait ToTensors {
     /// Tensor names to tensors
@@ -16,6 +16,12 @@ pub trait ToTensors {
 }
 
 impl ToTensors for Embedding {
+    fn to_tensors(&self) -> HashMap<String, Tensor> {
+        HashMap::from_iter([("weight".to_string(), self.embeddings().clone())])
+    }
+}
+
+impl ToTensors for ScaledEmbedding {
     fn to_tensors(&self) -> HashMap<String, Tensor> {
         HashMap::from_iter([("weight".to_string(), self.embeddings().clone())])
     }

@@ -101,8 +101,9 @@ impl SingleCache {
         self.all_data = None;
     }
 
-    pub fn set_len(&mut self, len: usize) {
+    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
         self.current_seq_len = len;
+        Ok(())
     }
 
     pub fn append(&mut self, src: &Tensor) -> Result<()> {
@@ -141,78 +142,186 @@ impl SingleCache {
 }
 
 #[derive(Debug, Clone)]
-pub struct KvCache {
-    pub k: SingleCache,
-    pub v: SingleCache,
+pub struct RotatingCache {
+    pub all_data: Option<Tensor>,
+    pub dim: usize,
+    // `offset` is the current write index in the buffer
+    pub offset: usize,
+    // The total size of the sequence seen so far.
+    pub current_seq_len: usize,
+    // max_seq_len is the size of the rotating buffer, it is actually allowed for the full
+    // sequence to grow past this limit.
+    pub max_seq_len: usize,
+}
+
+impl RotatingCache {
+    pub fn new(dim: usize, max_seq_len: usize) -> Self {
+        Self {
+            all_data: None,
+            dim,
+            offset: 0,
+            current_seq_len: 0,
+            max_seq_len,
+        }
+    }
+
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    pub fn current_seq_len(&self) -> usize {
+        self.current_seq_len
+    }
+
+    pub fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+
+    pub fn all_data(&self) -> &Option<Tensor> {
+        &self.all_data
+    }
+
+    pub fn current_data(&self) -> Result<Option<Tensor>> {
+        let data = match self.all_data.as_ref() {
+            None => None,
+            Some(d) => {
+                if self.current_seq_len >= self.max_seq_len {
+                    Some(d.clone())
+                } else {
+                    Some(d.narrow(self.dim, 0, self.current_seq_len)?)
+                }
+            }
+        };
+        Ok(data)
+    }
+
+    pub fn reset(&mut self) {
+        self.offset = 0;
+        self.current_seq_len = 0;
+        self.all_data = None;
+    }
+
+    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
+        // If trying to roll it back past the boundary of max_seq_len, fail early.
+        if self.current_seq_len - len > self.max_seq_len {
+            candle_core::bail!(
+                "Rotating KV cache (usually for sliding window) tried to reset to len {len} while current is {} and max retained is {}",
+                self.current_seq_len,
+                self.max_seq_len
+            );
+        }
+        self.current_seq_len = len % self.max_seq_len;
+        Ok(())
+    }
+
+    pub fn append(&mut self, src: &Tensor) -> Result<Tensor> {
+        let seq_len = src.dim(self.dim)?;
+        // This doesn't seem very idiomatic but because the creation can fail, it's tricky to use
+        // self.all_data.get_or_insert_with.
+        if self.all_data.is_none() {
+            let mut shape = src.dims().to_vec();
+            shape[self.dim] = self.max_seq_len;
+            let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
+            self.all_data = Some(ad)
+        };
+        let ad = self.all_data.as_mut().unwrap();
+
+        self.current_seq_len += seq_len;
+        if seq_len >= self.max_seq_len {
+            let to_copy = src
+                .narrow(self.dim, seq_len - self.max_seq_len, self.max_seq_len)?
+                .contiguous()?;
+            ad.slice_set(&to_copy, self.dim, 0)?;
+            self.offset = 0;
+            // Here we return `src` rather than `ad` so that all the past can be used.
+            Ok(src.clone())
+        } else {
+            let rem_len = self.max_seq_len - self.offset;
+            if seq_len <= rem_len {
+                ad.slice_set(&src.contiguous()?, self.dim, self.offset)?;
+                self.offset = (self.offset + seq_len) % self.max_seq_len;
+            } else {
+                // We have to make two copies here as we go over the boundary of the cache.
+                if rem_len > 0 {
+                    let src1 = src.narrow(self.dim, 0, rem_len)?.contiguous()?;
+                    ad.slice_set(&src1, self.dim, self.offset)?;
+                }
+                let src2 = src
+                    .narrow(self.dim, rem_len, seq_len - rem_len)?
+                    .contiguous()?;
+                ad.slice_set(&src2, self.dim, 0)?;
+                self.offset = seq_len - rem_len;
+            }
+            if self.current_seq_len >= self.max_seq_len {
+                Ok(ad.clone())
+            } else {
+                Ok(ad.narrow(self.dim, 0, self.current_seq_len)?)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum KvCache {
+    Normal { k: SingleCache, v: SingleCache },
+    Rotating { k: RotatingCache, v: RotatingCache },
 }
 
 impl KvCache {
-    pub fn new(dim: usize, max_seq_len: usize, capacity_seq_len: usize) -> Self {
+    pub fn new_normal(dim: usize, max_seq_len: usize, capacity_seq_len: usize) -> Self {
         let k = SingleCache::new(dim, max_seq_len, capacity_seq_len);
         let v = SingleCache::new(dim, max_seq_len, capacity_seq_len);
-        Self { k, v }
+        Self::Normal { k, v }
     }
 
-    pub fn k_cache(&self) -> &SingleCache {
-        &self.k
-    }
-
-    pub fn v_cache(&self) -> &SingleCache {
-        &self.v
-    }
-
-    pub fn k_cache_mut(&mut self) -> &mut SingleCache {
-        &mut self.k
-    }
-
-    pub fn v_cache_mut(&mut self) -> &mut SingleCache {
-        &mut self.v
+    pub fn new_rotating(dim: usize, sliding_window: usize) -> Self {
+        let k = RotatingCache::new(dim, sliding_window);
+        let v = RotatingCache::new(dim, sliding_window);
+        Self::Rotating { k, v }
     }
 
     pub fn k(&self) -> Result<Option<Tensor>> {
-        self.k.current_data()
+        match self {
+            Self::Normal { k, .. } => k.current_data(),
+            Self::Rotating { k, .. } => k.current_data(),
+        }
     }
 
     pub fn v(&self) -> Result<Option<Tensor>> {
-        self.v.current_data()
-    }
-
-    pub fn append_sliding_window(
-        &mut self,
-        k: &Tensor,
-        v: &Tensor,
-        mask: Option<&Tensor>,
-        sliding_window: Option<usize>,
-    ) -> Result<(Tensor, Tensor, Option<Tensor>)> {
-        let (mut k, mut v) = self.append(k, v)?;
-
-        if let Some(sliding_window) = sliding_window {
-            assert_eq!(self.k.dim, 2);
-            let kv_seq_len = k.dim(2)?;
-            if kv_seq_len > sliding_window {
-                k = k.narrow(2, kv_seq_len - (sliding_window - 1), sliding_window - 1)?;
-                v = v.narrow(2, kv_seq_len - (sliding_window - 1), sliding_window - 1)?;
-                if let Some(mut mask) = mask.cloned() {
-                    let mask_len = mask.dim(1)?;
-                    mask = mask.narrow(1, mask_len - (sliding_window - 1), sliding_window - 1)?;
-                    return Ok((k, v, Some(mask)));
-                }
-            }
+        match self {
+            Self::Normal { v, .. } => v.current_data(),
+            Self::Rotating { v, .. } => v.current_data(),
         }
-        Ok((k, v, mask.cloned()))
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
-        self.k.append(&k)?;
-        self.v.append(&v)?;
-        let out_k = self.k.current_data()?;
-        let out_v = self.v.current_data()?;
+        match self {
+            Self::Normal { k: kc, v: vc } => {
+                kc.append(&k)?;
+                vc.append(&v)?;
+            }
+            Self::Rotating { k: kc, v: vc } => {
+                kc.append(&k)?;
+                vc.append(&v)?;
+            }
+        }
+        let (out_k, out_v) = match self {
+            Self::Normal { k, v } => (k.current_data()?, v.current_data()?),
+            Self::Rotating { k, v } => (k.current_data()?, v.current_data()?),
+        };
         let k = match out_k {
             None => {
                 let mut shape = k.dims().to_vec();
-                shape[self.k.dim] = 0;
+                match self {
+                    Self::Normal { k, .. } => shape[k.dim] = 0,
+                    Self::Rotating { k, .. } => shape[k.dim] = 0,
+                }
                 Tensor::zeros(shape, k.dtype(), k.device())?
             }
             Some(k) => k,
@@ -220,7 +329,10 @@ impl KvCache {
         let v = match out_v {
             None => {
                 let mut shape = v.dims().to_vec();
-                shape[self.k.dim] = 0;
+                match self {
+                    Self::Normal { v, .. } => shape[v.dim] = 0,
+                    Self::Rotating { v, .. } => shape[v.dim] = 0,
+                }
                 Tensor::zeros(shape, v.dtype(), v.device())?
             }
             Some(v) => v,
@@ -229,22 +341,49 @@ impl KvCache {
     }
 
     pub fn current_seq_len(&self) -> usize {
-        self.k.current_seq_len()
+        match self {
+            Self::Normal { k, .. } => k.current_seq_len(),
+            Self::Rotating { k, .. } => k.current_seq_len(),
+        }
     }
 
     pub fn reset(&mut self) {
-        self.k.reset();
-        self.v.reset();
+        match self {
+            Self::Normal { k, v } => {
+                k.reset();
+                v.reset();
+            }
+            Self::Rotating { k, v } => {
+                k.reset();
+                v.reset();
+            }
+        }
     }
 
-    pub fn set_len(&mut self, len: usize) {
-        self.k.set_len(len);
-        self.v.set_len(len);
+    /// Returns Ok if the length reassignment was successful, otherwise returns Err.
+    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
+        match self {
+            Self::Normal { k, v } => {
+                k.set_len(len)?;
+                v.set_len(len)?;
+                Ok(())
+            }
+            Self::Rotating { k, v } => {
+                k.set_len(len)?;
+                v.set_len(len)?;
+                Ok(())
+            }
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct NormalCache(pub Vec<KvCache>);
+
+pub enum NormalCacheType {
+    Normal { max_seq_len: usize },
+    SlidingWindow { window: usize },
+}
 
 impl NormalCache {
     /// The number of tokens to grow the cache by
@@ -252,13 +391,52 @@ impl NormalCache {
 
     pub fn new(len: usize, max_seq_len: usize) -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self(vec![
-            KvCache::new(
+            KvCache::new_normal(
                 2,
                 max_seq_len,
                 Self::CACHE_GROW_SIZE
             );
             len
         ])))
+    }
+
+    pub fn new_sliding(
+        len: usize,
+        max_seq_len: usize,
+        sliding_window: Option<usize>,
+    ) -> Arc<Mutex<Self>> {
+        match sliding_window {
+            Some(sliding_window) => Arc::new(Mutex::new(Self(vec![
+                KvCache::new_rotating(
+                    2,
+                    sliding_window
+                );
+                len
+            ]))),
+            None => Arc::new(Mutex::new(Self(vec![
+                KvCache::new_normal(
+                    2,
+                    max_seq_len,
+                    Self::CACHE_GROW_SIZE
+                );
+                len
+            ]))),
+        }
+    }
+
+    pub fn from_types(types: Vec<NormalCacheType>) -> Arc<Mutex<Self>> {
+        let mut caches = Vec::new();
+        for ty in types {
+            match ty {
+                NormalCacheType::Normal { max_seq_len } => {
+                    caches.push(KvCache::new_normal(2, max_seq_len, Self::CACHE_GROW_SIZE));
+                }
+                NormalCacheType::SlidingWindow { window } => {
+                    caches.push(KvCache::new_rotating(2, window));
+                }
+            }
+        }
+        Arc::new(Mutex::new(Self(caches)))
     }
 }
 
@@ -273,16 +451,6 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
     ) {
         let mut new_k_cache = Vec::new();
         let mut new_v_cache = Vec::new();
-        let seq0_cache = if modify_draft_cache {
-            seqs[0].normal_draft_cache()
-        } else {
-            seqs[0].normal_cache()
-        };
-        // Use this for the various parameters. Assumes all seqs are from one model.
-        let template_cache_dim = seq0_cache[0].as_ref().unwrap().k.dim;
-        let template_cache_csl = seq0_cache[0].as_ref().unwrap().k.current_seq_len;
-        let template_cache_msl = seq0_cache[0].as_ref().unwrap().k.max_seq_len;
-        let template_cache_capsl = seq0_cache[0].as_ref().unwrap().k.capacity_seq_len;
 
         'outer: for layer in 0..pipeline.get_metadata().num_hidden_layers {
             let mut k_vec = Vec::new();
@@ -303,8 +471,16 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 let cache = cache
                     .as_ref()
                     .expect("Not handling completions in `clone_in_cache`.");
-                k_vec.push(cache.k.all_data.clone().unwrap());
-                v_vec.push(cache.v.all_data.clone().unwrap());
+                match cache {
+                    KvCache::Normal { k, v } => {
+                        k_vec.push(k.all_data.clone().unwrap());
+                        v_vec.push(v.all_data.clone().unwrap());
+                    }
+                    KvCache::Rotating { k, v } => {
+                        k_vec.push(k.all_data.clone().unwrap());
+                        v_vec.push(v.all_data.clone().unwrap());
+                    }
+                }
             }
             new_k_cache.push(Some(if k_vec.len() > 1 {
                 Tensor::cat(&k_vec, 0).unwrap()
@@ -317,24 +493,64 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 v_vec[0].clone()
             }));
         }
+
+        let seq0_cache = if modify_draft_cache {
+            &*seqs[0].normal_draft_cache()
+        } else {
+            &*seqs[0].normal_cache()
+        };
+
         let mut caches = Vec::new();
         for (k_cache, v_cache) in new_k_cache.into_iter().zip(new_v_cache) {
-            caches.push(KvCache {
-                k: SingleCache {
-                    all_data: k_cache.map(|x| x.contiguous().unwrap()),
-                    dim: template_cache_dim,
-                    current_seq_len: template_cache_csl,
-                    max_seq_len: template_cache_msl,
-                    capacity_seq_len: template_cache_capsl,
-                },
-                v: SingleCache {
-                    all_data: v_cache.map(|x| x.contiguous().unwrap()),
-                    dim: template_cache_dim,
-                    current_seq_len: template_cache_csl,
-                    max_seq_len: template_cache_msl,
-                    capacity_seq_len: template_cache_capsl,
-                },
-            });
+            // Use this for the various parameters. Assumes all seqs are from one model.
+            match seq0_cache[0].as_ref().unwrap() {
+                KvCache::Normal { k: old_k, .. } => {
+                    let template_cache_dim = old_k.dim;
+                    let template_cache_csl = old_k.current_seq_len;
+                    let template_cache_msl = old_k.max_seq_len;
+                    let template_cache_capsl = old_k.capacity_seq_len;
+
+                    caches.push(KvCache::Normal {
+                        k: SingleCache {
+                            all_data: k_cache.map(|x| x.contiguous().unwrap()),
+                            dim: template_cache_dim,
+                            current_seq_len: template_cache_csl,
+                            max_seq_len: template_cache_msl,
+                            capacity_seq_len: template_cache_capsl,
+                        },
+                        v: SingleCache {
+                            all_data: v_cache.map(|x| x.contiguous().unwrap()),
+                            dim: template_cache_dim,
+                            current_seq_len: template_cache_csl,
+                            max_seq_len: template_cache_msl,
+                            capacity_seq_len: template_cache_capsl,
+                        },
+                    });
+                }
+                KvCache::Rotating { k: old_k, .. } => {
+                    let template_cache_dim = old_k.dim;
+                    let template_cache_csl = old_k.current_seq_len;
+                    let template_cache_msl = old_k.max_seq_len;
+                    let template_cache_offset = old_k.offset;
+
+                    caches.push(KvCache::Rotating {
+                        k: RotatingCache {
+                            all_data: k_cache.map(|x| x.contiguous().unwrap()),
+                            dim: template_cache_dim,
+                            current_seq_len: template_cache_csl,
+                            max_seq_len: template_cache_msl,
+                            offset: template_cache_offset,
+                        },
+                        v: RotatingCache {
+                            all_data: v_cache.map(|x| x.contiguous().unwrap()),
+                            dim: template_cache_dim,
+                            current_seq_len: template_cache_csl,
+                            max_seq_len: template_cache_msl,
+                            offset: template_cache_offset,
+                        },
+                    });
+                }
+            }
         }
         *pipeline.cache().normal() = NormalCache(caches);
     }
@@ -347,8 +563,14 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 continue;
             }
 
-            let k_cache = cache.k.all_data.clone().unwrap();
-            let v_cache = cache.v.all_data.clone().unwrap();
+            let (k_cache, v_cache) = match cache {
+                KvCache::Normal { k, v } => {
+                    (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+                }
+                KvCache::Rotating { k, v } => {
+                    (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+                }
+            };
 
             let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
             debug_assert_eq!(k_caches.len(), seqs.len());
@@ -364,22 +586,51 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 let seq_cache = &mut output_cache[layer];
                 let k = k_caches.get(seq_i).unwrap().clone();
                 let v = v_caches.get(seq_i).unwrap().clone();
-                *seq_cache = Some(KvCache {
-                    k: SingleCache {
-                        all_data: Some(k),
-                        dim: cache.k.dim,
-                        current_seq_len: cache.k.current_seq_len,
-                        max_seq_len: cache.k.max_seq_len,
-                        capacity_seq_len: cache.k.capacity_seq_len,
-                    },
-                    v: SingleCache {
-                        all_data: Some(v),
-                        dim: cache.v.dim,
-                        current_seq_len: cache.v.current_seq_len,
-                        max_seq_len: cache.v.max_seq_len,
-                        capacity_seq_len: cache.v.capacity_seq_len,
-                    },
-                });
+
+                match cache {
+                    KvCache::Normal {
+                        k: cache_k,
+                        v: cache_v,
+                    } => {
+                        *seq_cache = Some(KvCache::Normal {
+                            k: SingleCache {
+                                all_data: Some(k),
+                                dim: cache_k.dim,
+                                current_seq_len: cache_k.current_seq_len,
+                                max_seq_len: cache_k.max_seq_len,
+                                capacity_seq_len: cache_k.capacity_seq_len,
+                            },
+                            v: SingleCache {
+                                all_data: Some(v),
+                                dim: cache_v.dim,
+                                current_seq_len: cache_v.current_seq_len,
+                                max_seq_len: cache_v.max_seq_len,
+                                capacity_seq_len: cache_v.capacity_seq_len,
+                            },
+                        });
+                    }
+                    KvCache::Rotating {
+                        k: cache_k,
+                        v: cache_v,
+                    } => {
+                        *seq_cache = Some(KvCache::Rotating {
+                            k: RotatingCache {
+                                all_data: Some(k),
+                                dim: cache_k.dim,
+                                current_seq_len: cache_k.current_seq_len,
+                                max_seq_len: cache_k.max_seq_len,
+                                offset: cache_k.offset,
+                            },
+                            v: RotatingCache {
+                                all_data: Some(v),
+                                dim: cache_v.dim,
+                                current_seq_len: cache_v.current_seq_len,
+                                max_seq_len: cache_v.max_seq_len,
+                                offset: cache_v.offset,
+                            },
+                        });
+                    }
+                }
             }
         }
     }
@@ -397,10 +648,6 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
             return;
         }
 
-        // Use this for the various parameters. Assumes all seqs are from one model.
-        let template_cache_dim = pipeline.cache().normal().0[0].k.dim;
-        let template_cache_msl = pipeline.cache().normal().0[0].k.max_seq_len;
-
         let layer_devices = if let Some(device_mapper) = pipeline.device_mapper() {
             let mut layer_devices = Vec::new();
             for layer in 0..device_mapper.num_device_mapping_layers() {
@@ -411,6 +658,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         } else {
             None
         };
+
+        let old_cache = pipeline.cache().normal().0[0].clone();
 
         for (layer_idx, layer) in pipeline.cache().normal().0.iter_mut().enumerate() {
             if !load_preallocated_cache {
@@ -445,23 +694,55 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
             } else {
                 v_caches[0].clone()
             };
-            let cache = KvCache {
-                k: SingleCache {
-                    all_data: Some(k_cache.zeros_like().unwrap()),
-                    dim: template_cache_dim,
-                    current_seq_len: 0,
-                    max_seq_len: template_cache_msl,
-                    capacity_seq_len: k_cache.dims()[template_cache_dim],
-                },
-                v: SingleCache {
-                    all_data: Some(v_cache.zeros_like().unwrap()),
-                    dim: template_cache_dim,
-                    current_seq_len: 0,
-                    max_seq_len: template_cache_msl,
-                    capacity_seq_len: k_cache.dims()[template_cache_dim],
-                },
-            };
-            *layer = cache;
+
+            // Use this for the various parameters. Assumes all seqs are from one model.
+            match &old_cache {
+                KvCache::Normal { k, .. } => {
+                    let template_cache_dim = k.dim;
+                    let template_cache_msl = k.max_seq_len;
+
+                    let cache = KvCache::Normal {
+                        k: SingleCache {
+                            all_data: Some(k_cache.zeros_like().unwrap()),
+                            dim: template_cache_dim,
+                            current_seq_len: 0,
+                            max_seq_len: template_cache_msl,
+                            capacity_seq_len: k_cache.dims()[template_cache_dim],
+                        },
+                        v: SingleCache {
+                            all_data: Some(v_cache.zeros_like().unwrap()),
+                            dim: template_cache_dim,
+                            current_seq_len: 0,
+                            max_seq_len: template_cache_msl,
+                            capacity_seq_len: k_cache.dims()[template_cache_dim],
+                        },
+                    };
+                    *layer = cache;
+                }
+                KvCache::Rotating { k, .. } => {
+                    let template_cache_dim = k.dim;
+                    let template_cache_msl = k.max_seq_len;
+
+                    // Rotating cache is not preallocated.
+                    let cache = KvCache::Rotating {
+                        k: RotatingCache {
+                            all_data: None,
+                            dim: template_cache_dim,
+                            current_seq_len: 0,
+                            max_seq_len: template_cache_msl,
+                            offset: 0,
+                        },
+                        v: RotatingCache {
+                            all_data: None,
+                            dim: template_cache_dim,
+                            current_seq_len: 0,
+                            max_seq_len: template_cache_msl,
+                            offset: 0,
+                        },
+                    };
+                    *layer = cache;
+                }
+            }
         }
     }
 }

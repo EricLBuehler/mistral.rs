@@ -5,8 +5,8 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder, SumAllReduce, UnquantLinear,
+    distributed::DistributedOperation, ColumnParallelLayer, QuantMethod, QuantizedConfig,
+    ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce, QuantMethodConfig, UnquantLinear
 };
 use serde::Deserialize;
 
@@ -34,7 +34,6 @@ serde_default_fn!(f64, routed_scaling_factor, 1.0);
 serde_default_fn!(TopkMethod, topk_method, TopkMethod::Greedy);
 serde_default_fn!(usize, moe_layer_freq, 1);
 serde_default_fn!(usize, first_k_dense_replace, 0);
-serde_default_fn!(bool, norm_topk_prob, false);
 serde_default_fn!(ScoringFunc, scoring_func, ScoringFunc::Softmax);
 serde_default_fn!(Activation, hidden_act, Activation::Silu);
 serde_default_fn!(bool, tie_word_embeddings, false);
@@ -77,9 +76,6 @@ pub struct DeepSeekV3Config {
     pub(crate) moe_layer_freq: usize,
     #[serde(default = "first_k_dense_replace")]
     pub(crate) first_k_dense_replace: usize,
-    // k dense layers
-    #[serde(default = "norm_topk_prob")]
-    pub(crate) norm_topk_prob: bool,
     #[serde(default = "scoring_func")]
     scoring_func: ScoringFunc,
     #[serde(default = "hidden_act")]
@@ -561,135 +557,94 @@ impl MLAAttention {
             &[self.cfg.kv_lora_rank, self.cfg.qk_rope_head_dim],
             D::Minus1,
         )?;
-        let kv_c = kv_split[0].clone();
-        let k_pe = kv_split[1].clone();
-        let kv_c_normed = kv_c.apply(&self.kv_a_layernorm)?;
-
-        let Some((kv_cache, metadata)) = metadata else {
-            candle_core::bail!("Expected pagedattn metadata")
-        };
-        let kv_cache = kv_cache.1;
-        // We have (num_blocks, num_heads_k, head_dim, page_block_size)
-        // We want (num_blocks, page_block_size, num_heads_k, head_dim)
-        // TODO! the contiguous is evil
-        let kv_cache = kv_cache.permute((0, 3, 1, 2))?.contiguous()?;
-        let block_size = kv_cache.dim(1)?;
-        let num_heads_cache = kv_cache.dim(3)?;
-        assert_eq!(block_size, 64);
-        assert_eq!(
-            num_heads_cache,
-            self.cfg.kv_lora_rank + self.cfg.qk_rope_head_dim
-        );
-
-        let slot_mapping = metadata
-            .slot_mappings
-            .get(&xs.device().location())
-            .unwrap()
-            .flatten_all()?;
-
-        if attention_mask.is_none() {
-            let q_nope = self
-                .w_q_uk
-                .forward_autocast(&hidden_states_or_q_c)?
-                .reshape((
-                    bs,
-                    seq_len,
-                    self.cfg.num_attention_heads,
-                    self.cfg.kv_lora_rank,
-                ))?;
-            let q_pe = self.w_qr.forward(&hidden_states_or_q_c)?.reshape((
-                bs,
-                seq_len,
-                self.cfg.num_attention_heads,
-                self.cfg.qk_rope_head_dim,
-            ))?;
-
-            let (q_pe, k_pe) =
-                self.rotary_emb
-                    .forward(&q_pe, &k_pe.unsqueeze(1)?, seqlen_offsets)?;
-
-            mistralrs_paged_attn::concat_and_cache_mla(
-                &kv_c_normed.reshape(((), self.cfg.kv_lora_rank))?,
-                &k_pe.squeeze(1)?.reshape(((), self.cfg.qk_rope_head_dim))?,
-                &kv_cache.squeeze(D::Minus2)?,
-                &slot_mapping,
-            )?;
-
-            let block_tables = metadata
-                .block_tables
-                .as_ref()
-                .unwrap()
-                .get(&xs.device().location())
-                .unwrap();
-            let context_lens = metadata
-                .context_lens
-                .as_ref()
-                .unwrap()
-                .get(&xs.device().location())
-                .unwrap();
-
-            let q = Tensor::cat(&[q_nope, q_pe], D::Minus1)?;
-
-            let output = candle_flash_mla::flash_attn_mla(
-                &q,
-                &kv_cache,
-                block_tables.to_dtype(DType::I32)?,
-                context_lens.to_dtype(DType::I32)?,
-                self.sdpa_params.softmax_scale,
-                self.cfg.kv_lora_rank,
-            )?
-            .reshape((bs, seq_len, ()))?;
-
-            let out = self.w_uv_o.forward_autocast(&output)?;
-
-            if self.comm.world_size() > 1 {
-                mistralrs_quant::distributed::SumAllReduce::new(&self.comm).apply(&out)
-            } else {
-                Ok(out)
-            }
-        } else {
-            let q = match &self.q {
-                QProj::Lora { a: _, norm: _, b } => b.forward_autocast(&hidden_states_or_q_c)?,
-                QProj::Plain(q) => q.forward(&hidden_states_or_q_c)?,
-            };
-            let q = q.reshape((
-                bs,
-                seq_len,
-                self.cfg.num_attention_heads,
-                self.cfg.q_head_dim(),
-            ))?;
-
-            let q_pe = q.i((.., self.cfg.qk_nope_head_dim..))?;
-            let (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
-            let q = q.slice_assign(&[&.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
-
-            mistralrs_paged_attn::concat_and_cache_mla(
-                &kv_c_normed,
-                &k_pe.squeeze(1)?,
-                &kv_cache.squeeze(D::Minus2)?,
-                &slot_mapping,
-            )?;
-
-            let kv = self.kv_b_proj.forward_autocast(&kv_c_normed)?.reshape((
+        compressed_kv = ckv_split[0].clone();
+        let mut k_pe = ckv_split[1].clone();
+        k_pe = k_pe
+            .reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
+            .transpose(1, 2)?;
+        let mut kv = self
+            .kv_b_proj
+            .forward_autocast(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
+        kv = kv
+            .reshape((
                 bs,
                 seq_len,
                 self.num_attention_heads,
                 self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
-            ))?;
+            ))?
+            .transpose(1, 2)?;
 
-            let kv_split =
-                kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
-            let k_nope = kv_split[0].clone();
-            let v = kv_split[1].clone();
+        let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
+        let k_nope = kv_split[0].clone();
+        let mut v = kv_split[1].clone();
 
-            let k = Tensor::cat(&[k_nope, k_pe.repeat((1, q.dim(1)?, 1, 1))?], D::Minus1)?;
+        (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
 
-            let v = v
-                .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
-                .contiguous()?;
+        let mut q = Tensor::zeros(
+            (bs, self.num_attention_heads, seq_len, self.q_head_dim),
+            q_pe.dtype(),
+            q_pe.device(),
+        )?;
+        q = q.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &q_nope)?;
+        q = q.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
 
-            let output = Sdpa
-                .run_attention(
+        let mut k = Tensor::zeros(
+            (bs, self.num_attention_heads, seq_len, self.q_head_dim),
+            k_pe.dtype(),
+            k_pe.device(),
+        )?;
+        k = k.slice_assign(&[&.., &.., &.., &(..self.cfg.qk_nope_head_dim)], &k_nope)?;
+        let k_pe = k_pe.repeat((1, k.dim(1)?, 1, 1))?;
+        k = k.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &k_pe)?;
+
+        let mut attn_out = match &self.paged_attn {
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => {
+                    let v = v
+                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+                        .contiguous()?;
+                    paged_attn
+                        .forward(
+                            &q,
+                            &k,
+                            &v,
+                            attention_mask,
+                            Some(key_cache),
+                            Some(value_cache),
+                            input_metadata,
+                            &self.sdpa_params,
+                            Some(flash_params),
+                        )?
+                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+                }
+                None => {
+                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
+                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
+                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    // Sanity check.
+                    assert!(attention_mask.is_some());
+                    let v = v
+                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
+                        .contiguous()?;
+                    paged_attn
+                        .forward(
+                            &q,
+                            &k,
+                            &v,
+                            attention_mask,
+                            None,
+                            None,
+                            &input_metadata,
+                            &self.sdpa_params,
+                            Some(flash_params),
+                        )?
+                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
+                }
+            },
+            None => {
+                (k, v) = kv_cache.append(&k, &v)?;
+
+                Sdpa.run_attention(
                     &q,
                     &k,
                     &v,
@@ -887,7 +842,7 @@ impl MoeGate {
             }
         };
 
-        if self.top_k > 1 && self.cfg.norm_topk_prob {
+        if matches!(self.cfg.scoring_func, ScoringFunc::Sigmoid) {
             let denmoninator = (topk_weight.sum_keepdim(D::Minus1)? + 1e-20)?;
             topk_weight = topk_weight.broadcast_div(&denmoninator)?;
         }
@@ -1004,7 +959,7 @@ impl Moe {
         }
 
         if self.world_size > 1 {
-            y = self.all_reduce.apply(&y)?;
+            y = self.all_reduce.sum_all_reduce(&y)?;
         }
 
         Ok(y)

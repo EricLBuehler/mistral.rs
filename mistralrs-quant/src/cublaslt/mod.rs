@@ -25,7 +25,7 @@ static mut CUBLASLT: Option<CublasLtWrapper> = None;
 pub static CUBLASLT_HANDLE: Lazy<Mutex<Option<&'static CublasLtWrapper>>> =
     Lazy::new(|| Mutex::new(None));
 
-pub fn maybe_init_cublas_lt_wrapper() {
+pub fn maybe_init_cublas_lt_wrapper(device: Device) {
     unsafe {
         INIT.call_once(|| {
             #[cfg(not(feature = "cuda"))]
@@ -39,15 +39,12 @@ pub fn maybe_init_cublas_lt_wrapper() {
                 // Then check if we can create a device
                 // Then check that the device is CUDA
                 use candle_core::cuda_backend::cudarc::driver;
-                CUBLASLT = driver::result::init()
-                    .ok()
-                    .and_then(|_| Device::cuda_if_available(0).ok())
-                    .and_then(|device| match device {
-                        Device::Cuda(_) => Some(CublasLtWrapper {
-                            cublaslt: CublasLt::new(&device).unwrap(),
-                        }),
-                        _ => None,
-                    });
+                CUBLASLT = match device {
+                    Device::Cuda(_) => Some(CublasLtWrapper {
+                        cublaslt: CublasLt::new(&device).unwrap(),
+                    }),
+                    _ => None,
+                }
             }
             #[allow(static_mut_refs)]
             let cublaslt: Option<&'static CublasLtWrapper> = CUBLASLT.as_ref();

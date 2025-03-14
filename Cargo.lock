@@ -381,7 +381,7 @@ checksum = "f61dac84819c6588b558454b194026eb1f09c293b9036ae9b159e74e73ab6cf9"
 [[package]]
 name = "candle-core"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d8101c2e#d8101c2e099b1d68e6b0ffe22d75531958f3a2e9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2002e7a#2002e7abbe7b84db61241eca8fbb876108202a79"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -409,7 +409,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d8101c2e#d8101c2e099b1d68e6b0ffe22d75531958f3a2e9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2002e7a#2002e7abbe7b84db61241eca8fbb876108202a79"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -420,19 +420,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d8101c2e#d8101c2e099b1d68e6b0ffe22d75531958f3a2e9"
-dependencies = [
- "anyhow",
- "candle-core",
- "half",
- "num_cpus",
- "rayon",
-]
-
-[[package]]
-name = "candle-flash-mla"
-version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d8101c2e#d8101c2e099b1d68e6b0ffe22d75531958f3a2e9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2002e7a#2002e7abbe7b84db61241eca8fbb876108202a79"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -465,7 +453,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d8101c2e#d8101c2e099b1d68e6b0ffe22d75531958f3a2e9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2002e7a#2002e7abbe7b84db61241eca8fbb876108202a79"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -473,7 +461,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d8101c2e#d8101c2e099b1d68e6b0ffe22d75531958f3a2e9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2002e7a#2002e7abbe7b84db61241eca8fbb876108202a79"
 dependencies = [
  "metal",
  "once_cell",
@@ -484,7 +472,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=d8101c2e#d8101c2e099b1d68e6b0ffe22d75531958f3a2e9"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=2002e7a#2002e7abbe7b84db61241eca8fbb876108202a79"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -2127,7 +2115,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -2562,6 +2550,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "toml",
  "tower-http",
  "tracing",
  "url",
@@ -3532,9 +3521,9 @@ dependencies = [
 
 [[package]]
 name = "ring"
-version = "0.17.11"
+version = "0.17.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da5349ae27d3887ca812fb375b45a4fbb36d8d12d2df394968cd86e35683fe73"
+checksum = "70ac5d832aa16abd7d1def883a8545280c20a60f523a370aa3a9617c2b8550ee"
 dependencies = [
  "cc",
  "cfg-if",

@@ -44,7 +44,11 @@ static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 #[cfg(not(feature = "metal"))]
 fn get_device(seed: Option<u64>) -> &'static Result<Device> {
     DEVICE.get_or_init(|| {
-        let device = Device::cuda_if_available(0)?;
+        let device = if cfg!(feature = "nccl") {
+            Device::Cpu
+        } else {
+            Device::cuda_if_available(0)?
+        };
         if let Some(seed) = seed {
             device.set_seed(seed)?;
         }
@@ -548,12 +552,11 @@ impl Runner {
                     max_num_images: p.max_num_images,
                 })
                 .unwrap_or(AutoDeviceMapParams::default_vision()),
-            Which::DiffusionPlain { .. } => {
-                return Err(PyApiErr::from(
-                    "diffusion model doesn't support max_seq_len",
-                ))
-            }
+            Which::DiffusionPlain { .. } => AutoDeviceMapParams::default_text(),
         };
+
+        let max_seq_len = auto_map_params.max_seq_len();
+
         let max_seqs = if tgt_non_granular_index.is_some() {
             1
         } else {
@@ -649,7 +652,7 @@ impl Runner {
             None => DeviceMapSetting::Auto(auto_map_params),
         };
 
-        let no_paged_attn = if device.is_cuda() {
+        let no_paged_attn = if device.is_cuda() || cfg!(feature = "nccl") {
             no_paged_attn
         } else if device.is_metal() {
             !paged_attn
@@ -671,7 +674,7 @@ impl Runner {
                 (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
                     block_size,
                     512,
-                    MemoryGpuConfig::Utilization(0.9), // NOTE(EricLBuehler): default is to use 90% of memory
+                    MemoryGpuConfig::ContextSize(max_seq_len),
                 )?),
                 (block_size, None, None, Some(ctxt), true, false) => Some(
                     PagedAttentionConfig::new(block_size, 512, MemoryGpuConfig::ContextSize(ctxt))?,

@@ -16,7 +16,7 @@ use crate::pipeline::get_chat_template;
 use crate::pipeline::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
-use crate::prefix_cacher_v2::PrefixCacheManagerV2;
+use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::debug::DeviceRepr;
 use crate::utils::model_config as ModelConfig;

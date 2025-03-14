@@ -36,6 +36,8 @@ pub(crate) struct PreprocessedImages {
     pub(crate) tgt_sizes: Option<Tensor>,
     /// Without batch size. Per image. (w,h).
     pub(crate) image_sizes_all: Option<Vec<(u32, u32)>>,
+    /// Without batch size
+    pub(crate) num_crops: Option<Vec<usize>>,
 }
 
 /// ImagePreProcessor: process images for the model (similar to `InputsProcessor`, typically called by it)

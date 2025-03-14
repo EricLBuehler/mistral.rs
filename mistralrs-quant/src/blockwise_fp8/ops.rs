@@ -143,6 +143,8 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
             candle_core::bail!("Expected scale to be rank 2");
         }
 
+        let dev = weight_s.device();
+
         let weight = weight_s
             .as_cuda_slice::<F8E4M3>()?
             .slice(weight_l.start_offset()..);
@@ -174,6 +176,7 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
                         scale_stride,
                         weight_block_size_y,
                         weight_block_size_x,
+                        *dev.cu_stream(),
                     )
                 };
                 CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
@@ -194,6 +197,7 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
                         scale_stride,
                         weight_block_size_y,
                         weight_block_size_x,
+                        *dev.cu_stream(),
                     )
                 };
                 CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())
@@ -214,6 +218,7 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
                         scale_stride,
                         weight_block_size_y,
                         weight_block_size_x,
+                        *dev.cu_stream(),
                     )
                 };
                 CudaStorage::wrap_cuda_slice(output, weight_s.device().clone())

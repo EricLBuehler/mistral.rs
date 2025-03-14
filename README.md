@@ -31,6 +31,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
+- 💎💎💎 Run the **Gemma 3** Model with 128k context length and vision support: [documentation](docs/GEMMA3.md)
+
+    ```
+    ./mistralrs-server -i vision-plain -m google/gemma-3-4b-it -a gemma3
+    ```
+
 - 🐋🐋🐋 Run the Deepseek R1/V3 model: [documentation](docs/DEEPSEEKV3.md)
 
     ```
@@ -54,34 +60,22 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i vision-plain -m lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k -a vllama
     ```
 
-- 🌟📷 Run the **MiniCPM-O 2.6** Model: [documentation and guide here](docs/MINICPMO_2_6.md)
+- φ⁴ 📷 Run the **Phi 4 Multimodal** model: [documentation and guide here](docs/PHI4MM.md)
 
     ```
-    ./mistralrs-server -i vision-plain -m openbmb/MiniCPM-o-2_6 -a minicpmo
+    ./mistralrs-server -i vision-plain -m microsoft/Phi-4-multimodal-instruct -a phi4mm
     ```
 
-- 🤗📷 Run the **Smol VLM** Model: [documentation and guide here](docs/IDEFICS3.md)
+- φ⁴ Run the new **Phi 4/Phi 4 Mini** models with 128K context window
 
     ```
-    ./mistralrs-server -i vision-plain -m HuggingFaceTB/SmolVLM-Instruct -a idefics3
-    ```
-
-- φ³ Run the new Phi 3.5/3.1/3 model with 128K context window
-
-    ```
-    ./mistralrs-server -i plain -m microsoft/Phi-3.5-mini-instruct -a phi3
+    ./mistralrs-server -i plain -m microsoft/Phi-4-mini-instruct -a phi3
     ```
 
 - 🧮 Enhance ISQ by collecting an imatrix from calibration data: [documentation](docs/IMATRIX.md)
 
     ```
     ./mistralrs-server -i --isq Q4K plain -m meta-llama/Llama-3.2-3B-Instruct --calibration-file calibration_data/calibration_datav3_small.txt
-    ```
-
-- φ³ 📷 Run the Phi 3 vision model: [documentation and guide here](docs/PHI3V.md)
-
-    ```
-    ./mistralrs-server --port 1234 vision-plain -m microsoft/Phi-3.5-vision-instruct -a phi3v
     ```
 
 - 🌲📷 Run the FLUX.1 diffusion model: [documentation and guide here](docs/FLUX.md)
@@ -174,6 +168,9 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |DeepseekV2|✅| |✅| |
 |DeepseekV3|✅| |✅| |
 |MinCPM-O 2.6|✅| |✅| |
+|Phi 4 Multimodal|✅| |✅| |
+|Qwen2.5-VL|✅| |✅| |
+|Gemma 3|✅| |✅|✅|
 
 ## APIs and Integrations
 
@@ -443,6 +440,9 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `qwen2vl`
 - `idefics3`
 - `minicpmo`
+- `phi4mm`
+- `qwen2_5vl`
+- `gemma3`
 
 ### Supported GGUF architectures
 
@@ -543,6 +543,8 @@ Please submit more benchmarks via raising an issue!
 |Deepseek V2| | |✅|
 |Deepseek V3| | |✅|
 |MiniCPM-O 2.6| | |✅|
+|Qwen2.5-VL| | |✅|
+|Gemma 3| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -574,6 +576,8 @@ Please submit more benchmarks via raising an issue!
 |Deepseek V2| | | |
 |Deepseek V3| | | |
 |MiniCPM-O 2.6| | | |
+|Qwen2.5-VL| | | |
+|Gemma 3| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -598,7 +602,8 @@ Please submit more benchmarks via raising an issue!
 |Deepseek V2| |
 |Deepseek V3| |
 |MiniCPM-O 2.6| |
-
+|Qwen2.5-VL| |
+|Gemma 3|✅|
 
 ### Using derivative model
 

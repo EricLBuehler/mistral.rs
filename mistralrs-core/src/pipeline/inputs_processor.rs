@@ -57,7 +57,6 @@ pub mod text_models_inputs_processor {
 
     use anyhow::Result;
     use candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
-    use mistralrs_quant::set_use_matmul_via_f16;
     use tokenizers::Tokenizer;
 
     use crate::{
@@ -67,8 +66,6 @@ pub mod text_models_inputs_processor {
     };
 
     use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
-
-    const VIA_F16_TOK_THRESHOLD: usize = 512;
 
     fn _make_tensor_with_pad<D: WithDType>(
         x: Vec<Vec<D>>,
@@ -267,12 +264,6 @@ pub mod text_models_inputs_processor {
         }
 
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
-        // Only use matmul via f16 if prompt and seqlen > 512
-        if input.dim(1)? > VIA_F16_TOK_THRESHOLD {
-            set_use_matmul_via_f16(true);
-        } else {
-            set_use_matmul_via_f16(false);
-        }
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {
             let max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
@@ -445,8 +436,6 @@ pub mod text_models_inputs_processor {
             seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
         }
 
-        set_use_matmul_via_f16(false);
-
         let paged_attn_meta = if paged_attn_metadata.is_some() {
             let slot_mappings = _make_tensor_with_pad(slot_mappings, 1, _PAD_SLOT_ID, device)?;
 
@@ -531,6 +520,10 @@ pub mod text_models_inputs_processor {
             let mut n_chunks = Vec::new();
             let prompt_chunksize: usize = prompt_chunksize.into();
 
+            // This comes from prefix caching
+            // The invariant where all token offsets are the same is handled by the scheduler
+            let offset = input_seqs[0].token_offset();
+
             // Pad each sequence by the padding token to the max len.
             for ctxt in toks.iter() {
                 let chunks = ctxt.chunks(prompt_chunksize).collect::<Vec<_>>();
@@ -553,7 +546,7 @@ pub mod text_models_inputs_processor {
                 .map(|(i, chunk)| {
                     let (toks, seq_ns): (Vec<Vec<T>>, Vec<usize>) = chunk.into_iter().unzip();
                     make_prompt_chunk(
-                        i * prompt_chunksize,
+                        i * prompt_chunksize + offset,
                         toks,
                         &seq_ns
                             .iter()

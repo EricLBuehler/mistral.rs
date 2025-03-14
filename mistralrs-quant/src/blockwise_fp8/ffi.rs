@@ -14,6 +14,7 @@ extern "C" {
         scale_stride: i32,
         weight_block_size_y: i32,
         weight_block_size_x: i32,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_dequant_fp8_blockwise_kernel_f16(
@@ -26,6 +27,7 @@ extern "C" {
         scale_stride: i32,
         weight_block_size_y: i32,
         weight_block_size_x: i32,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
     );
 
     pub(crate) fn launch_dequant_fp8_blockwise_kernel_bf16(
@@ -38,5 +40,6 @@ extern "C" {
         scale_stride: i32,
         weight_block_size_y: i32,
         weight_block_size_x: i32,
+        stream: candle_core::cuda::cudarc::driver::sys::CUstream,
     );
 }

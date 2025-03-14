@@ -66,7 +66,7 @@ impl QuantMethod for FP8Linear {
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
-        maybe_init_cublas_lt_wrapper();
+        maybe_init_cublas_lt_wrapper(x.device().clone());
 
         match *CUBLASLT_HANDLE.lock().unwrap() {
             Some(handle) => {
