@@ -24,8 +24,8 @@ rust-version = "1.82"
 
 [workspace.dependencies]
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "2002e7a" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "2002e7a" }
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "ea6ba141" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "ea6ba141" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
@@ -47,7 +47,7 @@ half = "2.4.0"
 rayon = "1.1.0"
 url = "2.5.2"
 data-url = "0.3.1"
-float8 = "0.1.3"
+float8 = "0.2.1"
 regex = "1.10.6"
 metal = { version = "0.27.0", features = ["mps"] }
 safetensors = "0.4.5"

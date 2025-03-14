@@ -28,9 +28,9 @@ async fn main() -> Result<()> {
         .build()
         .await?;
 
-    let mut rng = rand::thread_rng();
-    let random_value: f64 = rng.gen_range(0.0..=1.0);
-    let threshold: f64 = rng.gen_range(0.0..=0.5);
+    let mut rng = rand::rng();
+    let random_value: f64 = rng.random_range(0.0..=1.0);
+    let threshold: f64 = rng.random_range(0.0..=0.5);
 
     let request = RequestBuilder::new()
         .add_logits_processor(Arc::new(move |logits: &Tensor, _context: &[u32]| {

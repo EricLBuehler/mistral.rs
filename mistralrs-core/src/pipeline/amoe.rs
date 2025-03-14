@@ -14,7 +14,7 @@ use image::DynamicImage;
 use indexmap::IndexMap;
 use indicatif::MultiProgress;
 use mistralrs_quant::IsqType;
-use rand::{seq::SliceRandom, thread_rng};
+use rand::{rng, seq::SliceRandom};
 use rand_isaac::Isaac64Rng;
 use tracing::{info, warn};
 
@@ -366,7 +366,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
             })
             .collect::<candle_core::Result<Vec<_>>>()?;
 
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut samples = inputs.into_inner();
 
         // Create several dummy objects for the sequences. No custom logits processors.
