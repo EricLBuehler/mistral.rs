@@ -21,7 +21,7 @@ use crate::{
         },
         AdapterInstruction,
     },
-    prefix_cacher_v2::PrefixCacheManagerV2,
+    prefix_cacher::PrefixCacheManagerV2,
     sequence::{Sequence, SequenceRecognizer},
     DeviceMapSetting, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource, TryIntoDType,
 };

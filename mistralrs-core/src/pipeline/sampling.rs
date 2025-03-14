@@ -4,7 +4,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
 use crate::{
-    prefix_cacher_v2::PrefixCacheManagerV2,
+    prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
     sequence::{Sequence, SequenceRecognizer, StopReason},
     tools::parse_text_tools,

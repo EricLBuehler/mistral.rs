@@ -796,6 +796,12 @@ impl Sequence {
         self.input_images.as_deref()
     }
 
+    pub fn has_images(&self) -> bool {
+        self.input_images
+            .as_ref()
+            .is_some_and(|images| !images.is_empty())
+    }
+
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
         self.image_gen_response_format
     }

@@ -126,9 +126,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
             *config.crop_size.as_ref().unwrap().get("height").unwrap(),
         );
 
-        let has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let (pixel_values, image_sizes, num_img_tokens, num_image_samples) = if has_images {
             let mut pixel_values_accum = Vec::new();

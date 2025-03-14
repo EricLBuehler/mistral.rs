@@ -21,7 +21,7 @@ use crate::{
         text_models_inputs_processor::PagedAttentionMeta,
         AdapterInstruction, CacheBackendMetadata, CacheInstruction, NormalCache,
     },
-    prefix_cacher_v2::PrefixCacheManagerV2,
+    prefix_cacher::PrefixCacheManagerV2,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
