@@ -750,7 +750,7 @@
 </span><span class="kw">use </span>pyo3::pyclass;
 
 <span class="kw">use </span>once_cell::sync::Lazy;
-<span class="kw">use </span>rand::distributions::{Distribution, WeightedIndex};
+<span class="kw">use </span>rand::distr::{weighted::WeightedIndex, Distribution};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 <span class="kw">use </span>serde::{Deserialize, Serialize};

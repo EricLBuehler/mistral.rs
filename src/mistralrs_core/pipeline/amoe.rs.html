@@ -613,7 +613,7 @@
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>indicatif::MultiProgress;
 <span class="kw">use </span>mistralrs_quant::IsqType;
-<span class="kw">use </span>rand::{seq::SliceRandom, thread_rng};
+<span class="kw">use </span>rand::{rng, seq::SliceRandom};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
 <span class="kw">use </span>tracing::{info, warn};
 
@@ -965,7 +965,7 @@
             })
             .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span><span class="kw-2">mut </span>rng = thread_rng();
+        <span class="kw">let </span><span class="kw-2">mut </span>rng = rng();
         <span class="kw">let </span><span class="kw-2">mut </span>samples = inputs.into_inner();
 
         <span class="comment">// Create several dummy objects for the sequences. No custom logits processors.

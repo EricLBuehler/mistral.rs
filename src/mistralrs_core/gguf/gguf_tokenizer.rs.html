@@ -1044,8 +1044,8 @@
 
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_encode_decode_llama() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">use </span>rand::rng;
         <span class="kw">use </span>rand::seq::SliceRandom;
-        <span class="kw">use </span>rand::thread_rng;
 
         <span class="kw">let </span>passage = get_test_passage();
         <span class="kw">let </span>hf_tokenizer = get_hf_tokenizer(TokenizerType::Llama)<span class="question-mark">?</span>;
@@ -1069,7 +1069,7 @@
 
         </span><span class="attr">#[allow(clippy::cast_possible_truncation)]
         </span><span class="kw">let </span><span class="kw-2">mut </span>tokens = (<span class="number">0</span>..hf_tokenizer.get_vocab_size(<span class="bool-val">false</span>) <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-        tokens.shuffle(<span class="kw-2">&amp;mut </span>thread_rng());
+        tokens.shuffle(<span class="kw-2">&amp;mut </span>rng());
 
         <span class="comment">// Without skipping special tokens
         </span><span class="kw">let </span>hf_decoded = decode(<span class="kw-2">&amp;</span>hf_tokenizer, <span class="kw-2">&amp;</span>tokens, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
@@ -1086,8 +1086,8 @@
 
     <span class="attr">#[test]
     </span><span class="kw">fn </span>test_encode_decode_gpt2() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+        <span class="kw">use </span>rand::rng;
         <span class="kw">use </span>rand::seq::SliceRandom;
-        <span class="kw">use </span>rand::thread_rng;
 
         <span class="kw">let </span>passage = get_test_passage();
         <span class="kw">let </span>hf_tokenizer = get_hf_tokenizer(TokenizerType::Gpt2)<span class="question-mark">?</span>;
@@ -1111,7 +1111,7 @@
 
         </span><span class="attr">#[allow(clippy::cast_possible_truncation)]
         </span><span class="kw">let </span><span class="kw-2">mut </span>tokens = (<span class="number">0</span>..hf_tokenizer.get_vocab_size(<span class="bool-val">false</span>) <span class="kw">as </span>u32).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-        tokens.shuffle(<span class="kw-2">&amp;mut </span>thread_rng());
+        tokens.shuffle(<span class="kw-2">&amp;mut </span>rng());
 
         <span class="comment">// Without skipping special tokens
         </span><span class="kw">let </span>hf_decoded = decode(<span class="kw-2">&amp;</span>hf_tokenizer, <span class="kw-2">&amp;</span>tokens, <span class="bool-val">false</span>)<span class="question-mark">?</span>;
