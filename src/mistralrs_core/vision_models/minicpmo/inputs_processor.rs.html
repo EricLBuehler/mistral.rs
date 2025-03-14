@@ -782,9 +782,7 @@
 <a href="#781" id="781">781</a>
 <a href="#782" id="782">782</a>
 <a href="#783" id="783">783</a>
-<a href="#784" id="784">784</a>
-<a href="#785" id="785">785</a>
-<a href="#786" id="786">786</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#784" id="784">784</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -960,9 +958,7 @@
         <span class="kw">let </span>config = other_config.expect(<span class="string">"Need a PreProcessorConfig config."</span>);
         <span class="kw">let </span>config: <span class="kw-2">&amp;</span>PreProcessorConfig = config.downcast_ref().expect(<span class="string">"Downcast failed."</span>);
 
-        <span class="kw">let </span>has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        <span class="kw">let </span>has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         <span class="kw">let </span>(new_input, pixel_values_all, image_bound, tgt_sizes) = <span class="kw">if </span>has_images {
             <span class="kw">const </span>IMAGE_TAG: <span class="kw-2">&amp;</span>str = <span class="string">"(&lt;image&gt;./&lt;/image&gt;)"</span>;

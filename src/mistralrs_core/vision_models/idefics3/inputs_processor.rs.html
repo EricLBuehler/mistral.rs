@@ -602,9 +602,7 @@
 <a href="#601" id="601">601</a>
 <a href="#602" id="602">602</a>
 <a href="#603" id="603">603</a>
-<a href="#604" id="604">604</a>
-<a href="#605" id="605">605</a>
-<a href="#606" id="606">606</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#604" id="604">604</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, cmp, collections::HashMap, num::NonZeroUsize, sync::Arc};
 
@@ -791,9 +789,7 @@
         <span class="kw">let </span>config = other_config.expect(<span class="string">"Need a PreProcessorConfig config."</span>);
         <span class="kw">let </span>config: <span class="kw-2">&amp;</span>PreProcessorConfig = config.downcast_ref().expect(<span class="string">"Downcast failed."</span>);
 
-        <span class="kw">let </span>has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        <span class="kw">let </span>has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         <span class="kw">let </span>(new_input, pixel_values, pixel_attention_mask) = <span class="kw">if </span>has_images {
             <span class="kw">let </span><span class="kw-2">mut </span>pixel_values_accum = Vec::new();

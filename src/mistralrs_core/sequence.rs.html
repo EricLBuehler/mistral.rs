@@ -996,7 +996,13 @@
 <a href="#995" id="995">995</a>
 <a href="#996" id="996">996</a>
 <a href="#997" id="997">997</a>
-<a href="#998" id="998">998</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a>
+<a href="#1003" id="1003">1003</a>
+<a href="#1004" id="1004">1004</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
     get_mut_group,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
@@ -1792,6 +1798,12 @@
 
     <span class="kw">pub fn </span>images(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>[image::DynamicImage]&gt; {
         <span class="self">self</span>.input_images.as_deref()
+    }
+
+    <span class="kw">pub fn </span>has_images(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.input_images
+            .as_ref()
+            .is_some_and(|images| !images.is_empty())
     }
 
     <span class="kw">pub fn </span>image_gen_response_format(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt; {

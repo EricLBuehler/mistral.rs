@@ -461,9 +461,7 @@
 <a href="#460" id="460">460</a>
 <a href="#461" id="461">461</a>
 <a href="#462" id="462">462</a>
-<a href="#463" id="463">463</a>
-<a href="#464" id="464">464</a>
-<a href="#465" id="465">465</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#463" id="463">463</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::num::NonZeroUsize;
 <span class="kw">use </span>std::sync::Arc;
@@ -591,9 +589,7 @@
             <span class="kw-2">*</span>config.crop_size.as_ref().unwrap().get(<span class="string">"height"</span>).unwrap(),
         );
 
-        <span class="kw">let </span>has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        <span class="kw">let </span>has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         <span class="kw">let </span>(pixel_values, image_sizes, num_img_tokens, num_image_samples) = <span class="kw">if </span>has_images {
             <span class="kw">let </span><span class="kw-2">mut </span>pixel_values_accum = Vec::new();

@@ -209,24 +209,73 @@
 <a href="#208" id="208">208</a>
 <a href="#209" id="209">209</a>
 <a href="#210" id="210">210</a>
-<a href="#211" id="211">211</a></pre></div><pre class="rust"><code><span class="attr">#![allow(dead_code, deprecated)]
+<a href="#211" id="211">211</a>
+<a href="#212" id="212">212</a>
+<a href="#213" id="213">213</a>
+<a href="#214" id="214">214</a>
+<a href="#215" id="215">215</a>
+<a href="#216" id="216">216</a>
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a>
+<a href="#250" id="250">250</a>
+<a href="#251" id="251">251</a>
+<a href="#252" id="252">252</a>
+<a href="#253" id="253">253</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
-</span><span class="kw">use </span>std::sync::{Arc, Mutex};
+<span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
+<span class="kw">use </span>either::Either;
+<span class="kw">use </span>itertools::Itertools;
+<span class="kw">use </span>tracing::info;
 
-<span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>radix_trie::{Trie, TrieCommon, TrieKey};
+<span class="kw">use crate</span>::{
+    pipeline::{KvCache, RotatingCache, SingleCache},
+    sequence::Sequence,
+};
 
-<span class="kw">use crate</span>::{get_mut_arcmutex, pipeline::LayerCaches, sequence::Sequence};
-
-<span class="attr">#[derive(PartialEq, Eq)]
+<span class="attr">#[derive(PartialEq, Eq, Debug, Hash)]
 </span><span class="kw">struct </span>Tokens(Vec&lt;u32&gt;);
 
-<span class="kw">impl </span>TrieKey <span class="kw">for </span>Tokens {
-    <span class="kw">fn </span>encode_bytes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;u8&gt; {
+<span class="kw">impl </span>Tokens {
+    <span class="doccomment">/// Maximum index to where the two sets of tokens match
+    </span><span class="kw">fn </span>find_max_index(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span><span class="self">Self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;usize&gt; {
         <span class="self">self</span>.<span class="number">0
             </span>.iter()
-            .flat_map(|x| bytemuck::bytes_of(x).to_vec())
-            .collect::&lt;Vec&lt;u8&gt;&gt;()
+            .zip(x.<span class="number">0</span>.iter())
+            .enumerate()
+            .take_while(|(<span class="kw">_</span>, (a, b))| a == b)
+            .map(|(index, <span class="kw">_</span>)| index)
+            .last()
     }
 }
 
@@ -236,65 +285,101 @@
     }
 }
 
-<span class="kw">type </span>EvictionCacheGroup = (Arc&lt;Mutex&lt;LayerCaches&gt;&gt;, <span class="prelude-ty">Option</span>&lt;Arc&lt;Mutex&lt;LayerCaches&gt;&gt;&gt;);
+<span class="attr">#[derive(Clone)]
+</span><span class="kw">struct </span>CacheElement {
+    cache: Vec&lt;<span class="prelude-ty">Option</span>&lt;KvCache&gt;&gt;,
+    devices: Vec&lt;<span class="prelude-ty">Option</span>&lt;Device&gt;&gt;,
+}
 
-<span class="attr">#[deprecated(note = <span class="string">"use PrefixCacheManagerV2 instead!"</span>)]
-</span><span class="kw">pub struct </span>PrefixCacheManager {
-    caches: Trie&lt;Tokens, Arc&lt;Mutex&lt;LayerCaches&gt;&gt;&gt;,
-    xlora_caches: <span class="prelude-ty">Option</span>&lt;Trie&lt;Tokens, Arc&lt;Mutex&lt;LayerCaches&gt;&gt;&gt;&gt;,
-    device: Device,
-    <span class="kw">pub </span>n_on_device: usize,
+<span class="kw">pub struct </span>PrefixCacheManagerV2 {
+    caches: HashMap&lt;Tokens, CacheElement&gt;,
+    n_on_device: usize,
     no_prefix_cache: bool,
-    eviction_cache_ptrs: Vec&lt;EvictionCacheGroup&gt;,
 }
 
 <span class="attr">#[derive(Clone)]
 </span><span class="kw">pub struct </span>MatchingCache {
-    <span class="kw">pub </span>normal: LayerCaches,
-    <span class="kw">pub </span>xlora: <span class="prelude-ty">Option</span>&lt;LayerCaches&gt;,
+    <span class="kw">pub </span>normal: Vec&lt;<span class="prelude-ty">Option</span>&lt;KvCache&gt;&gt;,
     <span class="kw">pub </span>toks: Vec&lt;u32&gt;,
+    <span class="kw">pub </span>offset: usize,
 }
 
-<span class="kw">impl </span>PrefixCacheManager {
-    <span class="kw">pub fn </span>new(device: Device, n_on_device: usize, is_xlora: bool, no_prefix_cache: bool) -&gt; <span class="self">Self </span>{
-        PrefixCacheManager {
-            caches: Trie::new(),
-            xlora_caches: <span class="kw">if </span>is_xlora { <span class="prelude-val">Some</span>(Trie::new()) } <span class="kw">else </span>{ <span class="prelude-val">None </span>},
-            device,
+<span class="kw">impl </span>PrefixCacheManagerV2 {
+    <span class="kw">pub fn </span>new(n_on_device: usize, no_prefix_cache: bool) -&gt; <span class="self">Self </span>{
+        <span class="kw">if </span>!no_prefix_cache {
+            <span class="macro">info!</span>(<span class="string">"PrefixCacherV2 is enabled! Expect higher multi-turn prompt throughput."</span>);
+        }
+        PrefixCacheManagerV2 {
+            caches: HashMap::new(),
             n_on_device,
             no_prefix_cache,
-            eviction_cache_ptrs: Vec::new(),
         }
     }
 
-    <span class="doccomment">/// This always keeps the cache on the device. If later on, a new seq cannot be allocated due to memory shortage,
-    /// some caches will be evicted.
+    <span class="doccomment">/// This always keeps the cache on the device.
     </span><span class="kw">pub fn </span>add_sequence(<span class="kw-2">&amp;mut </span><span class="self">self</span>, seq: <span class="kw-2">&amp;mut </span>Sequence) {
-        <span class="kw">if </span><span class="self">self</span>.no_prefix_cache {
+        <span class="kw">if </span><span class="self">self</span>.no_prefix_cache || seq.has_images() {
             <span class="kw">return</span>;
         }
-        <span class="kw">let </span>cache = Arc::new(Mutex::new(seq.cache().clone()));
-        <span class="self">self</span>.caches
-            .insert(seq.get_toks().to_vec().into(), cache.clone());
-        <span class="kw">if </span>seq.is_xlora() {
-            <span class="kw">let </span>xlora_cache = Arc::new(Mutex::new(seq.xlora_cache().clone()));
-            <span class="self">self</span>.xlora_caches
-                .as_mut()
-                .unwrap()
-                .insert(seq.get_toks().to_vec().into(), xlora_cache.clone());
-            <span class="self">self</span>.eviction_cache_ptrs.push((cache, <span class="prelude-val">Some</span>(xlora_cache)));
-        } <span class="kw">else </span>{
-            <span class="self">self</span>.eviction_cache_ptrs.push((cache, <span class="prelude-val">None</span>));
-        }
+        <span class="kw">let </span>cache = seq.normal_cache().to_vec();
+        <span class="kw">let </span>devices = cache
+            .iter()
+            .map(|x| x.as_ref().map(|x| x.k().unwrap().unwrap().device().clone()))
+            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+        <span class="self">self</span>.caches.insert(
+            seq.get_toks().to_vec().into(),
+            CacheElement { cache, devices },
+        );
     }
 
-    <span class="kw">fn </span>cache_to&lt;<span class="lifetime">'a</span>&gt;(
-        cache: <span class="kw">impl </span>Iterator&lt;Item = <span class="kw-2">&amp;</span><span class="lifetime">'a </span><span class="kw-2">mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;&gt;,
-        device: <span class="kw-2">&amp;</span>Device,
+    <span class="kw">fn </span>cache_to(
+        cache: <span class="kw-2">&amp;mut </span>[<span class="prelude-ty">Option</span>&lt;KvCache&gt;],
+        devices: Either&lt;<span class="kw-2">&amp;</span>Device, <span class="kw-2">&amp;</span>Vec&lt;<span class="prelude-ty">Option</span>&lt;Device&gt;&gt;&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-        <span class="kw">for </span>layer <span class="kw">in </span>cache {
-            <span class="kw">if let </span><span class="prelude-val">Some</span>((<span class="kw-2">ref </span>q, <span class="kw-2">ref </span>k)) = layer {
-                <span class="kw-2">*</span>layer = <span class="prelude-val">Some</span>((q.to_device(device)<span class="question-mark">?</span>, k.to_device(device)<span class="question-mark">?</span>));
+        <span class="kw">for </span>(i, layer) <span class="kw">in </span>cache
+            .iter_mut()
+            .enumerate()
+            .flat_map(|(i, x)| x.as_mut().map(|x| (i, x)))
+        {
+            <span class="kw">let </span>device = devices.left_or_else(|layers| layers[i].as_ref().unwrap());
+
+            <span class="kw">match </span>layer {
+                KvCache::Normal { k, v } =&gt; {
+                    <span class="kw-2">*</span>layer = KvCache::Normal {
+                        k: SingleCache {
+                            all_data: k.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: k.dim,
+                            current_seq_len: k.current_seq_len,
+                            max_seq_len: k.max_seq_len,
+                            capacity_seq_len: k.capacity_seq_len,
+                        },
+                        v: SingleCache {
+                            all_data: v.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: v.dim,
+                            current_seq_len: v.current_seq_len,
+                            max_seq_len: v.max_seq_len,
+                            capacity_seq_len: v.capacity_seq_len,
+                        },
+                    }
+                }
+                KvCache::Rotating { k, v } =&gt; {
+                    <span class="kw-2">*</span>layer = KvCache::Rotating {
+                        k: RotatingCache {
+                            all_data: k.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: k.dim,
+                            current_seq_len: k.current_seq_len,
+                            max_seq_len: k.max_seq_len,
+                            offset: k.offset,
+                        },
+                        v: RotatingCache {
+                            all_data: v.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
+                            dim: v.dim,
+                            current_seq_len: v.current_seq_len,
+                            max_seq_len: v.max_seq_len,
+                            offset: v.offset,
+                        },
+                    }
+                }
             }
         }
         <span class="prelude-val">Ok</span>(())
@@ -307,47 +392,47 @@
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="number">0</span>);
         }
         <span class="kw">let </span><span class="kw-2">mut </span>n_on_device = <span class="number">0</span>;
-        <span class="kw">for </span>(cache, <span class="kw">_</span>) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.eviction_cache_ptrs {
-            <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>].is_none() {
-                <span class="comment">// TODO: add support for normal cache
-                </span><span class="kw">continue</span>;
-            }
-            <span class="kw">if </span>!<span class="macro">matches!</span>(
-                <span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>]
-                    .as_ref()
-                    .unwrap()
-                    .<span class="number">0
-                    </span>.device(),
-                Device::Cpu
-            ) {
+        <span class="kw">for </span>cache <span class="kw">in </span><span class="self">self</span>.caches.values() {
+            <span class="kw">let </span>first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
+            <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
+                <span class="kw">continue</span>;
+            };
+
+            <span class="kw">let </span>cache_device = <span class="kw">match </span>first_non_none {
+                KvCache::Normal { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
+                }
+                KvCache::Rotating { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
+                }
+            };
+
+            <span class="kw">if </span>!<span class="macro">matches!</span>(cache_device, Device::Cpu) {
                 n_on_device += <span class="number">1</span>;
             }
         }
         <span class="kw">let </span><span class="kw-2">mut </span>n_evicted = <span class="number">0</span>;
         <span class="comment">// Intentionally evict the first ones first, as they are the oldest
-        </span><span class="kw">for </span>(cache, xlora_cache) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.eviction_cache_ptrs {
+        </span><span class="kw">for </span>cache <span class="kw">in </span><span class="self">self</span>.caches.values_mut() {
             <span class="kw">if </span>n_on_device - n_evicted == <span class="self">self</span>.n_on_device {
                 <span class="kw">break</span>;
             }
-            <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>].is_none() {
-                <span class="comment">// TODO: add support for normal cache
-                </span><span class="kw">continue</span>;
-            }
-            <span class="kw">if </span>!<span class="macro">matches!</span>(
-                <span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>]
-                    .as_ref()
-                    .unwrap()
-                    .<span class="number">0
-                    </span>.device(),
-                Device::Cpu
-            ) {
-                <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="macro">get_mut_arcmutex!</span>(cache);
-                <span class="kw">let </span><span class="kw-2">mut </span>xlora_cache = xlora_cache.as_ref().map(|c| <span class="macro">get_mut_arcmutex!</span>(c));
+            <span class="kw">let </span>first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
+            <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
+                <span class="kw">continue</span>;
+            };
 
-                <span class="self">Self</span>::cache_to(cache.iter_mut(), <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>xlora_cache) = xlora_cache {
-                    <span class="self">Self</span>::cache_to(xlora_cache.iter_mut(), <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache_device = <span class="kw">match </span>first_non_none {
+                KvCache::Normal { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
                 }
+                KvCache::Rotating { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
+                }
+            };
+
+            <span class="kw">if </span>!<span class="macro">matches!</span>(cache_device, Device::Cpu) {
+                <span class="self">Self</span>::cache_to(<span class="kw-2">&amp;mut </span>cache.cache, Either::Left(<span class="kw-2">&amp;</span>Device::Cpu))<span class="question-mark">?</span>;
                 n_evicted += <span class="number">1</span>;
             }
         }
@@ -360,60 +445,59 @@
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="number">0</span>);
         }
         <span class="comment">// Intentionally evict the first ones first, as they are the oldest
-        </span><span class="kw">for </span>(cache, xlora_cache) <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.eviction_cache_ptrs {
-            <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>].is_none() {
-                <span class="comment">// TODO: add support for normal cache
-                </span><span class="kw">continue</span>;
-            }
-            <span class="kw">if </span>!<span class="macro">matches!</span>(
-                <span class="macro">get_mut_arcmutex!</span>(cache.as_ref())[<span class="number">0</span>]
-                    .as_ref()
-                    .unwrap()
-                    .<span class="number">0
-                    </span>.device(),
-                Device::Cpu
-            ) {
-                <span class="kw">let </span><span class="kw-2">mut </span>cache = <span class="macro">get_mut_arcmutex!</span>(cache);
-                <span class="kw">let </span><span class="kw-2">mut </span>xlora_cache = xlora_cache.as_ref().map(|c| <span class="macro">get_mut_arcmutex!</span>(c));
+        </span><span class="kw">for </span>cache <span class="kw">in </span><span class="self">self</span>.caches.values_mut() {
+            <span class="kw">let </span>first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
+            <span class="kw">let </span><span class="prelude-val">Some</span>(<span class="prelude-val">Some</span>(first_non_none)) = first_non_none <span class="kw">else </span>{
+                <span class="kw">continue</span>;
+            };
 
-                <span class="self">Self</span>::cache_to(cache.iter_mut(), <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
-                <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>xlora_cache) = xlora_cache {
-                    <span class="self">Self</span>::cache_to(xlora_cache.iter_mut(), <span class="kw-2">&amp;</span>Device::Cpu)<span class="question-mark">?</span>;
+            <span class="kw">let </span>cache_device = <span class="kw">match </span>first_non_none {
+                KvCache::Normal { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
                 }
+                KvCache::Rotating { k, .. } =&gt; {
+                    k.all_data().as_ref().expect(<span class="string">"No KV cache data"</span>).device()
+                }
+            };
+
+            <span class="kw">if </span>!<span class="macro">matches!</span>(cache_device, Device::Cpu) {
+                <span class="self">Self</span>::cache_to(<span class="kw-2">&amp;mut </span>cache.cache, Either::Left(<span class="kw-2">&amp;</span>Device::Cpu))<span class="question-mark">?</span>;
             }
         }
         <span class="prelude-val">Ok</span>(<span class="self">self</span>.caches.len())
     }
 
     <span class="doccomment">/// Search for a matching cache given some toks
-    </span><span class="kw">pub fn </span>search_for_matching_cache(<span class="kw-2">&amp;mut </span><span class="self">self</span>, toks: <span class="kw-2">&amp;</span>[u32]) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;MatchingCache&gt;&gt; {
-        <span class="kw">if </span><span class="self">self</span>.no_prefix_cache || toks.is_empty() {
+    </span><span class="kw">pub fn </span>search_for_matching_cache(
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+        toks: <span class="kw-2">&amp;</span>[u32],
+        contains_images: bool,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;MatchingCache&gt;&gt; {
+        <span class="kw">if </span><span class="self">self</span>.no_prefix_cache || toks.is_empty() || contains_images {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>);
         }
 
         <span class="kw">let </span>toks = Tokens(toks.to_vec());
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(cache) = <span class="self">self</span>.caches.get(<span class="kw-2">&amp;</span>toks) {
-            <span class="self">Self</span>::cache_to(<span class="macro">get_mut_arcmutex!</span>(cache.as_ref()).iter_mut(), <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-            <span class="kw">let </span>cache = <span class="macro">get_mut_arcmutex!</span>(cache.as_ref()).clone();
-            <span class="kw">let </span>xlora_cache = <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>xlora_caches) = <span class="self">self</span>.xlora_caches {
-                <span class="kw">let </span><span class="kw-2">mut </span>xlora_cache = <span class="macro">get_mut_arcmutex!</span>(xlora_caches.get(<span class="kw-2">&amp;</span>toks).unwrap().as_ref());
-                <span class="self">Self</span>::cache_to(xlora_cache.iter_mut(), <span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-                <span class="prelude-val">Some</span>(xlora_cache.clone())
-            } <span class="kw">else </span>{
-                <span class="prelude-val">None
-            </span>};
-            <span class="kw">let </span>ancestor = <span class="kw-2">&amp;</span><span class="self">self
-                </span>.caches
-                .get_ancestor(<span class="kw-2">&amp;</span>toks)
-                .expect(<span class="string">"No ancestor."</span>)
-                .key()
-                .expect(<span class="string">"Cannot get the key."</span>)
-                .<span class="number">0</span>;
-            <span class="comment">// Know ancestor.len() &lt; toks.len(), and toks[0..ancestor.len()] == toks
-            </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(MatchingCache {
-                normal: cache,
-                xlora: xlora_cache,
-                toks: toks.<span class="number">0</span>[ancestor.len()..].to_vec(),
+
+        <span class="kw">let </span><span class="kw-2">mut </span>longest_match = (<span class="number">0</span>, <span class="prelude-val">None</span>);
+        <span class="kw">for </span>(k, v) <span class="kw">in </span><span class="self">self</span>.caches.iter() {
+            <span class="kw">let </span>match_len = toks.find_max_index(k);
+            <span class="kw">if let </span><span class="prelude-val">Some</span>(match_len) = match_len {
+                <span class="kw">if </span>match_len &gt; longest_match.<span class="number">0 </span>{
+                    longest_match = (match_len, <span class="prelude-val">Some</span>(v));
+                }
+            }
+        }
+        <span class="kw">if let </span>(match_len, <span class="prelude-val">Some</span>(longest_match)) = longest_match {
+            <span class="kw">let </span><span class="kw-2">mut </span>cache = longest_match.clone();
+            <span class="self">Self</span>::cache_to(<span class="kw-2">&amp;mut </span>cache.cache, Either::Right(<span class="kw-2">&amp;</span>cache.devices))<span class="question-mark">?</span>;
+            <span class="kw">for </span>layer <span class="kw">in </span>cache.cache.iter_mut().flatten() {
+                layer.set_len(match_len);
+            }
+            <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(MatchingCache {
+                normal: cache.cache,
+                toks: toks.<span class="number">0</span>[match_len..].to_vec(),
+                offset: match_len,
             }))
         } <span class="kw">else </span>{
             <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>)

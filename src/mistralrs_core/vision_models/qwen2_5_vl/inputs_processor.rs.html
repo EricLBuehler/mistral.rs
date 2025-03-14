@@ -741,9 +741,7 @@
 <a href="#740" id="740">740</a>
 <a href="#741" id="741">741</a>
 <a href="#742" id="742">742</a>
-<a href="#743" id="743">743</a>
-<a href="#744" id="744">744</a>
-<a href="#745" id="745">745</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
+<a href="#743" id="743">743</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
     device_map::DeviceMapper,
     pipeline::{
         text_models_inputs_processor::{
@@ -907,9 +905,7 @@
         <span class="kw">let </span>config = other_config.expect(<span class="string">"Need a PreProcessorConfig config."</span>);
         <span class="kw">let </span>config: <span class="kw-2">&amp;</span>PreProcessorConfig = config.downcast_ref().expect(<span class="string">"Downcast failed."</span>);
 
-        <span class="kw">let </span>has_images = input_seqs
-            .iter()
-            .all(|seq| seq.images().is_some_and(|images| !images.is_empty()));
+        <span class="kw">let </span>has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         <span class="kw">let </span>(
             new_input,
