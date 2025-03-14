@@ -661,7 +661,7 @@ impl Loader for NormalLoader {
                     }
                     EitherCache::Normal(normal) => {
                         for layer in &mut *normal.lock().unwrap().0 {
-                            layer.set_len(0);
+                            layer.reset();
                         }
                     }
                 }

@@ -101,8 +101,9 @@ impl SingleCache {
         self.all_data = None;
     }
 
-    pub fn set_len(&mut self, len: usize) {
+    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
         self.current_seq_len = len;
+        Ok(())
     }
 
     pub fn append(&mut self, src: &Tensor) -> Result<()> {
@@ -204,12 +205,17 @@ impl RotatingCache {
         self.all_data = None;
     }
 
-    pub fn set_len(&mut self, len: usize) {
-        if len < self.max_seq_len {
-            self.current_seq_len = len % self.max_seq_len;
-        } else {
-            // No change.
+    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
+        // If trying to roll it back past the boundary of max_seq_len, fail early.
+        if self.current_seq_len - len > self.max_seq_len {
+            candle_core::bail!(
+                "Rotating KV cache (usually for sliding window) tried to reset to len {len} while current is {} and max retained is {}",
+                self.current_seq_len,
+                self.max_seq_len
+            );
         }
+        self.current_seq_len = len % self.max_seq_len;
+        Ok(())
     }
 
     pub fn append(&mut self, src: &Tensor) -> Result<Tensor> {
@@ -354,15 +360,18 @@ impl KvCache {
         }
     }
 
-    pub fn set_len(&mut self, len: usize) {
+    /// Returns Ok if the length reassignment was successful, otherwise returns Err.
+    pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
         match self {
             Self::Normal { k, v } => {
-                k.set_len(len);
-                v.set_len(len);
+                k.set_len(len)?;
+                v.set_len(len)?;
+                Ok(())
             }
             Self::Rotating { k, v } => {
-                k.set_len(len);
-                v.set_len(len);
+                k.set_len(len)?;
+                v.set_len(len)?;
+                Ok(())
             }
         }
     }

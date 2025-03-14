@@ -239,7 +239,10 @@ impl PrefixCacheManagerV2 {
             let mut cache = longest_match.clone();
             Self::cache_to(&mut cache.cache, Either::Right(&cache.devices))?;
             for layer in cache.cache.iter_mut().flatten() {
-                layer.set_len(match_len);
+                match layer.set_len(match_len) {
+                    Ok(_) => (),
+                    Err(_) => return Ok(None),
+                }
             }
             Ok(Some(MatchingCache {
                 normal: cache.cache,
