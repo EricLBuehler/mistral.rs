@@ -65,6 +65,17 @@ impl Gemma3Model {
             } => {
                 assert!(*image_token_index < text_config.vocab_size);
                 Ok(Self {
+                    multi_modal_projector: Some(Gemma3MultiModalProjector::new(
+                        cfg,
+                        vb.pp("multi_modal_projector")
+                            .set_device(normal_loading_metadata.real_device.clone()),
+                    )?),
+                    vision_tower: Some(SiglipVisionTransformer::new(
+                        vision_config,
+                        vb.pp("vision_tower")
+                            .pp("vision_model")
+                            .set_device(normal_loading_metadata.real_device.clone()),
+                    )?),
                     language_model: TextModel::new(
                         text_config,
                         vb.pp("language_model"),
@@ -72,14 +83,6 @@ impl Gemma3Model {
                         normal_loading_metadata,
                         attention_mechanism,
                     )?,
-                    multi_modal_projector: Some(Gemma3MultiModalProjector::new(
-                        cfg,
-                        vb.pp("multi_modal_projector"),
-                    )?),
-                    vision_tower: Some(SiglipVisionTransformer::new(
-                        vision_config,
-                        vb.pp("vision_tower").pp("vision_model"),
-                    )?),
                     cfg: cfg.clone(),
                 })
             }
