@@ -205,7 +205,11 @@ impl RotatingCache {
     }
 
     pub fn set_len(&mut self, len: usize) {
-        self.current_seq_len = len % self.max_seq_len;
+        if len < self.max_seq_len {
+            self.current_seq_len = len % self.max_seq_len;
+        } else {
+            // No change.
+        }
     }
 
     pub fn append(&mut self, src: &Tensor) -> Result<Tensor> {

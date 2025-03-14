@@ -65,7 +65,7 @@ impl PrefixCacheManagerV2 {
 
     /// This always keeps the cache on the device.
     pub fn add_sequence(&mut self, seq: &mut Sequence) {
-        if self.no_prefix_cache {
+        if self.no_prefix_cache || seq.has_images() {
             return;
         }
         let cache = seq.normal_cache().to_vec();
