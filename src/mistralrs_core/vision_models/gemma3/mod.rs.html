@@ -254,7 +254,10 @@
 <a href="#253" id="253">253</a>
 <a href="#254" id="254">254</a>
 <a href="#255" id="255">255</a>
-<a href="#256" id="256">256</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a>
+<a href="#259" id="259">259</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::sync::Arc;
 
@@ -321,6 +324,17 @@
             } =&gt; {
                 <span class="macro">assert!</span>(<span class="kw-2">*</span>image_token_index &lt; text_config.vocab_size);
                 <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+                    multi_modal_projector: <span class="prelude-val">Some</span>(Gemma3MultiModalProjector::new(
+                        cfg,
+                        vb.pp(<span class="string">"multi_modal_projector"</span>)
+                            .set_device(normal_loading_metadata.real_device.clone()),
+                    )<span class="question-mark">?</span>),
+                    vision_tower: <span class="prelude-val">Some</span>(SiglipVisionTransformer::new(
+                        vision_config,
+                        vb.pp(<span class="string">"vision_tower"</span>)
+                            .pp(<span class="string">"vision_model"</span>)
+                            .set_device(normal_loading_metadata.real_device.clone()),
+                    )<span class="question-mark">?</span>),
                     language_model: TextModel::new(
                         text_config,
                         vb.pp(<span class="string">"language_model"</span>),
@@ -328,14 +342,6 @@
                         normal_loading_metadata,
                         attention_mechanism,
                     )<span class="question-mark">?</span>,
-                    multi_modal_projector: <span class="prelude-val">Some</span>(Gemma3MultiModalProjector::new(
-                        cfg,
-                        vb.pp(<span class="string">"multi_modal_projector"</span>),
-                    )<span class="question-mark">?</span>),
-                    vision_tower: <span class="prelude-val">Some</span>(SiglipVisionTransformer::new(
-                        vision_config,
-                        vb.pp(<span class="string">"vision_tower"</span>).pp(<span class="string">"vision_model"</span>),
-                    )<span class="question-mark">?</span>),
                     cfg: cfg.clone(),
                 })
             }
