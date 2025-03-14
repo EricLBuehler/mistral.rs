@@ -1055,7 +1055,16 @@
 <a href="#1054" id="1054">1054</a>
 <a href="#1055" id="1055">1055</a>
 <a href="#1056" id="1056">1056</a>
-<a href="#1057" id="1057">1057</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
+<a href="#1057" id="1057">1057</a>
+<a href="#1058" id="1058">1058</a>
+<a href="#1059" id="1059">1059</a>
+<a href="#1060" id="1060">1060</a>
+<a href="#1061" id="1061">1061</a>
+<a href="#1062" id="1062">1062</a>
+<a href="#1063" id="1063">1063</a>
+<a href="#1064" id="1064">1064</a>
+<a href="#1065" id="1065">1065</a>
+<a href="#1066" id="1066">1066</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor, D};
 
@@ -1158,8 +1167,9 @@
         <span class="self">self</span>.all_data = <span class="prelude-val">None</span>;
     }
 
-    <span class="kw">pub fn </span>set_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) {
+    <span class="kw">pub fn </span>set_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) -&gt; candle_core::Result&lt;()&gt; {
         <span class="self">self</span>.current_seq_len = len;
+        <span class="prelude-val">Ok</span>(())
     }
 
     <span class="kw">pub fn </span>append(<span class="kw-2">&amp;mut </span><span class="self">self</span>, src: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
@@ -1261,12 +1271,17 @@
         <span class="self">self</span>.all_data = <span class="prelude-val">None</span>;
     }
 
-    <span class="kw">pub fn </span>set_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) {
-        <span class="kw">if </span>len &lt; <span class="self">self</span>.max_seq_len {
-            <span class="self">self</span>.current_seq_len = len % <span class="self">self</span>.max_seq_len;
-        } <span class="kw">else </span>{
-            <span class="comment">// No change.
-        </span>}
+    <span class="kw">pub fn </span>set_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) -&gt; candle_core::Result&lt;()&gt; {
+        <span class="comment">// If trying to roll it back past the boundary of max_seq_len, fail early.
+        </span><span class="kw">if </span><span class="self">self</span>.current_seq_len - len &gt; <span class="self">self</span>.max_seq_len {
+            <span class="macro">candle_core::bail!</span>(
+                <span class="string">"Rotating KV cache (usually for sliding window) tried to reset to len {len} while current is {} and max retained is {}"</span>,
+                <span class="self">self</span>.current_seq_len,
+                <span class="self">self</span>.max_seq_len
+            );
+        }
+        <span class="self">self</span>.current_seq_len = len % <span class="self">self</span>.max_seq_len;
+        <span class="prelude-val">Ok</span>(())
     }
 
     <span class="kw">pub fn </span>append(<span class="kw-2">&amp;mut </span><span class="self">self</span>, src: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
@@ -1411,15 +1426,18 @@
         }
     }
 
-    <span class="kw">pub fn </span>set_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) {
+    <span class="doccomment">/// Returns Ok if the length reassignment was successful, otherwise returns Err.
+    </span><span class="kw">pub fn </span>set_len(<span class="kw-2">&amp;mut </span><span class="self">self</span>, len: usize) -&gt; candle_core::Result&lt;()&gt; {
         <span class="kw">match </span><span class="self">self </span>{
             <span class="self">Self</span>::Normal { k, v } =&gt; {
-                k.set_len(len);
-                v.set_len(len);
+                k.set_len(len)<span class="question-mark">?</span>;
+                v.set_len(len)<span class="question-mark">?</span>;
+                <span class="prelude-val">Ok</span>(())
             }
             <span class="self">Self</span>::Rotating { k, v } =&gt; {
-                k.set_len(len);
-                v.set_len(len);
+                k.set_len(len)<span class="question-mark">?</span>;
+                v.set_len(len)<span class="question-mark">?</span>;
+                <span class="prelude-val">Ok</span>(())
             }
         }
     }
