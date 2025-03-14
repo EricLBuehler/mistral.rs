@@ -24,7 +24,7 @@ use crate::pipeline::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use crate::pipeline::loaders::DeviceMappedModelLoader;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
-use crate::prefix_cacher_v2::PrefixCacheManagerV2;
+use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::utils::gguf_metadata::{ContentConfig, GgufDeviceMapLoaderInner};
 use crate::utils::model_config as ModelConfig;
