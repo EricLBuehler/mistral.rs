@@ -115,14 +115,16 @@ impl InputsProcessor for LLaVAInputProcessor {
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
+        let has_images = input_seqs
+            .iter()
+            .all(|seq| seq.is_prompt() && seq.has_images());
 
         let (pixel_values, num_img_tokens) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut num_img_tokens_accum = Vec::new();
             for seq in input_seqs.iter_mut() {
                 let imgs = seq
-                    .take_images()
+                    .clone_images()
                     .expect("Need to have images by this point.");
                 let PreprocessedImages {
                     pixel_values,
@@ -227,49 +229,54 @@ impl InputsProcessor for LLaVAInputProcessor {
                 .iter_mut()
                 .zip(num_img_tokens.unwrap().into_iter()),
         ) {
-            let splits = self
-                .image_tag_splitter
-                .split(&detokenized)
-                .map(|span| &detokenized[span.range()])
-                .collect::<Vec<_>>();
-            let prompt_chunks = splits
-                .iter()
-                .map(|s| {
-                    // we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
-                    tokenizer
-                        .encode(*s, false)
-                        .unwrap()
-                        .get_ids()
-                        .to_vec()
-                        .iter()
-                        .map(|x| *x as i64)
-                        .collect()
-                })
-                .collect::<Vec<Vec<_>>>();
-            let mut image_ids_pad = Vec::new();
-            for (i, num_img_token) in num_img_tokens.iter().enumerate() {
-                let mut image_id_pad = vec![0; *num_img_token];
-                image_id_pad[0] = -(i as i64 + 1);
-                image_ids_pad.push(image_id_pad);
-            }
-            let mut input_ids: Vec<i64> = Vec::new();
-            for item in prompt_chunks
-                .iter()
-                .map(|x| x.to_vec())
-                .interleave(image_ids_pad)
-            {
-                input_ids.extend(item);
-            }
-            // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-            seq.set_toks_and_reallocate(
-                input_ids
+            if !seq.flag_have_processed_images() {
+                let splits = self
+                    .image_tag_splitter
+                    .split(&detokenized)
+                    .map(|span| &detokenized[span.range()])
+                    .collect::<Vec<_>>();
+                let prompt_chunks = splits
                     .iter()
-                    .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
-                    .collect::<Vec<_>>(),
-                paged_attn_metadata.as_mut(),
-            );
+                    .map(|s| {
+                        // we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
+                        tokenizer
+                            .encode(*s, false)
+                            .unwrap()
+                            .get_ids()
+                            .to_vec()
+                            .iter()
+                            .map(|x| *x as i64)
+                            .collect()
+                    })
+                    .collect::<Vec<Vec<_>>>();
+                let mut image_ids_pad = Vec::new();
+                for (i, num_img_token) in num_img_tokens.iter().enumerate() {
+                    let mut image_id_pad = vec![0; *num_img_token];
+                    image_id_pad[0] = -(i as i64 + 1);
+                    image_ids_pad.push(image_id_pad);
+                }
+                let mut input_ids: Vec<i64> = Vec::new();
+                for item in prompt_chunks
+                    .iter()
+                    .map(|x| x.to_vec())
+                    .interleave(image_ids_pad)
+                {
+                    input_ids.extend(item);
+                }
+                // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
+                seq.set_toks_and_reallocate(
+                    input_ids
+                        .iter()
+                        .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
+                        .collect::<Vec<_>>(),
+                    paged_attn_metadata.as_mut(),
+                );
 
-            toks.push(input_ids);
+                toks.push(input_ids);
+            } else {
+                let ids = seq.get_toks().to_vec();
+                toks.push(ids.iter().map(|x| *x as i64).collect());
+            }
         }
 
         let iter = if is_prompt {

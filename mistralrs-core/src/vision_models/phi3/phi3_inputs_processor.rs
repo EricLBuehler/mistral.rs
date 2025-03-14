@@ -118,7 +118,7 @@ impl InputsProcessor for Phi3InputsProcessor {
             let mut n_images = Vec::new();
             for seq in input_seqs.iter_mut() {
                 let imgs = seq
-                    .take_images()
+                    .clone_images()
                     .expect("Need to have images by this point.");
                 let imgs_len = imgs.len();
                 n_images.push(imgs_len);
@@ -231,82 +231,88 @@ impl InputsProcessor for Phi3InputsProcessor {
                 .iter_mut()
                 .zip(num_img_tokens.unwrap().into_iter().zip(n_images)),
         ) {
-            let splits = self
-                .image_tag_splitter
-                .split(&detokenized)
-                .map(|span| &detokenized[span.range()])
-                .collect::<Vec<_>>();
-            let prompt_chunks = tokenizer
-                .encode_batch(splits, true)
-                .expect("Encode failed")
-                .into_iter()
-                .map(|enc| enc.get_ids().to_vec())
-                .collect::<Vec<_>>();
+            if !seq.flag_have_processed_images() {
+                let splits = self
+                    .image_tag_splitter
+                    .split(&detokenized)
+                    .map(|span| &detokenized[span.range()])
+                    .collect::<Vec<_>>();
+                let prompt_chunks = tokenizer
+                    .encode_batch(splits, true)
+                    .expect("Encode failed")
+                    .into_iter()
+                    .map(|enc| enc.get_ids().to_vec())
+                    .collect::<Vec<_>>();
 
-            let image_tags = self.image_tag_splitter.find_iter(&detokenized);
-            let image_ids = image_tags
-                .into_iter()
-                .map(|s| {
-                    let s = &detokenized[s.range()];
-                    s.split('|')
-                        .nth(1)
-                        .unwrap()
-                        .split('_')
-                        .nth(1)
-                        .unwrap()
-                        .parse::<u32>()
-                        .expect("Failed to parse image id to u32")
-                })
-                .collect::<Vec<_>>();
-            let unique_image_ids = image_ids
-                .iter()
-                .copied()
-                .unique()
-                .sorted()
-                .collect::<Vec<_>>();
-            // `image_ids` must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be [1, 4, 5]
-            if unique_image_ids != (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>() {
-                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                let image_tags = self.image_tag_splitter.find_iter(&detokenized);
+                let image_ids = image_tags
+                    .into_iter()
+                    .map(|s| {
+                        let s = &detokenized[s.range()];
+                        s.split('|')
+                            .nth(1)
+                            .unwrap()
+                            .split('_')
+                            .nth(1)
+                            .unwrap()
+                            .parse::<u32>()
+                            .expect("Failed to parse image id to u32")
+                    })
+                    .collect::<Vec<_>>();
+                let unique_image_ids = image_ids
+                    .iter()
+                    .copied()
+                    .unique()
+                    .sorted()
+                    .collect::<Vec<_>>();
+                // `image_ids` must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be [1, 4, 5]
+                if unique_image_ids != (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>()
+                {
+                    return Box::new(std::iter::once(Err(anyhow::Error::msg(
                     "`image_ids` must start from 1, and must be continuous, e.g. [1, 2, 3], cannot be [1, 4, 5].",
                 ))));
-            }
-            // Total images must be the same as the number of image tags
-            if unique_image_ids.len() != n_images {
-                return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                    "Total images must be the same as the number of image tags.",
-                ))));
-            }
+                }
+                // Total images must be the same as the number of image tags
+                if unique_image_ids.len() != n_images {
+                    return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                        "Total images must be the same as the number of image tags.",
+                    ))));
+                }
 
-            // Use the TryInto + unwrap_or to handle case when id==0
-            let image_ids_pad = image_ids
-                .iter()
-                .map(|id| {
-                    [-(*id as i64)].repeat(
-                        num_img_tokens[TryInto::<usize>::try_into(*id as isize - 1)
-                            .unwrap_or(num_img_tokens.len() - 1)],
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            let mut input_ids: Vec<i64> = Vec::new();
-            for item in prompt_chunks
-                .iter()
-                .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
-                .interleave(image_ids_pad)
-            {
-                input_ids.extend(item);
-            }
-
-            // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-            seq.set_toks_and_reallocate(
-                input_ids
+                // Use the TryInto + unwrap_or to handle case when id==0
+                let image_ids_pad = image_ids
                     .iter()
-                    .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
-                    .collect::<Vec<_>>(),
-                paged_attn_metadata.as_mut(),
-            );
+                    .map(|id| {
+                        [-(*id as i64)].repeat(
+                            num_img_tokens[TryInto::<usize>::try_into(*id as isize - 1)
+                                .unwrap_or(num_img_tokens.len() - 1)],
+                        )
+                    })
+                    .collect::<Vec<_>>();
 
-            toks.push(input_ids);
+                let mut input_ids: Vec<i64> = Vec::new();
+                for item in prompt_chunks
+                    .iter()
+                    .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
+                    .interleave(image_ids_pad)
+                {
+                    input_ids.extend(item);
+                }
+
+                // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
+                seq.set_toks_and_reallocate(
+                    input_ids
+                        .iter()
+                        .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
+                        .collect::<Vec<_>>(),
+                    paged_attn_metadata.as_mut(),
+                );
+
+                toks.push(input_ids);
+            } else {
+                let ids = seq.get_toks().to_vec();
+                toks.push(ids.iter().map(|x| *x as i64).collect());
+            }
         }
 
         let iter = if is_prompt {

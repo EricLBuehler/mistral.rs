@@ -702,13 +702,6 @@ impl Engine {
                 warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt_tokens.len());
             }
         }
-        let prefill_cache = handle_seq_error!(
-            self.prefix_cacher.search_for_matching_cache(
-                &prompt_tokens,
-                images.as_ref().is_some_and(|x| !x.is_empty())
-            ),
-            request.response
-        );
 
         let topk = request
             .sampling_params
@@ -926,7 +919,7 @@ impl Engine {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!");
-            let seq = Sequence::new_waiting(
+            let mut seq = Sequence::new_waiting(
                 prompt_tokens.clone(),
                 prompt_text.clone(),
                 self.id,
@@ -959,6 +952,13 @@ impl Engine {
                 seq_preallocated_cache,
                 request.return_raw_logits,
             );
+
+            let prefill_cache = handle_seq_error!(
+                self.prefix_cacher
+                    .search_for_matching_cache(&mut seq, &*get_mut_arcmutex!(self.pipeline)),
+                request.response
+            );
+
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill_v2(
                     prefill_cache.normal,

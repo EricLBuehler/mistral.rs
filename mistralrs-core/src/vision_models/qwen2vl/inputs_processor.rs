@@ -498,6 +498,10 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             seq_indices,
         })))
     }
+
+    fn supports_pre_processed_images(&self) -> bool {
+        false
+    }
 }
 
 impl Qwen2VLImageProcessor {

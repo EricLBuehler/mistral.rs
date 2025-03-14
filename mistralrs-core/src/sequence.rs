@@ -16,6 +16,7 @@ use crate::{
 use candle_core::Tensor;
 use std::{
     fmt::Display,
+    ops::Range,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -210,6 +211,8 @@ pub struct Sequence {
     pub cached_pixel_values: Option<Tensor>,
     pub cached_img_thw: Option<Tensor>,
     pub cached_vid_thw: Option<Tensor>,
+    mm_positions: Option<Vec<Range<usize>>>,
+    have_processed_images: bool,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -352,6 +355,8 @@ impl Sequence {
             cached_vid_thw: None,
             return_raw_logits,
             token_offset: 0,
+            mm_positions: None,
+            have_processed_images: false,
         }
     }
 
@@ -505,6 +510,44 @@ impl Sequence {
             metadata.block_engine.free_sequence(*self.id());
             metadata.block_engine.allocate(self);
         }
+    }
+
+    // Clears the current mm positions.
+    pub(crate) fn recompute_mm_positions(&mut self, image_sequence_toks: Vec<Vec<u32>>) {
+        let mut accum = Vec::new();
+
+        let mut last_i = 0;
+        for img_seq_toks in image_sequence_toks {
+            let mut start = last_i;
+            for i in last_i..self.tokens.len() {
+                start = i;
+                if img_seq_toks
+                    == self.tokens[i..(img_seq_toks.len() + i).min(self.tokens.len() - 1)]
+                {
+                    break;
+                }
+            }
+
+            if start != self.tokens.len() - 1 {
+                let end = start + img_seq_toks.len();
+                last_i = end;
+                assert_eq!(img_seq_toks, self.tokens[start..end]);
+                accum.push(start..end);
+            }
+        }
+
+        self.mm_positions = Some(accum);
+    }
+
+    /// Indicate that this sequence has processed images and return the previous state.
+    pub(crate) fn flag_have_processed_images(&mut self) -> bool {
+        let prev = self.have_processed_images;
+        self.have_processed_images = true;
+        prev
+    }
+
+    pub(crate) fn get_mm_positions(&self) -> Option<&Vec<Range<usize>>> {
+        self.mm_positions.as_ref()
     }
 
     pub fn completion_bytes(&self) -> &[u8] {
@@ -784,11 +827,7 @@ impl Sequence {
         self.adapters.clone()
     }
 
-    pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
-        self.input_images.take()
-    }
-
-    pub fn clone_images(&mut self) -> Option<Vec<image::DynamicImage>> {
+    pub fn clone_images(&self) -> Option<Vec<image::DynamicImage>> {
         self.input_images.clone()
     }
 

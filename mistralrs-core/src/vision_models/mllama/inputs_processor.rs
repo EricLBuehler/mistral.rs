@@ -311,7 +311,7 @@ impl InputsProcessor for MLlamaImageProcessor {
                     num_crops: _,
                 } = self
                     .preprocess(
-                        seq.take_images()
+                        seq.clone_images()
                             .expect("Need to have images by this point."),
                         vec![],
                         config,
