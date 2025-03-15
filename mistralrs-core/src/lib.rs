@@ -246,7 +246,10 @@ impl Drop for MistralRs {
         ENGINE_INSTRUCTIONS
             .lock()
             .expect("`ENGINE_INSTRUCTIONS` was poisioned")
-            .insert(self.engine_id, Some(EngineInstruction::Terminate));
+            .insert(
+                ENGINE_ID.load(std::sync::atomic::Ordering::SeqCst),
+                Some(EngineInstruction::Terminate),
+            );
     }
 }
 
@@ -315,8 +318,6 @@ impl MistralRs {
                 engine.run().await;
             });
         });
-
-        let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
 
         if distributed::is_daemon() {
             let request_sender = sender.write().unwrap().clone();
@@ -435,7 +436,7 @@ impl MistralRs {
         }
 
         Arc::new(Self {
-            engine_id,
+            engine_id: ENGINE_ID.load(std::sync::atomic::Ordering::SeqCst),
             sender,
             log,
             id,
