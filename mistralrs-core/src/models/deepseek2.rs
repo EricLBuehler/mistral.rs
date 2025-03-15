@@ -682,8 +682,7 @@ impl MLAAttention {
                     seq_len,
                     self.cfg.num_attention_heads,
                     self.cfg.q_head_dim(),
-                ))?
-                .transpose(1, 2)?;
+                ))?;
 
             let q_pe = q.i((.., .., .., self.cfg.qk_nope_head_dim..))?;
             let (q_pe, k_pe) =
@@ -691,12 +690,12 @@ impl MLAAttention {
                     .forward(&q_pe, &k_pe.unsqueeze(2)?, seqlen_offsets)?;
             let q = q.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
 
-            mistralrs_paged_attn::concat_and_cache_mla(
-                &kv_c_normed.reshape(((), self.cfg.kv_lora_rank))?,
-                &k_pe.squeeze(1)?.reshape(((), self.cfg.qk_rope_head_dim))?,
-                &kv_cache.squeeze(D::Minus2)?,
-                &slot_mapping,
-            )?;
+            // mistralrs_paged_attn::concat_and_cache_mla(
+            //     &kv_c_normed.reshape(((), self.cfg.kv_lora_rank))?,
+            //     &k_pe.squeeze(2)?.reshape(((), self.cfg.qk_rope_head_dim))?,
+            //     &kv_cache.squeeze(D::Minus2)?,
+            //     &slot_mapping,
+            // )?;
 
             let kv_nope = self
                 .kv_b_proj
@@ -706,19 +705,18 @@ impl MLAAttention {
                     seq_len,
                     self.num_attention_heads,
                     self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
-                ))?
-                .transpose(1, 2)?;
+                ))?;
 
             let kv_split =
                 kv_nope.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
             let k_nope = kv_split[0].clone();
             let v = kv_split[1].clone();
 
-            dbg!(&k_nope, &k_pe.transpose(1, 2)?);
+            dbg!(&k_nope, &k_pe);
             let k = Tensor::cat(
                 &[
                     &k_nope,
-                    &k_pe.transpose(1, 2)?.repeat((1, k_nope.dim(1)?, 1, 1))?,
+                    &k_pe.repeat((1, 1, k_nope.dim(2)?, 1))?,
                 ],
                 D::Minus1,
             )?;
@@ -729,9 +727,9 @@ impl MLAAttention {
 
             let output = Sdpa
                 .run_attention(
-                    &q.contiguous()?,
-                    &k.contiguous()?,
-                    &v.contiguous()?,
+                    &q.transpose(1, 2)?.contiguous()?,
+                    &k.transpose(1, 2)?.contiguous()?,
+                    &v.transpose(1, 2)?.contiguous()?,
                     attention_mask,
                     Some(flash_params),
                     &self.sdpa_params,
