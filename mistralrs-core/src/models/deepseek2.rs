@@ -681,9 +681,11 @@ impl MLAAttention {
                 self.cfg.q_head_dim(),
             ))?;
 
-            let q_pe = q.i((.., self.cfg.qk_nope_head_dim..))?;
-            let (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
-            let q = q.slice_assign(&[&.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
+            let q_pe = q.i((.., .., .., self.cfg.qk_nope_head_dim..))?;
+            let (q_pe, k_pe) =
+                self.rotary_emb
+                    .forward(&q_pe, &k_pe.unsqueeze(1)?, seqlen_offsets)?;
+            let q = q.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
 
             mistralrs_paged_attn::concat_and_cache_mla(
                 &kv_c_normed.reshape(((), self.cfg.kv_lora_rank))?,
@@ -692,7 +694,7 @@ impl MLAAttention {
                 &slot_mapping,
             )?;
 
-            let kv = self.kv_b_proj.forward_autocast(&kv_c_normed)?.reshape((
+            let kv_nope = self.kv_b_proj.forward_autocast(&kv_c_normed)?.reshape((
                 bs,
                 seq_len,
                 self.num_attention_heads,
@@ -700,11 +702,17 @@ impl MLAAttention {
             ))?;
 
             let kv_split =
-                kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
+                kv_nope.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
             let k_nope = kv_split[0].clone();
             let v = kv_split[1].clone();
 
-            let k = Tensor::cat(&[k_nope, k_pe.repeat((1, q.dim(1)?, 1, 1))?], D::Minus1)?;
+            let k = Tensor::cat(
+                &[
+                    &k_nope,
+                    &k_pe.transpose(1, 2)?.repeat((1, 1, k_nope.dim(2)?, 1))?,
+                ],
+                D::Minus1,
+            )?;
 
             let v = v
                 .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
@@ -712,9 +720,9 @@ impl MLAAttention {
 
             let output = Sdpa
                 .run_attention(
-                    &q,
-                    &k,
-                    &v,
+                    &q.transpose(1, 2)?.contiguous()?,
+                    &k.transpose(1, 2)?.contiguous()?,
+                    &v.transpose(1, 2)?.contiguous()?,
                     attention_mask,
                     Some(flash_params),
                     &self.sdpa_params,
@@ -1273,6 +1281,7 @@ impl DeepSeekV2 {
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;
+
         // PagedAttention prompt chunking
         let attention_mask = attention_mask.filter(|_| {
             metadata

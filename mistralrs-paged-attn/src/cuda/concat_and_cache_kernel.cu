@@ -2,6 +2,17 @@
 #include <cuda_bf16.h>
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
+
+#define CUDA_CHECK(call)                                                       \
+  do {                                                                         \
+    cudaError_t err = call;                                                    \
+    if (err != cudaSuccess) {                                                  \
+      fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,         \
+              cudaGetErrorString(err));                                        \
+      exit(err);                                                               \
+    }                                                                          \
+  } while (0)
 
 template <typename scalar_t, typename cache_t>
 __global__ void concat_and_cache_mla_kernel(
@@ -89,4 +100,5 @@ extern "C" void concat_and_cache_mla(
   } else if (dtype == 2) {
     CALL_CONCAT_AND_CACHE_MLA(float);
   }
+  CUDA_CHECK(cudaGetLastError());
 }
