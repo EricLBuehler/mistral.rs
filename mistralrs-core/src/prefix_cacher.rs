@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Range};
 
 use candle_core::{Device, Result};
 use either::Either;
@@ -8,6 +8,7 @@ use tracing::info;
 use crate::{
     pipeline::{KvCache, RotatingCache, SingleCache},
     sequence::Sequence,
+    Pipeline,
 };
 
 #[derive(PartialEq, Eq, Debug, Hash)]
@@ -36,6 +37,7 @@ impl From<Vec<u32>> for Tokens {
 struct CacheElement {
     cache: Vec<Option<KvCache>>,
     devices: Vec<Option<Device>>,
+    mm_positions: Option<Vec<Range<usize>>>,
 }
 
 pub struct PrefixCacheManagerV2 {
@@ -65,7 +67,7 @@ impl PrefixCacheManagerV2 {
 
     /// This always keeps the cache on the device.
     pub fn add_sequence(&mut self, seq: &mut Sequence) {
-        if self.no_prefix_cache || seq.has_images() {
+        if self.no_prefix_cache {
             return;
         }
         let cache = seq.normal_cache().to_vec();
@@ -75,7 +77,11 @@ impl PrefixCacheManagerV2 {
             .collect::<Vec<_>>();
         self.caches.insert(
             seq.get_toks().to_vec().into(),
-            CacheElement { cache, devices },
+            CacheElement {
+                cache,
+                devices,
+                mm_positions: seq.get_mm_positions().cloned(),
+            },
         );
     }
 
@@ -217,10 +223,44 @@ impl PrefixCacheManagerV2 {
     /// Search for a matching cache given some toks
     pub fn search_for_matching_cache(
         &mut self,
-        toks: &[u32],
-        contains_images: bool,
+        seq: &mut Sequence,
+        pipeline: &dyn Pipeline,
     ) -> Result<Option<MatchingCache>> {
-        if self.no_prefix_cache || toks.is_empty() || contains_images {
+        if pipeline
+            .get_processor()
+            .inputs_processor()
+            .supports_pre_processed_images()
+            && seq.has_images()
+        {
+            pipeline
+                .get_processor()
+                .inputs_processor()
+                .process_inputs(
+                    pipeline.tokenizer(),
+                    &mut [seq],
+                    true,
+                    pipeline.get_metadata().is_xlora,
+                    &pipeline.device(),
+                    pipeline.get_metadata().no_kv_cache,
+                    None,
+                    false,
+                    pipeline.get_input_processor_config(),
+                    None,
+                    pipeline.get_metadata().prompt_chunksize,
+                    pipeline.device_mapper(),
+                )
+                .into_iter()
+                .collect::<anyhow::Result<Vec<_>>>()
+                .map_err(candle_core::Error::msg)?;
+
+            let toks = seq.get_toks();
+
+            dbg!(toks.len(), seq.has_images());
+        }
+
+        let toks = seq.get_toks();
+
+        if self.no_prefix_cache || toks.is_empty() {
             return Ok(None);
         }
 

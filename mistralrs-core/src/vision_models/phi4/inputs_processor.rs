@@ -118,7 +118,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             let mut num_img_tokens_accum = Vec::new();
             for seq in input_seqs.iter_mut() {
                 let imgs = seq
-                    .take_images()
+                    .clone_images()
                     .expect("Need to have images by this point.");
                 let PreprocessedImages {
                     pixel_values,
@@ -236,38 +236,41 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             .into_iter()
             .zip(input_seqs.iter_mut().zip(num_img_tokens.unwrap()))
         {
-            detokenized = img_token_pattern
-                .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
-                .to_string();
+            if !seq.flag_have_processed_images() {
+                detokenized = img_token_pattern
+                    .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
+                    .to_string();
 
-            seq.set_toks_and_reallocate(
-                tokenizer
-                    .encode(detokenized.clone(), false)
-                    .expect("Encode failed")
-                    .get_ids()
-                    .to_vec(),
-                paged_attn_metadata.as_mut(),
-            );
+                seq.set_toks_and_reallocate(
+                    tokenizer
+                        .encode(detokenized.clone(), false)
+                        .expect("Encode failed")
+                        .get_ids()
+                        .to_vec(),
+                    paged_attn_metadata.as_mut(),
+                );
 
-            seq.set_initial_prompt(detokenized);
+                seq.set_initial_prompt(detokenized);
 
-            let mut i = 0;
-            let mut image_token_count_iter = num_img_tokens.iter();
-            while i < seq.get_toks().len() {
-                let token_id = seq.get_toks()[i];
-                let token_count = if token_id == IMAGE_SPECIAL_TOKEN_ID as u32 {
-                    image_token_count_iter.next().unwrap()
-                } else {
-                    i += 1;
-                    continue;
-                };
+                let mut i = 0;
+                let mut image_token_count_iter = num_img_tokens.iter();
+                while i < seq.get_toks().len() {
+                    let token_id = seq.get_toks()[i];
+                    let token_count = if token_id == IMAGE_SPECIAL_TOKEN_ID as u32 {
+                        image_token_count_iter.next().unwrap()
+                    } else {
+                        i += 1;
+                        continue;
+                    };
 
-                let mut new_ids = seq.get_toks()[..i].to_vec();
-                new_ids.extend(vec![token_id; *token_count]);
-                new_ids.extend(seq.get_toks()[i + 1..].to_vec());
-                seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
-                i += token_count;
+                    let mut new_ids = seq.get_toks()[..i].to_vec();
+                    new_ids.extend(vec![token_id; *token_count]);
+                    new_ids.extend(seq.get_toks()[i + 1..].to_vec());
+                    seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
+                    i += token_count;
+                }
             }
+
             toks.push(seq.get_toks().to_vec());
         }
 
