@@ -640,7 +640,7 @@ impl MLAAttention {
             let out = self.w_uv_o.forward_autocast(&output)?;
 
             if self.comm.world_size() > 1 {
-                mistralrs_quant::distributed::SumAllReduce::new(&self.comm).apply(&out)
+                mistralrs_quant::distributed::SumAllReduce::new(&self.comm).sum_all_reduce(&out)
             } else {
                 Ok(out)
             }
