@@ -352,10 +352,12 @@ pub async fn sample_sequence(
             sample_speculative,
         )?
     };
-
+    // println!("start");
     let bias_if_not_allowed = match &mut seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
+            // println!("here");
             let step_res = llg.compute_mask().map_err(candle_core::Error::msg)?;
+            // println!("here1");
             if let Some(mask) = &step_res.sample_mask {
                 if mask.is_allowed(first_lobprobs_response.token) {
                     None
@@ -370,16 +372,19 @@ pub async fn sample_sequence(
                     Some(acc)
                 }
             } else if step_res.is_stop() {
+                // println!("stop");
                 let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
                 let trie = llg.tok_trie();
                 acc[trie.eos_token() as usize] = 0.0;
-                Some(acc)
+                Some(acc);
+                None //
             } else {
                 None
             }
         }
         SequenceRecognizer::None => None,
     };
+
     let second_logprobs_response = match bias_if_not_allowed {
         Some(acc) => {
             let new_logits = (logits + Tensor::from_slice(&acc, acc.len(), &Device::Cpu)?)?;
