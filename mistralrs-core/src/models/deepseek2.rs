@@ -513,21 +513,23 @@ impl MLAAttention {
 
         // Matrix absorbtion: https://github.com/flashinfer-ai/flashinfer/pull/551
         // We absorb `W_UK` into `W_Q` resulting in W_Q_UK
+
         let w_q_uk = w_q
-            .permute((1, 0, 2))?
-            .contiguous()?
-            .matmul(&w_uk.permute((1, 0, 2))?.t()?.contiguous()?)?
-            .permute((1, 0, 2))?
+            .unsqueeze(2)?
+            .broadcast_mul(&w_uk.permute((1, 0, 2))?.unsqueeze(0)?)?
+            .sum(D::Minus1)?
             .flatten_from(1)?
             .contiguous()?;
 
         let w_o = o_proj
             .dequantize_w()?
             .reshape(((), cfg.num_attention_heads, cfg.v_head_dim))?;
+
         let w_uv_o = w_uv
             .permute((1, 0, 2))?
-            .contiguous()?
-            .matmul(&w_o.permute((1, 0, 2))?.t()?.contiguous()?)?
+            .unsqueeze(2)?
+            .broadcast_mul(&w_o.permute((1, 0, 2))?.unsqueeze(1)?)?
+            .sum(D::Minus1)?
             .flatten(0, 1)?
             .contiguous()?;
 
@@ -674,17 +676,19 @@ impl MLAAttention {
                 QProj::Lora { a: _, norm: _, b } => b.forward_autocast(&hidden_states_or_q_c)?,
                 QProj::Plain(q) => q.forward(&hidden_states_or_q_c)?,
             };
-            let q = q.reshape((
-                bs,
-                seq_len,
-                self.cfg.num_attention_heads,
-                self.cfg.q_head_dim(),
-            ))?;
+            let q = q
+                .reshape((
+                    bs,
+                    seq_len,
+                    self.cfg.num_attention_heads,
+                    self.cfg.q_head_dim(),
+                ))?
+                .transpose(1, 2)?;
 
             let q_pe = q.i((.., .., .., self.cfg.qk_nope_head_dim..))?;
             let (q_pe, k_pe) =
                 self.rotary_emb
-                    .forward(&q_pe, &k_pe.unsqueeze(1)?, seqlen_offsets)?;
+                    .forward(&q_pe, &k_pe.unsqueeze(2)?, seqlen_offsets)?;
             let q = q.slice_assign(&[&.., &.., &.., &(self.cfg.qk_nope_head_dim..)], &q_pe)?;
 
             mistralrs_paged_attn::concat_and_cache_mla(
@@ -694,22 +698,27 @@ impl MLAAttention {
                 &slot_mapping,
             )?;
 
-            let kv_nope = self.kv_b_proj.forward_autocast(&kv_c_normed)?.reshape((
-                bs,
-                seq_len,
-                self.num_attention_heads,
-                self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
-            ))?;
+            let kv_nope = self
+                .kv_b_proj
+                .forward_autocast(&kv_c_normed)?
+                .reshape((
+                    bs,
+                    seq_len,
+                    self.num_attention_heads,
+                    self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
+                ))?
+                .transpose(1, 2)?;
 
             let kv_split =
                 kv_nope.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
             let k_nope = kv_split[0].clone();
             let v = kv_split[1].clone();
 
+            dbg!(&k_nope, &k_pe.transpose(1, 2)?);
             let k = Tensor::cat(
                 &[
                     &k_nope,
-                    &k_pe.transpose(1, 2)?.repeat((1, 1, k_nope.dim(2)?, 1))?,
+                    &k_pe.transpose(1, 2)?.repeat((1, k_nope.dim(1)?, 1, 1))?,
                 ],
                 D::Minus1,
             )?;
@@ -720,13 +729,14 @@ impl MLAAttention {
 
             let output = Sdpa
                 .run_attention(
-                    &q.transpose(1, 2)?.contiguous()?,
-                    &k.transpose(1, 2)?.contiguous()?,
-                    &v.transpose(1, 2)?.contiguous()?,
+                    &q.contiguous()?,
+                    &k.contiguous()?,
+                    &v.contiguous()?,
                     attention_mask,
                     Some(flash_params),
                     &self.sdpa_params,
                 )?
+                .transpose(1, 2)?
                 .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
                 .reshape((bs, seq_len, ()))?;
 

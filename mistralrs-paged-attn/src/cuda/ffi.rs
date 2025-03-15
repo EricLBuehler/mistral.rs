@@ -92,6 +92,7 @@ extern "C" {
         k_pe_stride: c_int,
         block_stride: c_int,
         entry_stride: c_int,
+        stream: CUstream,
 
         dtype: u32, // 0 => f16; 1 => bf16; 2 => f32
     );

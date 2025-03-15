@@ -553,6 +553,8 @@ fn launch_concat_and_cache_mla<
     let kvc = kvc.as_cuda_slice::<T>()?;
     let s = s.as_cuda_slice::<i64>()?;
 
+    let dev = s.device();
+
     // Get cuda views for all tensors
     let kcn = kcn.slice(kcn_l.start_offset()..);
     let kpe = kpe.slice(kpe_l.start_offset()..);
@@ -590,6 +592,7 @@ fn launch_concat_and_cache_mla<
             kpe_stride,
             block_stride,
             entry_stride,
+            *dev.cu_stream(),
             internal_type as u32,
         )
     }

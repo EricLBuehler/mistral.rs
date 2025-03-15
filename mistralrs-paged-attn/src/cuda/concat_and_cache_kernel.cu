@@ -85,13 +85,13 @@ extern "C" void concat_and_cache_mla(
     int k_pe_stride,
     int block_stride,
     int entry_stride,
+    cudaStream_t stream,
 
     uint32_t dtype      // 0 => f16; 1 => bf16; 2 => f32
 
 ) {
   dim3 grid(num_tokens);
   dim3 block(std::min(kv_lora_rank, 512));
-  const cudaStream_t stream = 0;
 
   if (dtype == 0){
     CALL_CONCAT_AND_CACHE_MLA(__half);
