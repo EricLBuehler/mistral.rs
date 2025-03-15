@@ -45,7 +45,7 @@ bytemuck = "1.15.0"
 rayon.workspace = true
 tokio.workspace = true
 tokio-rayon = "2.1.0"
-rand_isaac = "0.3.0"
+rand_isaac = "0.4.0"
 futures.workspace = true
 pyo3 = { workspace = true, optional = true }
 indicatif = { version = "0.17.8", features = ["rayon"] }
