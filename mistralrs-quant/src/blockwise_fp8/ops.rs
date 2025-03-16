@@ -252,9 +252,11 @@ pub fn fp8_blockwise_dequantize(
 #[cfg(test)]
 mod tests {
     use candle_core::{DType, Device, Result, Tensor};
+    use candle_nn::{Linear, Module};
     use half::bf16;
+    use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 
-    use crate::blockwise_fp8::ops;
+    use crate::{blockwise_fp8::ops, safetensors::MmapedSafetensors};
 
     #[test]
     fn test_fp8_blockwise_dequant() -> Result<()> {
@@ -452,6 +454,47 @@ mod tests {
                 ],
             ]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_blockwise_fp8_gemm() -> Result<()> {
+        let dev = Device::cuda_if_available(0)?;
+
+        let api = ApiBuilder::new().with_progress(true).build().unwrap();
+        let api = api.repo(Repo::with_revision(
+            "EricB/mistralrs_tests".to_string(),
+            RepoType::Model,
+            "main".to_string(),
+        ));
+
+        let filename = api.get("test_fp8.safetensors").unwrap();
+        let vb = unsafe { MmapedSafetensors::new(filename)? };
+
+        let weight = vb.load("weight", &dev, None)?;
+        assert_eq!((7168, 2048), weight.dims2()?);
+        assert_eq!(DType::F8E4M3, weight.dtype());
+
+        let scale = vb.load("scale", &dev, None)?;
+        assert_eq!((56, 16), scale.dims2()?);
+        assert_eq!(DType::F32, scale.dtype());
+
+        let weight_block_size = vec![128, 128];
+
+        // in dim is 2048.
+        let xs = Tensor::randn(0f32, 1f32, (32, 2048), &dev)?.to_dtype(DType::BF16)?;
+
+        let truth = {
+            let weight_dq =
+                ops::fp8_blockwise_dequantize(&weight, &scale, weight_block_size, DType::BF16)?;
+
+            let lin_dq = Linear::new(weight_dq, None);
+            lin_dq.forward(&xs)?
+        };
+
+        // TODO: will be adding real blockwise fp8 gemm shortly ;)
+        assert_eq!((32, 7168), truth.dims2()?);
 
         Ok(())
     }

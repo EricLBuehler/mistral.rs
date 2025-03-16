@@ -30,6 +30,7 @@ yoke = "0.7.5"
 memmap2 = "0.9.5"
 safetensors.workspace = true
 regex.workspace = true
+hf-hub.workspace = true
 
 [features]
 cuda = [
