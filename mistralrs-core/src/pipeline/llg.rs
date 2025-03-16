@@ -2,10 +2,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use llguidance::{
-    api::{ParserLimits, RegexNode, TopLevelGrammar},
-    lark_to_llguidance,
+    api::{ParserLimits, TopLevelGrammar},
     toktrie::{InferenceCapabilities, TokEnv},
-    JsonCompileOptions, TokenParser,
+    TokenParser,
 };
 use tokenizers::Tokenizer;
 
@@ -21,13 +20,9 @@ pub fn build_tok_env(tokenizer: Tokenizer) -> TokEnv {
 
 pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<TopLevelGrammar>> {
     let grm = match constraint {
-        Constraint::Regex(regex) => {
-            TopLevelGrammar::from_regex(RegexNode::Regex(regex.to_string()))
-        }
-        Constraint::Lark(lark) => lark_to_llguidance(lark)?,
-        Constraint::JsonSchema(value) => {
-            JsonCompileOptions::default().json_to_llg_no_validate(value.clone())?
-        }
+        Constraint::Regex(regex) => TopLevelGrammar::from_regex(regex),
+        Constraint::Lark(lark) => TopLevelGrammar::from_lark(lark.clone()),
+        Constraint::JsonSchema(value) => TopLevelGrammar::from_json_schema(value.clone()),
         Constraint::Llguidance(value) => value.clone(),
         Constraint::None => return Ok(None),
     };
@@ -38,7 +33,7 @@ pub fn constraint_from_llg_grammar(
     tok_env: TokEnv,
     grm: TopLevelGrammar,
 ) -> Result<llguidance::Constraint> {
-    let parser = TokenParser::from_llguidance_json(
+    let parser = TokenParser::from_grammar(
         tok_env,
         grm,
         llguidance::Logger::new(0, 1),

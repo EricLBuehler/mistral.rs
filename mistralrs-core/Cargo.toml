@@ -19,9 +19,9 @@ serde.workspace = true
 serde_json.workspace = true
 candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "496a8d2b", optional = true }
 dirs = "5.0.1"
-hf-hub = { version = "0.3.3", package = "candle-hf-hub" }
+hf-hub.workspace = true
 thiserror = "1.0.57"
-tokenizers = "0.21.0"
+tokenizers = { version = "0.21.0", default-features = false }
 tqdm = "0.7.0"
 chrono = "0.4.34"
 minijinja = { version = "2.0.2", features = ["builtins", "json"] }
@@ -77,8 +77,8 @@ regex.workspace = true
 serde_plain = "1.0.2"
 as-any = "0.3.1"
 float8.workspace = true
-llguidance = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc", default-features = false, features = ["lark"] }
-toktrie_hf_tokenizers = { git = "https://github.com/microsoft/llguidance", rev = "cfef3df97372a7b84d74976ff41cc9cb78bca6cc" }
+llguidance = { git = "https://github.com/EricLBuehler/llguidance", rev = "8d71957", default-features = false, features = ["lark"] }
+toktrie_hf_tokenizers = { git = "https://github.com/EricLBuehler/llguidance", rev = "8d71957" }
 objc = { version = "0.2.7", optional = true }
 metal = { workspace = true, optional = true }
 candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "496a8d2b", optional = true }

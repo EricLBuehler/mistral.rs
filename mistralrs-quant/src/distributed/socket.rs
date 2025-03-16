@@ -47,6 +47,7 @@ impl Server {
     pub fn broadcast_id(&self, id: &Id) -> Result<()> {
         let body = id.internal();
         // SAFETY: We know the provenance and lifetime of `body` are valid.
+        #[allow(clippy::unnecessary_cast)]
         let body_bytes = unsafe { slice::from_raw_parts(body.as_ptr() as *const u8, body.len()) };
         for mut stream in &self.connections {
             stream.write_all(body_bytes)?;
