@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["chunk_into_chars","chunk_into_words","substring"]};

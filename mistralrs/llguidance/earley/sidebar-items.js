@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ParserError"],"fn":["grammars_from_json"],"mod":["lexerspec","regexvec"],"struct":["CGrammar","CSymIdx","DefaultBiasComputer","Grammar","Parser","ParserRecognizer","ParserStats"],"trait":["BiasComputer"]};
+window.SIDEBAR_ITEMS = {"enum":["ParserError"],"mod":["lexerspec","perf","regexvec"],"struct":["CGrammar","CSymIdx","DefaultBiasComputer","Grammar","Parser","ParserMetrics","ParserRecognizer","ParserStats","SlicedBiasComputer","SymIdx","SymbolProps","XorShift"],"trait":["BiasComputer"]};

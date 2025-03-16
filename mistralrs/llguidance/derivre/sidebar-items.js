@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["NextByte","RegexAst"],"fn":["map_ast"],"mod":["raw"],"struct":["AlphabetInfo","ExprRef","JsonQuoteOptions","Regex","RegexBuilder","StateID"]};
+window.SIDEBAR_ITEMS = {"enum":["NextByte","RegexAst"],"fn":["map_ast"],"mod":["raw"],"struct":["AlphabetInfo","ExprRef","JsonQuoteOptions","Regex","RegexBuilder","StateID"],"type":["HashMap","HashSet","RandomState"]};

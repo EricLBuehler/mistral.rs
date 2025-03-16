@@ -151,7 +151,8 @@
 <a href="#150" id="150">150</a>
 <a href="#151" id="151">151</a>
 <a href="#152" id="152">152</a>
-<a href="#153" id="153">153</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#153" id="153">153</a>
+<a href="#154" id="154">154</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     slice,
@@ -200,6 +201,7 @@
     </span><span class="kw">pub fn </span>broadcast_id(<span class="kw-2">&amp;</span><span class="self">self</span>, id: <span class="kw-2">&amp;</span>Id) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
         <span class="kw">let </span>body = id.internal();
         <span class="comment">// SAFETY: We know the provenance and lifetime of `body` are valid.
+        </span><span class="attr">#[allow(clippy::unnecessary_cast)]
         </span><span class="kw">let </span>body_bytes = <span class="kw">unsafe </span>{ slice::from_raw_parts(body.as_ptr() <span class="kw">as </span><span class="kw-2">*const </span>u8, body.len()) };
         <span class="kw">for </span><span class="kw-2">mut </span>stream <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.connections {
             stream.write_all(body_bytes)<span class="question-mark">?</span>;

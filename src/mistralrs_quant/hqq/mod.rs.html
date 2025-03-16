@@ -831,7 +831,8 @@
 <a href="#830" id="830">830</a>
 <a href="#831" id="831">831</a>
 <a href="#832" id="832">832</a>
-<a href="#833" id="833">833</a></pre></div><pre class="rust"><code><span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a></pre></div><pre class="rust"><code><span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Shape, Tensor};
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
@@ -985,11 +986,12 @@
                         (<span class="number">10. </span>* (wq_in.dims()[<span class="number">0</span>] <span class="kw">as </span>f64 / <span class="number">10.</span>).ceil()) <span class="kw">as </span>usize,
                         wq_in.dims()[<span class="number">1</span>],
                     ),
-                    DType::I32,
+                    DType::U32,
                     wq_in.device(),
                 )<span class="question-mark">?</span>;
-                <span class="kw">let </span>wq =
-                    wq.slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>(..wq_in.dims()[<span class="number">0</span>]), <span class="kw-2">&amp;</span>..], <span class="kw-2">&amp;</span>wq_in.to_dtype(DType::I32)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>wq = wq
+                    .slice_assign(<span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>(..wq_in.dims()[<span class="number">0</span>]), <span class="kw-2">&amp;</span>..], <span class="kw-2">&amp;</span>wq_in.to_dtype(DType::U32)<span class="question-mark">?</span>)<span class="question-mark">?
+                    </span>.to_dtype(DType::I32)<span class="question-mark">?</span>;
                 <span class="kw">let </span>step = (wq.dims()[<span class="number">0</span>] <span class="kw">as </span>f64 / <span class="number">10.</span>) <span class="kw">as </span>usize;
 
                 <span class="kw">let </span>a = wq.narrow(<span class="number">0</span>, <span class="number">0</span>, step)<span class="question-mark">?</span>;
