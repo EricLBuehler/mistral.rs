@@ -284,9 +284,21 @@ impl CustomOp1 for Leftshift {
                 let result = CpuStorage::U8(result);
                 Ok((result, l1.shape().clone()))
             }
-            CpuStorage::I16(_) => Err(Error::UnsupportedDTypeForOp(DType::I16, "leftshifr")),
-            CpuStorage::U32(_) => Err(Error::UnsupportedDTypeForOp(DType::U32, "leftshifr")),
-            CpuStorage::I64(_) => Err(Error::UnsupportedDTypeForOp(DType::I64, "leftshifr")),
+            CpuStorage::I16(vs1) => {
+                let result = self.leftshift(vs1);
+                let result = CpuStorage::I16(result);
+                Ok((result, l1.shape().clone()))
+            }
+            CpuStorage::U32(vs1) => {
+                let result = self.leftshift(vs1);
+                let result = CpuStorage::U32(result);
+                Ok((result, l1.shape().clone()))
+            }
+            CpuStorage::I64(vs1) => {
+                let result = self.leftshift(vs1);
+                let result = CpuStorage::I64(result);
+                Ok((result, l1.shape().clone()))
+            }
             CpuStorage::I32(vs1) => {
                 let result = self.leftshift(vs1);
                 let result = CpuStorage::I32(result);

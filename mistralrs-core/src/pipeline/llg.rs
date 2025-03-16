@@ -20,7 +20,7 @@ pub fn build_tok_env(tokenizer: Tokenizer) -> TokEnv {
 
 pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<TopLevelGrammar>> {
     let grm = match constraint {
-        Constraint::Regex(regex) => TopLevelGrammar::from_regex(&regex),
+        Constraint::Regex(regex) => TopLevelGrammar::from_regex(regex),
         Constraint::Lark(lark) => TopLevelGrammar::from_lark(lark.clone()),
         Constraint::JsonSchema(value) => TopLevelGrammar::from_json_schema(value.clone()),
         Constraint::Llguidance(value) => value.clone(),

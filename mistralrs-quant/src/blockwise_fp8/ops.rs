@@ -250,6 +250,7 @@ pub fn fp8_blockwise_dequantize(
 }
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod tests {
     use candle_core::{DType, Device, Result, Tensor};
     use candle_nn::{Linear, Module};
@@ -458,6 +459,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "cuda")]
     #[test]
     fn test_blockwise_fp8_gemm() -> Result<()> {
         let dev = Device::cuda_if_available(0)?;

@@ -33,7 +33,6 @@ async fn main() -> Result<()> {
         .set_constraint(mistralrs::Constraint::Llguidance(LlguidanceGrammar {
             grammars: vec![top, schema],
             max_tokens: None,
-            test_trace: false,
         }))
         .set_sampler_max_len(100)
         .add_message(
