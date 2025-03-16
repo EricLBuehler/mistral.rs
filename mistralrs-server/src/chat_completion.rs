@@ -191,21 +191,17 @@ async fn parse_request(
                             if !image_messages[0].contains_key("text") {
                                 anyhow::bail!("Expected `text` key in input message.");
                             }
-
                             let content = match image_messages[0]["text"].deref() {
                                 Either::Left(left) => left.to_string(),
                                 Either::Right(right) => format!("{:?}", right),
                             };
-                            
                             let mut message_map: IndexMap<
                                 String,
                                 Either<String, Vec<IndexMap<String, Value>>>,
                             > = IndexMap::new();
                             message_map.insert("role".to_string(), Either::Left(message.role));
-                            message_map
-                                .insert("content".to_string(), Either::Left(content));
+                            message_map.insert("content".to_string(), Either::Left(content));
                             messages.push(message_map);
-                            
                             continue;
                         }
                         if image_messages.len() != 2 {
