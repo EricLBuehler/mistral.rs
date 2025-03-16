@@ -282,6 +282,7 @@ pub struct PhiRopeConfig {
     pub original_max_position_embeddings: usize,
     pub rope_theta: f64,
     pub head_dim: usize,
+    pub partial_rotary_factor: Option<f64>,
 }
 
 impl PhiRotaryEmbedding {
@@ -294,7 +295,7 @@ impl PhiRotaryEmbedding {
         dev: &Device,
     ) -> Result<Self> {
         let max_seq_len = cfg.max_position_embeddings;
-        let dim = cfg.head_dim;
+        let dim = (cfg.head_dim as f64 * cfg.partial_rotary_factor.unwrap_or(1.)) as usize;
 
         // Calculate scale
         let scale =
@@ -356,7 +357,7 @@ impl PhiRotaryEmbedding {
 
     fn new_unscaled(cfg: &PhiRopeConfig, dtype: DType, dev: &Device) -> Result<Self> {
         let max_seq_len = cfg.max_position_embeddings;
-        let dim = cfg.head_dim;
+        let dim = (cfg.head_dim as f64 * cfg.partial_rotary_factor.unwrap_or(1.)) as usize;
 
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
@@ -391,7 +392,7 @@ impl PhiRotaryEmbedding {
         dev: &Device,
     ) -> Result<Self> {
         let max_seq_len = cfg.max_position_embeddings;
-        let dim = cfg.head_dim;
+        let dim = (cfg.head_dim as f64 * cfg.partial_rotary_factor.unwrap_or(1.)) as usize;
 
         if !matches!(scaling_type, ScaledRopeType::Su) {
             candle_core::bail!("Scaled Phi3 RoPE (non-classic scaled, with mscales) must have type `su`/`longrope`.");
@@ -513,26 +514,79 @@ impl PhiRotaryEmbedding {
         let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
         let all_same = seqlen_offsets.iter().all(|&x| x == seqlen_offsets[0]);
-        if all_same {
-            let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-            let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-            Ok((q_embed, k_embed))
+
+        let rot_dim = cos.dim(D::Minus1)? * 2;
+
+        // Case for Phi 3 / Phi 4 mini
+        if rot_dim != q.dim(D::Minus1)? {
+            let rot_dim = cos.dim(D::Minus1)? * 2;
+            let q_rot = q.narrow(D::Minus1, 0, rot_dim)?;
+            let q_pass = q.narrow(D::Minus1, rot_dim, q.dim(D::Minus1)? - rot_dim)?;
+            let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
+            let k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)? - rot_dim)?;
+
+            let (q_rot, k_rot) = if all_same {
+                let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
+                let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
+                let q_embed = candle_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
+                let k_embed = candle_nn::rotary_emb::rope(&k_rot.contiguous()?, &cos, &sin)?;
+                (q_embed, k_embed)
+            } else {
+                let mut q_embeds = Vec::new();
+                let mut k_embeds = Vec::new();
+                for (i, offset) in seqlen_offsets.iter().enumerate() {
+                    let cos = cos.narrow(0, *offset, seq_len)?;
+                    let sin = sin.narrow(0, *offset, seq_len)?;
+                    let q_embed = candle_nn::rotary_emb::rope(
+                        &q_rot.i(i)?.unsqueeze(0)?.contiguous()?,
+                        &cos,
+                        &sin,
+                    )?;
+                    let k_embed = candle_nn::rotary_emb::rope(
+                        &k_rot.i(i)?.unsqueeze(0)?.contiguous()?,
+                        &cos,
+                        &sin,
+                    )?;
+                    q_embeds.push(q_embed);
+                    k_embeds.push(k_embed);
+                }
+                let q_rot = Tensor::cat(&q_embeds, 0)?;
+                let k_rot = Tensor::cat(&k_embeds, 0)?;
+                (q_rot, k_rot)
+            };
+
+            Ok((
+                Tensor::cat(&[q_rot, q_pass], D::Minus1)?.contiguous()?,
+                Tensor::cat(&[k_rot, k_pass], D::Minus1)?.contiguous()?,
+            ))
         } else {
-            let mut q_embeds = Vec::new();
-            let mut k_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = cos.narrow(0, *offset, seq_len)?;
-                let sin = sin.narrow(0, *offset, seq_len)?;
-                let q_embed =
-                    candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                let k_embed =
-                    candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                q_embeds.push(q_embed);
-                k_embeds.push(k_embed);
+            if all_same {
+                let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
+                let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
+                let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+                let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+                Ok((q_embed, k_embed))
+            } else {
+                let mut q_embeds = Vec::new();
+                let mut k_embeds = Vec::new();
+                for (i, offset) in seqlen_offsets.iter().enumerate() {
+                    let cos = cos.narrow(0, *offset, seq_len)?;
+                    let sin = sin.narrow(0, *offset, seq_len)?;
+                    let q_embed = candle_nn::rotary_emb::rope(
+                        &q.i(i)?.unsqueeze(0)?.contiguous()?,
+                        &cos,
+                        &sin,
+                    )?;
+                    let k_embed = candle_nn::rotary_emb::rope(
+                        &k.i(i)?.unsqueeze(0)?.contiguous()?,
+                        &cos,
+                        &sin,
+                    )?;
+                    q_embeds.push(q_embed);
+                    k_embeds.push(k_embed);
+                }
+                Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
             }
-            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
         }
     }
 }
