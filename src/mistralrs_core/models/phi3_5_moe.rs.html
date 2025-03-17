@@ -888,7 +888,8 @@
 <a href="#887" id="887">887</a>
 <a href="#888" id="888">888</a>
 <a href="#889" id="889">889</a>
-<a href="#890" id="890">890</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#890" id="890">890</a>
+<a href="#891" id="891">891</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
@@ -956,6 +957,7 @@
             original_max_position_embeddings: val.original_max_position_embeddings,
             rope_theta: val.rope_theta,
             head_dim: val.hidden_size / val.num_attention_heads,
+            partial_rotary_factor: <span class="prelude-val">None</span>,
         }
     }
 }

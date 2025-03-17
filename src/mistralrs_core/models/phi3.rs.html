@@ -819,7 +819,9 @@
 <a href="#818" id="818">818</a>
 <a href="#819" id="819">819</a>
 <a href="#820" id="820">820</a>
-<a href="#821" id="821">821</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="comment">// This implementation is based on:
 // https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
@@ -874,6 +876,7 @@
     <span class="kw">pub </span>quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
     <span class="attr">#[serde(default = <span class="string">"word_emb_default"</span>)]
     </span><span class="kw">pub </span>tie_word_embeddings: bool,
+    <span class="kw">pub </span>partial_rotary_factor: <span class="prelude-ty">Option</span>&lt;f64&gt;,
 }
 
 <span class="kw">impl </span>From&lt;Config&gt; <span class="kw">for </span>PhiRopeConfig {
@@ -884,6 +887,7 @@
             original_max_position_embeddings: val.original_max_position_embeddings,
             rope_theta: val.rope_theta,
             head_dim: val.hidden_size / val.num_attention_heads,
+            partial_rotary_factor: val.partial_rotary_factor,
         }
     }
 }

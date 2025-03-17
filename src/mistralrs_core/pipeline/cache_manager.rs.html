@@ -1064,7 +1064,42 @@
 <a href="#1063" id="1063">1063</a>
 <a href="#1064" id="1064">1064</a>
 <a href="#1065" id="1065">1065</a>
-<a href="#1066" id="1066">1066</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
+<a href="#1066" id="1066">1066</a>
+<a href="#1067" id="1067">1067</a>
+<a href="#1068" id="1068">1068</a>
+<a href="#1069" id="1069">1069</a>
+<a href="#1070" id="1070">1070</a>
+<a href="#1071" id="1071">1071</a>
+<a href="#1072" id="1072">1072</a>
+<a href="#1073" id="1073">1073</a>
+<a href="#1074" id="1074">1074</a>
+<a href="#1075" id="1075">1075</a>
+<a href="#1076" id="1076">1076</a>
+<a href="#1077" id="1077">1077</a>
+<a href="#1078" id="1078">1078</a>
+<a href="#1079" id="1079">1079</a>
+<a href="#1080" id="1080">1080</a>
+<a href="#1081" id="1081">1081</a>
+<a href="#1082" id="1082">1082</a>
+<a href="#1083" id="1083">1083</a>
+<a href="#1084" id="1084">1084</a>
+<a href="#1085" id="1085">1085</a>
+<a href="#1086" id="1086">1086</a>
+<a href="#1087" id="1087">1087</a>
+<a href="#1088" id="1088">1088</a>
+<a href="#1089" id="1089">1089</a>
+<a href="#1090" id="1090">1090</a>
+<a href="#1091" id="1091">1091</a>
+<a href="#1092" id="1092">1092</a>
+<a href="#1093" id="1093">1093</a>
+<a href="#1094" id="1094">1094</a>
+<a href="#1095" id="1095">1095</a>
+<a href="#1096" id="1096">1096</a>
+<a href="#1097" id="1097">1097</a>
+<a href="#1098" id="1098">1098</a>
+<a href="#1099" id="1099">1099</a>
+<a href="#1100" id="1100">1100</a>
+<a href="#1101" id="1101">1101</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor, D};
 
@@ -1182,6 +1217,7 @@
             <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
             <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad);
         };
+
         <span class="comment">// Expand kv cache
         </span><span class="kw">if </span><span class="self">self</span>.current_seq_len + seq_len &gt; <span class="self">self</span>.capacity_seq_len {
             <span class="kw">let </span>diff = <span class="self">self</span>.current_seq_len + seq_len - <span class="self">self</span>.capacity_seq_len;
@@ -1200,7 +1236,9 @@
             ad.slice_set(<span class="self">self</span>.all_data.as_ref().unwrap(), <span class="self">self</span>.dim, <span class="number">0</span>)<span class="question-mark">?</span>;
             <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad);
         }
+
         <span class="kw">let </span>ad = <span class="self">self</span>.all_data.as_mut().unwrap();
+
         ad.slice_set(src, <span class="self">self</span>.dim, <span class="self">self</span>.current_seq_len)<span class="question-mark">?</span>;
         <span class="self">self</span>.current_seq_len += seq_len;
         <span class="prelude-val">Ok</span>(())
@@ -1218,16 +1256,18 @@
     <span class="comment">// max_seq_len is the size of the rotating buffer, it is actually allowed for the full
     // sequence to grow past this limit.
     </span><span class="kw">pub </span>max_seq_len: usize,
+    <span class="kw">pub </span>capacity_seq_len: usize,
 }
 
 <span class="kw">impl </span>RotatingCache {
-    <span class="kw">pub fn </span>new(dim: usize, max_seq_len: usize) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(dim: usize, max_seq_len: usize, capacity_seq_len: usize) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             all_data: <span class="prelude-val">None</span>,
             dim,
             offset: <span class="number">0</span>,
             current_seq_len: <span class="number">0</span>,
             max_seq_len,
+            capacity_seq_len,
         }
     }
 
@@ -1290,10 +1330,32 @@
         // self.all_data.get_or_insert_with.
         </span><span class="kw">if </span><span class="self">self</span>.all_data.is_none() {
             <span class="kw">let </span><span class="kw-2">mut </span>shape = src.dims().to_vec();
-            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.max_seq_len;
+            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.capacity_seq_len;
             <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
             <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad)
         };
+
+        <span class="comment">// Expand kv cache, this case is a little more complex.
+        </span><span class="kw">if </span><span class="self">self</span>.current_seq_len + seq_len &gt; <span class="self">self</span>.capacity_seq_len
+            &amp;&amp; <span class="self">self</span>.current_seq_len + seq_len &lt; <span class="self">self</span>.max_seq_len
+        {
+            <span class="kw">let </span>diff = <span class="self">self</span>.current_seq_len + seq_len - <span class="self">self</span>.capacity_seq_len;
+            <span class="kw">let </span>n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
+            <span class="self">self</span>.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
+            <span class="kw">if </span><span class="self">self</span>.capacity_seq_len &gt; <span class="self">self</span>.max_seq_len {
+                <span class="macro">candle_core::bail!</span>(
+                    <span class="string">"kv-cache: requested capacity ({}) above max seq len ({})"</span>,
+                    <span class="self">self</span>.capacity_seq_len,
+                    <span class="self">self</span>.max_seq_len
+                )
+            }
+            <span class="kw">let </span><span class="kw-2">mut </span>shape = src.dims().to_vec();
+            shape[<span class="self">self</span>.dim] = <span class="self">self</span>.capacity_seq_len;
+            <span class="kw">let </span>ad = Tensor::zeros(shape, src.dtype(), src.device())<span class="question-mark">?</span>;
+            ad.slice_set(<span class="self">self</span>.all_data.as_ref().unwrap(), <span class="self">self</span>.dim, <span class="number">0</span>)<span class="question-mark">?</span>;
+            <span class="self">self</span>.all_data = <span class="prelude-val">Some</span>(ad);
+        }
+
         <span class="kw">let </span>ad = <span class="self">self</span>.all_data.as_mut().unwrap();
 
         <span class="self">self</span>.current_seq_len += seq_len;
@@ -1344,9 +1406,9 @@
         <span class="self">Self</span>::Normal { k, v }
     }
 
-    <span class="kw">pub fn </span>new_rotating(dim: usize, sliding_window: usize) -&gt; <span class="self">Self </span>{
-        <span class="kw">let </span>k = RotatingCache::new(dim, sliding_window);
-        <span class="kw">let </span>v = RotatingCache::new(dim, sliding_window);
+    <span class="kw">pub fn </span>new_rotating(dim: usize, sliding_window: usize, capacity_seq_len: usize) -&gt; <span class="self">Self </span>{
+        <span class="kw">let </span>k = RotatingCache::new(dim, sliding_window, capacity_seq_len);
+        <span class="kw">let </span>v = RotatingCache::new(dim, sliding_window, capacity_seq_len);
         <span class="self">Self</span>::Rotating { k, v }
     }
 
@@ -1475,7 +1537,8 @@
             <span class="prelude-val">Some</span>(sliding_window) =&gt; Arc::new(Mutex::new(<span class="self">Self</span>(<span class="macro">vec!</span>[
                 KvCache::new_rotating(
                     <span class="number">2</span>,
-                    sliding_window
+                    sliding_window,
+                    <span class="self">Self</span>::CACHE_GROW_SIZE
                 );
                 len
             ]))),
@@ -1498,7 +1561,7 @@
                     caches.push(KvCache::new_normal(<span class="number">2</span>, max_seq_len, <span class="self">Self</span>::CACHE_GROW_SIZE));
                 }
                 NormalCacheType::SlidingWindow { window } =&gt; {
-                    caches.push(KvCache::new_rotating(<span class="number">2</span>, window));
+                    caches.push(KvCache::new_rotating(<span class="number">2</span>, window, <span class="self">Self</span>::CACHE_GROW_SIZE));
                 }
             }
         }
@@ -1598,6 +1661,7 @@
                     <span class="kw">let </span>template_cache_csl = old_k.current_seq_len;
                     <span class="kw">let </span>template_cache_msl = old_k.max_seq_len;
                     <span class="kw">let </span>template_cache_offset = old_k.offset;
+                    <span class="kw">let </span>template_cache_capsl = old_k.capacity_seq_len;
 
                     caches.push(KvCache::Rotating {
                         k: RotatingCache {
@@ -1606,6 +1670,7 @@
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             offset: template_cache_offset,
+                            capacity_seq_len: template_cache_capsl,
                         },
                         v: RotatingCache {
                             all_data: v_cache.map(|x| x.contiguous().unwrap()),
@@ -1613,6 +1678,7 @@
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             offset: template_cache_offset,
+                            capacity_seq_len: template_cache_capsl,
                         },
                     });
                 }
@@ -1686,6 +1752,7 @@
                                 current_seq_len: cache_k.current_seq_len,
                                 max_seq_len: cache_k.max_seq_len,
                                 offset: cache_k.offset,
+                                capacity_seq_len: cache_k.capacity_seq_len,
                             },
                             v: RotatingCache {
                                 all_data: <span class="prelude-val">Some</span>(v),
@@ -1693,6 +1760,7 @@
                                 current_seq_len: cache_v.current_seq_len,
                                 max_seq_len: cache_v.max_seq_len,
                                 offset: cache_v.offset,
+                                capacity_seq_len: cache_v.capacity_seq_len,
                             },
                         });
                     }
@@ -1797,6 +1865,7 @@
                             current_seq_len: <span class="number">0</span>,
                             max_seq_len: template_cache_msl,
                             offset: <span class="number">0</span>,
+                            capacity_seq_len: <span class="number">0</span>,
                         },
                         v: RotatingCache {
                             all_data: <span class="prelude-val">None</span>,
@@ -1804,6 +1873,7 @@
                             current_seq_len: <span class="number">0</span>,
                             max_seq_len: template_cache_msl,
                             offset: <span class="number">0</span>,
+                            capacity_seq_len: <span class="number">0</span>,
                         },
                     };
                     <span class="kw-2">*</span>layer = cache;

@@ -254,7 +254,9 @@
 <a href="#253" id="253">253</a>
 <a href="#254" id="254">254</a>
 <a href="#255" id="255">255</a>
-<a href="#256" id="256">256</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#256" id="256">256</a>
+<a href="#257" id="257">257</a>
+<a href="#258" id="258">258</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>};
 <span class="kw">use </span>either::Either;
@@ -373,6 +375,7 @@
                             current_seq_len: k.current_seq_len,
                             max_seq_len: k.max_seq_len,
                             offset: k.offset,
+                            capacity_seq_len: k.capacity_seq_len,
                         },
                         v: RotatingCache {
                             all_data: v.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
@@ -380,6 +383,7 @@
                             current_seq_len: v.current_seq_len,
                             max_seq_len: v.max_seq_len,
                             offset: v.offset,
+                            capacity_seq_len: v.capacity_seq_len,
                         },
                     }
                 }

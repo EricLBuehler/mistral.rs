@@ -1343,7 +1343,8 @@
 <a href="#1342" id="1342">1342</a>
 <a href="#1343" id="1343">1343</a>
 <a href="#1344" id="1344">1344</a>
-<a href="#1345" id="1345">1345</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#1345" id="1345">1345</a>
+<a href="#1346" id="1346">1346</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>phi3_inputs_processor;
 
@@ -1435,6 +1436,7 @@
             original_max_position_embeddings: val.original_max_position_embeddings,
             rope_theta: val.rope_theta,
             head_dim: val.hidden_size / val.num_attention_heads,
+            partial_rotary_factor: <span class="prelude-val">None</span>,
         }
     }
 }

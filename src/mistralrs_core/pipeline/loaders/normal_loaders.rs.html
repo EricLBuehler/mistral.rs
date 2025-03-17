@@ -3329,7 +3329,9 @@
 <a href="#3328" id="3328">3328</a>
 <a href="#3329" id="3329">3329</a>
 <a href="#3330" id="3330">3330</a>
-<a href="#3331" id="3331">3331</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#3331" id="3331">3331</a>
+<a href="#3332" id="3332">3332</a>
+<a href="#3333" id="3333">3333</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fmt::{Debug, Display},
     str::FromStr,
@@ -4877,6 +4879,7 @@
     quantization_config: <span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
     <span class="attr">#[serde(default = <span class="string">"word_emb_default"</span>)]
     </span>tie_word_embeddings: bool,
+    partial_rotary_factor: <span class="prelude-ty">Option</span>&lt;f64&gt;,
 }
 
 <span class="kw">impl </span>Phi3BasicConfig {
@@ -4901,6 +4904,7 @@
             sliding_window: basic_config.sliding_window,
             quantization_config: basic_config.quantization_config,
             tie_word_embeddings: basic_config.tie_word_embeddings,
+            partial_rotary_factor: basic_config.partial_rotary_factor,
         })
     }
 }

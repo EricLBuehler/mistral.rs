@@ -2074,7 +2074,53 @@
 <a href="#2073" id="2073">2073</a>
 <a href="#2074" id="2074">2074</a>
 <a href="#2075" id="2075">2075</a>
-<a href="#2076" id="2076">2076</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#2076" id="2076">2076</a>
+<a href="#2077" id="2077">2077</a>
+<a href="#2078" id="2078">2078</a>
+<a href="#2079" id="2079">2079</a>
+<a href="#2080" id="2080">2080</a>
+<a href="#2081" id="2081">2081</a>
+<a href="#2082" id="2082">2082</a>
+<a href="#2083" id="2083">2083</a>
+<a href="#2084" id="2084">2084</a>
+<a href="#2085" id="2085">2085</a>
+<a href="#2086" id="2086">2086</a>
+<a href="#2087" id="2087">2087</a>
+<a href="#2088" id="2088">2088</a>
+<a href="#2089" id="2089">2089</a>
+<a href="#2090" id="2090">2090</a>
+<a href="#2091" id="2091">2091</a>
+<a href="#2092" id="2092">2092</a>
+<a href="#2093" id="2093">2093</a>
+<a href="#2094" id="2094">2094</a>
+<a href="#2095" id="2095">2095</a>
+<a href="#2096" id="2096">2096</a>
+<a href="#2097" id="2097">2097</a>
+<a href="#2098" id="2098">2098</a>
+<a href="#2099" id="2099">2099</a>
+<a href="#2100" id="2100">2100</a>
+<a href="#2101" id="2101">2101</a>
+<a href="#2102" id="2102">2102</a>
+<a href="#2103" id="2103">2103</a>
+<a href="#2104" id="2104">2104</a>
+<a href="#2105" id="2105">2105</a>
+<a href="#2106" id="2106">2106</a>
+<a href="#2107" id="2107">2107</a>
+<a href="#2108" id="2108">2108</a>
+<a href="#2109" id="2109">2109</a>
+<a href="#2110" id="2110">2110</a>
+<a href="#2111" id="2111">2111</a>
+<a href="#2112" id="2112">2112</a>
+<a href="#2113" id="2113">2113</a>
+<a href="#2114" id="2114">2114</a>
+<a href="#2115" id="2115">2115</a>
+<a href="#2116" id="2116">2116</a>
+<a href="#2117" id="2117">2117</a>
+<a href="#2118" id="2118">2118</a>
+<a href="#2119" id="2119">2119</a>
+<a href="#2120" id="2120">2120</a>
+<a href="#2121" id="2121">2121</a>
+<a href="#2122" id="2122">2122</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
@@ -2358,6 +2404,7 @@
     <span class="kw">pub </span>original_max_position_embeddings: usize,
     <span class="kw">pub </span>rope_theta: f64,
     <span class="kw">pub </span>head_dim: usize,
+    <span class="kw">pub </span>partial_rotary_factor: <span class="prelude-ty">Option</span>&lt;f64&gt;,
 }
 
 <span class="kw">impl </span>PhiRotaryEmbedding {
@@ -2370,7 +2417,7 @@
         dev: <span class="kw-2">&amp;</span>Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>max_seq_len = cfg.max_position_embeddings;
-        <span class="kw">let </span>dim = cfg.head_dim;
+        <span class="kw">let </span>dim = (cfg.head_dim <span class="kw">as </span>f64 * cfg.partial_rotary_factor.unwrap_or(<span class="number">1.</span>)) <span class="kw">as </span>usize;
 
         <span class="comment">// Calculate scale
         </span><span class="kw">let </span>scale =
@@ -2432,7 +2479,7 @@
 
     <span class="kw">fn </span>new_unscaled(cfg: <span class="kw-2">&amp;</span>PhiRopeConfig, dtype: DType, dev: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>max_seq_len = cfg.max_position_embeddings;
-        <span class="kw">let </span>dim = cfg.head_dim;
+        <span class="kw">let </span>dim = (cfg.head_dim <span class="kw">as </span>f64 * cfg.partial_rotary_factor.unwrap_or(<span class="number">1.</span>)) <span class="kw">as </span>usize;
 
         <span class="kw">let </span>inv_freq: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0</span>..dim)
             .step_by(<span class="number">2</span>)
@@ -2467,7 +2514,7 @@
         dev: <span class="kw-2">&amp;</span>Device,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
         <span class="kw">let </span>max_seq_len = cfg.max_position_embeddings;
-        <span class="kw">let </span>dim = cfg.head_dim;
+        <span class="kw">let </span>dim = (cfg.head_dim <span class="kw">as </span>f64 * cfg.partial_rotary_factor.unwrap_or(<span class="number">1.</span>)) <span class="kw">as </span>usize;
 
         <span class="kw">if </span>!<span class="macro">matches!</span>(scaling_type, ScaledRopeType::Su) {
             <span class="macro">candle_core::bail!</span>(<span class="string">"Scaled Phi3 RoPE (non-classic scaled, with mscales) must have type `su`/`longrope`."</span>);
@@ -2589,7 +2636,52 @@
         <span class="kw">let </span>(sin, cos) = <span class="self">self</span>.get_long_or_short_sin_cos(position_ids);
         <span class="kw">let </span>(_b_sz, _h, seq_len, _n_embd) = q.dims4()<span class="question-mark">?</span>;
         <span class="kw">let </span>all_same = seqlen_offsets.iter().all(|<span class="kw-2">&amp;</span>x| x == seqlen_offsets[<span class="number">0</span>]);
-        <span class="kw">if </span>all_same {
+
+        <span class="kw">let </span>rot_dim = cos.dim(D::Minus1)<span class="question-mark">? </span>* <span class="number">2</span>;
+
+        <span class="comment">// Case for Phi 3 / Phi 4 mini
+        </span><span class="kw">if </span>rot_dim != q.dim(D::Minus1)<span class="question-mark">? </span>{
+            <span class="kw">let </span>rot_dim = cos.dim(D::Minus1)<span class="question-mark">? </span>* <span class="number">2</span>;
+            <span class="kw">let </span>q_rot = q.narrow(D::Minus1, <span class="number">0</span>, rot_dim)<span class="question-mark">?</span>;
+            <span class="kw">let </span>q_pass = q.narrow(D::Minus1, rot_dim, q.dim(D::Minus1)<span class="question-mark">? </span>- rot_dim)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k_rot = k.narrow(D::Minus1, <span class="number">0</span>, rot_dim)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)<span class="question-mark">? </span>- rot_dim)<span class="question-mark">?</span>;
+
+            <span class="kw">let </span>(q_rot, k_rot) = <span class="kw">if </span>all_same {
+                <span class="kw">let </span>cos = cos.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
+                <span class="kw">let </span>sin = sin.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
+                <span class="kw">let </span>q_embed = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>q_rot.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
+                <span class="kw">let </span>k_embed = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>k_rot.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
+                (q_embed, k_embed)
+            } <span class="kw">else </span>{
+                <span class="kw">let </span><span class="kw-2">mut </span>q_embeds = Vec::new();
+                <span class="kw">let </span><span class="kw-2">mut </span>k_embeds = Vec::new();
+                <span class="kw">for </span>(i, offset) <span class="kw">in </span>seqlen_offsets.iter().enumerate() {
+                    <span class="kw">let </span>cos = cos.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>sin = sin.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>;
+                    <span class="kw">let </span>q_embed = candle_nn::rotary_emb::rope(
+                        <span class="kw-2">&amp;</span>q_rot.i(i)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
+                        <span class="kw-2">&amp;</span>cos,
+                        <span class="kw-2">&amp;</span>sin,
+                    )<span class="question-mark">?</span>;
+                    <span class="kw">let </span>k_embed = candle_nn::rotary_emb::rope(
+                        <span class="kw-2">&amp;</span>k_rot.i(i)<span class="question-mark">?</span>.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
+                        <span class="kw-2">&amp;</span>cos,
+                        <span class="kw-2">&amp;</span>sin,
+                    )<span class="question-mark">?</span>;
+                    q_embeds.push(q_embed);
+                    k_embeds.push(k_embed);
+                }
+                <span class="kw">let </span>q_rot = Tensor::cat(<span class="kw-2">&amp;</span>q_embeds, <span class="number">0</span>)<span class="question-mark">?</span>;
+                <span class="kw">let </span>k_rot = Tensor::cat(<span class="kw-2">&amp;</span>k_embeds, <span class="number">0</span>)<span class="question-mark">?</span>;
+                (q_rot, k_rot)
+            };
+
+            <span class="prelude-val">Ok</span>((
+                Tensor::cat(<span class="kw-2">&amp;</span>[q_rot, q_pass], D::Minus1)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
+                Tensor::cat(<span class="kw-2">&amp;</span>[k_rot, k_pass], D::Minus1)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
+            ))
+        } <span class="kw">else if </span>all_same {
             <span class="kw">let </span>cos = cos.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>sin = sin.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>q_embed = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
