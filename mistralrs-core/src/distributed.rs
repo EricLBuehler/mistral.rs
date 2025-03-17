@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::device_map::DeviceMapper;
 use crate::pipeline::{DeviceMappedModelLoader, IsqModelLoader};
@@ -58,7 +58,9 @@ pub(crate) fn prepare_distributed_mapper<
     paths: &dyn ModelPaths,
 ) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder<'a>)> {
     #[cfg(not(feature = "nccl"))]
-    warn!("NCCL support was included in the build, be sure to build with `--features nccl`.");
+    tracing::warn!(
+        "NCCL support was included in the build, be sure to build with `--features nccl`."
+    );
 
     // NCCL case!
 
