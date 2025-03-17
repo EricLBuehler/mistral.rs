@@ -219,7 +219,9 @@
 <a href="#218" id="218">218</a>
 <a href="#219" id="219">219</a>
 <a href="#220" id="220">220</a>
-<a href="#221" id="221">221</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Context;
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Context;
 <span class="kw">use </span>candle_core::{DType, Device};
 <span class="kw">use </span>core::ffi::c_char;
 <span class="kw">use </span>interprocess::local_socket::traits::{Listener, Stream};
@@ -233,7 +235,7 @@
 <span class="kw">use </span>std::process::Command;
 <span class="kw">use </span>std::str::FromStr;
 <span class="kw">use </span>std::sync::Arc;
-<span class="kw">use </span>tracing::{info, warn};
+<span class="kw">use </span>tracing::info;
 
 <span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <span class="kw">use </span><span class="kw">crate</span>::pipeline::{DeviceMappedModelLoader, IsqModelLoader};
@@ -279,7 +281,9 @@
     paths: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelPaths,
 ) -&gt; anyhow::Result&lt;(Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;, ShardedVarBuilder&lt;<span class="lifetime">'a</span>&gt;)&gt; {
     <span class="attr">#[cfg(not(feature = <span class="string">"nccl"</span>))]
-    </span><span class="macro">warn!</span>(<span class="string">"NCCL support was included in the build, be sure to build with `--features nccl`."</span>);
+    </span><span class="macro">tracing::warn!</span>(
+        <span class="string">"NCCL support was included in the build, be sure to build with `--features nccl`."
+    </span>);
 
     <span class="comment">// NCCL case!
 
