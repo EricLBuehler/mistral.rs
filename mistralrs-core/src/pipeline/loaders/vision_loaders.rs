@@ -2159,7 +2159,10 @@ impl DeviceMappedModelLoader for Idefics3Loader {
                 layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
             };
 
-            post_layernorm + patch_embedding + position_embedding + layer_elems
+            post_layernorm
+                + patch_embedding
+                + position_embedding
+                + layer_elems * cfg.num_hidden_layers
         };
 
         let elems = text_elems + connector_elems + vision_transformer;
@@ -2428,7 +2431,10 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
                 layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
             };
 
-            post_layernorm + patch_embedding + position_embedding + layer_elems
+            post_layernorm
+                + patch_embedding
+                + position_embedding
+                + layer_elems * cfg.num_hidden_layers
         };
 
         let elems = text_elems + vision_transformer;
@@ -2733,7 +2739,10 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
                         layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
                     };
 
-                    post_layernorm + patch_embedding + position_embedding + layer_elems
+                    post_layernorm
+                        + patch_embedding
+                        + position_embedding
+                        + layer_elems * cfg.num_hidden_layers
                 };
 
                 proj + glb_gn + sub_gn + vision_transformer
@@ -3299,7 +3308,10 @@ impl DeviceMappedModelLoader for Gemma3Loader {
                 layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
             };
 
-            post_layernorm + patch_embedding + position_embedding + layer_elems
+            post_layernorm
+                + patch_embedding
+                + position_embedding
+                + layer_elems * cfg.num_hidden_layers
         } else {
             0
         };
