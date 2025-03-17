@@ -307,9 +307,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                     )
                     .unwrap();
 
-                    let image_bounds = Tensor::cat(&[image_start_idx, image_end_idx], 1).unwrap();
-
-                    image_bounds
+                    Tensor::cat(&[image_start_idx, image_end_idx], 1).unwrap()
                 };
 
                 pixel_values_accum.push(pixel_values_list);
