@@ -202,6 +202,15 @@ fn supports_attn_softmax() -> Result<bool> {
     Ok(true)
 }
 
+/// Not *really* sure why this is necessary but it is.
+fn maybe_synchronize(device: &Device) -> Result<()> {
+    // If less that 4 GB available, synchronize
+    if MemoryUsage.get_memory_available(device)? < 4 * 1024 * (1024 * 1024) {
+        device.synchronize()?;
+    }
+    Ok(())
+}
+
 /// Computes softmax(QK^T*sqrt(d_k))V
 fn naive_sdpa(
     q: &Tensor,
@@ -210,10 +219,7 @@ fn naive_sdpa(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    // If less that 4 GB available, synchronize
-    if MemoryUsage.get_memory_available(q.device())? < 4 * 1024 * (1024 * 1024) {
-        q.device().synchronize()?;
-    }
+    maybe_synchronize(q.device())?;
 
     // Use faster softmax if mask is rank 2 or it's rank 3
     if mask.is_some_and(|mask| mask.rank() == 2 || mask.rank() == 3) && supports_attn_softmax()? {
@@ -316,13 +322,18 @@ impl Sdpa {
 
         let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
-        return naive_sdpa(q, &k, &v, mask, sdpa_params);
+
+        if mask.is_some_and(|x| x.rank() == 2) {
+            return naive_sdpa(q, &k, &v, mask, sdpa_params);
+        }
 
         // TODO: bench?
         #[allow(unused)]
         if let (Device::Cuda(_), Some(cublaslt)) = (q.device(), *CUBLASLT_HANDLE.lock().unwrap()) {
             #[cfg(feature = "cuda")]
             {
+                maybe_synchronize(q.device())?;
+
                 // cuBLASLt batch matmul implementation requires inputs to be dims3
                 let k = k.flatten(0, 1)?;
                 let q = q.flatten(0, 1)?;

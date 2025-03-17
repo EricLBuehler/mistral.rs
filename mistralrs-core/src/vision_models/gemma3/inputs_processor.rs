@@ -401,7 +401,7 @@ impl ImagePreProcessor for Gemma3ImageProcessor {
 
         for image in images.iter_mut() {
             // Convert to rgb
-            if config.do_convert_rgb.is_some_and(|x| x) {
+            if do_convert_rgb {
                 *image = DynamicImage::ImageRgb8(image.to_rgb8());
             }
         }
