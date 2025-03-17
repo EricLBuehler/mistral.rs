@@ -66,6 +66,7 @@ impl From<Config> for PhiRopeConfig {
             original_max_position_embeddings: val.original_max_position_embeddings,
             rope_theta: val.rope_theta,
             head_dim: val.hidden_size / val.num_attention_heads,
+            partial_rotary_factor: None,
         }
     }
 }

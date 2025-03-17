@@ -117,6 +117,7 @@ impl PrefixCacheManagerV2 {
                             current_seq_len: k.current_seq_len,
                             max_seq_len: k.max_seq_len,
                             offset: k.offset,
+                            capacity_seq_len: k.capacity_seq_len,
                         },
                         v: RotatingCache {
                             all_data: v.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
@@ -124,6 +125,7 @@ impl PrefixCacheManagerV2 {
                             current_seq_len: v.current_seq_len,
                             max_seq_len: v.max_seq_len,
                             offset: v.offset,
+                            capacity_seq_len: v.capacity_seq_len,
                         },
                     }
                 }
