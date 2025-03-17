@@ -108,62 +108,13 @@ impl InputsProcessor for Gemma3ImageProcessor {
             ))));
         };
 
-        let text_models_inputs_processor::InnerInputProcessorOutput {
-            inputs:
-                text_models_inputs_processor::InputMetadata {
-                    input,
-                    positions,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                    flash_meta,
-                },
-            seq_indices,
-        } = if is_prompt {
-            get_prompt_input(
-                input_seqs
-                    .iter()
-                    .map(|seq| seq.get_toks().to_vec())
-                    .collect::<Vec<_>>(),
-                input_seqs,
-                device,
-                last_n_context_len,
-                return_raw_logits,
-                paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
-                mapper,
-            )
-            .nth(0)
-            .unwrap()
-            .unwrap()
-        } else {
-            get_completion_input(
-                input_seqs
-                    .iter()
-                    .map(|seq| seq.get_toks().to_vec())
-                    .collect::<Vec<_>>(),
-                input_seqs,
-                device,
-                no_kv_cache,
-                last_n_context_len,
-                return_raw_logits,
-                paged_attn_metadata.as_mut(),
-                None, // TODO: evaluate if it is possible to batch this
-                mapper,
-            )
-            .nth(0)
-            .unwrap()
-            .unwrap()
-        };
-
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
-        let (new_input, pixel_values) = if has_images {
+        let pixel_values = if has_images {
             let mut pixel_values_accum = Vec::new();
-            let mut all_ids = Vec::new();
             let re = Regex::new(BOI_TOKEN).unwrap();
             for seq in input_seqs.iter_mut() {
                 let PreprocessedImages {
@@ -228,30 +179,60 @@ impl InputsProcessor for Gemma3ImageProcessor {
                     .expect("Detokenization failed!");
 
                 let ids = toks.get_ids().to_vec();
-                all_ids.push(ids.clone());
-
                 seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
             }
 
-            let mut all_ids_new = Vec::new();
-            let max_len = all_ids.iter().map(|ids| ids.len()).max().unwrap();
-            for ids in all_ids {
-                let pad = max_len - ids.len();
-                all_ids_new
-                    .push(Tensor::new([ids, vec![0; pad]].concat(), input.device()).unwrap());
-            }
-
-            (
-                Some(Tensor::stack(&all_ids_new, 0).unwrap()),
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-            )
+            Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
         } else {
-            (None, None)
+            None
         };
 
-        let input = match new_input {
-            Some(new_input) => new_input,
-            None => input,
+        let text_models_inputs_processor::InnerInputProcessorOutput {
+            inputs:
+                text_models_inputs_processor::InputMetadata {
+                    input,
+                    positions,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                    flash_meta,
+                },
+            seq_indices,
+        } = if is_prompt {
+            get_prompt_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks().to_vec())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                None, // TODO: evaluate if it is possible to batch this
+                mapper,
+            )
+            .nth(0)
+            .unwrap()
+            .unwrap()
+        } else {
+            get_completion_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks().to_vec())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                None, // TODO: evaluate if it is possible to batch this
+                mapper,
+            )
+            .nth(0)
+            .unwrap()
+            .unwrap()
         };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
