@@ -385,7 +385,18 @@
 <a href="#384" id="384">384</a>
 <a href="#385" id="385">385</a>
 <a href="#386" id="386">386</a>
-<a href="#387" id="387">387</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -589,6 +600,15 @@
     </span><span class="prelude-val">Ok</span>(<span class="bool-val">true</span>)
 }
 
+<span class="doccomment">/// Not *really* sure why this is necessary but it is.
+</span><span class="kw">fn </span>maybe_synchronize(device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="comment">// If less that 4 GB available, synchronize
+    </span><span class="kw">if </span>MemoryUsage.get_memory_available(device)<span class="question-mark">? </span>&lt; <span class="number">4 </span>* <span class="number">1024 </span>* (<span class="number">1024 </span>* <span class="number">1024</span>) {
+        device.synchronize()<span class="question-mark">?</span>;
+    }
+    <span class="prelude-val">Ok</span>(())
+}
+
 <span class="doccomment">/// Computes softmax(QK^T*sqrt(d_k))V
 </span><span class="kw">fn </span>naive_sdpa(
     q: <span class="kw-2">&amp;</span>Tensor,
@@ -597,10 +617,7 @@
     mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
     sdpa_params: <span class="kw-2">&amp;</span>SdpaParams,
 ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-    <span class="comment">// If less that 4 GB available, synchronize
-    </span><span class="kw">if </span>MemoryUsage.get_memory_available(q.device())<span class="question-mark">? </span>&lt; <span class="number">4 </span>* <span class="number">1024 </span>* (<span class="number">1024 </span>* <span class="number">1024</span>) {
-        q.device().synchronize()<span class="question-mark">?</span>;
-    }
+    maybe_synchronize(q.device())<span class="question-mark">?</span>;
 
     <span class="comment">// Use faster softmax if mask is rank 2 or it's rank 3
     </span><span class="kw">if </span>mask.is_some_and(|mask| mask.rank() == <span class="number">2 </span>|| mask.rank() == <span class="number">3</span>) &amp;&amp; supports_attn_softmax()<span class="question-mark">? </span>{
@@ -703,13 +720,18 @@
 
         <span class="kw">let </span>k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
-        <span class="kw">return </span>naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params);
+
+        <span class="kw">if </span>mask.is_some_and(|x| x.rank() == <span class="number">2</span>) {
+            <span class="kw">return </span>naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params);
+        }
 
         <span class="comment">// TODO: bench?
         </span><span class="attr">#[allow(unused)]
         </span><span class="kw">if let </span>(Device::Cuda(<span class="kw">_</span>), <span class="prelude-val">Some</span>(cublaslt)) = (q.device(), <span class="kw-2">*</span>CUBLASLT_HANDLE.lock().unwrap()) {
             <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
             </span>{
+                maybe_synchronize(q.device())<span class="question-mark">?</span>;
+
                 <span class="comment">// cuBLASLt batch matmul implementation requires inputs to be dims3
                 </span><span class="kw">let </span>k = k.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
                 <span class="kw">let </span>q = q.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;

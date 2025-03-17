@@ -3398,7 +3398,19 @@
 <a href="#3397" id="3397">3397</a>
 <a href="#3398" id="3398">3398</a>
 <a href="#3399" id="3399">3399</a>
-<a href="#3400" id="3400">3400</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#3400" id="3400">3400</a>
+<a href="#3401" id="3401">3401</a>
+<a href="#3402" id="3402">3402</a>
+<a href="#3403" id="3403">3403</a>
+<a href="#3404" id="3404">3404</a>
+<a href="#3405" id="3405">3405</a>
+<a href="#3406" id="3406">3406</a>
+<a href="#3407" id="3407">3407</a>
+<a href="#3408" id="3408">3408</a>
+<a href="#3409" id="3409">3409</a>
+<a href="#3410" id="3410">3410</a>
+<a href="#3411" id="3411">3411</a>
+<a href="#3412" id="3412">3412</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -5559,7 +5571,10 @@
                 layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
             };
 
-            post_layernorm + patch_embedding + position_embedding + layer_elems
+            post_layernorm
+                + patch_embedding
+                + position_embedding
+                + layer_elems * cfg.num_hidden_layers
         };
 
         <span class="kw">let </span>elems = text_elems + connector_elems + vision_transformer;
@@ -5828,7 +5843,10 @@
                 layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
             };
 
-            post_layernorm + patch_embedding + position_embedding + layer_elems
+            post_layernorm
+                + patch_embedding
+                + position_embedding
+                + layer_elems * cfg.num_hidden_layers
         };
 
         <span class="kw">let </span>elems = text_elems + vision_transformer;
@@ -6133,7 +6151,10 @@
                         layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
                     };
 
-                    post_layernorm + patch_embedding + position_embedding + layer_elems
+                    post_layernorm
+                        + patch_embedding
+                        + position_embedding
+                        + layer_elems * cfg.num_hidden_layers
                 };
 
                 proj + glb_gn + sub_gn + vision_transformer
@@ -6699,7 +6720,10 @@
                 layer_norm_1 + layer_norm_2 + fc1 + fc2 + q_proj + k_proj + v_proj + o_proj
             };
 
-            post_layernorm + patch_embedding + position_embedding + layer_elems
+            post_layernorm
+                + patch_embedding
+                + position_embedding
+                + layer_elems * cfg.num_hidden_layers
         } <span class="kw">else </span>{
             <span class="number">0
         </span>};
