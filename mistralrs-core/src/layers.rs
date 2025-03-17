@@ -559,34 +559,26 @@ impl PhiRotaryEmbedding {
                 Tensor::cat(&[q_rot, q_pass], D::Minus1)?.contiguous()?,
                 Tensor::cat(&[k_rot, k_pass], D::Minus1)?.contiguous()?,
             ))
+        } else if all_same {
+            let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
+            let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
+            let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+            Ok((q_embed, k_embed))
         } else {
-            if all_same {
-                let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
-                let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
-                let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-                let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
-                Ok((q_embed, k_embed))
-            } else {
-                let mut q_embeds = Vec::new();
-                let mut k_embeds = Vec::new();
-                for (i, offset) in seqlen_offsets.iter().enumerate() {
-                    let cos = cos.narrow(0, *offset, seq_len)?;
-                    let sin = sin.narrow(0, *offset, seq_len)?;
-                    let q_embed = candle_nn::rotary_emb::rope(
-                        &q.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    let k_embed = candle_nn::rotary_emb::rope(
-                        &k.i(i)?.unsqueeze(0)?.contiguous()?,
-                        &cos,
-                        &sin,
-                    )?;
-                    q_embeds.push(q_embed);
-                    k_embeds.push(k_embed);
-                }
-                Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
+            let mut q_embeds = Vec::new();
+            let mut k_embeds = Vec::new();
+            for (i, offset) in seqlen_offsets.iter().enumerate() {
+                let cos = cos.narrow(0, *offset, seq_len)?;
+                let sin = sin.narrow(0, *offset, seq_len)?;
+                let q_embed =
+                    candle_nn::rotary_emb::rope(&q.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                let k_embed =
+                    candle_nn::rotary_emb::rope(&k.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                q_embeds.push(q_embed);
+                k_embeds.push(k_embed);
             }
+            Ok((Tensor::cat(&q_embeds, 0)?, Tensor::cat(&k_embeds, 0)?))
         }
     }
 }
