@@ -159,7 +159,9 @@ impl InputsProcessor for Gemma3ImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
+        let has_images = input_seqs
+            .iter()
+            .all(|seq| seq.is_prompt() && seq.has_images());
 
         let (new_input, pixel_values) = if has_images {
             let mut pixel_values_accum = Vec::new();
@@ -184,7 +186,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
                     num_crops,
                 } = self
                     .preprocess(
-                        seq.take_images()
+                        seq.clone_images()
                             .expect("Need to have images by this point."),
                         vec![],
                         config,
@@ -194,43 +196,56 @@ impl InputsProcessor for Gemma3ImageProcessor {
                     .expect("Preprocessing failed");
 
                 let num_crops = num_crops.unwrap();
-
                 // Deliberately no .unsqueeze here
                 pixel_values_accum.push(pixel_values.clone());
 
-                let mut prompt = tokenizer
-                    .decode(seq.get_toks(), false)
-                    .expect("Detokenization failed!");
+                if !seq.flag_have_processed_images() {
+                    let mut prompt = tokenizer
+                        .decode(seq.get_toks(), false)
+                        .expect("Detokenization failed!");
 
-                let image_indexes: Vec<usize> =
-                    re.find_iter(&prompt).map(|mat| mat.start()).collect();
+                    let image_indexes: Vec<usize> =
+                        re.find_iter(&prompt).map(|mat| mat.start()).collect();
 
-                assert_ne!(pixel_values.dim(0).unwrap(), image_indexes.len());
+                    assert_ne!(pixel_values.dim(0).unwrap(), image_indexes.len());
 
-                for (num, idx) in num_crops.into_iter().zip(image_indexes).rev() {
-                    if num != 0 {
-                        let formatted_image_text = format!(
+                    let num_imaged_embed = num_crops.iter().filter(|x| **x != 0).count();
+                    for (num, idx) in num_crops.into_iter().zip(image_indexes).rev() {
+                        if num != 0 {
+                            let formatted_image_text = format!(
                             "Here is the original image {BOI_TOKEN} and here are some crops to help you see better {}", vec![BOI_TOKEN.to_string(); num].join(" ")
                         );
-                        prompt = format!(
-                            "{}{formatted_image_text}{}",
-                            &prompt[..idx],
-                            &prompt[idx + BOI_TOKEN.len()..]
-                        );
+                            prompt = format!(
+                                "{}{formatted_image_text}{}",
+                                &prompt[..idx],
+                                &prompt[idx + BOI_TOKEN.len()..]
+                            );
+                        }
                     }
+
+                    prompt = prompt.replace(BOI_TOKEN, &self.full_image_sequence);
+
+                    seq.set_initial_prompt(prompt.clone());
+                    let toks = tokenizer
+                        .encode(prompt, false)
+                        .expect("Detokenization failed!");
+
+                    let ids = toks.get_ids().to_vec();
+                    all_ids.push(ids.clone());
+
+                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+
+                    let full_image_sequence_toks = tokenizer
+                        .encode(self.full_image_sequence.clone(), false)
+                        .expect("Detokenization failed!")
+                        .get_ids()
+                        .to_vec();
+                    let full_image_sequence_toks = vec![full_image_sequence_toks; num_imaged_embed];
+                    seq.recompute_mm_positions(full_image_sequence_toks);
+                } else {
+                    let ids = seq.get_toks().to_vec();
+                    all_ids.push(ids.clone());
                 }
-
-                prompt = prompt.replace(BOI_TOKEN, &self.full_image_sequence);
-
-                seq.set_initial_prompt(prompt.clone());
-                let toks = tokenizer
-                    .encode(prompt, false)
-                    .expect("Detokenization failed!");
-
-                let ids = toks.get_ids().to_vec();
-                all_ids.push(ids.clone());
-
-                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
             }
 
             let mut all_ids_new = Vec::new();

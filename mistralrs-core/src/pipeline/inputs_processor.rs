@@ -45,6 +45,10 @@ pub trait InputsProcessor {
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InputProcessorOutput>>>;
 
+    fn supports_pre_processed_images(&self) -> bool {
+        true
+    }
+
     fn get_type(&self) -> InputsProcessorType;
 }
 

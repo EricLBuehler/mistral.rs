@@ -209,7 +209,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                     num_crops: _,
                 } = self
                     .preprocess(
-                        seq.take_images()
+                        seq.clone_images()
                             .expect("Need to have images by this point."),
                         vec![],
                         config,
@@ -410,6 +410,10 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             inputs,
             seq_indices,
         })))
+    }
+
+    fn supports_pre_processed_images(&self) -> bool {
+        false
     }
 }
 
