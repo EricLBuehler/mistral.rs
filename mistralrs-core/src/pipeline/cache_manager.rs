@@ -235,12 +235,14 @@ impl RotatingCache {
         };
 
         // Expand kv cache, this case is a little more complex.
-        if self.current_seq_len + seq_len > self.capacity_seq_len
-            && self.current_seq_len + seq_len < self.max_seq_len
+        if (self.current_seq_len + seq_len > self.capacity_seq_len
+            && self.current_seq_len + seq_len < self.max_seq_len)
+            || self.current_seq_len == 0
         {
             let diff = self.current_seq_len + seq_len - self.capacity_seq_len;
             let n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
             self.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
+            self.capacity_seq_len = self.capacity_seq_len.min(self.max_seq_len);
             if self.capacity_seq_len > self.max_seq_len {
                 candle_core::bail!(
                     "kv-cache: requested capacity ({}) above max seq len ({})",
