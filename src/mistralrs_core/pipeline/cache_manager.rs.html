@@ -1099,7 +1099,9 @@
 <a href="#1098" id="1098">1098</a>
 <a href="#1099" id="1099">1099</a>
 <a href="#1100" id="1100">1100</a>
-<a href="#1101" id="1101">1101</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
+<a href="#1101" id="1101">1101</a>
+<a href="#1102" id="1102">1102</a>
+<a href="#1103" id="1103">1103</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor, D};
 
@@ -1336,12 +1338,14 @@
         };
 
         <span class="comment">// Expand kv cache, this case is a little more complex.
-        </span><span class="kw">if </span><span class="self">self</span>.current_seq_len + seq_len &gt; <span class="self">self</span>.capacity_seq_len
-            &amp;&amp; <span class="self">self</span>.current_seq_len + seq_len &lt; <span class="self">self</span>.max_seq_len
-        {
+        </span><span class="kw">if </span>(<span class="self">self</span>.current_seq_len + seq_len &gt; <span class="self">self</span>.capacity_seq_len
+            &amp;&amp; <span class="self">self</span>.current_seq_len + seq_len &lt; <span class="self">self</span>.max_seq_len)
+            || <span class="self">self</span>.current_seq_len == <span class="number">0
+        </span>{
             <span class="kw">let </span>diff = <span class="self">self</span>.current_seq_len + seq_len - <span class="self">self</span>.capacity_seq_len;
             <span class="kw">let </span>n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
             <span class="self">self</span>.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
+            <span class="self">self</span>.capacity_seq_len = <span class="self">self</span>.capacity_seq_len.min(<span class="self">self</span>.max_seq_len);
             <span class="kw">if </span><span class="self">self</span>.capacity_seq_len &gt; <span class="self">self</span>.max_seq_len {
                 <span class="macro">candle_core::bail!</span>(
                     <span class="string">"kv-cache: requested capacity ({}) above max seq len ({})"</span>,
