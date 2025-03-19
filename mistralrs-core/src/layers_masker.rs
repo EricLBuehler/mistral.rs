@@ -2,7 +2,7 @@
 
 use std::ops::Add;
 
-use candle_core::{DType, Device, Result, Tensor, WithDType};
+use candle_core::{DType, Device, Result, Tensor, WithDType, D};
 
 use crate::pipeline::KvCache;
 
@@ -163,26 +163,24 @@ impl CausalMasker {
 
         let mut causal_mask = {
             let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
-            let diagonal = past_kv_len as isize - sliding_window as isize - 1;
-            let context_mask = apply_tril(&mask.ones_like()?, diagonal)?;
 
-            masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?
-                .to_dtype(DType::U8)?
+            let context_mask = apply_tril(&mask.ones_like()?, -(sliding_window as isize))?;
+
+            let zero = Tensor::new(0.0f32, input_ids.device())?;
+            let mask = masked_fill(&zero.broadcast_as(mask.shape())?, &mask, f32::MIN).unwrap();
+
+            masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN).unwrap()
         };
 
-        let zero = Tensor::new(0.0f32, input_ids.device())?;
-        causal_mask = {
-            let mask = causal_mask.broadcast_as((causal_mask.dims()[0], causal_mask.dims()[1]))?;
-            // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
+        if causal_mask.dim(D::Minus1)? > sliding_window {
+            causal_mask = causal_mask.narrow(
+                D::Minus1,
+                causal_mask.dim(D::Minus1)? - sliding_window,
+                sliding_window,
+            )?;
+        }
 
-            masked_fill(
-                &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
-                &mask,
-                f32::NEG_INFINITY,
-            )?
-        };
-
-        Ok(Some(causal_mask))
+        Ok(Some(causal_mask.to_dtype(dtype)?))
     }
 
     #[deprecated(
