@@ -456,6 +456,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
+                        target.get_metadata().eos_tok.clone(),
                     ));
                 }
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
@@ -566,6 +567,7 @@ fn new_dummy_seq(
     dummy_sampler: Sampler,
     dummy_group: Arc<tokio::sync::Mutex<SequenceGroup>>,
     images: Option<Vec<DynamicImage>>,
+    eos_toks: Vec<u32>,
 ) -> Sequence {
     Sequence::new_waiting(
         tokens,
@@ -595,5 +597,6 @@ fn new_dummy_seq(
         None,
         None,
         false,
+        eos_toks,
     )
 }

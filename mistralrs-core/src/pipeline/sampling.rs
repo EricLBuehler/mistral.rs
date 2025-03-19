@@ -371,8 +371,9 @@ pub async fn sample_sequence(
                 }
             } else if step_res.is_stop() {
                 let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
-                let trie = llg.tok_trie();
-                acc[trie.eos_token() as usize] = 0.0;
+                for eos_tok in seq.eos_tokens() {
+                    acc[*eos_tok as usize] = 0.0;
+                }
                 Some(acc)
             } else {
                 None

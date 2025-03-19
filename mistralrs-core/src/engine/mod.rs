@@ -852,6 +852,11 @@ impl Engine {
                 .clone()
                 .map(|conf| conf.block_size);
 
+            let eos_toks = get_mut_arcmutex!(self.pipeline)
+                .get_metadata()
+                .eos_tok
+                .clone();
+
             let seq_preallocated_cache = if get_mut_arcmutex!(self.pipeline).do_preallocated_cache()
             {
                 let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
@@ -958,6 +963,7 @@ impl Engine {
                 diffusion_params.clone(),
                 seq_preallocated_cache,
                 request.return_raw_logits,
+                eos_toks,
             );
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 seq.prefill_v2(
