@@ -2,26 +2,12 @@
 
 use std::ops::Add;
 
-use candle_core::{DType, Device, Result, Tensor, WithDType};
+use candle_core::{DType, Device, Result, Tensor, WithDType, D};
 
 use crate::pipeline::KvCache;
 
 // https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_attn_mask_utils.py
 pub struct CausalMasker;
-
-// https://github.com/mokeyish/candle-ext/blob/main/src/triangular.rs
-fn apply_tril(xs: &Tensor, diagonal: isize) -> Result<Tensor> {
-    let device = xs.device();
-    let (l, s) = xs.dims2()?;
-    let mut xs_tri = vec![];
-    for i in 0..l as isize {
-        for j in 0..s as isize {
-            let cond = i + diagonal < j;
-            xs_tri.push(if cond { 0u8 } else { 1u8 });
-        }
-    }
-    xs * Tensor::from_vec(xs_tri, (l, s), device)?.to_dtype(xs.dtype())?
-}
 
 // https://github.com/mokeyish/candle-ext/blob/main/src/masked_fill.rs
 /// xs are on false (0), value is on true (1)
@@ -73,6 +59,35 @@ impl CausalMasker {
             .flat_map(|i| (0..offset).map(move |j| u8::from(j + tgt_len > i + offset)))
             .collect();
         Tensor::from_slice(&mask, (tgt_len, offset), device)
+    }
+
+    fn make_swa_mask(
+        &self,
+        tgt_len: usize,
+        seqlen_offset: usize,
+        sliding_window: usize,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Tensor> {
+        let mask: Vec<_> = (0..tgt_len)
+            .flat_map(|i| {
+                (0..tgt_len).map(move |j| {
+                    if i < j || j + sliding_window < i {
+                        f32::NEG_INFINITY
+                    } else {
+                        0.
+                    }
+                })
+            })
+            .collect();
+        let mask = Tensor::from_slice(&mask, (tgt_len, tgt_len), device)?;
+        let mask = if seqlen_offset > 0 {
+            let mask0 = Tensor::zeros((tgt_len, seqlen_offset), DType::F32, device)?;
+            Tensor::cat(&[&mask0, &mask], D::Minus1)?
+        } else {
+            mask
+        };
+        mask.to_dtype(dtype)
     }
 
     /// Expands a mask from (bs, seq_len) to (bs, 1, tgt_len, seq_len)
@@ -154,146 +169,24 @@ impl CausalMasker {
         if sliding_window.is_none() {
             return self.make_causal_mask_matrix(input_ids, cache, dtype, n_attn_heads);
         }
-        let sliding_window = sliding_window.unwrap();
-        let past_kv_len = cache.get_past_kv_len()?;
         let (_b_sz, tgt_len) = input_ids.dims2()?;
-        if tgt_len == 1 {
-            return Ok(None);
-        }
-
-        let mut causal_mask = {
-            let mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
-            let diagonal = past_kv_len as isize - sliding_window as isize - 1;
-            let context_mask = apply_tril(&mask.ones_like()?, diagonal)?;
-
-            masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?
-                .to_dtype(DType::U8)?
-        };
-
-        let zero = Tensor::new(0.0f32, input_ids.device())?;
-        causal_mask = {
-            let mask = causal_mask.broadcast_as((causal_mask.dims()[0], causal_mask.dims()[1]))?;
-            // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-
-            masked_fill(
-                &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
-                &mask,
-                f32::NEG_INFINITY,
-            )?
-        };
-
-        Ok(Some(causal_mask))
-    }
-
-    #[deprecated(
-        since = "0.3.5",
-        note = "use `make_causal_mask_matrix_as_attn_bias` instead. This is incompatible with `Sdpa`."
-    )]
-    pub fn make_causal_mask_as_attn_bias(
-        &self,
-        input_ids: &Tensor,
-        cache: &dyn PastKvLenCache,
-        dtype: DType,
-        n_attn_heads: usize,
-    ) -> Result<Option<Tensor>> {
-        let past_kv_len = cache.get_past_kv_len()?;
-        let (b_sz, tgt_len) = input_ids.dims2()?;
-        if tgt_len == 1 {
-            return Ok(None);
-        }
-
-        let mut causal_mask = {
-            let mut mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
-            mask = mask
-                .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
-                .to_dtype(DType::U8)?;
-            mask
-        };
-
-        let zero = Tensor::new(0.0f32, input_ids.device())?;
-        causal_mask = {
-            let mut mask = causal_mask.broadcast_as((
-                causal_mask.dims()[0],
-                n_attn_heads,
-                causal_mask.dims()[2],
-                causal_mask.dims()[3],
-            ))?;
-            // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-            mask = masked_fill(
-                &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
-                &mask,
-                f32::NEG_INFINITY,
-            )?;
-
-            mask
-        };
-
-        // IMPORTANT: this must match the logic in attention.rs. Assume the cublaslt handle will be initialized
-        if causal_mask.device().is_cuda() {
-            causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
-        }
-
-        Ok(Some(causal_mask))
-    }
-
-    #[deprecated(
-        since = "0.3.5",
-        note = "use `make_causal_mask_matrix_with_sliding_window_as_attn_bias` instead. This is incompatible with `Sdpa`."
-    )]
-    pub fn make_causal_mask_with_sliding_window_as_attn_bias(
-        &self,
-        input_ids: &Tensor,
-        cache: &dyn PastKvLenCache,
-        sliding_window: Option<usize>,
-        dtype: DType,
-        n_attn_heads: usize,
-    ) -> Result<Option<Tensor>> {
-        if sliding_window.is_none() {
-            #[allow(deprecated)]
-            return self.make_causal_mask_as_attn_bias(input_ids, cache, dtype, n_attn_heads);
-        }
         let sliding_window = sliding_window.unwrap();
-        let past_kv_len = cache.get_past_kv_len()?;
-        let (b_sz, tgt_len) = input_ids.dims2()?;
+        // Compare the past KV len to the sliding window size. If the past kv len is 0 (no prefix cache), then this will be 0.
+        // Otherwise, this will be the number required such that the mask fits the size of the k/v seqlen (usually sliding window)
+        let past_kv_len = cache
+            .get_past_kv_len()?
+            .min(sliding_window.saturating_sub(tgt_len));
         if tgt_len == 1 {
             return Ok(None);
         }
 
-        let mut causal_mask = {
-            let mut mask = self.make_mask(tgt_len, past_kv_len, input_ids.device())?;
-            let diagonal = past_kv_len as isize - sliding_window as isize - 1;
-            let context_mask = apply_tril(&mask.ones_like()?, diagonal)?;
-            mask = masked_fill(&mask.to_dtype(DType::F32)?, &context_mask, f32::MIN)?;
-            mask = mask
-                .expand((b_sz, 1, tgt_len, tgt_len + past_kv_len))?
-                .to_dtype(DType::U8)?;
-
-            mask
-        };
-
-        let zero = Tensor::new(0.0f32, input_ids.device())?;
-        causal_mask = {
-            let mut mask = causal_mask.broadcast_as((
-                causal_mask.dims()[0],
-                n_attn_heads,
-                causal_mask.dims()[2],
-                causal_mask.dims()[3],
-            ))?;
-            // Mask: 1 means use from x (add 0.0), 0 means mask out (add -inf)
-            mask = masked_fill(
-                &zero.to_dtype(dtype)?.broadcast_as(mask.shape())?,
-                &mask,
-                f32::NEG_INFINITY,
-            )?;
-            mask
-        };
-
-        // IMPORTANT: this must match the logic in attention.rs. Assume the cublaslt handle will be initialized
-        if causal_mask.device().is_cuda() {
-            causal_mask = causal_mask.unsqueeze(0)?.repeat((n_attn_heads, 1, 1))?;
-        }
-
-        Ok(Some(causal_mask))
+        Ok(Some(self.make_swa_mask(
+            tgt_len,
+            past_kv_len,
+            sliding_window,
+            input_ids.device(),
+            dtype,
+        )?))
     }
 
     pub fn apply_mask_one_and_zero(

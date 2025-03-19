@@ -219,7 +219,8 @@ impl RotatingCache {
                 self.max_seq_len
             );
         }
-        self.current_seq_len = len % self.max_seq_len;
+        self.current_seq_len = len;
+        self.offset = len % self.max_seq_len;
         Ok(())
     }
 
@@ -330,19 +331,17 @@ impl KvCache {
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
-        match self {
+        let (out_k, out_v) = match self {
             Self::Normal { k: kc, v: vc } => {
                 kc.append(&k)?;
                 vc.append(&v)?;
+                (kc.current_data()?, vc.current_data()?)
             }
             Self::Rotating { k: kc, v: vc } => {
-                kc.append(&k)?;
-                vc.append(&v)?;
+                let out_k = kc.append(&k)?;
+                let out_v = vc.append(&v)?;
+                (Some(out_k), Some(out_v))
             }
-        }
-        let (out_k, out_v) = match self {
-            Self::Normal { k, v } => (k.current_data()?, v.current_data()?),
-            Self::Rotating { k, v } => (k.current_data()?, v.current_data()?),
         };
         let k = match out_k {
             None => {
@@ -404,11 +403,16 @@ impl KvCache {
             }
         }
     }
+
+    pub fn is_rotating(&self) -> bool {
+        matches!(self, Self::Rotating { .. })
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct NormalCache(pub Vec<KvCache>);
 
+#[derive(Debug)]
 pub enum NormalCacheType {
     Normal { max_seq_len: usize },
     SlidingWindow { window: usize },
@@ -531,9 +535,10 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         };
 
         let mut caches = Vec::new();
-        for (k_cache, v_cache) in new_k_cache.into_iter().zip(new_v_cache) {
+        for (layer_idx, (k_cache, v_cache)) in new_k_cache.into_iter().zip(new_v_cache).enumerate()
+        {
             // Use this for the various parameters. Assumes all seqs are from one model.
-            match seq0_cache[0].as_ref().unwrap() {
+            match seq0_cache[layer_idx].as_ref().unwrap() {
                 KvCache::Normal { k: old_k, .. } => {
                     let template_cache_dim = old_k.dim;
                     let template_cache_csl = old_k.current_seq_len;
@@ -694,7 +699,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
             None
         };
 
-        let old_cache = pipeline.cache().normal().0[0].clone();
+        let old_caches = pipeline.cache().normal().0.clone();
 
         for (layer_idx, layer) in pipeline.cache().normal().0.iter_mut().enumerate() {
             if !load_preallocated_cache {
@@ -731,7 +736,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
             };
 
             // Use this for the various parameters. Assumes all seqs are from one model.
-            match &old_cache {
+            match &old_caches[layer_idx] {
                 KvCache::Normal { k, .. } => {
                     let template_cache_dim = k.dim;
                     let template_cache_msl = k.max_seq_len;

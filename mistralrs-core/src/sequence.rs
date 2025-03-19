@@ -166,6 +166,7 @@ pub struct Sequence {
     sequence_stepping_type: SeqStepType,
     pub(crate) return_raw_logits: bool,
     token_offset: usize,
+    eos_tokens: Vec<u32>,
 
     // Image generation
     image_gen_response_format: Option<ImageGenerationResponseFormat>,
@@ -286,6 +287,7 @@ impl Sequence {
         seq_preallocated_cache: Option<(Tensor, Tensor)>,
         //
         return_raw_logits: bool,
+        eos_tokens: Vec<u32>,
     ) -> Self {
         let prompt_len = tokens.len();
         let mut custom_metadata = if let Some(block_size) = block_size {
@@ -352,6 +354,7 @@ impl Sequence {
             cached_vid_thw: None,
             return_raw_logits,
             token_offset: 0,
+            eos_tokens,
         }
     }
 
@@ -812,6 +815,10 @@ impl Sequence {
 
     pub fn get_diffusion_diffusion_params(&self) -> Option<DiffusionGenerationParams> {
         self.diffusion_params.clone()
+    }
+
+    pub fn eos_tokens(&self) -> &[u32] {
+        &self.eos_tokens
     }
 }
 

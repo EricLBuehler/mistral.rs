@@ -257,9 +257,10 @@ trait LoadTensors {
                 if !make_dummy_predicate(&load_name) {
                     let dev = match get_device_for_tensor(load_name.clone()) {
                         DeviceForLoadTensor::Base => base_device,
-                        DeviceForLoadTensor::Idx(i) => {
-                            layer_devices[i].as_ref().unwrap_or(base_device)
-                        }
+                        DeviceForLoadTensor::Idx(i) => layer_devices
+                            .get(i)
+                            .and_then(|d| d.as_ref())
+                            .unwrap_or(base_device),
                     };
                     // If making a dummy, don't add the tensor. `mistralrs_quant` handles this!
                     let tensor = tensors.load_name(&load_name, dev, dtype)?;
