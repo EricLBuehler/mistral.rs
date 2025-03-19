@@ -23,6 +23,11 @@ maturin build -o wheels-accelerate -m mistralrs-pyo3/Cargo.toml --interpreter py
 
 # WINDOWS: x86_64 Manylinux, Windows
 
+docker build -t wheelmaker:latest -f Dockerfile.manylinux .
+docker run --rm -v .:/io wheelmaker build --release -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.10
+docker run --rm -v .:/io wheelmaker build --release -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.11
+docker run --rm -v .:/io wheelmaker build --release -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.12
+
 maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.10
 maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.11
 maturin build -o wheels-cpu -m mistralrs-pyo3/Cargo.toml --interpreter python3.12

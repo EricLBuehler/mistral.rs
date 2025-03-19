@@ -116,6 +116,7 @@ impl SingleCache {
             let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
             self.all_data = Some(ad);
         };
+
         // Expand kv cache
         if self.current_seq_len + seq_len > self.capacity_seq_len {
             let diff = self.current_seq_len + seq_len - self.capacity_seq_len;
@@ -134,7 +135,9 @@ impl SingleCache {
             ad.slice_set(self.all_data.as_ref().unwrap(), self.dim, 0)?;
             self.all_data = Some(ad);
         }
+
         let ad = self.all_data.as_mut().unwrap();
+
         ad.slice_set(src, self.dim, self.current_seq_len)?;
         self.current_seq_len += seq_len;
         Ok(())
@@ -152,16 +155,18 @@ pub struct RotatingCache {
     // max_seq_len is the size of the rotating buffer, it is actually allowed for the full
     // sequence to grow past this limit.
     pub max_seq_len: usize,
+    pub capacity_seq_len: usize,
 }
 
 impl RotatingCache {
-    pub fn new(dim: usize, max_seq_len: usize) -> Self {
+    pub fn new(dim: usize, max_seq_len: usize, capacity_seq_len: usize) -> Self {
         Self {
             all_data: None,
             dim,
             offset: 0,
             current_seq_len: 0,
             max_seq_len,
+            capacity_seq_len,
         }
     }
 
@@ -224,10 +229,34 @@ impl RotatingCache {
         // self.all_data.get_or_insert_with.
         if self.all_data.is_none() {
             let mut shape = src.dims().to_vec();
-            shape[self.dim] = self.max_seq_len;
+            shape[self.dim] = self.capacity_seq_len;
             let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
             self.all_data = Some(ad)
         };
+
+        // Expand kv cache, this case is a little more complex.
+        if (self.current_seq_len + seq_len > self.capacity_seq_len
+            && self.current_seq_len + seq_len < self.max_seq_len)
+            || self.current_seq_len == 0
+        {
+            let diff = self.current_seq_len + seq_len - self.capacity_seq_len;
+            let n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
+            self.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
+            self.capacity_seq_len = self.capacity_seq_len.min(self.max_seq_len);
+            if self.capacity_seq_len > self.max_seq_len {
+                candle_core::bail!(
+                    "kv-cache: requested capacity ({}) above max seq len ({})",
+                    self.capacity_seq_len,
+                    self.max_seq_len
+                )
+            }
+            let mut shape = src.dims().to_vec();
+            shape[self.dim] = self.capacity_seq_len;
+            let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
+            ad.slice_set(self.all_data.as_ref().unwrap(), self.dim, 0)?;
+            self.all_data = Some(ad);
+        }
+
         let ad = self.all_data.as_mut().unwrap();
 
         self.current_seq_len += seq_len;
@@ -278,9 +307,9 @@ impl KvCache {
         Self::Normal { k, v }
     }
 
-    pub fn new_rotating(dim: usize, sliding_window: usize) -> Self {
-        let k = RotatingCache::new(dim, sliding_window);
-        let v = RotatingCache::new(dim, sliding_window);
+    pub fn new_rotating(dim: usize, sliding_window: usize, capacity_seq_len: usize) -> Self {
+        let k = RotatingCache::new(dim, sliding_window, capacity_seq_len);
+        let v = RotatingCache::new(dim, sliding_window, capacity_seq_len);
         Self::Rotating { k, v }
     }
 
@@ -409,7 +438,8 @@ impl NormalCache {
             Some(sliding_window) => Arc::new(Mutex::new(Self(vec![
                 KvCache::new_rotating(
                     2,
-                    sliding_window
+                    sliding_window,
+                    Self::CACHE_GROW_SIZE
                 );
                 len
             ]))),
@@ -432,7 +462,7 @@ impl NormalCache {
                     caches.push(KvCache::new_normal(2, max_seq_len, Self::CACHE_GROW_SIZE));
                 }
                 NormalCacheType::SlidingWindow { window } => {
-                    caches.push(KvCache::new_rotating(2, window));
+                    caches.push(KvCache::new_rotating(2, window, Self::CACHE_GROW_SIZE));
                 }
             }
         }
@@ -532,6 +562,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     let template_cache_csl = old_k.current_seq_len;
                     let template_cache_msl = old_k.max_seq_len;
                     let template_cache_offset = old_k.offset;
+                    let template_cache_capsl = old_k.capacity_seq_len;
 
                     caches.push(KvCache::Rotating {
                         k: RotatingCache {
@@ -540,6 +571,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             offset: template_cache_offset,
+                            capacity_seq_len: template_cache_capsl,
                         },
                         v: RotatingCache {
                             all_data: v_cache.map(|x| x.contiguous().unwrap()),
@@ -547,6 +579,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             offset: template_cache_offset,
+                            capacity_seq_len: template_cache_capsl,
                         },
                     });
                 }
@@ -620,6 +653,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 current_seq_len: cache_k.current_seq_len,
                                 max_seq_len: cache_k.max_seq_len,
                                 offset: cache_k.offset,
+                                capacity_seq_len: cache_k.capacity_seq_len,
                             },
                             v: RotatingCache {
                                 all_data: Some(v),
@@ -627,6 +661,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 current_seq_len: cache_v.current_seq_len,
                                 max_seq_len: cache_v.max_seq_len,
                                 offset: cache_v.offset,
+                                capacity_seq_len: cache_v.capacity_seq_len,
                             },
                         });
                     }
@@ -731,6 +766,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: 0,
                             max_seq_len: template_cache_msl,
                             offset: 0,
+                            capacity_seq_len: 0,
                         },
                         v: RotatingCache {
                             all_data: None,
@@ -738,6 +774,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: 0,
                             max_seq_len: template_cache_msl,
                             offset: 0,
+                            capacity_seq_len: 0,
                         },
                     };
                     *layer = cache;

@@ -1546,6 +1546,7 @@ struct Phi3BasicConfig {
     quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     tie_word_embeddings: bool,
+    partial_rotary_factor: Option<f64>,
 }
 
 impl Phi3BasicConfig {
@@ -1570,6 +1571,7 @@ impl Phi3BasicConfig {
             sliding_window: basic_config.sliding_window,
             quantization_config: basic_config.quantization_config,
             tie_word_embeddings: basic_config.tie_word_embeddings,
+            partial_rotary_factor: basic_config.partial_rotary_factor,
         })
     }
 }
