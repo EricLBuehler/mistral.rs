@@ -597,7 +597,10 @@
 <a href="#596" id="596">596</a>
 <a href="#597" id="597">597</a>
 <a href="#598" id="598">598</a>
-<a href="#599" id="599">599</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#599" id="599">599</a>
+<a href="#600" id="600">600</a>
+<a href="#601" id="601">601</a>
+<a href="#602" id="602">602</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     any::Any,
     fs::{<span class="self">self</span>, File},
     io::Read,
@@ -1055,6 +1058,7 @@
                         dummy_sampler.clone(),
                         dummy_group.clone(),
                         images,
+                        target.get_metadata().eos_tok.clone(),
                     ));
                 }
                 <span class="kw">let </span><span class="kw-2">mut </span>input_seqs = seqs.iter_mut().collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
@@ -1165,6 +1169,7 @@
     dummy_sampler: Sampler,
     dummy_group: Arc&lt;tokio::sync::Mutex&lt;SequenceGroup&gt;&gt;,
     images: <span class="prelude-ty">Option</span>&lt;Vec&lt;DynamicImage&gt;&gt;,
+    eos_toks: Vec&lt;u32&gt;,
 ) -&gt; Sequence {
     Sequence::new_waiting(
         tokens,
@@ -1194,6 +1199,7 @@
         <span class="prelude-val">None</span>,
         <span class="prelude-val">None</span>,
         <span class="bool-val">false</span>,
+        eos_toks,
     )
 }
 </code></pre></div></section></main></body></html>

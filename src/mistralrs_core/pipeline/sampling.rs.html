@@ -453,7 +453,8 @@
 <a href="#452" id="452">452</a>
 <a href="#453" id="453">453</a>
 <a href="#454" id="454">454</a>
-<a href="#455" id="455">455</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
+<a href="#455" id="455">455</a>
+<a href="#456" id="456">456</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
@@ -826,8 +827,9 @@
                 }
             } <span class="kw">else if </span>step_res.is_stop() {
                 <span class="kw">let </span><span class="kw-2">mut </span>acc = <span class="macro">vec!</span>[-f32::INFINITY; logits.shape().dims1().unwrap()];
-                <span class="kw">let </span>trie = llg.tok_trie();
-                acc[trie.eos_token() <span class="kw">as </span>usize] = <span class="number">0.0</span>;
+                <span class="kw">for </span>eos_tok <span class="kw">in </span>seq.eos_tokens() {
+                    acc[<span class="kw-2">*</span>eos_tok <span class="kw">as </span>usize] = <span class="number">0.0</span>;
+                }
                 <span class="prelude-val">Some</span>(acc)
             } <span class="kw">else </span>{
                 <span class="prelude-val">None

@@ -1002,7 +1002,14 @@
 <a href="#1001" id="1001">1001</a>
 <a href="#1002" id="1002">1002</a>
 <a href="#1003" id="1003">1003</a>
-<a href="#1004" id="1004">1004</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
+<a href="#1004" id="1004">1004</a>
+<a href="#1005" id="1005">1005</a>
+<a href="#1006" id="1006">1006</a>
+<a href="#1007" id="1007">1007</a>
+<a href="#1008" id="1008">1008</a>
+<a href="#1009" id="1009">1009</a>
+<a href="#1010" id="1010">1010</a>
+<a href="#1011" id="1011">1011</a></pre></div><pre class="rust"><code><span class="kw">use crate</span>::{
     get_mut_group,
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
@@ -1170,6 +1177,7 @@
     sequence_stepping_type: SeqStepType,
     <span class="kw">pub</span>(<span class="kw">crate</span>) return_raw_logits: bool,
     token_offset: usize,
+    eos_tokens: Vec&lt;u32&gt;,
 
     <span class="comment">// Image generation
     </span>image_gen_response_format: <span class="prelude-ty">Option</span>&lt;ImageGenerationResponseFormat&gt;,
@@ -1290,6 +1298,7 @@
         </span>seq_preallocated_cache: <span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
         <span class="comment">//
         </span>return_raw_logits: bool,
+        eos_tokens: Vec&lt;u32&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>prompt_len = tokens.len();
         <span class="kw">let </span><span class="kw-2">mut </span>custom_metadata = <span class="kw">if let </span><span class="prelude-val">Some</span>(block_size) = block_size {
@@ -1356,6 +1365,7 @@
             cached_vid_thw: <span class="prelude-val">None</span>,
             return_raw_logits,
             token_offset: <span class="number">0</span>,
+            eos_tokens,
         }
     }
 
@@ -1816,6 +1826,10 @@
 
     <span class="kw">pub fn </span>get_diffusion_diffusion_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DiffusionGenerationParams&gt; {
         <span class="self">self</span>.diffusion_params.clone()
+    }
+
+    <span class="kw">pub fn </span>eos_tokens(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[u32] {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.eos_tokens
     }
 }
 

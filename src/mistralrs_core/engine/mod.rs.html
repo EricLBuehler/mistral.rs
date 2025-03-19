@@ -1073,7 +1073,13 @@
 <a href="#1072" id="1072">1072</a>
 <a href="#1073" id="1073">1073</a>
 <a href="#1074" id="1074">1074</a>
-<a href="#1075" id="1075">1075</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
+<a href="#1075" id="1075">1075</a>
+<a href="#1076" id="1076">1076</a>
+<a href="#1077" id="1077">1077</a>
+<a href="#1078" id="1078">1078</a>
+<a href="#1079" id="1079">1079</a>
+<a href="#1080" id="1080">1080</a>
+<a href="#1081" id="1081">1081</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>interprocess::local_socket::{traits::Listener, ListenerOptions};
 <span class="kw">use </span>llguidance::toktrie::TokEnv;
@@ -1927,6 +1933,11 @@
                 .clone()
                 .map(|conf| conf.block_size);
 
+            <span class="kw">let </span>eos_toks = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
+                .get_metadata()
+                .eos_tok
+                .clone();
+
             <span class="kw">let </span>seq_preallocated_cache = <span class="kw">if </span><span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).do_preallocated_cache()
             {
                 <span class="kw">let </span>metadata = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline).get_metadata();
@@ -2033,6 +2044,7 @@
                 diffusion_params.clone(),
                 seq_preallocated_cache,
                 request.return_raw_logits,
+                eos_toks,
             );
             <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
                 seq.prefill_v2(

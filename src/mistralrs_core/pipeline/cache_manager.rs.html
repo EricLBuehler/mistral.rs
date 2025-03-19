@@ -1101,7 +1101,12 @@
 <a href="#1100" id="1100">1100</a>
 <a href="#1101" id="1101">1101</a>
 <a href="#1102" id="1102">1102</a>
-<a href="#1103" id="1103">1103</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
+<a href="#1103" id="1103">1103</a>
+<a href="#1104" id="1104">1104</a>
+<a href="#1105" id="1105">1105</a>
+<a href="#1106" id="1106">1106</a>
+<a href="#1107" id="1107">1107</a>
+<a href="#1108" id="1108">1108</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::{Arc, Mutex, MutexGuard};
 
 <span class="kw">use </span>candle_core::{<span class="prelude-ty">Result</span>, Tensor, D};
 
@@ -1322,7 +1327,8 @@
                 <span class="self">self</span>.max_seq_len
             );
         }
-        <span class="self">self</span>.current_seq_len = len % <span class="self">self</span>.max_seq_len;
+        <span class="self">self</span>.current_seq_len = len;
+        <span class="self">self</span>.offset = len % <span class="self">self</span>.max_seq_len;
         <span class="prelude-val">Ok</span>(())
     }
 
@@ -1433,19 +1439,17 @@
     <span class="kw">pub fn </span>append(<span class="kw-2">&amp;mut </span><span class="self">self</span>, k: <span class="kw-2">&amp;</span>Tensor, v: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
         <span class="kw">let </span>k = k.contiguous()<span class="question-mark">?</span>;
         <span class="kw">let </span>v = v.contiguous()<span class="question-mark">?</span>;
-        <span class="kw">match </span><span class="self">self </span>{
+        <span class="kw">let </span>(out_k, out_v) = <span class="kw">match </span><span class="self">self </span>{
             <span class="self">Self</span>::Normal { k: kc, v: vc } =&gt; {
                 kc.append(<span class="kw-2">&amp;</span>k)<span class="question-mark">?</span>;
                 vc.append(<span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
+                (kc.current_data()<span class="question-mark">?</span>, vc.current_data()<span class="question-mark">?</span>)
             }
             <span class="self">Self</span>::Rotating { k: kc, v: vc } =&gt; {
-                kc.append(<span class="kw-2">&amp;</span>k)<span class="question-mark">?</span>;
-                vc.append(<span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
+                <span class="kw">let </span>out_k = kc.append(<span class="kw-2">&amp;</span>k)<span class="question-mark">?</span>;
+                <span class="kw">let </span>out_v = vc.append(<span class="kw-2">&amp;</span>v)<span class="question-mark">?</span>;
+                (<span class="prelude-val">Some</span>(out_k), <span class="prelude-val">Some</span>(out_v))
             }
-        }
-        <span class="kw">let </span>(out_k, out_v) = <span class="kw">match </span><span class="self">self </span>{
-            <span class="self">Self</span>::Normal { k, v } =&gt; (k.current_data()<span class="question-mark">?</span>, v.current_data()<span class="question-mark">?</span>),
-            <span class="self">Self</span>::Rotating { k, v } =&gt; (k.current_data()<span class="question-mark">?</span>, v.current_data()<span class="question-mark">?</span>),
         };
         <span class="kw">let </span>k = <span class="kw">match </span>out_k {
             <span class="prelude-val">None </span>=&gt; {
@@ -1507,12 +1511,17 @@
             }
         }
     }
+
+    <span class="kw">pub fn </span>is_rotating(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="macro">matches!</span>(<span class="self">self</span>, <span class="self">Self</span>::Rotating { .. })
+    }
 }
 
 <span class="attr">#[derive(Debug, Clone)]
 </span><span class="kw">pub struct </span>NormalCache(<span class="kw">pub </span>Vec&lt;KvCache&gt;);
 
-<span class="kw">pub enum </span>NormalCacheType {
+<span class="attr">#[derive(Debug)]
+</span><span class="kw">pub enum </span>NormalCacheType {
     Normal { max_seq_len: usize },
     SlidingWindow { window: usize },
 }
@@ -1634,9 +1643,10 @@
         };
 
         <span class="kw">let </span><span class="kw-2">mut </span>caches = Vec::new();
-        <span class="kw">for </span>(k_cache, v_cache) <span class="kw">in </span>new_k_cache.into_iter().zip(new_v_cache) {
+        <span class="kw">for </span>(layer_idx, (k_cache, v_cache)) <span class="kw">in </span>new_k_cache.into_iter().zip(new_v_cache).enumerate()
+        {
             <span class="comment">// Use this for the various parameters. Assumes all seqs are from one model.
-            </span><span class="kw">match </span>seq0_cache[<span class="number">0</span>].as_ref().unwrap() {
+            </span><span class="kw">match </span>seq0_cache[layer_idx].as_ref().unwrap() {
                 KvCache::Normal { k: old_k, .. } =&gt; {
                     <span class="kw">let </span>template_cache_dim = old_k.dim;
                     <span class="kw">let </span>template_cache_csl = old_k.current_seq_len;
@@ -1797,7 +1807,7 @@
             <span class="prelude-val">None
         </span>};
 
-        <span class="kw">let </span>old_cache = pipeline.cache().normal().<span class="number">0</span>[<span class="number">0</span>].clone();
+        <span class="kw">let </span>old_caches = pipeline.cache().normal().<span class="number">0</span>.clone();
 
         <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span>pipeline.cache().normal().<span class="number">0</span>.iter_mut().enumerate() {
             <span class="kw">if </span>!load_preallocated_cache {
@@ -1834,7 +1844,7 @@
             };
 
             <span class="comment">// Use this for the various parameters. Assumes all seqs are from one model.
-            </span><span class="kw">match </span><span class="kw-2">&amp;</span>old_cache {
+            </span><span class="kw">match </span><span class="kw-2">&amp;</span>old_caches[layer_idx] {
                 KvCache::Normal { k, .. } =&gt; {
                     <span class="kw">let </span>template_cache_dim = k.dim;
                     <span class="kw">let </span>template_cache_msl = k.max_seq_len;
