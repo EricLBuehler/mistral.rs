@@ -330,19 +330,17 @@ impl KvCache {
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
         let k = k.contiguous()?;
         let v = v.contiguous()?;
-        match self {
+        let (out_k, out_v) = match self {
             Self::Normal { k: kc, v: vc } => {
                 kc.append(&k)?;
                 vc.append(&v)?;
+                (kc.current_data()?, vc.current_data()?)
             }
             Self::Rotating { k: kc, v: vc } => {
-                kc.append(&k)?;
-                vc.append(&v)?;
+                let out_k = kc.append(&k)?;
+                let out_v = vc.append(&v)?;
+                (Some(out_k), Some(out_v))
             }
-        }
-        let (out_k, out_v) = match self {
-            Self::Normal { k, v } => (k.current_data()?, v.current_data()?),
-            Self::Rotating { k, v } => (k.current_data()?, v.current_data()?),
         };
         let k = match out_k {
             None => {
