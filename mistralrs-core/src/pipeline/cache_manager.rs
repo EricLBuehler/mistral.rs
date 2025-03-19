@@ -219,7 +219,8 @@ impl RotatingCache {
                 self.max_seq_len
             );
         }
-        self.current_seq_len = len % self.max_seq_len;
+        self.current_seq_len = len;
+        self.offset = len % self.max_seq_len;
         Ok(())
     }
 

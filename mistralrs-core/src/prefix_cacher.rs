@@ -222,7 +222,6 @@ impl PrefixCacheManagerV2 {
         toks: &[u32],
         contains_images: bool,
     ) -> Result<Option<MatchingCache>> {
-        return Ok(None);
         if self.no_prefix_cache || toks.is_empty() || contains_images {
             return Ok(None);
         }

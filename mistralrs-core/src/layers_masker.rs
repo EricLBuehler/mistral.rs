@@ -169,9 +169,13 @@ impl CausalMasker {
         if sliding_window.is_none() {
             return self.make_causal_mask_matrix(input_ids, cache, dtype, n_attn_heads);
         }
-        let sliding_window = sliding_window.unwrap();
-        let past_kv_len = cache.get_past_kv_len()?;
         let (_b_sz, tgt_len) = input_ids.dims2()?;
+        let sliding_window = sliding_window.unwrap();
+        // Compare the past KV len to the sliding window size. If the past kv len is 0 (no prefix cache), then this will be 0.
+        // Otherwise, this will be the number required such that the mask fits the size of the k/v seqlen (usually sliding window)
+        let past_kv_len = cache
+            .get_past_kv_len()?
+            .min(sliding_window.saturating_sub(tgt_len));
         if tgt_len == 1 {
             return Ok(None);
         }
