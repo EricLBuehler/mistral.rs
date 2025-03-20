@@ -6,7 +6,7 @@ use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -25,7 +25,7 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     pub(crate) vocab_size: usize,
     pub(crate) hidden_size: usize,
