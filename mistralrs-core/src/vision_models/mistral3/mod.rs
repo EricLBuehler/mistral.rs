@@ -3,11 +3,14 @@
 use crate::{
     layers::{self, Activation, RmsNorm},
     models,
-    ops::SplitOp,
+    ops::{NonZeroOp, SplitOp},
     paged_attention::AttentionImplementation,
-    pipeline::NormalLoadingMetadata,
+    pipeline::{
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        NormalLoadingMetadata,
+    },
 };
-use candle_core::{Result, Tensor, D};
+use candle_core::{DType, Result, Tensor, D};
 use candle_nn::{Linear, Module};
 use config::Mistral3Config;
 use mistralrs_quant::ShardedVarBuilder;
@@ -140,6 +143,7 @@ pub struct Mistral3Model {
     text_model: Mistral,
     vision_model: VisionModel,
     mmproj: Mistral3MultiModalProjector,
+    cfg: Mistral3Config,
 }
 
 impl Mistral3Model {
@@ -167,6 +171,7 @@ impl Mistral3Model {
             vision_model,
             text_model,
             mmproj,
+            cfg: cfg.clone(),
         })
     }
 
@@ -181,5 +186,50 @@ impl Mistral3Model {
         let selected_image_feature = image_outputs;
         self.mmproj
             .forward(&selected_image_feature.squeeze(0)?, image_sizes)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        image_sizes: Option<Vec<(usize, usize)>>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        let mut input_embeds = self.text_model.get_input_embeddings(input_ids)?;
+
+        if let Some(pixel_values) = pixel_values {
+            let image_sizes = image_sizes.unwrap();
+            let image_features = self.get_image_features(&pixel_values, image_sizes)?;
+
+            let special_image_mask = input_ids
+                .eq(self.cfg.image_token_index as f64)?
+                .unsqueeze(D::Minus1)?
+                .broadcast_as(input_embeds.shape().clone())?
+                .to_dtype(DType::U32)?;
+
+            let mask_flat = special_image_mask.flatten_all()?;
+            let mut x_flat = input_embeds.flatten_all()?;
+            let src_flat = image_features.flatten_all()?;
+
+            let indices = mask_flat.nonzero()?.squeeze(1)?;
+            let current_vals = x_flat.gather(&indices, 0)?;
+            let diff = (src_flat - current_vals)?;
+            x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+
+            input_embeds = x_flat.reshape(input_embeds.shape())?;
+        }
+
+        self.text_model.forward_embeds(
+            input_ids,
+            input_embeds,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
     }
 }

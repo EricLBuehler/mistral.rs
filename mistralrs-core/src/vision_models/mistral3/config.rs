@@ -1,4 +1,3 @@
-use either::Either;
 use serde::Deserialize;
 
 use crate::{layers::Activation, models::mistral, serde_default_fn};
