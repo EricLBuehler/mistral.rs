@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use candle_core::{DType, Device, Module, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use mistralrs_quant::{linear_b, QuantMethod, ShardedVarBuilder};
 
-use crate::layers::{self, RmsNorm};
+use crate::layers::{self, GetFloatInfo, RmsNorm};
 
 fn default_act() -> candle_nn::Activation {
     candle_nn::Activation::Silu
@@ -295,6 +295,7 @@ pub struct VisionModel {
     transformer: Transformer,
     patch_positional_embedding: RotaryEmbedding,
     max_image_width: u32,
+    patch_size: usize,
 }
 
 impl VisionModel {
@@ -321,6 +322,7 @@ impl VisionModel {
             transformer,
             patch_positional_embedding,
             max_image_width,
+            patch_size: cfg.patch_size,
         })
     }
 
@@ -337,19 +339,89 @@ impl VisionModel {
         Ok(ids)
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn generate_block_attention_mask(
+        &self,
+        patch_embeds_list: Vec<usize>,
+        patch_embeds: &Tensor,
+    ) -> Result<Tensor> {
+        let seq_len = patch_embeds.dim(1)?;
+        let mut causal_mask = (Tensor::ones(
+            (seq_len, seq_len),
+            patch_embeds.dtype(),
+            patch_embeds.device(),
+        )? * patch_embeds.dtype().finfo()?.min)?;
+
+        let block_end_idx: Vec<usize> = patch_embeds_list.iter().fold(Vec::new(), |mut acc, &x| {
+            let new_sum = x + acc.last().copied().unwrap_or(0);
+            acc.push(new_sum);
+            acc
+        });
+        let block_start_idx: Vec<usize> = {
+            let mut extended = vec![0];
+            extended.extend_from_slice(&patch_embeds_list[..patch_embeds_list.len() - 1]);
+            extended.into_iter().fold(Vec::new(), |mut acc, x| {
+                let new_sum = x + acc.last().copied().unwrap_or(0);
+                acc.push(new_sum);
+                acc
+            })
+        };
+        for (start, end) in block_start_idx.into_iter().zip(block_end_idx) {
+            causal_mask = causal_mask.slice_assign(
+                &[&(start..end), &(start..end)],
+                &Tensor::zeros(
+                    (end - start, end - start),
+                    causal_mask.dtype(),
+                    causal_mask.device(),
+                )?,
+            )?;
+        }
+
+        causal_mask
+            .reshape((1, 1, causal_mask.dim(0)?, causal_mask.dim(1)?))?
+            .repeat((patch_embeds.dim(0)?, 1, 1, 1))
+    }
+
+    pub fn forward(&self, xs: &Tensor, image_sizes: Vec<(usize, usize)>) -> Result<Tensor> {
         let patch_embeds = xs.apply(&self.patch_conv)?;
+        let patch_embeds_list = image_sizes
+            .iter()
+            .enumerate()
+            .map(|(i, &size)| {
+                patch_embeds
+                    .i(i)?
+                    .narrow(D::Minus2, 0, size.0 / self.patch_size)?
+                    .narrow(D::Minus1, 0, size.1 / self.patch_size)
+            })
+            .collect::<Result<Vec<Tensor>>>()?;
+        let patch_embeds = Tensor::cat(
+            &patch_embeds_list
+                .iter()
+                .map(|p| p.flatten_from(1)?.t())
+                .collect::<Result<Vec<Tensor>>>()?,
+            0,
+        )?
+        .unsqueeze(0)?;
+        let patch_embeds = patch_embeds.apply(&self.ln_pre)?;
+
         let subsampled_positions = Some(self.position_ids_in_meshgrid(
             patch_embeds.dim(2)?,
             patch_embeds.dim(3)?,
             patch_embeds.device(),
         )?);
-        let patch_embeds = patch_embeds.flatten_from(2)?.t()?.apply(&self.ln_pre)?;
+
+        let attention_mask = self.generate_block_attention_mask(
+            patch_embeds_list
+                .iter()
+                .map(|p| Ok(p.dim(D::Minus2)? * p.dim(D::Minus1)?))
+                .collect::<Result<Vec<usize>>>()?,
+            &patch_embeds,
+        )?;
+
         self.transformer.forward(
             &patch_embeds,
             &self.patch_positional_embedding,
             subsampled_positions.as_ref(),
-            None,
+            Some(&attention_mask),
         )
     }
 }

@@ -13,7 +13,7 @@ pub struct Mistral3Config {
     pub multimodal_projector_bias: bool,
     pub projector_hidden_act: Activation,
     pub spatial_merge_size: usize,
-    pub vision_feature_layer: Either<isize, Vec<isize>>,
+    pub vision_feature_layer: isize,
     #[serde(default = "d_flash_attn")]
     pub use_flash_attn: bool,
     pub text_config: mistral::Config,

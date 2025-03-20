@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use crate::{
     layers::{self, Activation, RmsNorm},
     models,
@@ -8,7 +10,6 @@ use crate::{
 use candle_core::{Result, Tensor, D};
 use candle_nn::{Linear, Module};
 use config::Mistral3Config;
-use either::Either;
 use mistralrs_quant::ShardedVarBuilder;
 use models::mistral::Model as Mistral;
 use vision::VisionModel;
@@ -100,10 +101,11 @@ impl Mistral3MultiModalProjector {
             cfg.text_config.rms_norm_eps,
             vb.pp("norm"),
         )?;
-        let num_feature_layers = match &cfg.vision_feature_layer {
-            Either::Left(_) => 1,
-            Either::Right(r) => r.len(),
-        };
+        // let num_feature_layers = match &cfg.vision_feature_layer {
+        //     Either::Left(_) => 1,
+        //     Either::Right(r) => r.len(),
+        // };
+        let num_feature_layers = 1;
         let linear_1 = layers::linear_b(
             cfg.vision_config.hidden_size * num_feature_layers,
             cfg.text_config.hidden_size,
@@ -158,10 +160,26 @@ impl Mistral3Model {
         )?;
         let mmproj = Mistral3MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
 
+        // For get_image_features, assuming this for best efficiency.
+        assert_eq!(cfg.vision_feature_layer, -1);
+
         Ok(Self {
             vision_model,
             text_model,
             mmproj,
         })
+    }
+
+    fn get_image_features(
+        &self,
+        image_features: &Tensor,
+        image_sizes: Vec<(usize, usize)>,
+    ) -> Result<Tensor> {
+        let image_outputs = self
+            .vision_model
+            .forward(image_features, image_sizes.clone())?;
+        let selected_image_feature = image_outputs;
+        self.mmproj
+            .forward(&selected_image_feature.squeeze(0)?, image_sizes)
     }
 }
