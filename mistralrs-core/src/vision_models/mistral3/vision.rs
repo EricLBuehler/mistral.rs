@@ -289,7 +289,7 @@ impl RotaryEmbedding {
 }
 
 #[derive(Debug, Clone)]
-pub struct VisionModel {
+pub struct Mistral3VisionModel {
     patch_conv: candle_nn::Conv2d,
     ln_pre: RmsNorm,
     transformer: Transformer,
@@ -298,7 +298,7 @@ pub struct VisionModel {
     patch_size: usize,
 }
 
-impl VisionModel {
+impl Mistral3VisionModel {
     pub fn new(cfg: &Mistral3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let conv2d_cfg = candle_nn::Conv2dConfig {
             stride: cfg.patch_size,

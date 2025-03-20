@@ -37,6 +37,7 @@ use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::{self, LLaVAProcessor};
 use crate::vision_models::llava_next::Model as LLaVANext;
 use crate::vision_models::llava_next_inputs_processor::{self, LLaVANextProcessor};
+use crate::vision_models::mistral3::{Mistral3Config, Mistral3Model};
 use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3, PHI3V_CLIP_CONFIG};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
@@ -148,6 +149,8 @@ pub enum VisionLoaderType {
     Qwen2_5VL,
     #[serde(rename = "gemma3")]
     Gemma3,
+    #[serde(rename = "mistral3")]
+    Mistral3,
 }
 
 impl FromStr for VisionLoaderType {
@@ -165,7 +168,8 @@ impl FromStr for VisionLoaderType {
             "phi4mm" => Ok(Self::Phi4MM),
             "qwen2_5vl" => Ok(Self::Qwen2_5VL),
             "gemma3" => Ok(Self::Gemma3),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`.")),
+            "mistral3" => Ok(Self::Mistral3),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`.")),
         }
     }
 }
@@ -3401,6 +3405,226 @@ impl DeviceMappedModelLoader for Gemma3Loader {
             sliding_window: None, // None to be more forgiving, some do not
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+        };
+
+        Ok(Box::new(cfg))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
+}
+
+// ======================== Mistral 3 Loader
+
+/// [`VisionLoader`] for an Mistral 3 model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct Mistral3Loader;
+
+pub struct Mistral3Prefixer;
+
+impl VisionPromptPrefixer for Mistral3Prefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        prompt.to_string()
+    }
+}
+
+impl VisionModelLoader for Mistral3Loader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let mut config: Mistral3Config = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(Mistral3Model::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let config: Mistral3Config = serde_json::from_str(config)?;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        todo!()
+    }
+    fn supports_paged_attention(&self) -> bool {
+        true
+    }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(Mistral3Prefixer)
+    }
+}
+
+impl IsqModelLoader for Mistral3Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+}
+
+impl DeviceMappedModelLoader for Mistral3Loader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
+    ) -> Result<usize> {
+        let cfg: Mistral3Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let AutoDeviceMapParams::Vision {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images: _,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        // TODO: vision!
+
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        // let cfg: Mistral3Config = serde_json::from_str(config)?;
+
+        // let AutoDeviceMapParams::Vision {
+        //     max_seq_len: _,
+        //     max_batch_size: _,
+        //     max_image_shape: _,
+        //     max_num_images: _,
+        // } = params
+        // else {
+        //     anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        // };
+
+        // TODO: vision!
+
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg: Mistral3Config = serde_json::from_str(config)?;
+
+        let elems = {
+            let cfg = &cfg.text_config;
+
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+
+        // TODO: vision
+
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<Vec<usize>> {
+        let cfg: Mistral3Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: Mistral3Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Mistral3Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
         };
 
         Ok(Box::new(cfg))

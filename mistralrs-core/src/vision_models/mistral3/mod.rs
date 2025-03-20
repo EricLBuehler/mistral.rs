@@ -1,21 +1,26 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use std::sync::Arc;
+
 use crate::{
+    amoe::{AnyMoeBaseModelMixin, MlpLayer},
+    device_map::DeviceMapper,
     layers::{self, Activation, RmsNorm},
     models,
     ops::{NonZeroOp, SplitOp},
-    paged_attention::AttentionImplementation,
+    paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        NormalLoadingMetadata,
+        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
+    AnyMoeConfig, AnyMoeExpertType,
 };
-use candle_core::{DType, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
-use config::Mistral3Config;
-use mistralrs_quant::ShardedVarBuilder;
+pub use config::Mistral3Config;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use models::mistral::Model as Mistral;
-use vision::VisionModel;
+use vision::Mistral3VisionModel;
 
 mod config;
 mod vision;
@@ -141,7 +146,7 @@ impl Mistral3MultiModalProjector {
 
 pub struct Mistral3Model {
     text_model: Mistral,
-    vision_model: VisionModel,
+    vision_model: Mistral3VisionModel,
     mmproj: Mistral3MultiModalProjector,
     cfg: Mistral3Config,
 }
@@ -154,10 +159,10 @@ impl Mistral3Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let vision_model = VisionModel::new(&cfg.vision_config, vb.pp("vision_tower"))?;
+        let vision_model = Mistral3VisionModel::new(&cfg.vision_config, vb.pp("vision_tower"))?;
         let text_model = Mistral::new(
             &cfg.text_config,
-            vb.pp("language_model"),
+            vb.pp("text_model"),
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
@@ -231,5 +236,108 @@ impl Mistral3Model {
             metadata,
             flash_params,
         )
+    }
+}
+
+impl IsqModel for Mistral3Model {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        self.text_model.get_layers()
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        todo!()
+    }
+
+    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
+        self.text_model.imatrix_names()
+    }
+}
+
+#[derive(Default)]
+pub struct Mistral3SpecificArgs {
+    pub image_sizes: Option<Vec<(usize, usize)>>,
+}
+
+impl VisionModel for Mistral3Model {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        model_specific_args: Box<dyn std::any::Any>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> candle_core::Result<Tensor> {
+        let Mistral3SpecificArgs { image_sizes } = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `Mistral3SpecificArgs`");
+        self.forward(
+            input_ids,
+            pixel_values,
+            seqlen_offsets,
+            context_lens,
+            image_sizes,
+            metadata,
+            flash_params,
+        )
+    }
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
+        Box::new(Mistral3SpecificArgs::default())
+    }
+    fn cache(&self) -> &EitherCache {
+        self.text_model.cache()
+    }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        self.text_model.cache_mut()
+    }
+    fn device(&self) -> &Device {
+        self.text_model.device()
+    }
+    fn max_seq_len(&self) -> usize {
+        self.text_model.max_seq_len()
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        self.text_model.config()
+    }
+    fn has_conv2d(&self) -> bool {
+        // TODO
+        false
+    }
+}
+
+impl AnyMoeBaseModelMixin for Mistral3Model {
+    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
+        self.text_model.get_mlps()
+    }
+    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        self.text_model.get_mlps_mut()
+    }
+    fn create_anymoe_layers(
+        &mut self,
+        additional_vbs: Vec<ShardedVarBuilder>,
+        config: AnyMoeConfig,
+        (prefix, mlp): (String, String),
+        layers: Vec<usize>,
+        expert_type: AnyMoeExpertType,
+        gate_vb: Option<ShardedVarBuilder>,
+    ) -> Result<()> {
+        self.text_model.create_anymoe_layers(
+            additional_vbs,
+            config,
+            (prefix, mlp),
+            layers,
+            expert_type,
+            gate_vb,
+        )
+    }
+    fn amoe_supported(&self) -> bool {
+        true
     }
 }

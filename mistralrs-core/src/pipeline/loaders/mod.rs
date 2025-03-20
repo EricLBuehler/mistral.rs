@@ -26,8 +26,8 @@ pub use normal_loaders::{
 use tracing::{info, warn};
 pub use vision_loaders::{
     Gemma3Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader,
-    Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, VLlamaLoader, VisionLoaderType,
-    VisionModel, VisionModelLoader,
+    Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, VLlamaLoader,
+    VisionLoaderType, VisionModel, VisionModelLoader,
 };
 
 pub use diffusion_loaders::{
