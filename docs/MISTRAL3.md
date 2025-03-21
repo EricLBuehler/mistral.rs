@@ -1,8 +1,8 @@
-# Gemma 3 Model: [`google/gemma-3-4b-it`](https://huggingface.co/google/gemma-3-4b-it)
+# Mistral 3 Model: [`mistralai/Mistral-Small-3.1-24B-Instruct-2503`](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503)
 
-The Gemma 3 model is a family of multimodal (text+vision) models with 128k context length. The collection can be found [here](https://huggingface.co/collections/google/gemma-3-release-67c6c6f89c4f76621268bb6d), with model sizes ranging from 4B to 27B.
+The Mistral 3 model is a strong multimodal (text+vision) model with 128k context length, function calling, and strong visual understanding.
 
-We support the Gemma 3 Model in the Rust, Python, and HTTP APIs, including ISQ for increased performance.
+We support the Mistral 3 Model in the Rust, Python, and HTTP APIs, including ISQ for increased performance.
 
 The Python and HTTP APIs support sending images as:
 - URL
@@ -12,7 +12,7 @@ The Python and HTTP APIs support sending images as:
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
 ## HTTP server
-You can find this example [here](../examples/server/gemma3.py).
+You can find this example [here](../examples/server/mistral3.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -22,8 +22,8 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Image:**
 
-<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg" alt="Mount Washington" width = "1000" height = "666">
-<h6><a href = "https://www.nhmagazine.com/mount-washington/">Credit</a></h6>
+<img src="https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg">
+<h6><a href = "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg">Credit</a></h6>
 
 **Prompt:**
 ```
@@ -32,11 +32,11 @@ What is this?
 
 **Output:**
 ```
-image shows Mount Washington in New Hampshire, USA. It's a prominent peak in the White Mountains, known for its extreme weather conditions and being the highest peak in the Northeastern United States. The image captures it covered in snow with a dramatic sky above. The structures at the summit are communication towers.
+The image shows a close-up of a vibrant flower with pink petals and a central cluster of yellowish-brown stamens. This flower appears to be from the genus *Gazania*, commonly known as treasure flowers or gazanias. These flowers are known for their daisy-like appearance and bright colors.
 
+Gazania flowers typically have ray florets (the petal-like structures) that can change color based on light conditions—often appearing more vibrant in direct sunlight. They are popular in gardens for their hardiness and ability to thrive in sunny locations with well-drained soil.
 
-
-The winding path visible on the mountain slopes appears to be part of the Mount Washington Auto Road, a historic road that allows vehicles to drive to the summit.
+If there's anything specific about this flower or its care that interests you further, feel free to ask!
 ```
 
 ---
@@ -47,7 +47,7 @@ The winding path visible on the mountain slopes appears to be part of the Mount 
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m google/gemma-3-12b-it -a gemma3
+cargo run --release --features ... -- --port 1234 vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3
 ```
 
 2) Send a request
@@ -63,7 +63,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 
 completion = client.chat.completions.create(
-    model="gemma3",
+    model="mistral3",
     messages=[
         {
             "role": "user",
@@ -97,9 +97,9 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/gemma3/main.rs).
+You can find this example [here](../mistralrs/examples/mistral3/main.rs).
 
-This is a minimal example of running the Gemma 3 model with a dummy image.
+This is a minimal example of running the Mistral 3 model with a dummy image.
 
 ```rust
 use anyhow::Result;
@@ -108,7 +108,7 @@ use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, Visi
 #[tokio::main]
 async fn main() -> Result<()> {
     let model =
-        VisionModelBuilder::new("google/gemma-3-12b-it", VisionLoaderType::Gemma3)
+        VisionModelBuilder::new("mistralai/Mistral-Small-3.1-24B-Instruct-2503", VisionLoaderType::Mistral3)
             .with_isq(IsqType::Q4K)
             .with_logging()
             .build()
@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/gemma3.py).
+You can find this example [here](../examples/python/mistral3.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -153,14 +153,15 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="google/gemma-3-12b-it",
-        arch=VisionArchitecture.Gemma3,
+        model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+        arch=VisionArchitecture.Mistral3,
     ),
+    in_situ_quant="Q4K"
 )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="gemma3",
+        model="mistral3",
         messages=[
             {
                 "role": "user",

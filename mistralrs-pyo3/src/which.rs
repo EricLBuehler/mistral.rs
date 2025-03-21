@@ -56,6 +56,7 @@ pub enum VisionArchitecture {
     Phi4MM,
     Qwen2_5VL,
     Gemma3,
+    Mistral3,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
@@ -72,6 +73,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
             VisionArchitecture::Phi4MM => VisionLoaderType::Phi4MM,
             VisionArchitecture::Qwen2_5VL => VisionLoaderType::Qwen2_5VL,
             VisionArchitecture::Gemma3 => VisionLoaderType::Gemma3,
+            VisionArchitecture::Mistral3 => VisionLoaderType::Mistral3,
         }
     }
 }

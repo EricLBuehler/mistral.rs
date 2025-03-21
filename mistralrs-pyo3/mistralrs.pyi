@@ -95,6 +95,7 @@ class VisionArchitecture(Enum):
     Phi4MM = "phi4mm"
     Qwen2_5VL = "qwen2_5vl"
     Gemma3 = "gemma3"
+    Mistral3 = "mistral3"
 
 @dataclass
 class DiffusionArchitecture(Enum):
