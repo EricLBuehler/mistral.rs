@@ -277,6 +277,7 @@ impl InputsProcessor for Mistral3ImageProcessor {
 }
 
 impl Mistral3ImageProcessor {
+    #[allow(clippy::too_many_arguments)]
     fn resize(
         &self,
         image: &DynamicImage,
@@ -365,7 +366,7 @@ impl ImagePreProcessor for Mistral3ImageProcessor {
                 );
             }
 
-            image_sizes.push((height as u32, width as u32));
+            image_sizes.push((height, width));
         }
 
         images = mistralrs_vision::pad_to_max_image_size(images);
