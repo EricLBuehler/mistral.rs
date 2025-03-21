@@ -909,7 +909,7 @@
 </span><span class="attr">#[allow(clippy::borrowed_box)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_chat_template(
     paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
-    _chat_template_json: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
+    chat_template_json: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
     chat_template_fallback: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
     chat_template_ovrd: <span class="prelude-ty">Option</span>&lt;String&gt;,
 ) -&gt; ChatTemplate {
@@ -948,22 +948,22 @@
         }
         <span class="prelude-val">None </span>=&gt; serde_json::from_str(<span class="kw-2">&amp;</span>template_content.as_ref().unwrap().clone()).unwrap(),
     };
-    <span class="comment">// // Overwrite to use any present `chat_template.json`
-    // if let Some(ChatTemplateValue(chat_template_value)) = &amp;mut template.chat_template {
-    //     if let Some(chat_template_json) = chat_template_json {
-    //         #[derive(Debug, serde::Deserialize)]
-    //         struct AutomaticTemplate {
-    //             chat_template: String,
-    //         }
-    //         let deser: AutomaticTemplate = serde_json::from_str(
-    //             &amp;fs::read_to_string(chat_template_json).expect("Loading chat template failed."),
-    //         )
-    //         .unwrap();
-    //         *chat_template_value = Either::Left(deser.chat_template);
-    //     }
-    // }
+    <span class="comment">// Overwrite to use any present `chat_template.json`, only if there is not one present already.
+    </span><span class="kw">if </span>template.chat_template.is_none() {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(chat_template_json) = chat_template_json {
+            <span class="attr">#[derive(Debug, serde::Deserialize)]
+            </span><span class="kw">struct </span>AutomaticTemplate {
+                chat_template: String,
+            }
+            <span class="kw">let </span>deser: AutomaticTemplate = serde_json::from_str(
+                <span class="kw-2">&amp;</span>fs::read_to_string(chat_template_json).expect(<span class="string">"Loading chat template failed."</span>),
+            )
+            .unwrap();
+            template.chat_template = <span class="prelude-val">Some</span>(ChatTemplateValue(Either::Left(deser.chat_template)));
+        }
+    }
 
-    </span><span class="kw">let </span>processor_conf: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig&gt; = paths
+    <span class="kw">let </span>processor_conf: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig&gt; = paths
         .get_processor_config()
         .as_ref()
         .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());

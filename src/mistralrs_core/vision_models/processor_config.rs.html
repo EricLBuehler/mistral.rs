@@ -7,7 +7,12 @@
 <a href="#6" id="6">6</a>
 <a href="#7" id="7">7</a>
 <a href="#8" id="8">8</a>
-<a href="#9" id="9">9</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde::Deserialize;
+<a href="#9" id="9">9</a>
+<a href="#10" id="10">10</a>
+<a href="#11" id="11">11</a>
+<a href="#12" id="12">12</a>
+<a href="#13" id="13">13</a>
+<a href="#14" id="14">14</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde::Deserialize;
 
 <span class="attr">#[allow(dead_code)]
 #[derive(Deserialize, Debug, Default)]
@@ -15,5 +20,10 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="attr">#[serde(alias = <span class="string">"image_seq_length"</span>)]
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) image_seq_len: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) image_break_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) image_end_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) image_token: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) patch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) spatial_merge_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 }
 </code></pre></div></section></main></body></html>

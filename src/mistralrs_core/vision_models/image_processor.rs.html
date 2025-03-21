@@ -58,7 +58,8 @@
 <a href="#57" id="57">57</a>
 <a href="#58" id="58">58</a>
 <a href="#59" id="59">59</a>
-<a href="#60" id="60">60</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#60" id="60">60</a>
+<a href="#61" id="61">61</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>image::DynamicImage;
@@ -74,7 +75,8 @@
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) pixel_values: Tensor,
     <span class="doccomment">/// Without batch size, safe to unsqueeze &amp; concat in dim0
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) pixel_attention_mask: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-    <span class="kw">pub</span>(<span class="kw">crate</span>) image_sizes: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+    <span class="doccomment">/// (w, h)
+    </span><span class="kw">pub</span>(<span class="kw">crate</span>) image_sizes: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) num_img_tokens: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,
     <span class="doccomment">/// Without batch size, safe to unsqueeze &amp; concat in dim0
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) aspect_ratio_ids: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
@@ -94,7 +96,7 @@
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) pixel_values_list: <span class="prelude-ty">Option</span>&lt;Vec&lt;Tensor&gt;&gt;,
     <span class="doccomment">/// Without batch size, safe to unsqueeze &amp; concat in dim0
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) tgt_sizes: <span class="prelude-ty">Option</span>&lt;Tensor&gt;,
-    <span class="doccomment">/// Without batch size. Per image. (w,h).
+    <span class="doccomment">/// Without batch size. Per image. (h, w)
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) image_sizes_all: <span class="prelude-ty">Option</span>&lt;Vec&lt;(u32, u32)&gt;&gt;,
     <span class="doccomment">/// Without batch size
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) num_crops: <span class="prelude-ty">Option</span>&lt;Vec&lt;usize&gt;&gt;,

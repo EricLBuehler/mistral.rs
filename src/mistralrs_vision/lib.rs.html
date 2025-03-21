@@ -110,7 +110,7 @@
 <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">mod </span>utils;
 
 <span class="kw">pub use </span>ops::{get_resize_image_size, make_pixel_mask, pad};
-<span class="kw">pub use </span>pad::pad_to_max_edge;
+<span class="kw">pub use </span>pad::{pad_to_max_edge, pad_to_max_image_size};
 <span class="kw">pub use </span>transforms::{InterpolateResize, Normalize, Rescale, ToTensor, ToTensorNoNorm};
 
 <span class="doccomment">/// A transform over an image. The input may vary but the output is always a Tensor.

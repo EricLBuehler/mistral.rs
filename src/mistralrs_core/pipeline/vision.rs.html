@@ -993,7 +993,8 @@
 <a href="#992" id="992">992</a>
 <a href="#993" id="993">993</a>
 <a href="#994" id="994">994</a>
-<a href="#995" id="995">995</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#995" id="995">995</a>
+<a href="#996" id="996">996</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -1004,8 +1005,8 @@
     VisionModel, VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
 };
 <span class="kw">use super</span>::{
-    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2_5VLLoader,
-    VisionLoaderType,
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
+    Qwen2_5VLLoader, VisionLoaderType,
 };
 <span class="kw">use </span><span class="kw">crate</span>::device_map::{<span class="self">self</span>, DeviceMapper};
 <span class="kw">use </span><span class="kw">crate</span>::distributed::{<span class="self">self</span>, WorkerTransferData};
@@ -1136,6 +1137,7 @@
             VisionLoaderType::Phi4MM =&gt; Box::new(Phi4MMLoader),
             VisionLoaderType::Qwen2_5VL =&gt; Box::new(Qwen2_5VLLoader),
             VisionLoaderType::Gemma3 =&gt; Box::new(Gemma3Loader),
+            VisionLoaderType::Mistral3 =&gt; Box::new(Mistral3Loader),
         };
         Box::new(VisionLoader {
             inner: loader,

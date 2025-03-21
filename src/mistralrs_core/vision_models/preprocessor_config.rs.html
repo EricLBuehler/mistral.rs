@@ -72,7 +72,8 @@
 <a href="#71" id="71">71</a>
 <a href="#72" id="72">72</a>
 <a href="#73" id="73">73</a>
-<a href="#74" id="74">74</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#74" id="74">74</a>
+<a href="#75" id="75">75</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>candle_core::Result;
 <span class="kw">use </span>image::imageops::FilterType;
@@ -125,6 +126,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) pan_and_scan_max_num_crops: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) pan_and_scan_min_ratio_to_activate: <span class="prelude-ty">Option</span>&lt;f64&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) do_pan_and_scan: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) default_to_square: <span class="prelude-ty">Option</span>&lt;bool&gt;,
 }
 
 <span class="attr">#[allow(dead_code)]
