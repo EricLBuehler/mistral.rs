@@ -18,11 +18,13 @@ use crate::{
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
 pub use config::Mistral3Config;
+pub use inputs_processor::Mistral3Processor;
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use models::mistral::Model as Mistral;
 use vision::Mistral3VisionModel;
 
 mod config;
+mod inputs_processor;
 mod vision;
 
 struct Mistral3PatchMerger {
@@ -44,10 +46,10 @@ impl Mistral3PatchMerger {
         })
     }
 
-    fn forward(&self, image_features: &Tensor, image_sizes: Vec<(usize, usize)>) -> Result<Tensor> {
+    fn forward(&self, image_features: &Tensor, image_sizes: Vec<(u32, u32)>) -> Result<Tensor> {
         let image_sizes = image_sizes
             .iter()
-            .map(|&(h, w)| (h / self.patch_size, w / self.patch_size))
+            .map(|&(h, w)| (h as usize / self.patch_size, w as usize / self.patch_size))
             .collect::<Vec<_>>();
 
         let tokens_per_image = image_sizes.iter().map(|&(h, w)| h * w).collect::<Vec<_>>();
@@ -136,7 +138,7 @@ impl Mistral3MultiModalProjector {
         })
     }
 
-    fn forward(&self, image_features: &Tensor, image_sizes: Vec<(usize, usize)>) -> Result<Tensor> {
+    fn forward(&self, image_features: &Tensor, image_sizes: Vec<(u32, u32)>) -> Result<Tensor> {
         let mut hidden_states = self.norm.forward(image_features)?;
         hidden_states = self.patch_merger.forward(&hidden_states, image_sizes)?;
         hidden_states = self.linear_1.forward(&hidden_states)?.apply(&self.act)?;
@@ -183,7 +185,7 @@ impl Mistral3Model {
     fn get_image_features(
         &self,
         image_features: &Tensor,
-        image_sizes: Vec<(usize, usize)>,
+        image_sizes: Vec<(u32, u32)>,
     ) -> Result<Tensor> {
         let image_outputs = self
             .vision_model
@@ -200,7 +202,7 @@ impl Mistral3Model {
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        image_sizes: Option<Vec<(usize, usize)>>,
+        image_sizes: Option<Vec<(u32, u32)>>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -260,7 +262,7 @@ impl IsqModel for Mistral3Model {
 
 #[derive(Default)]
 pub struct Mistral3SpecificArgs {
-    pub image_sizes: Option<Vec<(usize, usize)>>,
+    pub image_sizes: Option<Vec<(u32, u32)>>,
 }
 
 impl VisionModel for Mistral3Model {

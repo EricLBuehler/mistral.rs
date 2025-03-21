@@ -381,7 +381,7 @@ impl Mistral3VisionModel {
             .repeat((patch_embeds.dim(0)?, 1, 1, 1))
     }
 
-    pub fn forward(&self, xs: &Tensor, image_sizes: Vec<(usize, usize)>) -> Result<Tensor> {
+    pub fn forward(&self, xs: &Tensor, image_sizes: Vec<(u32, u32)>) -> Result<Tensor> {
         let patch_embeds = xs.apply(&self.patch_conv)?;
         let patch_embeds_list = image_sizes
             .iter()
@@ -389,8 +389,8 @@ impl Mistral3VisionModel {
             .map(|(i, &size)| {
                 patch_embeds
                     .i(i)?
-                    .narrow(D::Minus2, 0, size.0 / self.patch_size)?
-                    .narrow(D::Minus1, 0, size.1 / self.patch_size)
+                    .narrow(D::Minus2, 0, size.0 as usize / self.patch_size)?
+                    .narrow(D::Minus1, 0, size.1 as usize / self.patch_size)
             })
             .collect::<Result<Vec<Tensor>>>()?;
         let patch_embeds = Tensor::cat(

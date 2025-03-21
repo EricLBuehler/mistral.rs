@@ -14,6 +14,7 @@ pub(crate) struct PreprocessedImages {
     pub(crate) pixel_values: Tensor,
     /// Without batch size, safe to unsqueeze & concat in dim0
     pub(crate) pixel_attention_mask: Option<Tensor>,
+    /// (w, h)
     pub(crate) image_sizes: Option<(usize, usize)>,
     pub(crate) num_img_tokens: Option<Vec<usize>>,
     /// Without batch size, safe to unsqueeze & concat in dim0
@@ -34,7 +35,7 @@ pub(crate) struct PreprocessedImages {
     pub(crate) pixel_values_list: Option<Vec<Tensor>>,
     /// Without batch size, safe to unsqueeze & concat in dim0
     pub(crate) tgt_sizes: Option<Tensor>,
-    /// Without batch size. Per image. (w,h).
+    /// Without batch size. Per image. (h, w)
     pub(crate) image_sizes_all: Option<Vec<(u32, u32)>>,
     /// Without batch size
     pub(crate) num_crops: Option<Vec<usize>>,
