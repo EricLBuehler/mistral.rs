@@ -366,6 +366,8 @@ impl ImagePreProcessor for Mistral3ImageProcessor {
                 );
             }
 
+            let (width, height) = image.dimensions();
+
             image_sizes.push((height, width));
         }
 

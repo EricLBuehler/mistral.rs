@@ -2597,7 +2597,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
             max_seq_len,
             max_batch_size,
             max_image_shape: _,
-            max_num_images: _,
+            max_num_images,
         } = params
         else {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
@@ -2608,7 +2608,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         let vcfg = &PHI4_MM_VISION_CFG;
 
         let num_patches = (vcfg.image_size / vcfg.patch_size).pow(2);
-        let img_seq_len = num_patches + 1;
+        let img_seq_len = (num_patches + 1) * max_num_images;
 
         let max_text_attn = {
             // This model injects the vision information directly into the input embeddings
@@ -3186,7 +3186,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         prompt_chunksize: usize,
     ) -> Result<usize> {
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
             max_image_shape: _,
             max_num_images,
@@ -3212,7 +3212,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
 
                 let max_text_attn = {
                     // This model injects the vision information directly into the input embeddings
-                    let max_seq_len = img_seq_len + prompt_chunksize;
+                    let max_seq_len = img_seq_len + *max_seq_len;
                     max_batch_size * text_config.num_attention_heads * max_seq_len * max_seq_len
                 };
                 Ok(max_text_attn)
@@ -3489,51 +3489,98 @@ impl IsqModelLoader for Mistral3Loader {
     }
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 impl DeviceMappedModelLoader for Mistral3Loader {
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
-        let cfg = &cfg.text_config;
+        let vcfg = &cfg.vision_config;
+        let tcfg = &cfg.text_config;
 
         let AutoDeviceMapParams::Vision {
-            max_seq_len: _,
+            max_seq_len,
             max_batch_size,
-            max_image_shape: _,
-            max_num_images: _,
+            max_image_shape: (mut height, mut width),
+            max_num_images,
         } = params
         else {
             anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
-        // TODO: vision!
+        let img_seq_len = {
+            // Reshaping algorithm
 
-        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
+            // https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/blob/main/preprocessor_config.json#L29
+            let (max_height, max_width) = (1540, 1540);
+            let ratio = (height as f64 / max_height as f64).max(width as f64 / max_width as f64);
+            if ratio > 1. {
+                height = (height as f64 / ratio).floor() as usize;
+                width = (width as f64 / ratio).floor() as usize;
+            }
+
+            let num_height_tokens = (height - 1) / vcfg.patch_size + 1;
+            let num_width_tokens = (width - 1) / vcfg.patch_size + 1;
+
+            height = num_height_tokens * vcfg.patch_size;
+            width = num_width_tokens * vcfg.patch_size;
+
+            let num_height_tokens = height / vcfg.patch_size;
+            let num_width_tokens = width / vcfg.patch_size;
+
+            (num_width_tokens + 1) * num_height_tokens
+        };
+
+        // This model injects the vision information directly into the input embeddings
+        let max_seq_len = img_seq_len * max_num_images + *max_seq_len;
+        Ok(max_batch_size * tcfg.num_attention_heads * max_seq_len * max_seq_len)
     }
 
     fn non_mapped_max_act_size_elems(
         &self,
-        _config: &str,
-        _params: &AutoDeviceMapParams,
+        config: &str,
+        params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        // let cfg: Mistral3Config = serde_json::from_str(config)?;
+        let cfg: Mistral3Config = serde_json::from_str(config)?;
+        let cfg = &cfg.vision_config;
 
-        // let AutoDeviceMapParams::Vision {
-        //     max_seq_len: _,
-        //     max_batch_size: _,
-        //     max_image_shape: _,
-        //     max_num_images: _,
-        // } = params
-        // else {
-        //     anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
-        // };
+        let AutoDeviceMapParams::Vision {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape: (mut height, mut width),
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
 
-        // TODO: vision!
+        let img_seq_len = {
+            // Reshaping algorithm
 
-        Ok(0)
+            // https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/blob/main/preprocessor_config.json#L29
+            let (max_height, max_width) = (1540, 1540);
+            let ratio = (height as f64 / max_height as f64).max(width as f64 / max_width as f64);
+            if ratio > 1. {
+                height = (height as f64 / ratio).floor() as usize;
+                width = (width as f64 / ratio).floor() as usize;
+            }
+
+            let num_height_tokens = (height - 1) / cfg.patch_size + 1;
+            let num_width_tokens = (width - 1) / cfg.patch_size + 1;
+
+            height = num_height_tokens * cfg.patch_size;
+            width = num_width_tokens * cfg.patch_size;
+
+            let num_height_tokens = height / cfg.patch_size;
+            let num_width_tokens = width / cfg.patch_size;
+
+            (num_width_tokens + 1) * num_height_tokens
+        };
+
+        Ok((max_batch_size * max_num_images) * cfg.num_attention_heads * img_seq_len * img_seq_len)
     }
 
     fn non_mapped_size_in_bytes(
@@ -3544,7 +3591,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
     ) -> Result<usize> {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
 
-        let elems = {
+        let text_elems = {
             let cfg = &cfg.text_config;
 
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
@@ -3557,7 +3604,40 @@ impl DeviceMappedModelLoader for Mistral3Loader {
             embed_tokens + lm_head + norm
         };
 
-        // TODO: vision
+        let vision_elems = {
+            let cfg = &cfg.vision_config;
+
+            let patch_embed = {
+                let conv_cfg = Conv2dConfig {
+                    stride: cfg.patch_size,
+                    ..Default::default()
+                };
+                cfg.num_channels * cfg.hidden_size / conv_cfg.groups
+                    * cfg.patch_size
+                    * cfg.patch_size
+                    * cfg.patch_size
+            };
+            let ln_pre = cfg.hidden_size;
+            let vision_layer = {
+                let attn_norm = cfg.hidden_size;
+                let ffn_norm = cfg.hidden_size;
+
+                let gate = cfg.hidden_size * cfg.intermediate_size;
+                let up = cfg.hidden_size * cfg.intermediate_size;
+                let down = cfg.hidden_size * cfg.intermediate_size;
+
+                let q = cfg.hidden_size * cfg.hidden_size;
+                let k = cfg.hidden_size * cfg.hidden_size;
+                let v = cfg.hidden_size * cfg.hidden_size;
+                let o = cfg.hidden_size * cfg.hidden_size;
+
+                attn_norm + ffn_norm + gate + up + down + q + k + v + o
+            };
+
+            patch_embed + ln_pre + vision_layer * cfg.num_hidden_layers
+        };
+
+        let elems = text_elems + vision_elems;
 
         Ok(elems * dtype.size_in_bytes())
     }
