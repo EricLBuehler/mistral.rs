@@ -309,8 +309,7 @@ impl VisionModel for Mistral3Model {
         self.text_model.config()
     }
     fn has_conv2d(&self) -> bool {
-        // TODO
-        false
+        true
     }
 }
 

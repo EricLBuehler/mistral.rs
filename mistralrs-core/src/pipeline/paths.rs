@@ -363,7 +363,7 @@ pub fn get_model_paths(
 #[allow(clippy::borrowed_box)]
 pub(crate) fn get_chat_template(
     paths: &Box<dyn ModelPaths>,
-    _chat_template_json: &Option<String>,
+    chat_template_json: &Option<String>,
     chat_template_fallback: &Option<String>,
     chat_template_ovrd: Option<String>,
 ) -> ChatTemplate {
@@ -402,20 +402,20 @@ pub(crate) fn get_chat_template(
         }
         None => serde_json::from_str(&template_content.as_ref().unwrap().clone()).unwrap(),
     };
-    // // Overwrite to use any present `chat_template.json`
-    // if let Some(ChatTemplateValue(chat_template_value)) = &mut template.chat_template {
-    //     if let Some(chat_template_json) = chat_template_json {
-    //         #[derive(Debug, serde::Deserialize)]
-    //         struct AutomaticTemplate {
-    //             chat_template: String,
-    //         }
-    //         let deser: AutomaticTemplate = serde_json::from_str(
-    //             &fs::read_to_string(chat_template_json).expect("Loading chat template failed."),
-    //         )
-    //         .unwrap();
-    //         *chat_template_value = Either::Left(deser.chat_template);
-    //     }
-    // }
+    // Overwrite to use any present `chat_template.json`, only if there is not one present already.
+    if template.chat_template.is_none() {
+        if let Some(chat_template_json) = chat_template_json {
+            #[derive(Debug, serde::Deserialize)]
+            struct AutomaticTemplate {
+                chat_template: String,
+            }
+            let deser: AutomaticTemplate = serde_json::from_str(
+                &fs::read_to_string(chat_template_json).expect("Loading chat template failed."),
+            )
+            .unwrap();
+            template.chat_template = Some(ChatTemplateValue(Either::Left(deser.chat_template)));
+        }
+    }
 
     let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
         .get_processor_config()

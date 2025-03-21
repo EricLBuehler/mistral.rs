@@ -3114,7 +3114,6 @@ pub struct Gemma3Prefixer;
 
 impl VisionPromptPrefixer for Gemma3Prefixer {
     fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
-        // TODO vision
         prompt.to_string()
     }
 }
