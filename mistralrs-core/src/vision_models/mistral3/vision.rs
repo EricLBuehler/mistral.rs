@@ -296,6 +296,7 @@ pub struct Mistral3VisionModel {
     patch_positional_embedding: RotaryEmbedding,
     max_image_width: u32,
     patch_size: usize,
+    dtype: DType,
 }
 
 impl Mistral3VisionModel {
@@ -323,20 +324,25 @@ impl Mistral3VisionModel {
             patch_positional_embedding,
             max_image_width,
             patch_size: cfg.patch_size,
+            dtype: vb.dtype(),
         })
     }
 
     fn position_ids_in_meshgrid(
         &self,
-        num_patches_h: usize,
-        num_patches_w: usize,
+        patch_embeds_list: &Vec<Tensor>,
         device: &Device,
     ) -> Result<Tensor> {
-        let idx = Tensor::arange(0, num_patches_h as u32, device)?;
-        let idy = Tensor::arange(0, num_patches_w as u32, device)?;
-        let mesh = Tensor::meshgrid(&[idx, idy], false)?;
-        let ids = (&mesh[0] * (self.max_image_width as f64) + &mesh[1])?.flatten_all()?;
-        Ok(ids)
+        let mut positions = Vec::new();
+        for patch in patch_embeds_list {
+            let (height, width) = (patch.dim(D::Minus2)?, patch.dim(D::Minus1)?);
+            let idx = Tensor::arange(0, height as u32, device)?;
+            let idy = Tensor::arange(0, width as u32, device)?;
+            let mesh = Tensor::meshgrid(&[idx, idy], false)?;
+            let ids = (&mesh[0] * (self.max_image_width as f64) + &mesh[1])?.flatten_all()?;
+            positions.push(ids);
+        }
+        Tensor::cat(&positions, 0)
     }
 
     fn generate_block_attention_mask(
@@ -403,11 +409,8 @@ impl Mistral3VisionModel {
         .unsqueeze(0)?;
         let patch_embeds = patch_embeds.apply(&self.ln_pre)?;
 
-        let subsampled_positions = Some(self.position_ids_in_meshgrid(
-            patch_embeds.dim(2)?,
-            patch_embeds.dim(3)?,
-            patch_embeds.device(),
-        )?);
+        let subsampled_positions =
+            Some(self.position_ids_in_meshgrid(&patch_embeds_list, patch_embeds.device())?);
 
         let attention_mask = self.generate_block_attention_mask(
             patch_embeds_list
@@ -423,5 +426,9 @@ impl Mistral3VisionModel {
             subsampled_positions.as_ref(),
             Some(&attention_mask),
         )
+    }
+
+    pub fn dtype(&self) -> DType {
+        self.dtype
     }
 }

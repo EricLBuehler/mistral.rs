@@ -22,8 +22,12 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
+    serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
+
+serde_default_fn!(bool, use_flash_attn, false);
+serde_default_fn!(bool, tie_word_embeddings, false);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -38,9 +42,11 @@ pub struct Config {
     pub(crate) rms_norm_eps: f64,
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: Option<usize>,
+    #[serde(default = "use_flash_attn")]
     pub(crate) use_flash_attn: bool,
     pub(crate) head_dim: Option<usize>,
     pub(crate) quantization_config: Option<QuantizedConfig>,
+    #[serde(default = "tie_word_embeddings")]
     pub(crate) tie_word_embeddings: bool,
 }
 

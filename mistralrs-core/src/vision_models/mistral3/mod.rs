@@ -161,15 +161,23 @@ impl Mistral3Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let vision_model = Mistral3VisionModel::new(&cfg.vision_config, vb.pp("vision_tower"))?;
+        let vision_model = Mistral3VisionModel::new(
+            &cfg.vision_config,
+            vb.pp("vision_tower")
+                .set_device(normal_loading_metadata.real_device.clone()),
+        )?;
+        let mmproj = Mistral3MultiModalProjector::new(
+            cfg,
+            vb.pp("multi_modal_projector")
+                .set_device(normal_loading_metadata.real_device.clone()),
+        )?;
         let text_model = Mistral::new(
             &cfg.text_config,
-            vb.pp("text_model"),
+            vb.pp("language_model"),
             is_gptx,
             normal_loading_metadata,
             attention_mechanism,
         )?;
-        let mmproj = Mistral3MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
 
         // For get_image_features, assuming this for best efficiency.
         assert_eq!(cfg.vision_feature_layer, -1);
@@ -210,7 +218,10 @@ impl Mistral3Model {
 
         if let Some(pixel_values) = pixel_values {
             let image_sizes = image_sizes.unwrap();
-            let image_features = self.get_image_features(&pixel_values, image_sizes)?;
+            let image_features = self.get_image_features(
+                &pixel_values.to_dtype(self.vision_model.dtype())?,
+                image_sizes,
+            )?;
 
             let special_image_mask = input_ids
                 .eq(self.cfg.image_token_index as f64)?
