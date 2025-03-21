@@ -13,6 +13,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
+    utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
 };
 use candle_core::{DType, Device, Result, Tensor, D};
@@ -144,6 +145,19 @@ impl Mistral3MultiModalProjector {
         hidden_states = self.linear_1.forward(&hidden_states)?.apply(&self.act)?;
         self.linear_2.forward(&hidden_states)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("norm").add(&self.norm);
+        uvb.pp("linear_1").add(&self.linear_1);
+        uvb.pp("linear_2").add(&self.linear_2);
+        uvb.pp("patch_merger")
+            .pp("merging_layer")
+            .add(&self.patch_merger.merging_layer);
+
+        uvb.to_safetensors()
+    }
 }
 
 pub struct Mistral3Model {
@@ -163,8 +177,8 @@ impl Mistral3Model {
     ) -> Result<Self> {
         let vision_model = Mistral3VisionModel::new(
             &cfg.vision_config,
-            vb.pp("vision_tower")
-                .set_device(normal_loading_metadata.real_device.clone()),
+            vb.pp("vision_tower"),
+            &normal_loading_metadata,
         )?;
         let mmproj = Mistral3MultiModalProjector::new(
             cfg,
@@ -259,11 +273,19 @@ impl IsqModel for Mistral3Model {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        self.text_model.get_layers()
+        let (mut tensors, mapper) = self.text_model.get_layers();
+        tensors.extend(self.vision_model.get_layers());
+        (tensors, mapper)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        todo!()
+        let uvb = UnVarBuilder::new();
+        uvb.pp("multi_modal_projector")
+            .extend(self.mmproj.residual_tensors());
+        uvb.pp("language_model")
+            .extend(self.text_model.residual_tensors());
+
+        uvb.to_safetensors()
     }
 
     fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {

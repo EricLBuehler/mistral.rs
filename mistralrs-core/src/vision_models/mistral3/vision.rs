@@ -3,7 +3,10 @@ use std::sync::Arc;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use mistralrs_quant::{linear_b, QuantMethod, ShardedVarBuilder};
 
-use crate::layers::{self, GetFloatInfo, RmsNorm};
+use crate::{
+    layers::{self, GetFloatInfo, RmsNorm},
+    pipeline::NormalLoadingMetadata,
+};
 
 fn default_act() -> candle_nn::Activation {
     candle_nn::Activation::Silu
@@ -96,9 +99,9 @@ impl Attention {
         attention_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let (b, patches, _) = xs.dims3()?;
-        let query_states = self.q_proj.forward(xs)?;
-        let key_states = self.k_proj.forward(xs)?;
-        let value_states = self.v_proj.forward(xs)?;
+        let query_states = self.q_proj.forward_autocast(xs)?;
+        let key_states = self.k_proj.forward_autocast(xs)?;
+        let value_states = self.v_proj.forward_autocast(xs)?;
 
         let shape = (b, patches, self.num_heads, self.head_dim);
         let query_states = query_states.reshape(shape)?.transpose(1, 2)?.contiguous()?;
@@ -116,7 +119,7 @@ impl Attention {
 
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
 
-        self.o_proj.forward(
+        self.o_proj.forward_autocast(
             &attn_weights
                 .matmul(&value_states)?
                 .transpose(1, 2)?
@@ -150,8 +153,9 @@ impl Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.down_proj.forward(
-            &(self.gate_proj.forward(xs)?.apply(&self.act_fn)? * self.up_proj.forward(xs)?)?,
+        self.down_proj.forward_autocast(
+            &(self.gate_proj.forward_autocast(xs)?.apply(&self.act_fn)?
+                * self.up_proj.forward_autocast(xs)?)?,
         )
     }
 }
@@ -165,11 +169,25 @@ struct AttentionLayer {
 }
 
 impl AttentionLayer {
-    fn new(cfg: &Mistral3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let attention_norm = RmsNorm::new(cfg.hidden_size, 1e-5, vb.pp("attention_norm"))?;
+    fn new(
+        cfg: &Mistral3VisionConfig,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: &NormalLoadingMetadata,
+    ) -> Result<Self> {
+        let attention_norm = RmsNorm::new(
+            cfg.hidden_size,
+            1e-5,
+            vb.pp("attention_norm")
+                .set_device(normal_loading_metadata.real_device.clone()),
+        )?;
         let feed_forward = Mlp::new(cfg, vb.pp("feed_forward"))?;
         let attention = Attention::new(cfg, vb.pp("attention"))?;
-        let ffn_norm = RmsNorm::new(cfg.hidden_size, 1e-5, vb.pp("ffn_norm"))?;
+        let ffn_norm = RmsNorm::new(
+            cfg.hidden_size,
+            1e-5,
+            vb.pp("ffn_norm")
+                .set_device(normal_loading_metadata.real_device.clone()),
+        )?;
         Ok(Self {
             attention_norm,
             feed_forward,
@@ -205,11 +223,15 @@ struct Transformer {
 }
 
 impl Transformer {
-    fn new(cfg: &Mistral3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &Mistral3VisionConfig,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: &NormalLoadingMetadata,
+    ) -> Result<Self> {
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let vb = vb.pp("layers");
         for layer_idx in 0..cfg.num_hidden_layers {
-            let layer = AttentionLayer::new(cfg, vb.pp(layer_idx))?;
+            let layer = AttentionLayer::new(cfg, vb.pp(layer_idx), normal_loading_metadata)?;
             layers.push(layer)
         }
         Ok(Self { layers })
@@ -300,7 +322,11 @@ pub struct Mistral3VisionModel {
 }
 
 impl Mistral3VisionModel {
-    pub fn new(cfg: &Mistral3VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
+    pub fn new(
+        cfg: &Mistral3VisionConfig,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: &NormalLoadingMetadata,
+    ) -> Result<Self> {
         let conv2d_cfg = candle_nn::Conv2dConfig {
             stride: cfg.patch_size,
             ..Default::default()
@@ -310,12 +336,21 @@ impl Mistral3VisionModel {
             cfg.hidden_size,
             cfg.patch_size,
             conv2d_cfg,
-            vb.pp("patch_conv"),
+            vb.pp("patch_conv")
+                .set_device(normal_loading_metadata.real_device.clone()),
         )?;
-        let ln_pre = RmsNorm::new(cfg.hidden_size, 1e-5, vb.pp("ln_pre"))?;
-        let transformer = Transformer::new(cfg, vb.pp("transformer"))?;
-        let patch_positional_embedding =
-            RotaryEmbedding::new(cfg, vb.pp("patch_positional_embedding"))?;
+        let ln_pre = RmsNorm::new(
+            cfg.hidden_size,
+            1e-5,
+            vb.pp("ln_pre")
+                .set_device(normal_loading_metadata.real_device.clone()),
+        )?;
+        let transformer = Transformer::new(cfg, vb.pp("transformer"), normal_loading_metadata)?;
+        let patch_positional_embedding = RotaryEmbedding::new(
+            cfg,
+            vb.pp("patch_positional_embedding")
+                .set_device(normal_loading_metadata.real_device.clone()),
+        )?;
         let max_image_width = (cfg.image_size / cfg.patch_size) as u32;
         Ok(Self {
             patch_conv,
@@ -430,5 +465,20 @@ impl Mistral3VisionModel {
 
     pub fn dtype(&self) -> DType {
         self.dtype
+    }
+
+    pub fn get_layers(&mut self) -> Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)> {
+        let mut tensors = Vec::new();
+        for layer in &mut self.transformer.layers {
+            tensors.push((&mut layer.attention.q_proj, None));
+            tensors.push((&mut layer.attention.k_proj, None));
+            tensors.push((&mut layer.attention.v_proj, None));
+            tensors.push((&mut layer.attention.o_proj, None));
+
+            tensors.push((&mut layer.feed_forward.gate_proj, None));
+            tensors.push((&mut layer.feed_forward.up_proj, None));
+            tensors.push((&mut layer.feed_forward.down_proj, None));
+        }
+        tensors
     }
 }
