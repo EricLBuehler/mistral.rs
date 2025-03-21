@@ -9,8 +9,8 @@ use super::{
     VisionModel, VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
 };
 use super::{
-    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Phi3VLoader, Qwen2_5VLLoader,
-    VisionLoaderType,
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
+    Qwen2_5VLLoader, VisionLoaderType,
 };
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
@@ -141,6 +141,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::Phi4MM => Box::new(Phi4MMLoader),
             VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
             VisionLoaderType::Gemma3 => Box::new(Gemma3Loader),
+            VisionLoaderType::Mistral3 => Box::new(Mistral3Loader),
         };
         Box::new(VisionLoader {
             inner: loader,
