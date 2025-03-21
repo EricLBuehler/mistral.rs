@@ -1,0 +1,615 @@
+
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="generator" content="Docutils 0.19: https://docutils.sourceforge.io/" />
+
+    <title>PagedAttention in mistral.rs &#8212; mistral.rs</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css" />
+    <link rel="stylesheet" href="../_static/styles/sphinx-book-theme.css?digest=14f4ca6b54d191a8c7657f6c759bf11a5fb86285" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.4cbf315f70debaebd550c87a6162cf0f.min.css" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script src="../_static/sphinx_highlight.js"></script>
+    <script src="../_static/clipboard.min.js"></script>
+    <script src="../_static/copybutton.js"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../_static/togglebutton.js"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?digest=5a5c038af52cf7bc1a1ec88eea08e6366ee68824"></script>
+    <script src="../_static/custom.js"></script>
+    <script src="../_static/design-tabs.js"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/paged_attention';</script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="prev" title="FlashAttention in mistral.rs" href="flash_attention.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/mistralrs-logo-text-light.png" class="logo__image only-light" alt="mistral.rs - Home"/>
+    <img src="../_static/mistralrs-logo-text-light.png" class="logo__image only-dark pst-js-only" alt="mistral.rs - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1 has-children"><a class="reference internal" href="../getting_started/installation.html">Installation</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../getting_started/installation/features.html">Feature flags in mistral.rs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../getting_started/installation/cli.html">CLI installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../getting_started/installation/python_pypi.html">Python Installation from PyPi</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../getting_started/installation/python_from_scratch.html">Python Installation from scratch</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting_started/quickstart.html">Quickstart</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../getting_started/examples.html">Examples</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Python API documentation</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../python_docs/api.html"><code class="docutils literal notranslate"><span class="pre">mistralrs</span></code></a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Quantization in mistral.rs</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../quantization/isq.html">In situ quantization</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../quantization/quants.html">Quantization in mistral.rs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../quantization/topology.html">Model topology configuration</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../quantization/uqff.html">Universal Quantized File Format: UQFF</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced features</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Advanced features</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="distributed.html">Distributed inference in mistral.rs: Tensor parallelism and Multi-node support</a></li>
+<li class="toctree-l2"><a class="reference internal" href="flash_attention.html">FlashAttention in mistral.rs</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">PagedAttention in mistral.rs</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><label class="sidebar-toggle primary-toggle btn btn-sm" for="__primary" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</label></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/EricLBuehler/mistral.rs" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="Source repository"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/EricLBuehler/mistral.rs/edit/main/docs/source/advanced/paged_attention.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/paged_attention.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<label class="sidebar-toggle secondary-toggle btn btn-sm" for="__secondary"title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</label>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>PagedAttention in mistral.rs</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#flashattention-v2-v3-pagedattention-in-mistral-rs">FlashAttention V2/V3 + PagedAttention in mistral.rs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#using-the-cli">Using the CLI</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#using-the-rust-api">Using the Rust API</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#using-the-python-api">Using the Python API</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="pagedattention-in-mistral-rs">
+<h1>PagedAttention in mistral.rs<a class="headerlink" href="#pagedattention-in-mistral-rs" title="Permalink to this heading">#</a></h1>
+<p>Mistral.rs supports PagedAttention (<a class="reference external" href="https://arxiv.org/abs/2309.06180">paper here</a>) to accelerate both normal inference and batched inference on:</p>
+<ul class="simple">
+<li><p>CUDA (Unix-like platforms such as WSL, Linux)</p></li>
+<li><p>Metal</p></li>
+</ul>
+<p>Our PagedAttention implementation has 2 inputs: GPU KV cache memory size, and block size. This enables you to have fine-tuned control over the available context length, by configuring the available memory for KV cache. When using a CUDA device, PagedAttention is actiated by default but can be disabled with <code class="docutils literal notranslate"><span class="pre">no_paged_attn</span></code> for Python or <code class="docutils literal notranslate"><span class="pre">no-paged-attn</span></code> for the CLI tools.</p>
+<blockquote>
+<div><p>Note: The default block size if not specified is 32.</p>
+</div></blockquote>
+<blockquote>
+<div><p>Note: if OOM occurs (this can be caused by a variety of factors including adapter activation, re-ISQ, and others), it is likely because the PagedAttention KV cache has already been allocated. To counter this, either set the KV cache memory to a lower amount or usage percentage (recommended) or disable paged attention entirely for a dynamically allocated cache.</p>
+</div></blockquote>
+<blockquote>
+<div><p>Note: Paged Attention is not enabled on Windows platforms, only Unix-based platforms.</p>
+</div></blockquote>
+<blockquote>
+<div><p>Note: In the CLI and Python API, Paged Attention is disabled by default for Metal. It can be enabled with the <code class="docutils literal notranslate"><span class="pre">--paged-attn</span></code>/<code class="docutils literal notranslate"><span class="pre">paged_attn</span></code> flags.</p>
+</div></blockquote>
+<p><strong>There are more features being added to this:</strong></p>
+<ul class="simple">
+<li><p>GGML model support</p></li>
+<li><p>Adapter model support</p></li>
+<li><p>Speculative decoding</p></li>
+<li><p>Prefix caching</p></li>
+</ul>
+<p><strong>Supported models:</strong></p>
+<ul class="simple">
+<li><p>Normal models</p></li>
+<li><p>GGUF models</p></li>
+<li><p>Vision models</p></li>
+</ul>
+<blockquote>
+<div><p>Note: the prefix cacher will be disabled when using PagedAttention regardless of settings. This functionality will be added soon!</p>
+</div></blockquote>
+<section id="flashattention-v2-v3-pagedattention-in-mistral-rs">
+<h2>FlashAttention V2/V3 + PagedAttention in mistral.rs<a class="headerlink" href="#flashattention-v2-v3-pagedattention-in-mistral-rs" title="Permalink to this heading">#</a></h2>
+<p>If mistral.rs is compiled with <span class="xref myst">FlashAttention</span> and PagedAttention is enabled, then FlashAttention will be used in tandem to accelerate
+the prefill phase.</p>
+</section>
+<section id="using-the-cli">
+<h2>Using the CLI<a class="headerlink" href="#using-the-cli" title="Permalink to this heading">#</a></h2>
+<p>Add the <code class="docutils literal notranslate"><span class="pre">--pa-gpu-mem</span></code>/<code class="docutils literal notranslate"><span class="pre">--pa-gpu-mem-usage</span></code> and <code class="docutils literal notranslate"><span class="pre">--pa-blk-size</span></code> parameters before the model kind selector. The GPU memory is in MBs and the block size means the number of tokens per block. These parameters may be passed on any supported model type.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cargo</span> <span class="n">run</span> <span class="o">--</span><span class="n">release</span> <span class="o">--</span><span class="n">features</span> <span class="n">cuda</span> <span class="o">--</span> <span class="o">-</span><span class="n">i</span> <span class="o">--</span><span class="n">pa</span><span class="o">-</span><span class="n">gpu</span><span class="o">-</span><span class="n">mem</span> <span class="mi">8192</span> <span class="o">--</span><span class="n">pa</span><span class="o">-</span><span class="n">blk</span><span class="o">-</span><span class="n">size</span> <span class="mi">32</span> <span class="o">--</span><span class="n">isq</span> <span class="n">Q4K</span> <span class="n">plain</span> <span class="o">-</span><span class="n">m</span> <span class="n">microsoft</span><span class="o">/</span><span class="n">Phi</span><span class="o">-</span><span class="mi">3</span><span class="o">-</span><span class="n">mini</span><span class="o">-</span><span class="mi">128</span><span class="n">k</span><span class="o">-</span><span class="n">instruct</span> <span class="o">-</span><span class="n">a</span> <span class="n">phi3</span>
+</pre></div>
+</div>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cargo</span> <span class="n">run</span> <span class="o">--</span><span class="n">release</span> <span class="o">--</span><span class="n">features</span> <span class="n">cuda</span> <span class="o">--</span> <span class="o">-</span><span class="n">i</span> <span class="o">--</span><span class="n">pa</span><span class="o">-</span><span class="n">gpu</span><span class="o">-</span><span class="n">mem</span><span class="o">-</span><span class="n">usage</span> <span class="mf">.95</span> <span class="o">--</span><span class="n">pa</span><span class="o">-</span><span class="n">blk</span><span class="o">-</span><span class="n">size</span> <span class="mi">32</span> <span class="n">gguf</span> <span class="o">-</span><span class="n">t</span> <span class="n">mistralai</span><span class="o">/</span><span class="n">Mistral</span><span class="o">-</span><span class="mi">7</span><span class="n">B</span><span class="o">-</span><span class="n">Instruct</span><span class="o">-</span><span class="n">v0</span><span class="mf">.1</span> <span class="o">-</span><span class="n">m</span> <span class="n">TheBloke</span><span class="o">/</span><span class="n">Mistral</span><span class="o">-</span><span class="mi">7</span><span class="n">B</span><span class="o">-</span><span class="n">Instruct</span><span class="o">-</span><span class="n">v0</span><span class="mf">.1</span><span class="o">-</span><span class="n">GGUF</span> <span class="o">-</span><span class="n">f</span> <span class="n">mistral</span><span class="o">-</span><span class="mi">7</span><span class="n">b</span><span class="o">-</span><span class="n">instruct</span><span class="o">-</span><span class="n">v0</span><span class="mf">.1</span><span class="o">.</span><span class="n">Q4_K_M</span><span class="o">.</span><span class="n">gguf</span>
+</pre></div>
+</div>
+</section>
+<section id="using-the-rust-api">
+<h2>Using the Rust API<a class="headerlink" href="#using-the-rust-api" title="Permalink to this heading">#</a></h2>
+<p>You can find this example <a class="reference internal" href="#../mistralrs/examples/paged_attn/main.rs"><span class="xref myst">here</span></a>.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">anyhow</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">mistralrs</span><span class="p">::{</span>
+<span class="w">    </span><span class="n">IsqType</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryGpuConfig</span><span class="p">,</span><span class="w"> </span><span class="n">PagedAttentionMetaBuilder</span><span class="p">,</span><span class="w"> </span><span class="n">TextMessageRole</span><span class="p">,</span><span class="w"> </span><span class="n">TextMessages</span><span class="p">,</span>
+<span class="w">    </span><span class="n">TextModelBuilder</span><span class="p">,</span>
+<span class="p">};</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">model</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TextModelBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;microsoft/Phi-3.5-mini-instruct&quot;</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">with_isq</span><span class="p">(</span><span class="n">IsqType</span><span class="p">::</span><span class="n">Q8_0</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">with_logging</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">with_paged_attn</span><span class="p">(</span><span class="o">||</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">PagedAttentionMetaBuilder</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="w">                </span><span class="p">.</span><span class="n">with_block_size</span><span class="p">(</span><span class="mi">32</span><span class="p">)</span>
+<span class="w">                </span><span class="p">.</span><span class="n">with_gpu_memory</span><span class="p">(</span><span class="n">MemoryGpuConfig</span><span class="p">::</span><span class="n">ContextSize</span><span class="p">(</span><span class="mi">1024</span><span class="p">))</span>
+<span class="w">                </span><span class="p">.</span><span class="n">build</span><span class="p">()</span>
+<span class="w">        </span><span class="p">})</span><span class="o">?</span>
+<span class="w">        </span><span class="p">.</span><span class="n">build</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">messages</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TextMessages</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">add_message</span><span class="p">(</span>
+<span class="w">            </span><span class="n">TextMessageRole</span><span class="p">::</span><span class="n">System</span><span class="p">,</span>
+<span class="w">            </span><span class="s">&quot;You are an AI agent with a specialty in programming.&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">add_message</span><span class="p">(</span>
+<span class="w">            </span><span class="n">TextMessageRole</span><span class="p">::</span><span class="n">User</span><span class="p">,</span>
+<span class="w">            </span><span class="s">&quot;Hello! How are you? Please write generic binary search function in Rust.&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="p">);</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">model</span><span class="p">.</span><span class="n">send_chat_request</span><span class="p">(</span><span class="n">messages</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">response</span><span class="p">.</span><span class="n">choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">message</span><span class="p">.</span><span class="n">content</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">unwrap</span><span class="p">());</span>
+<span class="w">    </span><span class="fm">dbg!</span><span class="p">(</span>
+<span class="w">        </span><span class="n">response</span><span class="p">.</span><span class="n">usage</span><span class="p">.</span><span class="n">avg_prompt_tok_per_sec</span><span class="p">,</span>
+<span class="w">        </span><span class="n">response</span><span class="p">.</span><span class="n">usage</span><span class="p">.</span><span class="n">avg_compl_tok_per_sec</span>
+<span class="w">    </span><span class="p">);</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="using-the-python-api">
+<h2>Using the Python API<a class="headerlink" href="#using-the-python-api" title="Permalink to this heading">#</a></h2>
+<div class="highlight-py notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">mistralrs</span> <span class="kn">import</span> <span class="n">Runner</span><span class="p">,</span> <span class="n">Which</span><span class="p">,</span> <span class="n">ChatCompletionRequest</span><span class="p">,</span> <span class="n">Architecture</span>
+
+<span class="n">runner</span> <span class="o">=</span> <span class="n">Runner</span><span class="p">(</span>
+    <span class="n">which</span><span class="o">=</span><span class="n">Which</span><span class="o">.</span><span class="n">Plain</span><span class="p">(</span>
+        <span class="n">model_id</span><span class="o">=</span><span class="s2">&quot;mistralai/Mistral-7B-Instruct-v0.1&quot;</span><span class="p">,</span>
+        <span class="n">arch</span><span class="o">=</span><span class="n">Architecture</span><span class="o">.</span><span class="n">Mistral</span><span class="p">,</span>
+    <span class="p">),</span>
+    <span class="n">pa_gpu_mem</span> <span class="o">=</span> <span class="mi">4096</span><span class="p">,</span>
+    <span class="n">pa_blk_size</span> <span class="o">=</span> <span class="mi">32</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">res</span> <span class="o">=</span> <span class="n">runner</span><span class="o">.</span><span class="n">send_chat_completion_request</span><span class="p">(</span>
+    <span class="n">ChatCompletionRequest</span><span class="p">(</span>
+        <span class="n">model</span><span class="o">=</span><span class="s2">&quot;mistral&quot;</span><span class="p">,</span>
+        <span class="n">messages</span><span class="o">=</span><span class="p">[</span>
+            <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Tell me a story about the Rust type system.&quot;</span><span class="p">}</span>
+        <span class="p">],</span>
+        <span class="n">max_tokens</span><span class="o">=</span><span class="mi">256</span><span class="p">,</span>
+        <span class="n">presence_penalty</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+        <span class="n">top_p</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span>
+        <span class="n">temperature</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span>
+    <span class="p">)</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">choices</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">message</span><span class="o">.</span><span class="n">content</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">res</span><span class="o">.</span><span class="n">usage</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="flash_attention.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">FlashAttention in mistral.rs</p>
+      </div>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#flashattention-v2-v3-pagedattention-in-mistral-rs">FlashAttention V2/V3 + PagedAttention in mistral.rs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#using-the-cli">Using the CLI</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#using-the-rust-api">Using the Rust API</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#using-the-python-api">Using the Python API</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By Eric Buehler
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025, mistral.rs.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>
