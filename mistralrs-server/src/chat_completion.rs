@@ -184,6 +184,26 @@ async fn parse_request(
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
+                        // If there is only one message, it is possible a text message
+                        // found when rig is used as client. In this case, we need to check if
+                        // the message is a text message or an image message.
+                        if image_messages.len() == 1 {
+                            if !image_messages[0].contains_key("text") {
+                                anyhow::bail!("Expected `text` key in input message.");
+                            }
+                            let content = match image_messages[0]["text"].deref() {
+                                Either::Left(left) => left.to_string(),
+                                Either::Right(right) => format!("{:?}", right),
+                            };
+                            let mut message_map: IndexMap<
+                                String,
+                                Either<String, Vec<IndexMap<String, Value>>>,
+                            > = IndexMap::new();
+                            message_map.insert("role".to_string(), Either::Left(message.role));
+                            message_map.insert("content".to_string(), Either::Left(content));
+                            messages.push(message_map);
+                            continue;
+                        }
                         if image_messages.len() != 2 {
                             anyhow::bail!(
                                 "Expected 2 items for the content of a message with an image."
