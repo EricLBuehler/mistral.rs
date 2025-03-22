@@ -4,6 +4,7 @@ use core::ffi::c_char;
 use interprocess::local_socket::traits::{Listener, Stream};
 use interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 use interprocess::local_socket::{ListenerOptions, Stream as LocalStream};
+pub use mistralrs_quant::distributed::use_nccl;
 use mistralrs_quant::{ShardedSafeTensors, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
