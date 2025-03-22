@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
+    env,
     fs::File,
     path::PathBuf,
     str::FromStr,
@@ -13,8 +14,8 @@ use candle_core::{quantized, Context, Device, Tensor};
 use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use mistralrs_quant::{
-    CollectedImatrixData, FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde,
-    QuantizedSerdeType, UnquantLinear,
+    CollectedImatrixData, FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizeOntoGuard,
+    QuantizedSerde, QuantizedSerdeType, UnquantLinear,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
@@ -437,8 +438,7 @@ pub trait IsqModel {
 
             use rayon::iter::IntoParallelRefIterator;
 
-            // Get the MINIMUM of the max isq threads the quant method allows
-            #[cfg(not(feature = "metal"))]
+            // Get the MINIMUM of the max isq threads the quant method
             let mut minimum_max_threads = {
                 let current_rayon_threads = rayon::current_num_threads();
                 tensors
@@ -455,8 +455,9 @@ pub trait IsqModel {
                     .min()
                     .unwrap_or(current_rayon_threads)
             };
-            #[cfg(feature = "metal")]
-            let mut minimum_max_threads = 1;
+            if env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
+                minimum_max_threads = 1;
+            }
 
             if matches!(imatrix_source, Some(ImatrixDataSource::Collected)) {
                 // Collected imatrix means that the model is potentially on the gpu already
@@ -469,6 +470,8 @@ pub trait IsqModel {
                 .num_threads(minimum_max_threads)
                 .build()
                 .map_err(candle_core::Error::msg)?;
+
+            let guard = QuantizeOntoGuard::new();
 
             pool.install(|| {
                 use indicatif::ParallelProgressIterator;
@@ -483,7 +486,13 @@ pub trait IsqModel {
                         .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
                             **tensor = tensor
                                 .clone()
-                                .apply_isq(dtype, device.clone(), &n_quantized, imatrix_weight)
+                                .apply_isq(
+                                    dtype,
+                                    device.clone(),
+                                    &n_quantized,
+                                    imatrix_weight,
+                                    guard.clone(),
+                                )
                                 .unwrap();
                             device.synchronize().unwrap();
                         });
@@ -496,7 +505,13 @@ pub trait IsqModel {
                         .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
                             **tensor = tensor
                                 .clone()
-                                .apply_isq(dtype, device.clone(), &n_quantized, imatrix_weight)
+                                .apply_isq(
+                                    dtype,
+                                    device.clone(),
+                                    &n_quantized,
+                                    imatrix_weight,
+                                    guard.clone(),
+                                )
                                 .unwrap();
                             device.synchronize().unwrap();
                         });

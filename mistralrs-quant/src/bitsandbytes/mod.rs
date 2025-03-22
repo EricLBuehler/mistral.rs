@@ -7,7 +7,9 @@ use std::{
 use candle_core::{Context, DType, Device, Result, Shape, Tensor};
 use serde::Deserialize;
 
-use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, ShardedVarBuilder};
+use crate::{
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, ShardedVarBuilder,
+};
 
 #[cfg(feature = "cuda")]
 mod ffi;
@@ -259,6 +261,7 @@ impl QuantMethod for BnbLinear {
         _device: Device,
         _n_quantized: &AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
     }

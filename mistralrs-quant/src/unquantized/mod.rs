@@ -15,7 +15,7 @@ use crate::{
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul, QuantMethod, QuantMethodConfig,
-    QuantizedSerde, QuantizedSerdeType,
+    QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
@@ -144,10 +144,12 @@ impl QuantMethod for UnquantLinear {
         device: Device,
         n_quantized: &AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         match dtype {
             /*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
+                let _acquired_quantize_guard = guard.acquire();
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("HQQ does not support imatrix.");
@@ -196,9 +198,9 @@ impl QuantMethod for UnquantLinear {
             ) => {
                 let dtype: GgmlDType = dtype.unwrap().try_into()?;
                 let res = if let Some(imatrix_weight) = imatrix_weight {
-                    generate_isq_imatrix!(self.w, imatrix_weight, device, dtype, n_quantized)
+                    generate_isq_imatrix!(self.w, imatrix_weight, device, dtype, n_quantized, guard)
                 } else {
-                    generate_isq!(self.w, device, dtype, n_quantized)
+                    generate_isq!(self.w, device, dtype, n_quantized, guard)
                 };
                 Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
@@ -209,6 +211,7 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             Some(IsqType::F8E4M3) => {
+                let _acquired_quantize_guard = guard.acquire();
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("F8E4M3 does not support imatrix.");
@@ -226,6 +229,7 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             None => {
+                let _acquired_quantize_guard = guard.acquire();
                 // Ignore imatrix altogether
 
                 let w = self.w.to_device(&device)?;

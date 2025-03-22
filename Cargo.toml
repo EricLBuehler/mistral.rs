@@ -23,9 +23,16 @@ license = "MIT"
 rust-version = "1.82"
 
 [workspace.dependencies]
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "fdf35be" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "fdf35be" }
+candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "fdf35be" }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "fdf35be" }
+# candle-core = { path = "../candle/candle-core" }
+# candle-nn = { path = "../candle/candle-nn" }
+# candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
+# candle-flash-attn = { path = "../candle/candle-flash-attn" }
+
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "7cdb40f" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "7cdb40f" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }

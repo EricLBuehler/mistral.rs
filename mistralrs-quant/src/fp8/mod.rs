@@ -18,7 +18,7 @@ use crate::{
         deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
         UQFF_VERSION,
     },
-    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
@@ -153,6 +153,7 @@ impl QuantMethod for FP8Linear {
         _device: Device,
         _n_quantized: &AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
     }

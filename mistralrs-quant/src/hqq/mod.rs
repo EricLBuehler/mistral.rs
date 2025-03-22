@@ -21,7 +21,8 @@ use crate::{
         deserialize_tensor, fake_deserialize_tensor, serialize_tensor, version_is_compatible,
         BitWiseOp, LeftshiftOp, UQFF_VERSION,
     },
-    IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
+    QuantizedSerdeType,
 };
 
 #[cfg(feature = "cuda")]
@@ -594,7 +595,9 @@ impl QuantMethod for HqqLayer {
         device: Device,
         n_quantized: &AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
+        let _acquired_quantize_guard = guard.acquire();
         if imatrix_weight.is_some() {
             // TODO just warn?
             candle_core::bail!("HQQ does not support imatrix.");

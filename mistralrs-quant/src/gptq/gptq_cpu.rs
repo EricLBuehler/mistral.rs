@@ -1,6 +1,6 @@
 use crate::{
-    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
-    ShardedVarBuilder,
+    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
+    QuantizedSerde, ShardedVarBuilder,
 };
 use candle_core::{DType, Device, Result, Tensor};
 use std::{
@@ -56,6 +56,7 @@ impl QuantMethod for GptqLayer {
         _device: Device,
         _n_quantized: &AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
     }
