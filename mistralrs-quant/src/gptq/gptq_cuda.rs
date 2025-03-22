@@ -20,7 +20,7 @@ use lazy_static::lazy_static;
 use crate::{
     gptq::marlin_backend::{gptq_marlin_matmul, gptq_weight_repack},
     utils::{get_cuda_device, get_cuda_slice},
-    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
+    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizeOntoGuard,
     QuantizedSerde, ShardedVarBuilder,
 };
 
@@ -337,7 +337,7 @@ impl QuantMethod for GptqLayer {
         _device: Device,
         _n_quantized: &AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
-        _guard: QuantizedOntoGuard,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         candle_core::bail!("GPTQ quantization does not support ISQ.")
     }
