@@ -316,7 +316,11 @@ impl Sdpa {
         let can_use_mask = mask.is_none_or(|mask| {
             (mask.rank() == 2 || mask.rank() == 4) && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         });
-        if all_head_dims_match && can_use_mask {
+        if [q, k, v].into_iter().all(|x| x.device().is_metal())
+            && all_head_dims_match
+            && can_use_mask
+            && mask.is_none()
+        {
             let mask = match mask {
                 Some(mask) if mask.rank() == 2 => Some(mask.unsqueeze(0)?.unsqueeze(0)?),
                 Some(mask) if mask.rank() == 4 => Some(mask.unsqueeze(0)?.unsqueeze(0)?),
