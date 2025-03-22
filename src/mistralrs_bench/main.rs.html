@@ -954,7 +954,7 @@
     <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
     </span><span class="kw">let </span>device = Device::new_metal(<span class="number">0</span>)<span class="question-mark">?</span>;
     <span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
-    </span><span class="kw">let </span>device = <span class="kw">if </span><span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) {
+    </span><span class="kw">let </span>device = <span class="kw">if </span>mistralrs_core::distributed::use_nccl() {
         Device::Cpu
     } <span class="kw">else </span>{
         Device::cuda_if_available(<span class="number">0</span>)<span class="question-mark">?
@@ -1017,7 +1017,7 @@
         DeviceMapSetting::Auto(auto_device_map_params)
     };
 
-    <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() || <span class="macro">cfg!</span>(feature = <span class="string">"nccl"</span>) {
+    <span class="kw">let </span>no_paged_attn = <span class="kw">if </span>device.is_cuda() || mistralrs_core::distributed::use_nccl() {
         args.no_paged_attn
     } <span class="kw">else if </span>device.is_metal() {
         !args.paged_attn

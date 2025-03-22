@@ -221,12 +221,14 @@
 <a href="#220" id="220">220</a>
 <a href="#221" id="221">221</a>
 <a href="#222" id="222">222</a>
-<a href="#223" id="223">223</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Context;
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Context;
 <span class="kw">use </span>candle_core::{DType, Device};
 <span class="kw">use </span>core::ffi::c_char;
 <span class="kw">use </span>interprocess::local_socket::traits::{Listener, Stream};
 <span class="kw">use </span>interprocess::local_socket::{GenericNamespaced, Name, ToNsName};
 <span class="kw">use </span>interprocess::local_socket::{ListenerOptions, Stream <span class="kw">as </span>LocalStream};
+<span class="kw">pub use </span>mistralrs_quant::distributed::use_nccl;
 <span class="kw">use </span>mistralrs_quant::{ShardedSafeTensors, ShardedVarBuilder};
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>serde_big_array::BigArray;

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["is_daemon"]};
+window.SIDEBAR_ITEMS = {"fn":["is_daemon","use_nccl"]};
