@@ -34,11 +34,21 @@ pub trait Processor {
     fn process(
         &self,
         pipeline: &dyn Pipeline,
-        messages: Vec<IndexMap<String, MessageContent>>,
+        mut messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
         add_special_tokens: bool,
         tools: Vec<Tool>,
     ) -> Result<(Vec<u32>, String)> {
+        for message in messages.iter_mut() {
+            if message["role"].as_ref().left().is_some_and(|x| x == "tool") {
+                message["role"] = Either::Left("ipython".to_string());
+                message["content"] = Either::Left(format!(
+                    "{{\"output\": \"{}\"}}",
+                    message["content"].as_ref().unwrap_left()
+                ));
+            }
+        }
+
         let prompt = apply_chat_template(
             pipeline,
             messages,
