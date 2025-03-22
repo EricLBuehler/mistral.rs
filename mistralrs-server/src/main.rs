@@ -317,7 +317,7 @@ async fn main() -> Result<()> {
     let device = if args.cpu {
         args.no_paged_attn = true;
         Device::Cpu
-    } else if cfg!(feature = "nccl") {
+    } else if mistralrs_core::distributed::use_nccl() {
         Device::Cpu
     } else {
         Device::cuda_if_available(0)?
@@ -379,7 +379,7 @@ async fn main() -> Result<()> {
         DeviceMapSetting::Auto(auto_device_map_params)
     };
 
-    let no_paged_attn = if device.is_cuda() || cfg!(feature = "nccl") {
+    let no_paged_attn = if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
         args.no_paged_attn
     } else if device.is_metal() {
         !args.paged_attn
