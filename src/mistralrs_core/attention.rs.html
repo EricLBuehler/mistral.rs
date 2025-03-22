@@ -755,7 +755,7 @@
         <span class="kw">let </span>k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
         <span class="kw">let </span>v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
 
-        <span class="kw">if </span>mask.is_some_and(|x| x.rank() == <span class="number">2</span>) {
+        <span class="kw">if </span>mask.is_some_and(|x| x.rank() == <span class="number">2</span>) || mistralrs_quant::distributed::use_nccl() {
             <span class="kw">return </span>naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params);
         }
 
