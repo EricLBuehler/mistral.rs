@@ -396,7 +396,24 @@
 <a href="#395" id="395">395</a>
 <a href="#396" id="396">396</a>
 <a href="#397" id="397">397</a>
-<a href="#398" id="398">398</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -707,12 +724,29 @@
             <span class="kw">return </span>flash_attn(<span class="kw-2">&amp;</span>q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, flash_params, sdpa_params)<span class="question-mark">?</span>.transpose(<span class="number">1</span>, <span class="number">2</span>);
         }
 
-        <span class="kw">let </span>all_head_dims_match = head_dim == k_head_dim &amp;&amp; k_head_dim == v_head_dim;
-        <span class="kw">if </span>q.device().is_metal() &amp;&amp; seq_len == <span class="number">1 </span>&amp;&amp; all_head_dims_match {
+        <span class="comment">// We can use Metal SDPA (vector/full) if the mask is the correct size and head dims match.
+        // If the mask is provided, then softcapping isn't allowed - default back to naive SDPA
+        // Softcapping is implemented for vector SDPA.
+        </span><span class="kw">let </span>all_head_dims_match = head_dim == k_head_dim &amp;&amp; k_head_dim == v_head_dim;
+        <span class="kw">let </span>tgt_mask_shape = <span class="macro">vec!</span>[b_sz, n_attn_heads, seq_len, k.dim(<span class="number">2</span>)<span class="question-mark">?</span>];
+        <span class="kw">let </span>can_use_mask = mask.is_none_or(|mask| {
+            mask.layout().broadcast_as(tgt_mask_shape.clone()).is_ok()
+                &amp;&amp; sdpa_params.softcap.is_none_or(|x| x == <span class="number">1.0</span>)
+        });
+        <span class="kw">if </span>[q, k, v].into_iter().all(|x| x.device().is_metal())
+            &amp;&amp; all_head_dims_match
+            &amp;&amp; can_use_mask
+        {
+            <span class="kw">let </span>mask = <span class="kw">match </span>mask {
+                <span class="prelude-val">Some</span>(mask) =&gt; <span class="prelude-val">Some</span>(mask.broadcast_as(tgt_mask_shape)<span class="question-mark">?</span>),
+                <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+            };
             <span class="kw">return </span>candle_nn::ops::sdpa(
                 q,
                 k,
                 v,
+                mask.as_ref(),
+                <span class="bool-val">false</span>,
                 sdpa_params.softmax_scale,
                 sdpa_params.softcap.unwrap_or(<span class="number">1.0</span>),
             );

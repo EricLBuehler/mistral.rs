@@ -832,7 +832,10 @@
 <a href="#831" id="831">831</a>
 <a href="#832" id="832">832</a>
 <a href="#833" id="833">833</a>
-<a href="#834" id="834">834</a></pre></div><pre class="rust"><code><span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a></pre></div><pre class="rust"><code><span class="kw">use </span>byteorder::{LittleEndian, ReadBytesExt};
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Shape, Tensor};
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
@@ -855,7 +858,8 @@
         deserialize_tensor, fake_deserialize_tensor, serialize_tensor, version_is_compatible,
         BitWiseOp, LeftshiftOp, UQFF_VERSION,
     },
-    IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
+    QuantizedSerdeType,
 };
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
@@ -1428,7 +1432,9 @@
         device: Device,
         n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
         imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
+        guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+        <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
         <span class="kw">if </span>imatrix_weight.is_some() {
             <span class="comment">// TODO just warn?
             </span><span class="macro">candle_core::bail!</span>(<span class="string">"HQQ does not support imatrix."</span>);

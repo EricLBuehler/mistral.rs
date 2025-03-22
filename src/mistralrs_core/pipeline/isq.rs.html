@@ -811,9 +811,25 @@
 <a href="#810" id="810">810</a>
 <a href="#811" id="811">811</a>
 <a href="#812" id="812">812</a>
-<a href="#813" id="813">813</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
+    env,
     fs::File,
     path::PathBuf,
     str::FromStr,
@@ -826,8 +842,8 @@
 <span class="kw">use </span>indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 <span class="kw">use </span>itertools::Itertools;
 <span class="kw">use </span>mistralrs_quant::{
-    CollectedImatrixData, FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde,
-    QuantizedSerdeType, UnquantLinear,
+    CollectedImatrixData, FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizeOntoGuard,
+    QuantizedSerde, QuantizedSerdeType, UnquantLinear,
 };
 <span class="kw">use </span>rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 <span class="kw">use </span>regex::Regex;
@@ -1250,8 +1266,7 @@
 
             <span class="kw">use </span>rayon::iter::IntoParallelRefIterator;
 
-            <span class="comment">// Get the MINIMUM of the max isq threads the quant method allows
-            </span><span class="attr">#[cfg(not(feature = <span class="string">"metal"</span>))]
+            <span class="comment">// Get the MINIMUM of the max isq threads the quant method
             </span><span class="kw">let </span><span class="kw-2">mut </span>minimum_max_threads = {
                 <span class="kw">let </span>current_rayon_threads = rayon::current_num_threads();
                 tensors
@@ -1268,8 +1283,9 @@
                     .min()
                     .unwrap_or(current_rayon_threads)
             };
-            <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]
-            </span><span class="kw">let </span><span class="kw-2">mut </span>minimum_max_threads = <span class="number">1</span>;
+            <span class="kw">if </span>env::var(<span class="string">"MISTRALRS_ISQ_SINGLETHREAD"</span>).is_ok() {
+                minimum_max_threads = <span class="number">1</span>;
+            }
 
             <span class="kw">if </span><span class="macro">matches!</span>(imatrix_source, <span class="prelude-val">Some</span>(ImatrixDataSource::Collected)) {
                 <span class="comment">// Collected imatrix means that the model is potentially on the gpu already
@@ -1282,6 +1298,8 @@
                 .num_threads(minimum_max_threads)
                 .build()
                 .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+
+            <span class="kw">let </span>guard = QuantizeOntoGuard::new();
 
             pool.install(|| {
                 <span class="kw">use </span>indicatif::ParallelProgressIterator;
@@ -1296,7 +1314,13 @@
                         .for_each(|(((tensor, <span class="kw">_</span>), (device, dtype)), imatrix_weight)| {
                             <span class="kw-2">**</span>tensor = tensor
                                 .clone()
-                                .apply_isq(dtype, device.clone(), <span class="kw-2">&amp;</span>n_quantized, imatrix_weight)
+                                .apply_isq(
+                                    dtype,
+                                    device.clone(),
+                                    <span class="kw-2">&amp;</span>n_quantized,
+                                    imatrix_weight,
+                                    guard.clone(),
+                                )
                                 .unwrap();
                             device.synchronize().unwrap();
                         });
@@ -1309,7 +1333,13 @@
                         .for_each(|(((tensor, <span class="kw">_</span>), (device, dtype)), imatrix_weight)| {
                             <span class="kw-2">**</span>tensor = tensor
                                 .clone()
-                                .apply_isq(dtype, device.clone(), <span class="kw-2">&amp;</span>n_quantized, imatrix_weight)
+                                .apply_isq(
+                                    dtype,
+                                    device.clone(),
+                                    <span class="kw-2">&amp;</span>n_quantized,
+                                    imatrix_weight,
+                                    guard.clone(),
+                                )
                                 .unwrap();
                             device.synchronize().unwrap();
                         });

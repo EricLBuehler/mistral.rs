@@ -286,7 +286,10 @@
 <a href="#285" id="285">285</a>
 <a href="#286" id="286">286</a>
 <a href="#287" id="287">287</a>
-<a href="#288" id="288">288</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#288" id="288">288</a>
+<a href="#289" id="289">289</a>
+<a href="#290" id="290">290</a>
+<a href="#291" id="291">291</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
@@ -295,7 +298,9 @@
 <span class="kw">use </span>candle_core::{Context, DType, Device, <span class="prelude-ty">Result</span>, Shape, Tensor};
 <span class="kw">use </span>serde::Deserialize;
 
-<span class="kw">use crate</span>::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, ShardedVarBuilder};
+<span class="kw">use crate</span>::{
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, ShardedVarBuilder,
+};
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 </span><span class="kw">mod </span>ffi;
@@ -547,6 +552,7 @@
         _device: Device,
         _n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
         _imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
+        _guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
         <span class="macro">todo!</span>()
     }

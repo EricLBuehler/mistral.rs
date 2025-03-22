@@ -290,7 +290,12 @@
 <a href="#289" id="289">289</a>
 <a href="#290" id="290">290</a>
 <a href="#291" id="291">291</a>
-<a href="#292" id="292">292</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a>
+<a href="#297" id="297">297</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
@@ -307,7 +312,8 @@
     generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     DummyLayer, FP8Linear, GgufMatMul, HqqAxis, HqqBits, HqqConfig, HqqLayer, IsqType, QuantMethod,
-    QuantMethodConfig, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
+    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, Shard,
+    ShardedVarBuilder, UnquantLinear,
 };
 
 <span class="attr">#[derive(Debug)]
@@ -382,6 +388,7 @@
         device: Device,
         n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
         imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
+        guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
         <span class="kw">let </span>weight = ops::fp8_blockwise_dequantize(
             <span class="kw-2">&amp;</span><span class="self">self</span>.weight,
@@ -392,6 +399,7 @@
         <span class="kw">match </span>dtype {
             <span class="comment">/*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
             </span><span class="prelude-val">Some</span>(IsqType::HQQ4 | IsqType::HQQ8) =&gt; {
+                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
                 <span class="kw">if </span>imatrix_weight.is_some() {
                     <span class="comment">// TODO just warn?
                     </span><span class="macro">candle_core::bail!</span>(<span class="string">"HQQ does not support imatrix."</span>);
@@ -440,9 +448,9 @@
             ) =&gt; {
                 <span class="kw">let </span>dtype: GgmlDType = dtype.unwrap().try_into()<span class="question-mark">?</span>;
                 <span class="kw">let </span>res = <span class="kw">if let </span><span class="prelude-val">Some</span>(imatrix_weight) = imatrix_weight {
-                    <span class="macro">generate_isq_imatrix!</span>(weight, imatrix_weight, device, dtype, n_quantized)
+                    <span class="macro">generate_isq_imatrix!</span>(weight, imatrix_weight, device, dtype, n_quantized, guard)
                 } <span class="kw">else </span>{
-                    <span class="macro">generate_isq!</span>(weight, device, dtype, n_quantized)
+                    <span class="macro">generate_isq!</span>(weight, device, dtype, n_quantized, guard)
                 };
                 <span class="prelude-val">Ok</span>(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
@@ -453,6 +461,7 @@
                 })<span class="question-mark">?</span>))
             }
             <span class="prelude-val">Some</span>(IsqType::F8E4M3) =&gt; {
+                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
                 <span class="kw">if </span>imatrix_weight.is_some() {
                     <span class="comment">// TODO just warn?
                     </span><span class="macro">candle_core::bail!</span>(<span class="string">"F8E4M3 does not support imatrix."</span>);
@@ -470,6 +479,7 @@
                 })<span class="question-mark">?</span>))
             }
             <span class="prelude-val">None </span>=&gt; {
+                <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
                 <span class="comment">// Ignore imatrix altogether
 
                 </span><span class="kw">let </span>w = weight.to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?</span>;

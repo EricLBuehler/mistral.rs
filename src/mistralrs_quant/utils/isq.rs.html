@@ -96,7 +96,20 @@
 <a href="#95" id="95">95</a>
 <a href="#96" id="96">96</a>
 <a href="#97" id="97">97</a>
-<a href="#98" id="98">98</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{quantized::GgmlDType, Tensor};
+<a href="#98" id="98">98</a>
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a>
+<a href="#103" id="103">103</a>
+<a href="#104" id="104">104</a>
+<a href="#105" id="105">105</a>
+<a href="#106" id="106">106</a>
+<a href="#107" id="107">107</a>
+<a href="#108" id="108">108</a>
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{quantized::GgmlDType, Tensor};
 
 <span class="kw">pub enum </span>QuantizationBehaviour {
     Quantize(GgmlDType),
@@ -148,20 +161,28 @@
 <span class="attr">#[macro_export]
 #[doc(hidden)]
 </span><span class="macro">macro_rules!</span> generate_isq {
-    (<span class="macro-nonterminal">$tensor</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$n_quantized</span>:expr) =&gt; {
+    (<span class="macro-nonterminal">$tensor</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$n_quantized</span>:expr, <span class="macro-nonterminal">$guard</span>:expr) =&gt; {
         {
             <span class="kw">let </span>quantization_behaviour = <span class="macro-nonterminal">$crate::utils::isq::get_quantization_behaviour</span>(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$tensor</span>, <span class="macro-nonterminal">$dtype</span>);
-            <span class="kw">match </span>quantization_behaviour{
+            <span class="kw">let </span>dtype = <span class="kw">match </span>quantization_behaviour{
                 <span class="macro-nonterminal">$crate::utils::isq::QuantizationBehaviour::Skip </span>=&gt; {
                     <span class="kw">let </span>shape = <span class="macro-nonterminal">$tensor</span>.shape();
                     <span class="macro">tracing::warn!</span>(<span class="string">"Skipping quantization of tensor with shape {shape:?} as it is not quantizable."</span>);
-                    Arc::new(candle_core::quantized::QTensor::quantize_onto(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$tensor</span>, GgmlDType::F32, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$device</span>)<span class="question-mark">?</span>)
+                    GgmlDType::F32
                 },
                 <span class="macro-nonterminal">$crate::utils::isq::QuantizationBehaviour::Quantize</span>(dtype) =&gt; {
                     <span class="macro-nonterminal">$n_quantized</span>.fetch_add(<span class="number">1</span>, std::sync::atomic::Ordering::Relaxed);
-                    Arc::new(candle_core::quantized::QTensor::quantize_onto(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$tensor</span>, dtype, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$device</span>)<span class="question-mark">?</span>)
+                    dtype
                 }
-            }
+            };
+
+            <span class="kw">let </span>initial = candle_core::quantized::QTensor::quantize(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$tensor</span>, dtype)<span class="question-mark">?</span>;
+            <span class="kw">let </span>data = initial.data()<span class="question-mark">?</span>;
+
+            <span class="kw">let </span>_acquired_quantize_guard = <span class="macro-nonterminal">$guard</span>.acquire();
+            <span class="kw">let </span>qstorage = candle_core::quantized::QStorage::from_data(data, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$device</span>, dtype)<span class="question-mark">?</span>;
+
+            Arc::new(candle_core::quantized::QTensor::new(qstorage, <span class="macro-nonterminal">$tensor</span>.shape())<span class="question-mark">?</span>)
         }
     };
 }
@@ -169,27 +190,32 @@
 <span class="attr">#[macro_export]
 #[doc(hidden)]
 </span><span class="macro">macro_rules!</span> generate_isq_imatrix {
-    (<span class="macro-nonterminal">$tensor</span>:expr, <span class="macro-nonterminal">$imatrix</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$n_quantized</span>:expr) =&gt; {
+    (<span class="macro-nonterminal">$tensor</span>:expr, <span class="macro-nonterminal">$imatrix</span>:expr, <span class="macro-nonterminal">$device</span>:expr, <span class="macro-nonterminal">$dtype</span>:expr, <span class="macro-nonterminal">$n_quantized</span>:expr, <span class="macro-nonterminal">$guard</span>:expr) =&gt; {
         {
             <span class="kw">let </span>quantization_behaviour = <span class="macro-nonterminal">$crate::utils::isq::get_quantization_behaviour</span>(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$tensor</span>, <span class="macro-nonterminal">$dtype</span>);
-            <span class="kw">match </span>quantization_behaviour{
+            <span class="kw">let </span>dtype = <span class="kw">match </span>quantization_behaviour{
                 <span class="macro-nonterminal">$crate::utils::isq::QuantizationBehaviour::Skip </span>=&gt; {
                     <span class="kw">let </span>shape = <span class="macro-nonterminal">$tensor</span>.shape();
                     <span class="macro">tracing::warn!</span>(<span class="string">"Skipping quantization of tensor with shape {shape:?} as it is not quantizable."</span>);
-                    <span class="kw">if </span><span class="macro-nonterminal">$tensor</span>.device().is_cpu() {
-                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$tensor</span>, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$imatrix</span>, GgmlDType::F32, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$device</span>)<span class="question-mark">?</span>)
-                    } <span class="kw">else </span>{
-                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$tensor</span>, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$imatrix</span>, GgmlDType::F32)<span class="question-mark">?</span>)
-                    }
+                    GgmlDType::F32
                 },
                 <span class="macro-nonterminal">$crate::utils::isq::QuantizationBehaviour::Quantize</span>(dtype) =&gt; {
                     <span class="macro-nonterminal">$n_quantized</span>.fetch_add(<span class="number">1</span>, std::sync::atomic::Ordering::Relaxed);
-                    <span class="kw">if </span><span class="macro-nonterminal">$tensor</span>.device().is_cpu() {
-                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix_onto(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$tensor</span>, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$imatrix</span>, dtype, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$device</span>)<span class="question-mark">?</span>)
-                    } <span class="kw">else </span>{
-                        Arc::new(candle_core::quantized::QTensor::quantize_imatrix(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$tensor</span>, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$imatrix</span>, dtype)<span class="question-mark">?</span>)
-                    }
+                    dtype
                 }
+            };
+
+            <span class="kw">let </span>initial = candle_core::quantized::QTensor::quantize_imatrix(<span class="kw-2">&amp;</span><span class="macro-nonterminal">$tensor</span>, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$imatrix</span>, dtype)<span class="question-mark">?</span>;
+            <span class="kw">if </span>!<span class="macro-nonterminal">$tensor</span>.device().is_cpu() {
+                <span class="comment">// Short-circuit here, no need for fancy
+                </span>Arc::new(initial)
+            } <span class="kw">else </span>{
+                <span class="kw">let </span>data = initial.data()<span class="question-mark">?</span>;
+
+                <span class="kw">let </span>_acquired_quantize_guard = <span class="macro-nonterminal">$guard</span>.acquire();
+                <span class="kw">let </span>qstorage = candle_core::quantized::QStorage::from_data(data, <span class="kw-2">&amp;</span><span class="macro-nonterminal">$device</span>, dtype)<span class="question-mark">?</span>;
+
+                Arc::new(candle_core::quantized::QTensor::new(qstorage, <span class="macro-nonterminal">$tensor</span>.shape())<span class="question-mark">?</span>)
             }
         }
     };
