@@ -20,7 +20,7 @@ use lazy_static::lazy_static;
 use crate::{
     gptq::marlin_backend::{gptq_marlin_matmul, gptq_weight_repack},
     utils::{get_cuda_device, get_cuda_slice},
-    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizeOntoGuard,
+    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
     QuantizedSerde, ShardedVarBuilder,
 };
 
