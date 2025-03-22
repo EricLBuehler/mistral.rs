@@ -313,18 +313,17 @@ impl Sdpa {
         // If the mask is provided, then softcapping isn't allowed - default back to naive SDPA
         // Softcapping is implemented for vector SDPA.
         let all_head_dims_match = head_dim == k_head_dim && k_head_dim == v_head_dim;
+        let tgt_mask_shape = vec![b_sz, n_attn_heads, seq_len, k.dim(2)?];
         let can_use_mask = mask.is_none_or(|mask| {
-            (mask.rank() == 2 || mask.rank() == 4) && sdpa_params.softcap.is_none_or(|x| x == 1.0)
+            mask.layout().broadcast_as(tgt_mask_shape.clone()).is_ok()
+                && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         });
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
             && all_head_dims_match
             && can_use_mask
-            && mask.is_none()
         {
             let mask = match mask {
-                Some(mask) if mask.rank() == 2 => Some(mask.unsqueeze(0)?.unsqueeze(0)?),
-                Some(mask) if mask.rank() == 4 => Some(mask.unsqueeze(0)?.unsqueeze(0)?),
-                Some(_) => unreachable!(),
+                Some(mask) => Some(mask.broadcast_as(tgt_mask_shape)?),
                 None => None,
             };
             return candle_nn::ops::sdpa(
