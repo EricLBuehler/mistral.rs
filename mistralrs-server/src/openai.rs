@@ -19,11 +19,11 @@ impl Deref for MessageInnerContent {
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct MessageContent(
     #[serde(with = "either::serde_untagged")]
-    Either<String, Vec<HashMap<String, MessageInnerContent>>>,
+    Either<Option<String>, Vec<HashMap<String, MessageInnerContent>>>,
 );
 
 impl Deref for MessageContent {
-    type Target = Either<String, Vec<HashMap<String, MessageInnerContent>>>;
+    type Target = Either<Option<String>, Vec<HashMap<String, MessageInnerContent>>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

@@ -192,6 +192,11 @@ async fn parse_request(
             for message in req_messages {
                 match message.content.deref() {
                     Either::Left(content) => {
+                        // Filter
+                        let Some(content) = content else {
+                            continue;
+                        };
+
                         let mut message_map: IndexMap<
                             String,
                             Either<String, Vec<IndexMap<String, Value>>>,

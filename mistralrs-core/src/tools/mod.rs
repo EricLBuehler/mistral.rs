@@ -11,18 +11,13 @@ pub struct ToolCallingMatcher {
     tool_choice: ToolChoice,
 }
 
-// Same as CalledFunction, but uses `parameters`
+// Same as CalledFunction, but has different cases for variations on the names
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CalledFunctionParameters {
+    #[serde(alias = "function")]
     pub name: String,
+    #[serde(alias = "arguments")]
     pub parameters: HashMap<String, Value>,
-}
-
-// Same as CalledFunction, but uses `arguments``
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct CalledFunctionArguments {
-    pub name: String,
-    pub arguments: HashMap<String, Value>,
 }
 
 impl ToolCallingMatcher {
@@ -44,9 +39,7 @@ impl ToolCallingMatcher {
         // Check if the prefix could be a JSON serialization of any of the following types.
         [
             could_be_json::<CalledFunctionParameters>,
-            could_be_json::<CalledFunctionArguments>,
             could_be_json::<Vec<CalledFunctionParameters>>,
-            could_be_json::<Vec<CalledFunctionArguments>>,
         ]
         .iter()
         .find_map(|check| {
@@ -64,6 +57,11 @@ impl ToolCallingMatcher {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok(Vec::new());
         }
+        let message = if message.starts_with("<|python_tag|>") {
+            &message["<|python_tag|>".len()..]
+        } else {
+            message
+        };
 
         if let Ok(deser) = serde_json::from_str::<CalledFunctionParameters>(message) {
             let id = format!("call-{}", Uuid::new_v4());
@@ -86,31 +84,6 @@ impl ToolCallingMatcher {
                         function: CalledFunction {
                             name: deser.name,
                             arguments: serde_json::to_string(&deser.parameters)?,
-                        },
-                    })
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?)
-        } else if let Ok(deser) = serde_json::from_str::<CalledFunctionArguments>(message) {
-            let id = format!("call-{}", Uuid::new_v4());
-            Ok(vec![ToolCallResponse {
-                id,
-                tp: ToolCallType::Function,
-                function: CalledFunction {
-                    name: deser.name,
-                    arguments: serde_json::to_string(&deser.arguments)?,
-                },
-            }])
-        } else if let Ok(deser) = serde_json::from_str::<Vec<CalledFunctionArguments>>(message) {
-            Ok(deser
-                .into_iter()
-                .map(|deser| {
-                    let id = format!("call-{}", Uuid::new_v4());
-                    Ok(ToolCallResponse {
-                        id,
-                        tp: ToolCallType::Function,
-                        function: CalledFunction {
-                            name: deser.name,
-                            arguments: serde_json::to_string(&deser.arguments)?,
                         },
                     })
                 })
