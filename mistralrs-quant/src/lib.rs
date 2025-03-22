@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -384,6 +384,41 @@ pub trait QuantizedSerde {
     }
 }
 
+/// Used to gate access to quantizing onto the host device
+#[derive(Clone)]
+#[allow(unused)]
+pub struct QuantizeOntoGuard(Arc<Mutex<()>>);
+
+/// Real (for Metal) and Fake (for CUDA)
+pub enum QuantizeOntoDropGuard<'a> {
+    Real(MutexGuard<'a, ()>),
+    Fake,
+}
+
+impl Default for QuantizeOntoGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QuantizeOntoGuard {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(())))
+    }
+
+    pub fn acquire(&self) -> QuantizeOntoDropGuard<'_> {
+        #[cfg(feature = "cuda")]
+        {
+            QuantizeOntoDropGuard::Fake
+        }
+
+        #[cfg(not(feature = "cuda"))]
+        {
+            QuantizeOntoDropGuard::Real(self.0.lock().expect("QuantizeOntoGuard was poisoned!"))
+        }
+    }
+}
+
 /// Quantized method for a quantized matmul.
 pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn new(method: QuantMethodConfig) -> Result<Self>
@@ -423,6 +458,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         device: Device,
         n_quantized: &AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>;
 
     fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;

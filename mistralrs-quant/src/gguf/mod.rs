@@ -15,7 +15,7 @@ use candle_nn::Module;
 use crate::{
     generate_isq, generate_isq_imatrix,
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
-    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
@@ -103,6 +103,7 @@ impl QuantMethod for GgufMatMul {
         device: Device,
         n_quantized: &AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         if let Some(dtype) = dtype {
             let t = match &self.w {
@@ -111,9 +112,9 @@ impl QuantMethod for GgufMatMul {
             };
             let dtype = dtype.try_into()?;
             let res = if let Some(imatrix_weight) = imatrix_weight {
-                generate_isq_imatrix!(t, imatrix_weight, device, dtype, n_quantized)
+                generate_isq_imatrix!(t, imatrix_weight, device, dtype, n_quantized, guard)
             } else {
-                generate_isq!(t, device, dtype, n_quantized)
+                generate_isq!(t, device, dtype, n_quantized, guard)
             };
             Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                 q_weight: res,

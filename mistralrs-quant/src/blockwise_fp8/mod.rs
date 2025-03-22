@@ -15,7 +15,8 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     DummyLayer, FP8Linear, GgufMatMul, HqqAxis, HqqBits, HqqConfig, HqqLayer, IsqType, QuantMethod,
-    QuantMethodConfig, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
+    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, Shard,
+    ShardedVarBuilder, UnquantLinear,
 };
 
 #[derive(Debug)]
@@ -90,6 +91,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         device: Device,
         n_quantized: &AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         let weight = ops::fp8_blockwise_dequantize(
             &self.weight,
@@ -100,6 +102,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         match dtype {
             /*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
+                let _acquired_quantize_guard = guard.acquire();
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("HQQ does not support imatrix.");
@@ -148,9 +151,9 @@ impl QuantMethod for BlockwiseFP8Linear {
             ) => {
                 let dtype: GgmlDType = dtype.unwrap().try_into()?;
                 let res = if let Some(imatrix_weight) = imatrix_weight {
-                    generate_isq_imatrix!(weight, imatrix_weight, device, dtype, n_quantized)
+                    generate_isq_imatrix!(weight, imatrix_weight, device, dtype, n_quantized, guard)
                 } else {
-                    generate_isq!(weight, device, dtype, n_quantized)
+                    generate_isq!(weight, device, dtype, n_quantized, guard)
                 };
                 Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
@@ -161,6 +164,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 })?))
             }
             Some(IsqType::F8E4M3) => {
+                let _acquired_quantize_guard = guard.acquire();
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("F8E4M3 does not support imatrix.");
@@ -178,6 +182,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 })?))
             }
             None => {
+                let _acquired_quantize_guard = guard.acquire();
                 // Ignore imatrix altogether
 
                 let w = weight.to_device(&device)?;

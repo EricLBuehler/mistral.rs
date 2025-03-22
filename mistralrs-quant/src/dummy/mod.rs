@@ -1,6 +1,6 @@
 use candle_core::Result;
 
-use crate::{QuantMethod, QuantizedSerde};
+use crate::{QuantMethod, QuantizeOntoGuard, QuantizedSerde};
 
 #[derive(Debug)]
 pub struct DummyLayer;
@@ -27,6 +27,7 @@ impl QuantMethod for DummyLayer {
         _device: candle_core::Device,
         _n_quantized: &std::sync::atomic::AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
+        _guard: QuantizeOntoGuard,
     ) -> candle_core::Result<std::sync::Arc<dyn QuantMethod>> {
         candle_core::bail!("DummyLayer should not ever be present in forward pass!")
     }

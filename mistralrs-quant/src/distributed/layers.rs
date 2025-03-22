@@ -5,8 +5,8 @@ use candle_nn::Linear;
 
 use crate::{
     blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear, BnbLinear, DummyLayer,
-    QuantMethod, QuantMethodConfig, QuantMethodType, QuantizedConfig, QuantizedSerde, Shard,
-    ShardedVarBuilder, UnquantLinear,
+    QuantMethod, QuantMethodConfig, QuantMethodType, QuantizeOntoGuard, QuantizedConfig,
+    QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 use super::{Comm, DistributedOperation};
@@ -162,11 +162,12 @@ impl QuantMethod for RowParallelLayer {
         device: candle_core::Device,
         n_quantized: &std::sync::atomic::AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let weight = self
-            .weight
-            .clone()
-            .apply_isq(dtype, device, n_quantized, imatrix_weight)?;
+        let weight =
+            self.weight
+                .clone()
+                .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)?;
         Ok(Arc::new(Self {
             weight,
             bias: self.bias.clone(),
@@ -336,11 +337,12 @@ impl QuantMethod for ColumnParallelLayer {
         device: candle_core::Device,
         n_quantized: &std::sync::atomic::AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let weight = self
-            .weight
-            .clone()
-            .apply_isq(dtype, device, n_quantized, imatrix_weight)?;
+        let weight =
+            self.weight
+                .clone()
+                .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)?;
         let bias = match &self.bias {
             Some(b) => {
                 let (dtype, device) = weight.dtype_and_device();
@@ -475,10 +477,11 @@ impl QuantMethod for ReplicatedLayer {
         device: candle_core::Device,
         n_quantized: &std::sync::atomic::AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         self.0
             .clone()
-            .apply_isq(dtype, device, n_quantized, imatrix_weight)
+            .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)
     }
 }
 
