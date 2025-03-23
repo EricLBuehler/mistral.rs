@@ -21,11 +21,11 @@ impl Deref for MessageInnerContent {
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct MessageContent(
     #[serde(with = "either::serde_untagged")]
-    Either<Option<String>, Vec<HashMap<String, MessageInnerContent>>>,
+    Either<String, Vec<HashMap<String, MessageInnerContent>>>,
 );
 
 impl Deref for MessageContent {
-    type Target = Either<Option<String>, Vec<HashMap<String, MessageInnerContent>>>;
+    type Target = Either<String, Vec<HashMap<String, MessageInnerContent>>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -33,7 +33,6 @@ impl Deref for MessageContent {
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct FunctionCalled {
-    pub description: Option<String>,
     pub name: String,
     #[serde(alias = "arguments")]
     pub parameters: String,
@@ -48,7 +47,7 @@ pub struct ToolCall {
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct Message {
-    pub content: MessageContent,
+    pub content: Option<MessageContent>,
     pub role: String,
     pub name: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,

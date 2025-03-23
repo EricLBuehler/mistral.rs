@@ -190,27 +190,33 @@ async fn parse_request(
             let mut messages = Vec::new();
             let mut image_urls = Vec::new();
             for message in req_messages {
-                match message.content.deref() {
-                    Either::Left(content) => {
+                let content = match message.content.as_deref() {
+                    Some(content) => content.clone(),
+                    None => {
                         // Handle tool call
-                        let content = match content {
-                            Some(content) => content.to_string(),
-                            None => {
-                                use anyhow::Context;
-                                let calls = message.tool_calls.as_ref()
-                                    .context("No content was provided, expected tool calls to be provided.")?
-                                    .iter().map(|call| &call.function).collect::<Vec<_>>();
+                        use anyhow::Context;
+                        let calls = message
+                            .tool_calls
+                            .as_ref()
+                            .context(
+                                "No content was provided, expected tool calls to be provided.",
+                            )?
+                            .iter()
+                            .map(|call| &call.function)
+                            .collect::<Vec<_>>();
 
-                                serde_json::to_string(&calls)?
-                            }
-                        };
+                        Either::Left(serde_json::to_string(&calls)?)
+                    }
+                };
 
+                match &content {
+                    Either::Left(content) => {
                         let mut message_map: IndexMap<
                             String,
                             Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
-                        message_map.insert("content".to_string(), Either::Left(content));
+                        message_map.insert("content".to_string(), Either::Left(content.clone()));
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
