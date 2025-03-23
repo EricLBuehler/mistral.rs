@@ -73,7 +73,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                                 Option text_new.map(ToString::to_string)
                             ),
                             role: "assistant".to_string(),
-                            tool_calls: Some(tool_calls),
+                            tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
                         },
                         index: seq.get_response_index(),
                         finish_reason: is_done.map(|x| x.to_string()),
@@ -211,7 +211,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     message: crate::ResponseMessage {
                         content: text_new.map(ToString::to_string),
                         role: "assistant".to_string(),
-                        tool_calls,
+                        tool_calls: Some(tool_calls).filter(|v| !v.is_empty()),
                     },
                     logprobs: logprobs.map(|l| crate::Logprobs { content: Some(l) }),
                 };
