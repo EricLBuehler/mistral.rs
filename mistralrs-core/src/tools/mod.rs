@@ -13,6 +13,12 @@ fn process_model_specific_message(message: &str) -> &str {
     if let Some(message) = message.strip_prefix("<|python_tag|>") {
         // Llama case
         message
+    } else if let Some(message) = message
+        .strip_prefix("<tool_call>")
+        .and_then(|s| s.strip_suffix("</tool_call>"))
+    {
+        // Hermes case
+        message
     } else {
         message
     }
