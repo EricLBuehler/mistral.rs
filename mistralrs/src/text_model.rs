@@ -19,6 +19,7 @@ pub struct TextModelBuilder {
     pub(crate) imatrix: Option<PathBuf>,
     pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
+    pub(crate) jinja_explicit: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
 
@@ -105,7 +106,14 @@ impl TextModelBuilder {
             device_mapping: None,
             imatrix: None,
             calibration_file: None,
+            jinja_explicit: None,
         }
+    }
+
+    /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
+    pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
+        self.jinja_explicit = Some(jinja_explicit);
+        self
     }
 
     /// Set the prompt batchsize to use for inference.
@@ -273,8 +281,9 @@ impl TextModelBuilder {
             self.chat_template,
             self.tokenizer_json,
             Some(self.model_id),
+            self.no_kv_cache,
+            self.jinja_explicit,
         )
-        .with_no_kv_cache(self.no_kv_cache)
         .build(self.loader_type)?;
 
         // Load, into a Pipeline

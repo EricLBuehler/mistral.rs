@@ -1,0 +1,88 @@
+{%- set today = strftime_now("%Y-%m-%d") %}
+{%- set default_system_message = "You are Mistral Small 3, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.\nYour knowledge base was last updated on 2023-10-01. The current date is " + today + ".\n\nWhen you're not sure about some information, you say that you don't have the information and don't make up anything.\nIf the user's question is not clear, ambiguous, or does not provide enough context for you to accurately answer the question, you do not try to answer it right away and you rather ask the user to clarify their request (e.g. \"What are some good restaurants around me?\" => \"Where are you?\" or \"When is the next flight to Tokyo\" => \"Where do you travel from?\")" %}
+
+{%- if messages[0]['role'] == 'system' %}
+    {%- set system_message = messages[0]['content'] %}
+    {%- set loop_messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = default_system_message %}
+    {%- set loop_messages = messages %}
+{%- endif %}
+{{- '[SYSTEM_PROMPT]' + system_message + '[/SYSTEM_PROMPT]' }}
+
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- endif %}
+
+{%- set user_messages = loop_messages | selectattr("role", "equalto", "user") | list %}
+
+{{- bos_token }}
+{%- for message in loop_messages %}
+    {%- if message["role"] == "user" %}
+        {%- if tools is not none and (message == user_messages[-1]) %}
+            {{- "[AVAILABLE_TOOLS][" }}
+            {%- for tool in tools %}
+                {%- set tool = tool.function %}
+                {{- '{"type": "function", "function": {' }}
+                {%- for key, val in tool.items() if key != "return" %}
+                    {%- if val is string %}
+                        {{- '"' + key + '": "' + val + '"' }}
+                    {%- else %}
+                        {{- '"' + key + '": ' + val|tojson }}
+                    {%- endif %}
+                    {%- if not loop.last %}
+                        {{- ", " }}
+                    {%- endif %}
+                {%- endfor %}
+                {{- "}}" }}
+                {%- if not loop.last %}
+                    {{- ", " }}
+                {%- else %}
+                    {{- "]" }}
+                {%- endif %}
+            {%- endfor %}
+            {{- "[/AVAILABLE_TOOLS]" }}
+            {%- endif %}
+        {%- if loop.last and system_message is defined and message['content'] is string %}
+            {{- "[SYSTEM_PROMPT]" + system_message + "\n\n" + message["content"] + "[/SYSTEM_PROMPT]" }}
+        {%- elif message['content'] is string %}
+            {{- '[INST]' + message['content'] + '[/INST]' }}
+        {%- else %}
+            {{- '[INST]' }}
+            {%- for block in message['content'] %}
+                {%- if block['type'] == 'text' %}
+                        {{- block['text'] }}
+                        {{- "[SYSTEM_PROMPT]" + system_message + "\n\n" + block['text'] + "[/SYSTEM_PROMPT]" }}
+                {%- elif block['type'] == 'image' or block['type'] == 'image_url' %}
+                        {{- '[IMG]' }}
+                    {%- else %}
+                        {{- raise_exception('Only text and image blocks are supported in message content!') }}
+                    {%- endif %}
+            {%- endfor %}
+            {{- '[/INST]' }}
+        {%- endif %}
+    {%- elif (message.tool_calls is defined and message.tool_calls is not none) %}
+        {{- "[TOOL_CALLS][" }}
+        {%- for tool_call in message.tool_calls %}
+            {%- set out = tool_call.function|tojson %}
+            {{- out[:-1] }}
+            {{- ', "id": "' + tool_call.id + '"}' }}
+            {%- if not loop.last %}
+                {{- ", " }}
+            {%- else %}
+                {{- "]" + eos_token }}
+            {%- endif %}
+        {%- endfor %}
+    {%- elif message["role"] == "assistant" %}
+        {{- message["content"] + eos_token}}
+    {%- elif message["role"] == "tool_results" or message["role"] == "tool" %}
+        {%- if message.content is defined and message.content.content is defined %}
+            {%- set content = message.content.content %}
+        {%- else %}
+            {%- set content = message.content %}
+        {%- endif %}
+        {{- '[TOOL_RESULTS]{"content": ' + content|string + ", " + "[/TOOL_RESULTS]" }}
+    {%- else %}
+        {{- raise_exception("Only user and assistant roles are supported, with the exception of an initial optional system message!") }}
+    {%- endif %}
+{%- endfor %}

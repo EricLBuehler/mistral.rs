@@ -74,6 +74,7 @@ pub struct GGMLLoader {
     tokenizer_json: Option<String>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
+    jinja_explicit: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -98,10 +99,11 @@ pub struct GGMLLoaderBuilder {
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    jinja_explicit: Option<String>,
 }
 
 impl GGMLLoaderBuilder {
-    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: GGMLSpecificConfig,
         chat_template: Option<String>,
@@ -109,6 +111,8 @@ impl GGMLLoaderBuilder {
         model_id: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
+        no_kv_cache: bool,
+        jinja_explicit: Option<String>,
     ) -> Self {
         let kind = ModelKind::GgufQuantized {
             quant: QuantizationKind::Ggml,
@@ -122,14 +126,10 @@ impl GGMLLoaderBuilder {
             kind,
             quantized_filename,
             quantized_model_id,
+            no_kv_cache,
+            jinja_explicit,
             ..Default::default()
         }
-    }
-
-    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
-    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
-        self.no_kv_cache = no_kv_cache;
-        self
     }
 
     fn with_adapter(
@@ -191,6 +191,7 @@ impl GGMLLoaderBuilder {
             tgt_non_granular_index: self.tgt_non_granular_index,
             quantized_filename: Some(self.quantized_filename),
             quantized_model_id: Some(self.quantized_model_id),
+            jinja_explicit: self.jinja_explicit,
         })
     }
 }
@@ -209,6 +210,7 @@ impl GGMLLoader {
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
+        jinja_explicit: Option<String>,
     ) -> Self {
         let model_id = if let Some(id) = model_id {
             id
@@ -231,6 +233,7 @@ impl GGMLLoader {
             tokenizer_json,
             kind,
             tgt_non_granular_index,
+            jinja_explicit,
         }
     }
 }
@@ -344,8 +347,9 @@ impl Loader for GGMLLoader {
         });
         let chat_template = get_chat_template(
             paths,
+            &self.jinja_explicit,
             &paths
-                .get_chat_template_json()
+                .get_chat_template_explicit()
                 .as_ref()
                 .map(|x| x.to_string_lossy().to_string())
                 .clone(),

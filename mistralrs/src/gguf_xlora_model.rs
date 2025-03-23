@@ -45,6 +45,8 @@ impl GgufXLoraModelBuilder {
             self.gguf_model.model_id,
             self.gguf_model.files,
             config,
+            self.gguf_model.no_kv_cache,
+            self.gguf_model.jinja_explicit,
         )
         .with_xlora(
             self.xlora_model_id,

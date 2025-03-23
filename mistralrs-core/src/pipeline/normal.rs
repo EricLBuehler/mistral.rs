@@ -92,6 +92,7 @@ pub struct NormalLoader {
     token_source: RwLock<Option<TokenSource>>,
     revision: RwLock<Option<String>>,
     from_uqff: RwLock<Option<PathBuf>>,
+    jinja_explicit: Option<String>,
 }
 
 #[derive(Default)]
@@ -106,6 +107,7 @@ pub struct NormalLoaderBuilder {
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    jinja_explicit: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -122,12 +124,13 @@ pub struct NormalSpecificConfig {
 }
 
 impl NormalLoaderBuilder {
-    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
     pub fn new(
         config: NormalSpecificConfig,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         model_id: Option<String>,
+        no_kv_cache: bool,
+        jinja_explicit: Option<String>,
     ) -> Self {
         Self {
             config,
@@ -135,14 +138,10 @@ impl NormalLoaderBuilder {
             tokenizer_json,
             model_id,
             kind: ModelKind::Normal,
+            jinja_explicit,
+            no_kv_cache,
             ..Default::default()
         }
-    }
-
-    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
-    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
-        self.no_kv_cache = no_kv_cache;
-        self
     }
 
     fn with_adapter(
@@ -222,6 +221,7 @@ impl NormalLoaderBuilder {
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
+            jinja_explicit: self.jinja_explicit,
             token_source: RwLock::new(None),
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
@@ -593,8 +593,9 @@ impl Loader for NormalLoader {
 
         let chat_template = get_chat_template(
             paths,
+            &self.jinja_explicit,
             &paths
-                .get_chat_template_json()
+                .get_chat_template_explicit()
                 .as_ref()
                 .map(|x| x.to_string_lossy().to_string())
                 .clone(),

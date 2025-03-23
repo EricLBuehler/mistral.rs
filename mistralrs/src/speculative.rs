@@ -59,6 +59,8 @@ impl TextSpeculativeBuilder {
             builder.chat_template,
             builder.tokenizer_json,
             Some(builder.model_id),
+            builder.no_kv_cache,
+            builder.jinja_explicit,
         )
         .build(builder.loader_type)?;
 

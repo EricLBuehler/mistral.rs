@@ -92,6 +92,7 @@ pub struct GGUFLoader {
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
+    jinja_explicit: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -114,20 +115,21 @@ pub struct GGUFLoaderBuilder {
     chat_template: Option<String>,
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
+    jinja_explicit: Option<String>,
 }
 
 impl GGUFLoaderBuilder {
     /// Create a loader builder for a GGUF model. `tok_model_id` is the model ID where you can find a
     /// `tokenizer_config.json` file. If the `chat_template` is specified, then it will be treated as a
     /// path and used over remote files, removing all remote accesses.
-    ///
-    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
     pub fn new(
         chat_template: Option<String>,
         tok_model_id: Option<String>,
         quantized_model_id: String,
         quantized_filenames: Vec<String>,
         config: GGUFSpecificConfig,
+        no_kv_cache: bool,
+        jinja_explicit: Option<String>,
     ) -> Self {
         let kind = ModelKind::GgufQuantized {
             quant: QuantizationKind::Gguf,
@@ -140,14 +142,10 @@ impl GGUFLoaderBuilder {
             quantized_filenames,
             quantized_model_id,
             config,
+            jinja_explicit,
+            no_kv_cache,
             ..Default::default()
         }
-    }
-
-    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
-    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
-        self.no_kv_cache = no_kv_cache;
-        self
     }
 
     fn with_adapter(
@@ -208,6 +206,7 @@ impl GGUFLoaderBuilder {
             quantized_filenames: self.quantized_filenames,
             quantized_model_id: self.quantized_model_id,
             config: self.config,
+            jinja_explicit: self.jinja_explicit,
         })
     }
 }
@@ -225,6 +224,7 @@ impl GGUFLoader {
         chat_template: Option<String>,
         tgt_non_granular_index: Option<usize>,
         config: GGUFSpecificConfig,
+        jinja_explicit: Option<String>,
     ) -> Self {
         let model_id = if let Some(id) = model_id {
             Some(id)
@@ -248,6 +248,7 @@ impl GGUFLoader {
             kind,
             tgt_non_granular_index,
             config,
+            jinja_explicit,
         }
     }
 }
@@ -488,8 +489,9 @@ impl Loader for GGUFLoader {
         });
         let mut chat_template = get_chat_template(
             paths,
+            &self.jinja_explicit,
             &paths
-                .get_chat_template_json()
+                .get_chat_template_explicit()
                 .as_ref()
                 .map(|x| x.to_string_lossy().to_string())
                 .clone(),

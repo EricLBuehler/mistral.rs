@@ -80,6 +80,7 @@ fn parse_which(
     no_kv_cache: bool,
     chat_template: Option<String>,
     prompt_chunksize: Option<NonZeroUsize>,
+    jinja_explicit: Option<String>,
 ) -> PyApiResult<Box<dyn Loader>> {
     let use_flash_attn = mistralrs_core::using_flash_attn();
 
@@ -110,8 +111,9 @@ fn parse_which(
             chat_template,
             tokenizer_json,
             Some(model_id),
+            no_kv_cache,
+            jinja_explicit,
         )
-        .with_no_kv_cache(no_kv_cache)
         .build(arch.map(Into::into))?,
         Which::XLora {
             model_id,
@@ -139,8 +141,9 @@ fn parse_which(
             chat_template,
             tokenizer_json,
             model_id,
+            no_kv_cache,
+            jinja_explicit,
         )
-        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -176,8 +179,9 @@ fn parse_which(
             chat_template,
             tokenizer_json,
             model_id,
+            no_kv_cache,
+            jinja_explicit,
         )
-        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -202,8 +206,9 @@ fn parse_which(
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            no_kv_cache,
+            jinja_explicit,
         )
-        .with_no_kv_cache(no_kv_cache)
         .build(),
         Which::XLoraGGUF {
             tok_model_id,
@@ -224,8 +229,9 @@ fn parse_which(
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            no_kv_cache,
+            jinja_explicit,
         )
-        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -254,8 +260,9 @@ fn parse_which(
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            no_kv_cache,
+            jinja_explicit,
         )
-        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -284,8 +291,9 @@ fn parse_which(
             Some(tok_model_id),
             quantized_model_id,
             quantized_filename,
+            no_kv_cache,
+            jinja_explicit,
         )
-        .with_no_kv_cache(no_kv_cache)
         .build(),
         Which::XLoraGGML {
             tok_model_id,
@@ -310,8 +318,9 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            no_kv_cache,
+            jinja_explicit,
         )
-        .with_no_kv_cache(no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -344,8 +353,9 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            no_kv_cache,
+            jinja_explicit,
         )
-        .with_no_kv_cache(no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -380,6 +390,7 @@ fn parse_which(
             chat_template,
             tokenizer_json,
             Some(model_id),
+            jinja_explicit,
         )
         .build(arch.into()),
         Which::DiffusionPlain {
@@ -439,6 +450,7 @@ impl Runner {
         speculative_gamma = 32,
         which_draft = None,
         chat_template = None,
+        jinja_explicit = None,
         num_device_layers = None,
         in_situ_quant = None,
         anymoe_config = None,
@@ -460,6 +472,7 @@ impl Runner {
         speculative_gamma: usize,
         which_draft: Option<Which>,
         chat_template: Option<String>,
+        jinja_explicit: Option<String>,
         num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
@@ -573,9 +586,21 @@ impl Runner {
             None => None,
         };
 
-        let loader = parse_which(which, no_kv_cache, chat_template.clone(), prompt_chunksize)?;
+        let loader = parse_which(
+            which,
+            no_kv_cache,
+            chat_template.clone(),
+            prompt_chunksize,
+            jinja_explicit.clone(),
+        )?;
         let loader = if let Some(draft_which) = which_draft {
-            let draft = parse_which(draft_which, no_kv_cache, chat_template, prompt_chunksize)?;
+            let draft = parse_which(
+                draft_which,
+                no_kv_cache,
+                chat_template,
+                prompt_chunksize,
+                jinja_explicit,
+            )?;
             Box::new(SpeculativeLoader {
                 target: loader,
                 draft,

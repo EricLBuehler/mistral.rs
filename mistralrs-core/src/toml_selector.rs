@@ -484,6 +484,7 @@ struct TomlLoaderInnerParams {
     no_kv_cache: bool,
     tokenizer_json: Option<String>,
     prompt_chunksize: Option<NonZeroUsize>,
+    jinja_explicit: Option<String>,
 }
 
 pub struct TomlLoaderArgs {
@@ -491,6 +492,7 @@ pub struct TomlLoaderArgs {
     pub chat_template: Option<String>,
     pub no_kv_cache: bool,
     pub prompt_chunksize: Option<NonZeroUsize>,
+    pub jinja_explicit: Option<String>,
 }
 
 pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
@@ -607,6 +609,8 @@ fn loader_from_selected(
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .build(arch)?,
         TomlModelSelected::XLora {
@@ -635,6 +639,8 @@ fn loader_from_selected(
             args.chat_template,
             args.tokenizer_json,
             model_id,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_xlora(
             xlora_model_id,
@@ -671,6 +677,8 @@ fn loader_from_selected(
             args.chat_template,
             args.tokenizer_json,
             model_id,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_lora(
             adapters_model_id,
@@ -700,6 +708,8 @@ fn loader_from_selected(
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .build(),
         TomlModelSelected::XLoraGGUF {
@@ -725,6 +735,8 @@ fn loader_from_selected(
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_xlora(
             xlora_model_id,
@@ -756,6 +768,8 @@ fn loader_from_selected(
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_lora(
             adapters_model_id,
@@ -785,6 +799,8 @@ fn loader_from_selected(
             Some(tok_model_id),
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .build(),
         TomlModelSelected::XLoraGGML {
@@ -810,6 +826,8 @@ fn loader_from_selected(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_xlora(
             xlora_model_id,
@@ -843,6 +861,8 @@ fn loader_from_selected(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_lora(
             adapters_model_id,
@@ -880,6 +900,7 @@ fn loader_from_selected(
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
+            args.jinja_explicit,
         )
         .build(arch),
     };
@@ -896,6 +917,7 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
             prompt_chunksize: args.prompt_chunksize,
+            jinja_explicit: args.jinja_explicit,
         };
         let loader = loader_from_selected(args.clone(), selector.model)?;
         let loader = if let Some(speculative) = selector.speculative {

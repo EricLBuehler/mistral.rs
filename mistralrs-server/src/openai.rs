@@ -1,5 +1,7 @@
 use either::Either;
-use mistralrs_core::{ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice};
+use mistralrs_core::{
+    ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
 use utoipa::ToSchema;
@@ -19,14 +21,29 @@ impl Deref for MessageInnerContent {
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct MessageContent(
     #[serde(with = "either::serde_untagged")]
-    Either<String, Vec<HashMap<String, MessageInnerContent>>>,
+    Either<Option<String>, Vec<HashMap<String, MessageInnerContent>>>,
 );
 
 impl Deref for MessageContent {
-    type Target = Either<String, Vec<HashMap<String, MessageInnerContent>>>;
+    type Target = Either<Option<String>, Vec<HashMap<String, MessageInnerContent>>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct FunctionCalled {
+    pub description: Option<String>,
+    pub name: String,
+    #[serde(alias = "arguments")]
+    pub parameters: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct ToolCall {
+    #[serde(rename = "type")]
+    pub tp: ToolType,
+    pub function: FunctionCalled,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -34,6 +51,7 @@ pub struct Message {
     pub content: MessageContent,
     pub role: String,
     pub name: Option<String>,
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]

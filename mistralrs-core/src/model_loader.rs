@@ -17,6 +17,7 @@ pub struct LoaderBuilder {
     model: ModelSelected,
     no_kv_cache: bool,
     chat_template: Option<String>,
+    jinja_explicit: Option<String>,
     use_flash_attn: bool,
     prompt_chunksize: Option<NonZeroUsize>,
 }
@@ -29,6 +30,7 @@ impl LoaderBuilder {
             chat_template: None,
             use_flash_attn: false,
             prompt_chunksize: None,
+            jinja_explicit: None,
         }
     }
 
@@ -38,6 +40,10 @@ impl LoaderBuilder {
     }
     pub fn with_chat_template(mut self, chat_template: Option<String>) -> Self {
         self.chat_template = chat_template;
+        self
+    }
+    pub fn with_jinja_explicit(mut self, jinja_explicit: Option<String>) -> Self {
+        self.jinja_explicit = jinja_explicit;
         self
     }
     pub fn with_use_flash_attn(mut self, use_flash_attn: bool) -> Self {
@@ -189,6 +195,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 chat_template: args.chat_template,
                 no_kv_cache: args.no_kv_cache,
                 prompt_chunksize: args.prompt_chunksize,
+                jinja_explicit: args.jinja_explicit,
             };
             (selector, args).try_into()?
         }
@@ -219,8 +226,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tokenizer_json,
             Some(model_id),
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
-        .with_no_kv_cache(args.no_kv_cache)
         .build(arch)?,
         ModelSelected::XLora {
             model_id,
@@ -249,8 +257,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tokenizer_json,
             model_id,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
-        .with_no_kv_cache(args.no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -287,8 +296,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tokenizer_json,
             model_id,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
-        .with_no_kv_cache(args.no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -315,6 +325,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .build(),
         ModelSelected::XLoraGGUF {
@@ -338,8 +350,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
-        .with_no_kv_cache(args.no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -370,8 +383,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
-        .with_no_kv_cache(args.no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -399,8 +413,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             Some(tok_model_id),
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
-        .with_no_kv_cache(args.no_kv_cache)
         .build(),
         ModelSelected::XLoraGGML {
             tok_model_id,
@@ -424,8 +439,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
-        .with_no_kv_cache(args.no_kv_cache)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -457,8 +473,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
-        .with_no_kv_cache(args.no_kv_cache)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -496,6 +513,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tokenizer_json,
             Some(model_id),
+            args.jinja_explicit,
         )
         .build(arch),
         ModelSelected::DiffusionPlain {

@@ -15,7 +15,7 @@ use crate::{
     openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens},
     util,
 };
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use axum::{
     extract::{Json, State},
     http::{self, StatusCode},
@@ -192,13 +192,25 @@ async fn parse_request(
             for message in req_messages {
                 match message.content.deref() {
                     Either::Left(content) => {
+                        // Handle tool call
+                        let content = match content {
+                            Some(content) => content.to_string(),
+                            None => {
+                                use anyhow::Context;
+                                let calls = message.tool_calls.as_ref()
+                                    .context("No content was provided, expected tool calls to be provided.")?
+                                    .iter().map(|call| &call.function).collect::<Vec<_>>();
+
+                                serde_json::to_string(&calls)?
+                            }
+                        };
+
                         let mut message_map: IndexMap<
                             String,
                             Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
-                        message_map
-                            .insert("content".to_string(), Either::Left(content.to_string()));
+                        message_map.insert("content".to_string(), Either::Left(content));
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
@@ -304,11 +316,10 @@ async fn parse_request(
             if !image_urls.is_empty() {
                 let mut images = Vec::new();
                 for url_unparsed in image_urls {
+                    use anyhow::Context;
                     let image = util::parse_image_url(&url_unparsed)
                         .await
-                        .with_context(|| {
-                            format!("Failed to parse image resource: {}", url_unparsed)
-                        })?;
+                        .context(format!("Failed to parse image resource: {}", url_unparsed))?;
 
                     images.push(image);
                 }

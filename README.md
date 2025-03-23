@@ -107,6 +107,7 @@ Mistral.rs supports several model categories:
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
     - Enhance performance with an [imatrix](docs/IMATRIX.md)!
 - Automatic [device mapping](docs/DEVICE_MAPPING.md) to easily load and run models across multiple GPUs and CPU.
+- Specify custom chat templates easily: [chat templates](docs/CHAT_TOK.md)
 
 **Fast**:
 - Apple silicon support: ARM NEON, Accelerate, Metal
@@ -127,7 +128,7 @@ Mistral.rs supports several model categories:
 - First X-LoRA inference platform with first class support
 - [AnyMoE](docs/ANYMOE.md): Build a memory-efficient MoE model from anything, in seconds
 - Various [sampling and penalty](docs/SAMPLING.mds) methods
-- Tool calling: [docs](docs/TOOL_CALLING.md)
+- Native tool calling support for Llama, Mistral Small, Mistral Nemo, and Hermes models: [docs](docs/TOOL_CALLING.md)
 - Prompt chunking: process large prompts in a more manageable way
 
 **Advanced features**:

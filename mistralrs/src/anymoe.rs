@@ -61,8 +61,9 @@ impl AnyMoeModelBuilder {
             self.base.chat_template,
             self.base.tokenizer_json,
             Some(self.base.model_id),
+            self.base.no_kv_cache,
+            self.base.jinja_explicit,
         )
-        .with_no_kv_cache(self.base.no_kv_cache)
         .build(self.base.loader_type)?;
 
         let loader: Box<dyn Loader> = Box::new(AnyMoeLoader {
