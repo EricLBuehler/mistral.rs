@@ -34,7 +34,8 @@
 <a href="#33" id="33">33</a>
 <a href="#34" id="34">34</a>
 <a href="#35" id="35">35</a>
-<a href="#36" id="36">36</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#36" id="36">36</a>
+<a href="#37" id="37">37</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>serde_json::Value;
 
@@ -61,7 +62,8 @@
 </span><span class="kw">pub struct </span>Function {
     <span class="kw">pub </span>description: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>name: String,
-    <span class="kw">pub </span>parameters: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Value&gt;&gt;,
+    <span class="attr">#[serde(alias = <span class="string">"arguments"</span>)]
+    </span><span class="kw">pub </span>parameters: <span class="prelude-ty">Option</span>&lt;HashMap&lt;String, Value&gt;&gt;,
 }
 
 <span class="attr">#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]

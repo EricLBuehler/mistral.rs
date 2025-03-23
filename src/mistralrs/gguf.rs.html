@@ -215,7 +215,17 @@
 <a href="#214" id="214">214</a>
 <a href="#215" id="215">215</a>
 <a href="#216" id="216">216</a>
-<a href="#217" id="217">217</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#217" id="217">217</a>
+<a href="#218" id="218">218</a>
+<a href="#219" id="219">219</a>
+<a href="#220" id="220">220</a>
+<a href="#221" id="221">221</a>
+<a href="#222" id="222">222</a>
+<a href="#223" id="223">223</a>
+<a href="#224" id="224">224</a>
+<a href="#225" id="225">225</a>
+<a href="#226" id="226">226</a>
+<a href="#227" id="227">227</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::num::NonZeroUsize;
 
 <span class="kw">use crate</span>::{best_device, Model};
@@ -229,6 +239,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) token_source: TokenSource,
     <span class="kw">pub</span>(<span class="kw">crate</span>) hf_revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapSetting&gt;,
 
@@ -269,8 +280,15 @@
             topology: <span class="prelude-val">None</span>,
             tok_model_id: <span class="prelude-val">None</span>,
             device_mapping: <span class="prelude-val">None</span>,
+            jinja_explicit: <span class="prelude-val">None</span>,
         }
     }
+
+    <span class="doccomment">/// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
+    </span><span class="kw">pub fn </span>with_jinja_explicit(<span class="kw-2">mut </span><span class="self">self</span>, jinja_explicit: String) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.jinja_explicit = <span class="prelude-val">Some</span>(jinja_explicit);
+        <span class="self">self
+    </span>}
 
     <span class="doccomment">/// Source the tokenizer and chat template from this model ID (must contain `tokenizer.json` and `tokenizer_config.json`).
     </span><span class="kw">pub fn </span>with_tok_model_id(<span class="kw-2">mut </span><span class="self">self</span>, tok_model_id: <span class="kw">impl </span>ToString) -&gt; <span class="self">Self </span>{
@@ -384,6 +402,8 @@
             <span class="self">self</span>.model_id,
             <span class="self">self</span>.files,
             config,
+            <span class="self">self</span>.no_kv_cache,
+            <span class="self">self</span>.jinja_explicit,
         )
         .build();
 

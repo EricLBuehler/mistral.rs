@@ -934,7 +934,29 @@
 <a href="#933" id="933">933</a>
 <a href="#934" id="934">934</a>
 <a href="#935" id="935">935</a>
-<a href="#936" id="936">936</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fs::File, num::NonZeroUsize, path::PathBuf};
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a>
+<a href="#942" id="942">942</a>
+<a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{fs::File, num::NonZeroUsize, path::PathBuf};
 
 <span class="kw">use </span>serde::Deserialize;
 
@@ -1420,6 +1442,7 @@
     no_kv_cache: bool,
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="kw">pub struct </span>TomlLoaderArgs {
@@ -1427,6 +1450,7 @@
     <span class="kw">pub </span>chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>no_kv_cache: bool,
     <span class="kw">pub </span>prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+    <span class="kw">pub </span>jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="kw">pub fn </span>get_toml_selected_model_dtype(model: <span class="kw-2">&amp;</span>TomlSelector) -&gt; ModelDType {
@@ -1543,6 +1567,8 @@
             args.chat_template,
             args.tokenizer_json,
             <span class="prelude-val">Some</span>(model_id),
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .build(arch)<span class="question-mark">?</span>,
         TomlModelSelected::XLora {
@@ -1571,6 +1597,8 @@
             args.chat_template,
             args.tokenizer_json,
             model_id,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_xlora(
             xlora_model_id,
@@ -1607,6 +1635,8 @@
             args.chat_template,
             args.tokenizer_json,
             model_id,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_lora(
             adapters_model_id,
@@ -1636,6 +1666,8 @@
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .build(),
         TomlModelSelected::XLoraGGUF {
@@ -1661,6 +1693,8 @@
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_xlora(
             xlora_model_id,
@@ -1692,6 +1726,8 @@
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)<span class="question-mark">?</span>,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_lora(
             adapters_model_id,
@@ -1721,6 +1757,8 @@
             <span class="prelude-val">Some</span>(tok_model_id),
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .build(),
         TomlModelSelected::XLoraGGML {
@@ -1746,6 +1784,8 @@
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_xlora(
             xlora_model_id,
@@ -1779,6 +1819,8 @@
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_lora(
             adapters_model_id,
@@ -1816,6 +1858,7 @@
             args.chat_template,
             args.tokenizer_json,
             <span class="prelude-val">Some</span>(model_id),
+            args.jinja_explicit,
         )
         .build(arch),
     };
@@ -1832,6 +1875,7 @@
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
             prompt_chunksize: args.prompt_chunksize,
+            jinja_explicit: args.jinja_explicit,
         };
         <span class="kw">let </span>loader = loader_from_selected(args.clone(), selector.model)<span class="question-mark">?</span>;
         <span class="kw">let </span>loader = <span class="kw">if let </span><span class="prelude-val">Some</span>(speculative) = selector.speculative {

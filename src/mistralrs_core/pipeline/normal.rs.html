@@ -1198,7 +1198,8 @@
 <a href="#1197" id="1197">1197</a>
 <a href="#1198" id="1198">1198</a>
 <a href="#1199" id="1199">1199</a>
-<a href="#1200" id="1200">1200</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1200" id="1200">1200</a>
+<a href="#1201" id="1201">1201</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
@@ -1292,6 +1293,7 @@
     token_source: RwLock&lt;<span class="prelude-ty">Option</span>&lt;TokenSource&gt;&gt;,
     revision: RwLock&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;,
     from_uqff: RwLock&lt;<span class="prelude-ty">Option</span>&lt;PathBuf&gt;&gt;,
+    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Default)]
@@ -1306,6 +1308,7 @@
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Clone, Default)]
@@ -1322,12 +1325,13 @@
 }
 
 <span class="kw">impl </span>NormalLoaderBuilder {
-    <span class="doccomment">/// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
-    </span><span class="kw">pub fn </span>new(
+    <span class="kw">pub fn </span>new(
         config: NormalSpecificConfig,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
         model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        no_kv_cache: bool,
+        jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             config,
@@ -1335,15 +1339,11 @@
             tokenizer_json,
             model_id,
             kind: ModelKind::Normal,
+            jinja_explicit,
+            no_kv_cache,
             ..Default::default()
         }
     }
-
-    <span class="comment">// TODO(EricLBuehler): in 0.4.0 we can move this into the config
-    </span><span class="kw">pub fn </span>with_no_kv_cache(<span class="kw-2">mut </span><span class="self">self</span>, no_kv_cache: bool) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.no_kv_cache = no_kv_cache;
-        <span class="self">self
-    </span>}
 
     <span class="kw">fn </span>with_adapter(
         <span class="kw-2">mut </span><span class="self">self</span>,
@@ -1422,6 +1422,7 @@
             chat_template: <span class="self">self</span>.chat_template,
             tokenizer_json: <span class="self">self</span>.tokenizer_json,
             tgt_non_granular_index: <span class="self">self</span>.tgt_non_granular_index,
+            jinja_explicit: <span class="self">self</span>.jinja_explicit,
             token_source: RwLock::new(<span class="prelude-val">None</span>),
             revision: RwLock::new(<span class="prelude-val">None</span>),
             from_uqff: RwLock::new(<span class="prelude-val">None</span>),
@@ -1793,8 +1794,9 @@
 
         <span class="kw">let </span>chat_template = get_chat_template(
             paths,
+            <span class="kw-2">&amp;</span><span class="self">self</span>.jinja_explicit,
             <span class="kw-2">&amp;</span>paths
-                .get_chat_template_json()
+                .get_chat_template_explicit()
                 .as_ref()
                 .map(|x| x.to_string_lossy().to_string())
                 .clone(),

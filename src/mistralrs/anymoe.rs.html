@@ -121,7 +121,8 @@
 <a href="#120" id="120">120</a>
 <a href="#121" id="121">121</a>
 <a href="#122" id="122">122</a>
-<a href="#123" id="123">123</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::{
+<a href="#123" id="123">123</a>
+<a href="#124" id="124">124</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::{
     initialize_logging, AnyMoeConfig, AnyMoeLoader, AutoDeviceMapParams, DefaultSchedulerMethod,
     DeviceMapSetting, Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
     SchedulerConfig,
@@ -184,8 +185,9 @@
             <span class="self">self</span>.base.chat_template,
             <span class="self">self</span>.base.tokenizer_json,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.base.model_id),
+            <span class="self">self</span>.base.no_kv_cache,
+            <span class="self">self</span>.base.jinja_explicit,
         )
-        .with_no_kv_cache(<span class="self">self</span>.base.no_kv_cache)
         .build(<span class="self">self</span>.base.loader_type)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>loader: Box&lt;<span class="kw">dyn </span>Loader&gt; = Box::new(AnyMoeLoader {

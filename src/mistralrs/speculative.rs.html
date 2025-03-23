@@ -97,7 +97,9 @@
 <a href="#96" id="96">96</a>
 <a href="#97" id="97">97</a>
 <a href="#98" id="98">98</a>
-<a href="#99" id="99">99</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
+<a href="#99" id="99">99</a>
+<a href="#100" id="100">100</a>
+<a href="#101" id="101">101</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>mistralrs_core::{
     initialize_logging, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceMapSetting,
@@ -158,6 +160,8 @@
             builder.chat_template,
             builder.tokenizer_json,
             <span class="prelude-val">Some</span>(builder.model_id),
+            builder.no_kv_cache,
+            builder.jinja_explicit,
         )
         .build(builder.loader_type)<span class="question-mark">?</span>;
 

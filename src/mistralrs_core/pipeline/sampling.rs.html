@@ -454,7 +454,9 @@
 <a href="#453" id="453">453</a>
 <a href="#454" id="454">454</a>
 <a href="#455" id="455">455</a>
-<a href="#456" id="456">456</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
+<a href="#456" id="456">456</a>
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>rand_isaac::Isaac64Rng;
@@ -508,7 +510,8 @@
         <span class="kw">let </span><span class="kw-2">mut </span>tool_use_is_done = <span class="bool-val">false</span>;
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>t) = seq.tools {
             <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(<span class="kw-2">ref </span>d)) = seq.peek_delta() {
-                (tool_use_still_possible, tool_use_is_done) = t.prefix_could_be_tool(d.as_str());
+                (tool_use_still_possible, tool_use_is_done) =
+                    t.prefix_could_be_tool(this, d.as_str());
             }
         };
 
@@ -516,7 +519,7 @@
             <span class="kw">if let </span><span class="prelude-val">Some</span>(delta) = <span class="macro">crate::handle_seq_error_ok!</span>(seq.get_delta(), seq.responder()) {
                 <span class="kw">if </span>seq.get_mut_group().is_chat {
                     <span class="kw">let </span>(text_new, tool_calls) =
-                        parse_text_tools(delta.as_str(), seq.tools.clone())
+                        parse_text_tools(this, delta.as_str(), seq.tools.clone())
                             .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
 
                     <span class="kw">if </span>!tool_calls.is_empty() &amp;&amp; is_done.is_none() {
@@ -657,8 +660,9 @@
             };
 
             <span class="kw">if </span>seq.get_mut_group().is_chat {
-                <span class="kw">let </span>(text_new, tool_calls) = parse_text_tools(text.as_str(), seq.tools.clone())
-                    .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+                <span class="kw">let </span>(text_new, tool_calls) =
+                    parse_text_tools(this, text.as_str(), seq.tools.clone())
+                        .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
                 <span class="kw">let </span>choice = <span class="kw">crate</span>::Choice {
                     finish_reason: <span class="macro">fixup_sentencepiece!</span>(reason),
                     index: seq.get_response_index(),

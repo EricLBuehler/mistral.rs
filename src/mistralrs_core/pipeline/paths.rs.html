@@ -544,7 +544,27 @@
 <a href="#543" id="543">543</a>
 <a href="#544" id="544">544</a>
 <a href="#545" id="545">545</a>
-<a href="#546" id="546">546</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#546" id="546">546</a>
+<a href="#547" id="547">547</a>
+<a href="#548" id="548">548</a>
+<a href="#549" id="549">549</a>
+<a href="#550" id="550">550</a>
+<a href="#551" id="551">551</a>
+<a href="#552" id="552">552</a>
+<a href="#553" id="553">553</a>
+<a href="#554" id="554">554</a>
+<a href="#555" id="555">555</a>
+<a href="#556" id="556">556</a>
+<a href="#557" id="557">557</a>
+<a href="#558" id="558">558</a>
+<a href="#559" id="559">559</a>
+<a href="#560" id="560">560</a>
+<a href="#561" id="561">561</a>
+<a href="#562" id="562">562</a>
+<a href="#563" id="563">563</a>
+<a href="#564" id="564">564</a>
+<a href="#565" id="565">565</a>
+<a href="#566" id="566">566</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -904,24 +924,27 @@
 ///   is used.*
 ///
 /// THE FOLLOWING IS IGNORED:
-/// After this, if the `chat_template_json` filename is specified (a json with one field: "chat_template"),
+/// After this, if the `chat_template_explicit` filename is specified (a json with one field: "chat_template" OR a jinja file),
 ///  the chat template is overwritten with this chat template.
 </span><span class="attr">#[allow(clippy::borrowed_box)]
 </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_chat_template(
     paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
-    chat_template_json: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
+    jinja_explicit: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
+    chat_template_explicit: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
     chat_template_fallback: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;String&gt;,
     chat_template_ovrd: <span class="prelude-ty">Option</span>&lt;String&gt;,
 ) -&gt; ChatTemplate {
     <span class="comment">// Get template content, this may be overridden.
     </span><span class="kw">let </span>template_content = <span class="kw">if let </span><span class="prelude-val">Some</span>(template_filename) = paths.get_template_filename() {
-        <span class="kw">if </span>template_filename
-            .extension()
-            .expect(<span class="string">"Template filename must be a file"</span>)
-            .to_string_lossy()
-            != <span class="string">"json"
-        </span>{
-            <span class="macro">panic!</span>(<span class="string">"Template filename {template_filename:?} must end with `.json`."</span>);
+        <span class="kw">if </span>![<span class="string">"jinja"</span>, <span class="string">"json"</span>].contains(
+            <span class="kw-2">&amp;</span>template_filename
+                .extension()
+                .expect(<span class="string">"Template filename must be a file"</span>)
+                .to_string_lossy()
+                .to_string()
+                .as_str(),
+        ) {
+            <span class="macro">panic!</span>(<span class="string">"Template filename {template_filename:?} must end with `.json` or `.jinja`."</span>);
         }
         <span class="prelude-val">Some</span>(fs::read_to_string(template_filename).expect(<span class="string">"Loading chat template failed."</span>))
     } <span class="kw">else if </span>chat_template_fallback
@@ -950,17 +973,34 @@
     };
     <span class="comment">// Overwrite to use any present `chat_template.json`, only if there is not one present already.
     </span><span class="kw">if </span>template.chat_template.is_none() {
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(chat_template_json) = chat_template_json {
-            <span class="attr">#[derive(Debug, serde::Deserialize)]
-            </span><span class="kw">struct </span>AutomaticTemplate {
-                chat_template: String,
-            }
-            <span class="kw">let </span>deser: AutomaticTemplate = serde_json::from_str(
-                <span class="kw-2">&amp;</span>fs::read_to_string(chat_template_json).expect(<span class="string">"Loading chat template failed."</span>),
-            )
-            .unwrap();
-            template.chat_template = <span class="prelude-val">Some</span>(ChatTemplateValue(Either::Left(deser.chat_template)));
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(chat_template_explicit) = chat_template_explicit {
+            <span class="kw">let </span>ct =
+                fs::read_to_string(chat_template_explicit).expect(<span class="string">"Loading chat template failed."</span>);
+
+            <span class="kw">let </span>new_chat_template = <span class="kw">if </span>chat_template_explicit.ends_with(<span class="string">".jinja"</span>) {
+                ct
+            } <span class="kw">else </span>{
+                <span class="attr">#[derive(Debug, serde::Deserialize)]
+                </span><span class="kw">struct </span>AutomaticTemplate {
+                    chat_template: String,
+                }
+                <span class="kw">let </span>deser: AutomaticTemplate = serde_json::from_str(<span class="kw-2">&amp;</span>ct).unwrap();
+                deser.chat_template
+            };
+
+            template.chat_template = <span class="prelude-val">Some</span>(ChatTemplateValue(Either::Left(new_chat_template)));
         }
+    }
+
+    <span class="comment">// JINJA explicit
+    </span><span class="kw">if let </span><span class="prelude-val">Some</span>(jinja_explicit) = jinja_explicit {
+        <span class="kw">if </span>!jinja_explicit.ends_with(<span class="string">".jinja"</span>) {
+            <span class="macro">panic!</span>(<span class="string">"jinja_explicit must end with .jinja!"</span>);
+        }
+
+        <span class="kw">let </span>ct = fs::read_to_string(jinja_explicit).expect(<span class="string">"Loading chat template failed."</span>);
+
+        template.chat_template = <span class="prelude-val">Some</span>(ChatTemplateValue(Either::Left(ct)));
     }
 
     <span class="kw">let </span>processor_conf: <span class="prelude-ty">Option</span>&lt;<span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig&gt; = paths

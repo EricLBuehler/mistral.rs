@@ -455,7 +455,18 @@
 <a href="#454" id="454">454</a>
 <a href="#455" id="455">455</a>
 <a href="#456" id="456">456</a>
-<a href="#457" id="457">457</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
+<a href="#457" id="457">457</a>
+<a href="#458" id="458">458</a>
+<a href="#459" id="459">459</a>
+<a href="#460" id="460">460</a>
+<a href="#461" id="461">461</a>
+<a href="#462" id="462">462</a>
+<a href="#463" id="463">463</a>
+<a href="#464" id="464">464</a>
+<a href="#465" id="465">465</a>
+<a href="#466" id="466">466</a>
+<a href="#467" id="467">467</a>
+<a href="#468" id="468">468</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
 <span class="kw">use </span>std::{
     collections::HashMap,
     env,
@@ -472,7 +483,7 @@
     openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens},
     util,
 };
-<span class="kw">use </span>anyhow::{Context <span class="kw">as _</span>, <span class="prelude-ty">Result</span>};
+<span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{Json, State},
     http::{<span class="self">self</span>, StatusCode},
@@ -649,13 +660,25 @@
             <span class="kw">for </span>message <span class="kw">in </span>req_messages {
                 <span class="kw">match </span>message.content.deref() {
                     Either::Left(content) =&gt; {
+                        <span class="comment">// Handle tool call
+                        </span><span class="kw">let </span>content = <span class="kw">match </span>content {
+                            <span class="prelude-val">Some</span>(content) =&gt; content.to_string(),
+                            <span class="prelude-val">None </span>=&gt; {
+                                <span class="kw">use </span>anyhow::Context;
+                                <span class="kw">let </span>calls = message.tool_calls.as_ref()
+                                    .context(<span class="string">"No content was provided, expected tool calls to be provided."</span>)<span class="question-mark">?
+                                    </span>.iter().map(|call| <span class="kw-2">&amp;</span>call.function).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+
+                                serde_json::to_string(<span class="kw-2">&amp;</span>calls)<span class="question-mark">?
+                            </span>}
+                        };
+
                         <span class="kw">let </span><span class="kw-2">mut </span>message_map: IndexMap&lt;
                             String,
                             Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;,
                         &gt; = IndexMap::new();
                         message_map.insert(<span class="string">"role"</span>.to_string(), Either::Left(message.role));
-                        message_map
-                            .insert(<span class="string">"content"</span>.to_string(), Either::Left(content.to_string()));
+                        message_map.insert(<span class="string">"content"</span>.to_string(), Either::Left(content));
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) =&gt; {
@@ -761,11 +784,10 @@
             <span class="kw">if </span>!image_urls.is_empty() {
                 <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
                 <span class="kw">for </span>url_unparsed <span class="kw">in </span>image_urls {
+                    <span class="kw">use </span>anyhow::Context;
                     <span class="kw">let </span>image = util::parse_image_url(<span class="kw-2">&amp;</span>url_unparsed)
                         .<span class="kw">await
-                        </span>.with_context(|| {
-                            <span class="macro">format!</span>(<span class="string">"Failed to parse image resource: {}"</span>, url_unparsed)
-                        })<span class="question-mark">?</span>;
+                        </span>.context(<span class="macro">format!</span>(<span class="string">"Failed to parse image resource: {}"</span>, url_unparsed))<span class="question-mark">?</span>;
 
                     images.push(image);
                 }

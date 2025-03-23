@@ -265,7 +265,16 @@
 <a href="#264" id="264">264</a>
 <a href="#265" id="265">265</a>
 <a href="#266" id="266">266</a>
-<a href="#267" id="267">267</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a>
+<a href="#272" id="272">272</a>
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -286,6 +295,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapSetting&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
@@ -331,8 +341,15 @@
             device_mapping: <span class="prelude-val">None</span>,
             calibration_file: <span class="prelude-val">None</span>,
             imatrix: <span class="prelude-val">None</span>,
+            jinja_explicit: <span class="prelude-val">None</span>,
         }
     }
+
+    <span class="doccomment">/// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
+    </span><span class="kw">pub fn </span>with_jinja_explicit(<span class="kw-2">mut </span><span class="self">self</span>, jinja_explicit: String) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.jinja_explicit = <span class="prelude-val">Some</span>(jinja_explicit);
+        <span class="self">self
+    </span>}
 
     <span class="doccomment">/// Set the prompt batchsize to use for inference.
     </span><span class="kw">pub fn </span>with_prompt_chunksize(<span class="kw-2">mut </span><span class="self">self</span>, prompt_chunksize: NonZeroUsize) -&gt; <span class="self">Self </span>{
@@ -459,6 +476,7 @@
             <span class="self">self</span>.chat_template,
             <span class="self">self</span>.tokenizer_json,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.model_id),
+            <span class="self">self</span>.jinja_explicit,
         )
         .build(<span class="self">self</span>.loader_type);
 

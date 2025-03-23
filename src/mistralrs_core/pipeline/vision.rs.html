@@ -994,7 +994,13 @@
 <a href="#993" id="993">993</a>
 <a href="#994" id="994">994</a>
 <a href="#995" id="995">995</a>
-<a href="#996" id="996">996</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#996" id="996">996</a>
+<a href="#997" id="997">997</a>
+<a href="#998" id="998">998</a>
+<a href="#999" id="999">999</a>
+<a href="#1000" id="1000">1000</a>
+<a href="#1001" id="1001">1001</a>
+<a href="#1002" id="1002">1002</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::isq::UqffFullSer;
 <span class="kw">use super</span>::{
@@ -1083,6 +1089,7 @@
     token_source: RwLock&lt;<span class="prelude-ty">Option</span>&lt;TokenSource&gt;&gt;,
     revision: RwLock&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;,
     from_uqff: RwLock&lt;<span class="prelude-ty">Option</span>&lt;PathBuf&gt;&gt;,
+    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Default)]
@@ -1093,6 +1100,7 @@
     kind: ModelKind,
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Clone, Default)]
@@ -1114,12 +1122,14 @@
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
         model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
+        jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             config,
             chat_template,
             tokenizer_json,
             model_id,
+            jinja_explicit,
             kind: ModelKind::Normal,
         }
     }
@@ -1148,6 +1158,7 @@
             tokenizer_json: <span class="self">self</span>.tokenizer_json,
             xlora_model_id: <span class="prelude-val">None</span>,
             xlora_order: <span class="prelude-val">None</span>,
+            jinja_explicit: <span class="self">self</span>.jinja_explicit,
             token_source: RwLock::new(<span class="prelude-val">None</span>),
             revision: RwLock::new(<span class="prelude-val">None</span>),
             from_uqff: RwLock::new(<span class="prelude-val">None</span>),
@@ -1470,8 +1481,9 @@
         });
         <span class="kw">let </span>chat_template = get_chat_template(
             paths,
+            <span class="kw-2">&amp;</span><span class="self">self</span>.jinja_explicit,
             <span class="kw-2">&amp;</span>paths
-                .get_chat_template_json()
+                .get_chat_template_explicit()
                 .as_ref()
                 .map(|x| x.to_string_lossy().to_string())
                 .clone(),

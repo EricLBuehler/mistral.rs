@@ -299,7 +299,28 @@
 <a href="#298" id="298">298</a>
 <a href="#299" id="299">299</a>
 <a href="#300" id="300">300</a>
-<a href="#301" id="301">301</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a>
+<a href="#303" id="303">303</a>
+<a href="#304" id="304">304</a>
+<a href="#305" id="305">305</a>
+<a href="#306" id="306">306</a>
+<a href="#307" id="307">307</a>
+<a href="#308" id="308">308</a>
+<a href="#309" id="309">309</a>
+<a href="#310" id="310">310</a>
+<a href="#311" id="311">311</a>
+<a href="#312" id="312">312</a>
+<a href="#313" id="313">313</a>
+<a href="#314" id="314">314</a>
+<a href="#315" id="315">315</a>
+<a href="#316" id="316">316</a>
+<a href="#317" id="317">317</a>
+<a href="#318" id="318">318</a>
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>either::Either;
@@ -553,19 +574,40 @@
     <span class="kw">let </span>template = <span class="kw">match </span><span class="kw-2">&amp;</span>template.<span class="number">0 </span>{
         Either::Left(x) =&gt; x.clone(),
         Either::Right(map) =&gt; {
-            <span class="kw">let </span><span class="kw-2">mut </span>template = <span class="string">""</span>.to_string();
+            <span class="kw">let </span><span class="kw-2">mut </span>template = <span class="prelude-val">None</span>;
+            <span class="kw">let </span>has_tool_use = map.iter().any(|t| {
+                t.get(<span class="string">"name"</span>).is_some_and(|name| name == <span class="string">"tool_use"</span>) || t.contains_key(<span class="string">"tool_use"</span>)
+            });
+            <span class="kw">let </span>must_use_tool_template = !tools.is_empty();
+
+            <span class="kw">if </span>must_use_tool_template &amp;&amp; !has_tool_use {
+                <span class="macro">anyhow::bail!</span>(
+                    <span class="string">"Tools were provided but this chat template does not handle tool usage"
+                </span>);
+            }
+
             <span class="kw">for </span>t <span class="kw">in </span>map {
-                <span class="kw">if </span>t.contains_key(<span class="string">"tool_use"</span>) &amp;&amp; !tools.is_empty() {
-                    template = t[<span class="string">"tool_use"</span>].clone();
+                <span class="kw">let </span>name = t.get(<span class="string">"name"</span>);
+                <span class="kw">if let </span><span class="prelude-val">Some</span>(name) = name {
+                    template = <span class="prelude-val">Some</span>(t[<span class="string">"template"</span>].clone());
+                    <span class="attr">#[allow(clippy::if_same_then_else)]
+                    </span><span class="kw">if </span>name == <span class="string">"tool_use" </span>&amp;&amp; !tools.is_empty() {
+                        <span class="kw">break</span>;
+                    } <span class="kw">else if </span>name == <span class="string">"default" </span>&amp;&amp; !must_use_tool_template {
+                        <span class="kw">break</span>;
+                    }
+                } <span class="kw">else if </span>t.contains_key(<span class="string">"tool_use"</span>) &amp;&amp; !tools.is_empty() {
+                    template = <span class="prelude-val">Some</span>(t[<span class="string">"tool_use"</span>].clone());
                     <span class="kw">break</span>;
-                } <span class="kw">else if </span>t.contains_key(<span class="string">"default"</span>) {
-                    template = t[<span class="string">"default"</span>].clone();
+                } <span class="kw">else if </span>t.contains_key(<span class="string">"default"</span>) &amp;&amp; !must_use_tool_template {
+                    template = <span class="prelude-val">Some</span>(t[<span class="string">"default"</span>].clone());
                     <span class="kw">break</span>;
                 }
             }
-            <span class="kw">if </span>template.is_empty() {
+
+            <span class="kw">let </span><span class="prelude-val">Some</span>(template) = template <span class="kw">else </span>{
                 <span class="macro">anyhow::bail!</span>(<span class="string">"Chat template does not contain a `tool_use` or `default` key. Please ensure it contains at least a `default` key, although `tool_use` should be specified for using tools."</span>);
-            }
+            };
             template
         }
     };

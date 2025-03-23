@@ -584,7 +584,11 @@
 <a href="#583" id="583">583</a>
 <a href="#584" id="584">584</a>
 <a href="#585" id="585">585</a>
-<a href="#586" id="586">586</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::FullCacheManager;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
 <span class="kw">use super</span>::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -660,6 +664,7 @@
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     kind: ModelKind,
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="attr">#[derive(Clone, Default)]
@@ -684,10 +689,11 @@
     chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 }
 
 <span class="kw">impl </span>GGMLLoaderBuilder {
-    <span class="doccomment">/// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
+    <span class="attr">#[allow(clippy::too_many_arguments)]
     </span><span class="kw">pub fn </span>new(
         config: GGMLSpecificConfig,
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -695,6 +701,8 @@
         model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
         quantized_model_id: String,
         quantized_filename: String,
+        no_kv_cache: bool,
+        jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>kind = ModelKind::GgufQuantized {
             quant: QuantizationKind::Ggml,
@@ -708,15 +716,11 @@
             kind,
             quantized_filename,
             quantized_model_id,
+            no_kv_cache,
+            jinja_explicit,
             ..Default::default()
         }
     }
-
-    <span class="comment">// TODO(EricLBuehler): in 0.4.0 we can move this into the config
-    </span><span class="kw">pub fn </span>with_no_kv_cache(<span class="kw-2">mut </span><span class="self">self</span>, no_kv_cache: bool) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.no_kv_cache = no_kv_cache;
-        <span class="self">self
-    </span>}
 
     <span class="kw">fn </span>with_adapter(
         <span class="kw-2">mut </span><span class="self">self</span>,
@@ -777,6 +781,7 @@
             tgt_non_granular_index: <span class="self">self</span>.tgt_non_granular_index,
             quantized_filename: <span class="prelude-val">Some</span>(<span class="self">self</span>.quantized_filename),
             quantized_model_id: <span class="prelude-val">Some</span>(<span class="self">self</span>.quantized_model_id),
+            jinja_explicit: <span class="self">self</span>.jinja_explicit,
         })
     }
 }
@@ -795,6 +800,7 @@
         chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
         tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+        jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>model_id = <span class="kw">if let </span><span class="prelude-val">Some</span>(id) = model_id {
             id
@@ -817,6 +823,7 @@
             tokenizer_json,
             kind,
             tgt_non_granular_index,
+            jinja_explicit,
         }
     }
 }
@@ -930,8 +937,9 @@
         });
         <span class="kw">let </span>chat_template = get_chat_template(
             paths,
+            <span class="kw-2">&amp;</span><span class="self">self</span>.jinja_explicit,
             <span class="kw-2">&amp;</span>paths
-                .get_chat_template_json()
+                .get_chat_template_explicit()
                 .as_ref()
                 .map(|x| x.to_string_lossy().to_string())
                 .clone(),

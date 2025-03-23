@@ -94,7 +94,8 @@
 <a href="#93" id="93">93</a>
 <a href="#94" id="94">94</a>
 <a href="#95" id="95">95</a>
-<a href="#96" id="96">96</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#96" id="96">96</a>
+<a href="#97" id="97">97</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 
 <span class="kw">use crate</span>::{best_device, Model, TextModelBuilder};
 
@@ -139,9 +140,10 @@
             <span class="self">self</span>.text_model.chat_template,
             <span class="self">self</span>.text_model.tokenizer_json,
             <span class="prelude-val">Some</span>(<span class="self">self</span>.text_model.model_id),
+            <span class="self">self</span>.text_model.no_kv_cache,
+            <span class="self">self</span>.text_model.jinja_explicit,
         )
         .with_lora(<span class="self">self</span>.lora_model_id, <span class="self">self</span>.ordering)
-        .with_no_kv_cache(<span class="self">self</span>.text_model.no_kv_cache)
         .build(<span class="self">self</span>.text_model.loader_type)<span class="question-mark">?</span>;
 
         <span class="comment">// Load, into a Pipeline

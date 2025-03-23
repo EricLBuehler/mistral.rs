@@ -158,7 +158,9 @@
 <a href="#157" id="157">157</a>
 <a href="#158" id="158">158</a>
 <a href="#159" id="159">159</a>
-<a href="#160" id="160">160</a></pre></div><pre class="rust"><code><span class="kw">mod </span>request;
+<a href="#160" id="160">160</a>
+<a href="#161" id="161">161</a>
+<a href="#162" id="162">162</a></pre></div><pre class="rust"><code><span class="kw">mod </span>request;
 <span class="kw">mod </span>response;
 
 <span class="kw">pub use </span>request::<span class="kw-2">*</span>;
@@ -167,22 +169,40 @@
 <span class="kw">use </span>std::{collections::HashMap, sync::Arc};
 <span class="kw">use </span>uuid::Uuid;
 
+<span class="kw">use </span><span class="kw">crate</span>::Pipeline;
+
+<span class="kw">fn </span>process_model_specific_message(message: <span class="kw-2">&amp;</span>str) -&gt; <span class="kw-2">&amp;</span>str {
+    <span class="kw">if let </span><span class="prelude-val">Some</span>(message) = message.strip_prefix(<span class="string">"&lt;|python_tag|&gt;"</span>) {
+        <span class="comment">// Llama case
+        </span>message
+    } <span class="kw">else if let </span><span class="prelude-val">Some</span>(message) = message
+        .strip_prefix(<span class="string">"&lt;tool_call&gt;"</span>)
+        .and_then(|s| s.strip_suffix(<span class="string">"&lt;/tool_call&gt;"</span>))
+    {
+        <span class="comment">// Hermes case
+        </span>message
+    } <span class="kw">else if let </span><span class="prelude-val">Some</span>(message) = message
+        .strip_prefix(<span class="string">"[TOOL_CALLS]["</span>)
+        .and_then(|s| s.strip_suffix(<span class="string">"]"</span>))
+    {
+        <span class="comment">// Mistral Nemo case
+        </span>message
+    } <span class="kw">else </span>{
+        message
+    }
+}
+
 <span class="kw">pub struct </span>ToolCallingMatcher {
     tool_choice: ToolChoice,
 }
 
-<span class="comment">// Same as CalledFunction, but uses `parameters`
+<span class="comment">// Same as CalledFunction, but has different cases for variations on the names
 </span><span class="attr">#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 </span><span class="kw">pub struct </span>CalledFunctionParameters {
-    <span class="kw">pub </span>name: String,
-    <span class="kw">pub </span>parameters: HashMap&lt;String, Value&gt;,
-}
-
-<span class="comment">// Same as CalledFunction, but uses `arguments``
-</span><span class="attr">#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-</span><span class="kw">pub struct </span>CalledFunctionArguments {
-    <span class="kw">pub </span>name: String,
-    <span class="kw">pub </span>arguments: HashMap&lt;String, Value&gt;,
+    <span class="attr">#[serde(alias = <span class="string">"function"</span>)]
+    </span><span class="kw">pub </span>name: String,
+    <span class="attr">#[serde(alias = <span class="string">"arguments"</span>)]
+    </span><span class="kw">pub </span>parameters: HashMap&lt;String, Value&gt;,
 }
 
 <span class="kw">impl </span>ToolCallingMatcher {
@@ -196,17 +216,20 @@
     // If the start of a message could be a tool call, then it looks like an incomplete JSON of a given structure, e.g. `{"name": "foo", "param`.
     //
     // Returns a tuple of `(could_be_tool, is_complete_tool)`.
-    </span><span class="kw">pub fn </span>prefix_could_be_tool(<span class="kw-2">&amp;</span><span class="self">self</span>, message_prefix: <span class="kw-2">&amp;</span>str) -&gt; (bool, bool) {
+    </span><span class="kw">pub fn </span>prefix_could_be_tool(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
+        message_prefix: <span class="kw-2">&amp;</span>str,
+    ) -&gt; (bool, bool) {
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.tool_choice, ToolChoice::None) {
             <span class="kw">return </span>(<span class="bool-val">false</span>, <span class="bool-val">false</span>);
         }
+        <span class="kw">let </span>message_prefix = process_model_specific_message(message_prefix);
 
         <span class="comment">// Check if the prefix could be a JSON serialization of any of the following types.
         </span>[
             could_be_json::&lt;CalledFunctionParameters&gt;,
-            could_be_json::&lt;CalledFunctionArguments&gt;,
             could_be_json::&lt;Vec&lt;CalledFunctionParameters&gt;&gt;,
-            could_be_json::&lt;Vec&lt;CalledFunctionArguments&gt;&gt;,
         ]
         .iter()
         .find_map(|check| {
@@ -220,10 +243,15 @@
         .unwrap_or_default()
     }
 
-    <span class="kw">pub fn </span>get_call(<span class="kw-2">&amp;</span><span class="self">self</span>, message: <span class="kw-2">&amp;</span>str) -&gt; anyhow::Result&lt;Vec&lt;ToolCallResponse&gt;&gt; {
+    <span class="kw">pub fn </span>get_call(
+        <span class="kw-2">&amp;</span><span class="self">self</span>,
+        _pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
+        message: <span class="kw-2">&amp;</span>str,
+    ) -&gt; anyhow::Result&lt;Vec&lt;ToolCallResponse&gt;&gt; {
         <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.tool_choice, ToolChoice::None) {
             <span class="kw">return </span><span class="prelude-val">Ok</span>(Vec::new());
         }
+        <span class="kw">let </span>message = process_model_specific_message(message);
 
         <span class="kw">if let </span><span class="prelude-val">Ok</span>(deser) = serde_json::from_str::&lt;CalledFunctionParameters&gt;(message) {
             <span class="kw">let </span>id = <span class="macro">format!</span>(<span class="string">"call-{}"</span>, Uuid::new_v4());
@@ -246,31 +274,6 @@
                         function: CalledFunction {
                             name: deser.name,
                             arguments: serde_json::to_string(<span class="kw-2">&amp;</span>deser.parameters)<span class="question-mark">?</span>,
-                        },
-                    })
-                })
-                .collect::&lt;anyhow::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>)
-        } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(deser) = serde_json::from_str::&lt;CalledFunctionArguments&gt;(message) {
-            <span class="kw">let </span>id = <span class="macro">format!</span>(<span class="string">"call-{}"</span>, Uuid::new_v4());
-            <span class="prelude-val">Ok</span>(<span class="macro">vec!</span>[ToolCallResponse {
-                id,
-                tp: ToolCallType::Function,
-                function: CalledFunction {
-                    name: deser.name,
-                    arguments: serde_json::to_string(<span class="kw-2">&amp;</span>deser.arguments)<span class="question-mark">?</span>,
-                },
-            }])
-        } <span class="kw">else if let </span><span class="prelude-val">Ok</span>(deser) = serde_json::from_str::&lt;Vec&lt;CalledFunctionArguments&gt;&gt;(message) {
-            <span class="prelude-val">Ok</span>(deser
-                .into_iter()
-                .map(|deser| {
-                    <span class="kw">let </span>id = <span class="macro">format!</span>(<span class="string">"call-{}"</span>, Uuid::new_v4());
-                    <span class="prelude-val">Ok</span>(ToolCallResponse {
-                        id,
-                        tp: ToolCallType::Function,
-                        function: CalledFunction {
-                            name: deser.name,
-                            arguments: serde_json::to_string(<span class="kw-2">&amp;</span>deser.arguments)<span class="question-mark">?</span>,
                         },
                     })
                 })
@@ -300,16 +303,17 @@
 }
 
 <span class="doccomment">/// Takes raw UTf8 text and parses any possible tool calls from it.
-</span><span class="kw">pub fn </span>parse_text_tools(
-    raw_text: <span class="kw-2">&amp;</span>str,
+</span><span class="kw">pub fn </span>parse_text_tools&lt;<span class="lifetime">'a</span>&gt;(
+    pipeline: <span class="kw-2">&amp;</span><span class="kw">dyn </span>Pipeline,
+    raw_text: <span class="kw-2">&amp;</span><span class="lifetime">'a </span>str,
     matcher: <span class="prelude-ty">Option</span>&lt;Arc&lt;ToolCallingMatcher&gt;&gt;,
-) -&gt; anyhow::Result&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>str&gt;, Vec&lt;ToolCallResponse&gt;)&gt; {
+) -&gt; anyhow::Result&lt;(<span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>str&gt;, Vec&lt;ToolCallResponse&gt;)&gt; {
     <span class="kw">let </span><span class="kw-2">mut </span>tool_calls = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>text_new = <span class="prelude-val">Some</span>(raw_text);
 
     <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>matcher) = matcher {
         <span class="kw">let </span>calls = matcher
-            .get_call(raw_text)
+            .get_call(pipeline, raw_text)
             .map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
         <span class="kw">if </span>!calls.is_empty() {
             text_new = <span class="prelude-val">None</span>;

@@ -512,7 +512,12 @@
 <a href="#511" id="511">511</a>
 <a href="#512" id="512">512</a>
 <a href="#513" id="513">513</a>
-<a href="#514" id="514">514</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#514" id="514">514</a>
+<a href="#515" id="515">515</a>
+<a href="#516" id="516">516</a>
+<a href="#517" id="517">517</a>
+<a href="#518" id="518">518</a>
+<a href="#519" id="519">519</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
@@ -600,10 +605,14 @@
     </span><span class="attr">#[arg(long, default_value_t = <span class="bool-val">false</span>)]
     </span>no_kv_cache: bool,
 
-    <span class="doccomment">/// JINJA chat template with `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
+    <span class="doccomment">/// Chat template file with a JINJA file with `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
     /// Used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
     </span><span class="attr">#[arg(short, long)]
     </span>chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
+
+    <span class="doccomment">/// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
+    </span><span class="attr">#[arg(short, long)]
+    </span>jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 
     <span class="doccomment">/// Source of the token for authentication.
     /// Can be in the formats: `literal:&lt;value&gt;`, `env:&lt;value&gt;`, `path:&lt;value&gt;`, `cache` to use a cached token, or `none` to use no token.
@@ -823,6 +832,7 @@
         .with_chat_template(args.chat_template)
         .with_use_flash_attn(use_flash_attn)
         .with_prompt_chunksize(prompt_chunksize)
+        .with_jinja_explicit(args.jinja_explicit)
         .build()<span class="question-mark">?</span>;
 
     <span class="attr">#[cfg(feature = <span class="string">"metal"</span>)]

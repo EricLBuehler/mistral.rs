@@ -914,8 +914,8 @@
     <span class="doccomment">/// Get the processor config (for the vision models). This is primarily used for the chat template.
     </span><span class="kw">fn </span>get_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
 
-    <span class="doccomment">/// Get the explicit chat template. If specified, this overwrites anything in the tokenizer_config.json
-    </span><span class="kw">fn </span>get_chat_template_json(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
+    <span class="doccomment">/// Get the explicit chat template.
+    </span><span class="kw">fn </span>get_chat_template_explicit(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
 }
 
 <span class="attr">#[derive(Clone, Debug)]
@@ -1014,7 +1014,7 @@
     <span class="kw">fn </span>get_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
         <span class="kw-2">&amp;</span><span class="self">self</span>.processor_config
     }
-    <span class="kw">fn </span>get_chat_template_json(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
+    <span class="kw">fn </span>get_chat_template_explicit(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
         <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template_json_filename
     }
 }
