@@ -186,11 +186,15 @@ pub struct MistralRsBuilder {
     no_prefix_cache: Option<bool>,
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
-    throughput_logging_enabled: Option<()>,
+    throughput_logging_enabled: bool,
 }
 
 impl MistralRsBuilder {
-    pub fn new(pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>, method: SchedulerConfig) -> Self {
+    pub fn new(
+        pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+        method: SchedulerConfig,
+        throughput_logging: bool,
+    ) -> Self {
         Self {
             pipeline,
             method,
@@ -200,7 +204,7 @@ impl MistralRsBuilder {
             no_prefix_cache: None,
             prefix_cache_n: None,
             disable_eos_stop: None,
-            throughput_logging_enabled: None,
+            throughput_logging_enabled: throughput_logging,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -229,10 +233,6 @@ impl MistralRsBuilder {
     }
     pub fn with_disable_eos_stop(mut self, disable_eos_stop: bool) -> Self {
         self.disable_eos_stop = Some(disable_eos_stop);
-        self
-    }
-    pub fn with_throughput_logging(mut self) -> Self {
-        self.throughput_logging_enabled = Some(());
         self
     }
 
@@ -272,7 +272,6 @@ impl MistralRs {
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
-        let throughput_logging_enabled = throughput_logging_enabled.is_some();
 
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
@@ -443,7 +442,7 @@ impl MistralRs {
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!")
                 .as_secs(),
-            next_request_id: Mutex::new(RefCell::new(0)),
+            next_request_id: Mutex::new(RefCell::new(1)),
             reboot_state,
             engine_handler: RwLock::new(engine_handler),
             category,

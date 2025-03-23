@@ -32,6 +32,7 @@ pub struct TextModelBuilder {
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
     pub(crate) isq: Option<IsqType>,
+    pub(crate) throughput_logging: bool,
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
@@ -107,7 +108,14 @@ impl TextModelBuilder {
             imatrix: None,
             calibration_file: None,
             jinja_explicit: None,
+            throughput_logging: false,
         }
+    }
+
+    /// Enable runner throughput logging.
+    pub fn with_throughput_logging(mut self) -> Self {
+        self.throughput_logging = true;
+        self
     }
 
     /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
@@ -320,7 +328,7 @@ impl TextModelBuilder {
             },
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
+        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method, self.throughput_logging)
             .with_no_kv_cache(self.no_kv_cache)
             .with_no_prefix_cache(self.prefix_cache_n.is_none());
 
