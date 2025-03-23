@@ -211,7 +211,7 @@
             method: DefaultSchedulerMethod::Fixed(<span class="self">self</span>.max_num_seqs.try_into()<span class="question-mark">?</span>),
         };
 
-        <span class="kw">let </span>runner = MistralRsBuilder::new(pipeline, scheduler_method);
+        <span class="kw">let </span>runner = MistralRsBuilder::new(pipeline, scheduler_method, <span class="bool-val">false</span>);
 
         <span class="prelude-val">Ok</span>(Model::new(runner.build()))
     }

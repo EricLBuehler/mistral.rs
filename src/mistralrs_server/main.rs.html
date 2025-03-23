@@ -511,13 +511,7 @@
 <a href="#510" id="510">510</a>
 <a href="#511" id="511">511</a>
 <a href="#512" id="512">512</a>
-<a href="#513" id="513">513</a>
-<a href="#514" id="514">514</a>
-<a href="#515" id="515">515</a>
-<a href="#516" id="516">516</a>
-<a href="#517" id="517">517</a>
-<a href="#518" id="518">518</a>
-<a href="#519" id="519">519</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#513" id="513">513</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>axum::{
     extract::{DefaultBodyLimit, Json, State},
     http::{<span class="self">self</span>, Method},
@@ -998,23 +992,17 @@
         }
     };
     <span class="comment">// Throughput logging in the server
-    </span><span class="kw">let </span>builder = MistralRsBuilder::new(pipeline, scheduler_config)
+    </span><span class="kw">let </span>mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, !args.interactive_mode)
         .with_opt_log(args.log)
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
-        .with_prefix_cache_n(args.prefix_cache_n);
+        .with_prefix_cache_n(args.prefix_cache_n)
+        .build();
 
     <span class="kw">if </span>args.interactive_mode {
-        interactive_mode(builder.build(), args.throughput_log).<span class="kw">await</span>;
+        interactive_mode(mistralrs, args.throughput_log).<span class="kw">await</span>;
         <span class="kw">return </span><span class="prelude-val">Ok</span>(());
     }
-
-    <span class="kw">let </span>builder = <span class="kw">if </span>args.throughput_log {
-        builder.with_throughput_logging()
-    } <span class="kw">else </span>{
-        builder
-    };
-    <span class="kw">let </span>mistralrs = builder.build();
 
     <span class="comment">// Needs to be after the .build call as that is where the daemon waits.
     </span><span class="kw">let </span>setting_server = <span class="kw">if </span>!args.interactive_mode {

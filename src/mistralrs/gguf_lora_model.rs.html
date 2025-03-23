@@ -90,7 +90,11 @@
 <a href="#89" id="89">89</a>
 <a href="#90" id="90">90</a>
 <a href="#91" id="91">91</a>
-<a href="#92" id="92">92</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#92" id="92">92</a>
+<a href="#93" id="93">93</a>
+<a href="#94" id="94">94</a>
+<a href="#95" id="95">95</a>
+<a href="#96" id="96">96</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 
 <span class="kw">use crate</span>::{best_device, GgufModelBuilder, Model};
 
@@ -171,9 +175,13 @@
             },
         };
 
-        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(pipeline, scheduler_method)
-            .with_no_kv_cache(<span class="self">self</span>.gguf_model.no_kv_cache)
-            .with_no_prefix_cache(<span class="self">self</span>.gguf_model.prefix_cache_n.is_none());
+        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            <span class="self">self</span>.gguf_model.throughput_logging,
+        )
+        .with_no_kv_cache(<span class="self">self</span>.gguf_model.no_kv_cache)
+        .with_no_prefix_cache(<span class="self">self</span>.gguf_model.prefix_cache_n.is_none());
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.gguf_model.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

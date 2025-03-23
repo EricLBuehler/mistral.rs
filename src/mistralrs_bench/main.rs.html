@@ -1119,7 +1119,7 @@
             ),
         }
     };
-    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, <span class="bool-val">false</span>)
         .with_no_prefix_cache(<span class="bool-val">true</span>)
         .with_disable_eos_stop(<span class="bool-val">true</span>)
         .build();

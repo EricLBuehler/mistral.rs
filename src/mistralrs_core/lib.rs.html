@@ -578,8 +578,7 @@
 <a href="#577" id="577">577</a>
 <a href="#578" id="578">578</a>
 <a href="#579" id="579">579</a>
-<a href="#580" id="580">580</a>
-<a href="#581" id="581">581</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#580" id="580">580</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
 <span class="kw">use </span>engine::Engine;
@@ -767,11 +766,15 @@
     no_prefix_cache: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     prefix_cache_n: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     disable_eos_stop: <span class="prelude-ty">Option</span>&lt;bool&gt;,
-    throughput_logging_enabled: <span class="prelude-ty">Option</span>&lt;()&gt;,
+    throughput_logging_enabled: bool,
 }
 
 <span class="kw">impl </span>MistralRsBuilder {
-    <span class="kw">pub fn </span>new(pipeline: Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;, method: SchedulerConfig) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(
+        pipeline: Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
+        method: SchedulerConfig,
+        throughput_logging: bool,
+    ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             pipeline,
             method,
@@ -781,7 +784,7 @@
             no_prefix_cache: <span class="prelude-val">None</span>,
             prefix_cache_n: <span class="prelude-val">None</span>,
             disable_eos_stop: <span class="prelude-val">None</span>,
-            throughput_logging_enabled: <span class="prelude-val">None</span>,
+            throughput_logging_enabled: throughput_logging,
         }
     }
     <span class="kw">pub fn </span>with_log(<span class="kw-2">mut </span><span class="self">self</span>, log: String) -&gt; <span class="self">Self </span>{
@@ -810,10 +813,6 @@
     </span>}
     <span class="kw">pub fn </span>with_disable_eos_stop(<span class="kw-2">mut </span><span class="self">self</span>, disable_eos_stop: bool) -&gt; <span class="self">Self </span>{
         <span class="self">self</span>.disable_eos_stop = <span class="prelude-val">Some</span>(disable_eos_stop);
-        <span class="self">self
-    </span>}
-    <span class="kw">pub fn </span>with_throughput_logging(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
-        <span class="self">self</span>.throughput_logging_enabled = <span class="prelude-val">Some</span>(());
         <span class="self">self
     </span>}
 
@@ -853,7 +852,6 @@
         <span class="kw">let </span>no_prefix_cache = no_prefix_cache.unwrap_or(<span class="bool-val">false</span>);
         <span class="kw">let </span>prefix_cache_n = prefix_cache_n.unwrap_or(<span class="number">16</span>);
         <span class="kw">let </span>disable_eos_stop = disable_eos_stop.unwrap_or(<span class="bool-val">false</span>);
-        <span class="kw">let </span>throughput_logging_enabled = throughput_logging_enabled.is_some();
 
         <span class="kw">let </span>reboot_state = RebootState {
             pipeline: pipeline.clone(),
@@ -1024,7 +1022,7 @@
                 .duration_since(UNIX_EPOCH)
                 .expect(<span class="string">"Time travel has occurred!"</span>)
                 .as_secs(),
-            next_request_id: Mutex::new(RefCell::new(<span class="number">0</span>)),
+            next_request_id: Mutex::new(RefCell::new(<span class="number">1</span>)),
             reboot_state,
             engine_handler: RwLock::new(engine_handler),
             category,

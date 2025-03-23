@@ -225,7 +225,15 @@
 <a href="#224" id="224">224</a>
 <a href="#225" id="225">225</a>
 <a href="#226" id="226">226</a>
-<a href="#227" id="227">227</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#227" id="227">227</a>
+<a href="#228" id="228">228</a>
+<a href="#229" id="229">229</a>
+<a href="#230" id="230">230</a>
+<a href="#231" id="231">231</a>
+<a href="#232" id="232">232</a>
+<a href="#233" id="233">233</a>
+<a href="#234" id="234">234</a>
+<a href="#235" id="235">235</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::num::NonZeroUsize;
 
 <span class="kw">use crate</span>::{best_device, Model};
@@ -247,6 +255,7 @@
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) force_cpu: bool,
     <span class="kw">pub</span>(<span class="kw">crate</span>) topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) throughput_logging: bool,
 
     <span class="comment">// Other things
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) paged_attn_cfg: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
@@ -281,8 +290,15 @@
             tok_model_id: <span class="prelude-val">None</span>,
             device_mapping: <span class="prelude-val">None</span>,
             jinja_explicit: <span class="prelude-val">None</span>,
+            throughput_logging: <span class="bool-val">false</span>,
         }
     }
+
+    <span class="doccomment">/// Enable runner throughput logging.
+    </span><span class="kw">pub fn </span>with_throughput_logging(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.throughput_logging = <span class="bool-val">true</span>;
+        <span class="self">self
+    </span>}
 
     <span class="doccomment">/// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
     </span><span class="kw">pub fn </span>with_jinja_explicit(<span class="kw-2">mut </span><span class="self">self</span>, jinja_explicit: String) -&gt; <span class="self">Self </span>{
@@ -441,7 +457,7 @@
             },
         };
 
-        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(pipeline, scheduler_method)
+        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(pipeline, scheduler_method, <span class="self">self</span>.throughput_logging)
             .with_no_kv_cache(<span class="self">self</span>.no_kv_cache)
             .with_no_prefix_cache(<span class="self">self</span>.prefix_cache_n.is_none());
 

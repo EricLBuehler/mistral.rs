@@ -274,7 +274,15 @@
 <a href="#273" id="273">273</a>
 <a href="#274" id="274">274</a>
 <a href="#275" id="275">275</a>
-<a href="#276" id="276">276</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#276" id="276">276</a>
+<a href="#277" id="277">277</a>
+<a href="#278" id="278">278</a>
+<a href="#279" id="279">279</a>
+<a href="#280" id="280">280</a>
+<a href="#281" id="281">281</a>
+<a href="#282" id="282">282</a>
+<a href="#283" id="283">283</a>
+<a href="#284" id="284">284</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -308,6 +316,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) dtype: ModelDType,
     <span class="kw">pub</span>(<span class="kw">crate</span>) force_cpu: bool,
     <span class="kw">pub</span>(<span class="kw">crate</span>) isq: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) throughput_logging: bool,
 
     <span class="comment">// Other things
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) max_num_seqs: usize,
@@ -342,8 +351,15 @@
             calibration_file: <span class="prelude-val">None</span>,
             imatrix: <span class="prelude-val">None</span>,
             jinja_explicit: <span class="prelude-val">None</span>,
+            throughput_logging: <span class="bool-val">false</span>,
         }
     }
+
+    <span class="doccomment">/// Enable runner throughput logging.
+    </span><span class="kw">pub fn </span>with_throughput_logging(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.throughput_logging = <span class="bool-val">true</span>;
+        <span class="self">self
+    </span>}
 
     <span class="doccomment">/// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
     </span><span class="kw">pub fn </span>with_jinja_explicit(<span class="kw-2">mut </span><span class="self">self</span>, jinja_explicit: String) -&gt; <span class="self">Self </span>{
@@ -497,7 +513,7 @@
             method: DefaultSchedulerMethod::Fixed(<span class="self">self</span>.max_num_seqs.try_into()<span class="question-mark">?</span>),
         };
 
-        <span class="kw">let </span>runner = MistralRsBuilder::new(pipeline, scheduler_method)
+        <span class="kw">let </span>runner = MistralRsBuilder::new(pipeline, scheduler_method, <span class="self">self</span>.throughput_logging)
             .with_no_kv_cache(<span class="bool-val">false</span>)
             .with_no_prefix_cache(<span class="bool-val">false</span>);
 

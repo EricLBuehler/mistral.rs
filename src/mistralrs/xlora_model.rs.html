@@ -107,7 +107,11 @@
 <a href="#106" id="106">106</a>
 <a href="#107" id="107">107</a>
 <a href="#108" id="108">108</a>
-<a href="#109" id="109">109</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#109" id="109">109</a>
+<a href="#110" id="110">110</a>
+<a href="#111" id="111">111</a>
+<a href="#112" id="112">112</a>
+<a href="#113" id="113">113</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 
 <span class="kw">use crate</span>::{best_device, Model, TextModelBuilder};
 
@@ -205,9 +209,13 @@
             },
         };
 
-        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(pipeline, scheduler_method)
-            .with_no_kv_cache(<span class="self">self</span>.text_model.no_kv_cache)
-            .with_no_prefix_cache(<span class="self">self</span>.text_model.prefix_cache_n.is_none());
+        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            <span class="self">self</span>.text_model.throughput_logging,
+        )
+        .with_no_kv_cache(<span class="self">self</span>.text_model.no_kv_cache)
+        .with_no_prefix_cache(<span class="self">self</span>.text_model.prefix_cache_n.is_none());
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.text_model.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

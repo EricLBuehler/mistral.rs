@@ -1051,38 +1051,11 @@
 <a href="#1050" id="1050">1050</a>
 <a href="#1051" id="1051">1051</a>
 <a href="#1052" id="1052">1052</a>
-<a href="#1053" id="1053">1053</a>
-<a href="#1054" id="1054">1054</a>
-<a href="#1055" id="1055">1055</a>
-<a href="#1056" id="1056">1056</a>
-<a href="#1057" id="1057">1057</a>
-<a href="#1058" id="1058">1058</a>
-<a href="#1059" id="1059">1059</a>
-<a href="#1060" id="1060">1060</a>
-<a href="#1061" id="1061">1061</a>
-<a href="#1062" id="1062">1062</a>
-<a href="#1063" id="1063">1063</a>
-<a href="#1064" id="1064">1064</a>
-<a href="#1065" id="1065">1065</a>
-<a href="#1066" id="1066">1066</a>
-<a href="#1067" id="1067">1067</a>
-<a href="#1068" id="1068">1068</a>
-<a href="#1069" id="1069">1069</a>
-<a href="#1070" id="1070">1070</a>
-<a href="#1071" id="1071">1071</a>
-<a href="#1072" id="1072">1072</a>
-<a href="#1073" id="1073">1073</a>
-<a href="#1074" id="1074">1074</a>
-<a href="#1075" id="1075">1075</a>
-<a href="#1076" id="1076">1076</a>
-<a href="#1077" id="1077">1077</a>
-<a href="#1078" id="1078">1078</a>
-<a href="#1079" id="1079">1079</a>
-<a href="#1080" id="1080">1080</a>
-<a href="#1081" id="1081">1081</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
+<a href="#1053" id="1053">1053</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>interprocess::local_socket::{traits::Listener, ListenerOptions};
 <span class="kw">use </span>llguidance::toktrie::TokEnv;
+<span class="kw">use </span>logger::IntervalLogger;
 <span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>std::{
     collections::HashMap,
@@ -1091,7 +1064,7 @@
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 <span class="kw">use </span>tokio::sync::{mpsc::Receiver, Mutex};
 
@@ -1124,6 +1097,8 @@
     Constraint, StopTokens,
 };
 
+<span class="kw">mod </span>logger;
+
 <span class="kw">pub enum </span>EngineInstruction {
     Terminate,
 }
@@ -1147,6 +1122,7 @@
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
+    logger: IntervalLogger,
 }
 
 <span class="kw">impl </span>Engine {
@@ -1179,10 +1155,15 @@
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
+            logger: IntervalLogger::new(Duration::from_secs(<span class="number">5</span>)),
         }
     }
 
     <span class="kw">pub async fn </span>run(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="kw">if </span><span class="self">self</span>.throughput_logging_enabled {
+            <span class="self">self</span>.logger.enable_logging();
+        }
+
         <span class="kw">let </span>rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         <span class="kw">let </span><span class="kw-2">mut </span>last_completion_ids: Vec&lt;usize&gt; = <span class="macro">vec!</span>[];
         <span class="lifetime">'lp</span>: <span class="kw">loop </span>{
@@ -1216,10 +1197,7 @@
                 SchedulerOutput::DefaultScheduler {
                     output: <span class="kw-2">mut </span>scheduled,
                 } =&gt; {
-                    <span class="kw">let </span><span class="kw-2">mut </span>prompt_ts = <span class="prelude-val">None</span>;
-                    <span class="kw">let </span><span class="kw-2">mut </span>completion_ts = <span class="prelude-val">None</span>;
                     <span class="kw">if </span>scheduled.completion.len() &gt; <span class="number">0 </span>{
-                        <span class="kw">let </span>throughput_start = Instant::now();
                         <span class="kw">let </span>current_completion_ids: Vec&lt;usize&gt; =
                             scheduled.completion.iter().map(|seq| <span class="kw-2">*</span>seq.id()).collect();
                         <span class="kw">let </span>res = {
@@ -1282,16 +1260,12 @@
                             <span class="self">self</span>.prefix_cacher
                         );
 
-                        <span class="kw">let </span>throughput_end = Instant::now();
-                        <span class="attr">#[allow(clippy::cast_precision_loss)]
-                        </span><span class="kw">if </span><span class="self">self</span>.throughput_logging_enabled {
-                            completion_ts = <span class="prelude-val">Some</span>(
-                                scheduled.completion.len() <span class="kw">as </span>f64
-                                    / throughput_end
-                                        .duration_since(throughput_start)
-                                        .as_secs_f64(),
-                            );
-                        }
+                        <span class="kw">let </span>total_processed_tokens: usize = scheduled
+                            .completion
+                            .iter()
+                            .map(|seq| seq.get_toks().len())
+                            .sum();
+                        <span class="self">self</span>.logger.add_tokens_processed(total_processed_tokens);
 
                         last_completion_ids = current_completion_ids;
                     }
@@ -1358,17 +1332,12 @@
                             <span class="self">self</span>.prefix_cacher
                         );
 
-                        <span class="attr">#[allow(clippy::cast_precision_loss)]
-                        </span><span class="kw">if </span><span class="self">self</span>.throughput_logging_enabled {
-                            prompt_ts = <span class="prelude-val">Some</span>(
-                                scheduled
-                                    .prompt
-                                    .iter()
-                                    .map(|seq| seq.get_toks().len())
-                                    .sum::&lt;usize&gt;() <span class="kw">as </span>f64
-                                    / prompt_exec_time.as_secs_f64(),
-                            );
-                        }
+                        <span class="kw">let </span>total_processed_tokens: usize = scheduled
+                            .prompt
+                            .iter()
+                            .map(|seq| seq.get_toks().len())
+                            .sum();
+                        <span class="self">self</span>.logger.add_tokens_processed(total_processed_tokens);
 
                         <span class="kw">for </span>seq <span class="kw">in </span>scheduled.prompt.iter_mut() {
                             <span class="kw">match </span>seq.sequence_stepping_type() {
@@ -1419,21 +1388,6 @@
                         }
                     }
 
-                    <span class="kw">if </span><span class="self">self</span>.throughput_logging_enabled {
-                        <span class="kw">match </span>(prompt_ts, completion_ts) {
-                            (<span class="prelude-val">Some</span>(prompt), <span class="prelude-val">Some</span>(completion)) =&gt; {
-                                <span class="macro">info!</span>(<span class="string">"Throughput (scheduler V1): Prompt: {prompt} T/s Completion {completion} T/s"</span>);
-                            }
-                            (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(completion)) =&gt; {
-                                <span class="macro">info!</span>(<span class="string">"Throughput (scheduler V1): Completion {completion} T/s"</span>);
-                            }
-                            (<span class="prelude-val">Some</span>(prompt), <span class="prelude-val">None</span>) =&gt; {
-                                <span class="macro">info!</span>(<span class="string">"Throughput (scheduler V1): Prompt: {prompt} T/s"</span>);
-                            }
-                            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; (),
-                        }
-                    }
-
                     <span class="kw">if </span>scheduled.prompt.len() == <span class="number">0
                         </span>&amp;&amp; scheduled.completion.len() == <span class="number">0
                         </span>&amp;&amp; <span class="self">self</span>.scheduler.waiting_len() == <span class="number">0
@@ -1450,8 +1404,6 @@
                 }
                 SchedulerOutput::PagedAttention { <span class="kw-2">mut </span>output } =&gt; {
                     <span class="kw">if </span>!output.scheduled.is_empty() {
-                        <span class="kw">let </span>throughput_start = Instant::now();
-
                         <span class="kw">let </span>is_prompt = <span class="macro">get_mut_arcmutex!</span>(output.scheduled[<span class="number">0</span>]).is_prompt();
 
                         <span class="kw">let </span><span class="kw-2">mut </span>guards = output
@@ -1509,6 +1461,10 @@
                             <span class="self">self</span>.prefix_cacher
                         );
 
+                        <span class="kw">let </span>total_processed_tokens: usize =
+                            guards.iter().map(|seq| seq.get_toks().len()).sum();
+                        <span class="self">self</span>.logger.add_tokens_processed(total_processed_tokens);
+
                         <span class="kw">if </span><span class="self">self</span>.is_debug {
                             <span class="kw">let </span>ms_from_last_run = run_start.elapsed().as_secs_f64();
                             <span class="kw">let </span>total_len = guards.len();
@@ -1532,21 +1488,6 @@
                                     ms_from_last_run * <span class="number">1000.</span>,
                                 );
                             }
-                        }
-
-                        <span class="kw">let </span>throughput_end = Instant::now();
-                        <span class="attr">#[allow(clippy::cast_precision_loss)]
-                        </span><span class="kw">if </span><span class="self">self</span>.throughput_logging_enabled {
-                            <span class="kw">let </span>n_toks = <span class="kw">if </span>is_prompt {
-                                guards.iter().map(|seq| seq.get_toks().len()).sum::&lt;usize&gt;()
-                            } <span class="kw">else </span>{
-                                guards.len()
-                            };
-                            <span class="kw">let </span>ts = n_toks <span class="kw">as </span>f64
-                                / throughput_end
-                                    .duration_since(throughput_start)
-                                    .as_secs_f64();
-                            <span class="macro">info!</span>(<span class="string">"Throughput (scheduler V2): {ts} T/s"</span>);
                         }
 
                         <span class="kw">if </span>is_prompt {
@@ -2046,7 +1987,10 @@
                 request.return_raw_logits,
                 eos_toks,
             );
+            <span class="self">self</span>.logger.add_new_sequence();
             <span class="kw">let </span>seq = <span class="kw">if let </span><span class="prelude-val">Some</span>(prefill_cache) = prefill_cache.clone() {
+                <span class="self">self</span>.logger.add_prefix_cache_hit();
+
                 seq.prefill_v2(
                     prefill_cache.normal,
                     prefill_cache.toks,
