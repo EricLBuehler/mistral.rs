@@ -34,14 +34,15 @@ impl IntervalLogger {
             loop {
                 thread::sleep(interval);
 
-                let total_new_seqs = t_total_new_seqs.swap(0, Ordering::Relaxed);
-                let prefix_cache_hits = t_prefix_cache_hits.swap(0, Ordering::Relaxed);
+                let total_new_seqs = t_total_new_seqs.load(Ordering::Relaxed);
+                let prefix_cache_hits = t_prefix_cache_hits.load(Ordering::Relaxed);
+                let tokens_processed = t_tokens_processed.swap(0, Ordering::Relaxed);
 
-                if total_new_seqs != 0 {
+                if total_new_seqs != 0 && tokens_processed != 0 {
                     info!(
-                        "Throughput (T/s) {:.2}, Prefix cache hits {prefix_cache_hits}/{total_new_seqs} = {:.2}%",
-                        t_tokens_processed.swap(0, Ordering::Relaxed) as f64 / interval.as_secs_f64(),
-                        prefix_cache_hits as f64 / total_new_seqs as f64,
+                        "Throughput (T/s) {:.2}, Prefix cache hitrate {:.2}%",
+                        tokens_processed as f64 / interval.as_secs_f64(),
+                        100. * prefix_cache_hits as f64 / total_new_seqs as f64,
                     );
                 }
             }
