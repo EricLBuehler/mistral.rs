@@ -1,6 +1,6 @@
-# Mistral 3 Model: [`mistralai/Mistral-Small-3.1-24B-Instruct-2503`](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503)
+# Mistral Small 3.1 Model: [`mistralai/Mistral-Small-3.1-24B-Instruct-2503`](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503)
 
-The Mistral 3 model is a strong multimodal (text+vision) model with 128k context length, function calling, and strong visual understanding.
+The Mistral Small 3.1 model is a strong multimodal (text+vision) model with 128k context length, function calling, and strong visual understanding.
 
 We support the Mistral 3 Model in the Rust, Python, and HTTP APIs, including ISQ for increased performance.
 
@@ -10,6 +10,16 @@ The Python and HTTP APIs support sending images as:
 - [Base64](https://en.wikipedia.org/wiki/Base64) encoded string
 
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
+
+## Tool calling with Mistral Small 3.1
+
+The Mistral Small 3.1 model itself does not come with the correct JINJA chat template to enable tool calling. We provide a chat template for
+tool calling with Mistral Small 3.1, and you can use it by specifying the `jinja_explicit` parameter in the various APIs. For example:
+
+```bash
+./mistralrs-server --port 1234 --isq q4k --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3  
+```
+
 
 ## HTTP server
 You can find this example [here](../examples/server/mistral3.py).

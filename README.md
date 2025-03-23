@@ -107,6 +107,7 @@ Mistral.rs supports several model categories:
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
     - Enhance performance with an [imatrix](docs/IMATRIX.md)!
 - Automatic [device mapping](docs/DEVICE_MAPPING.md) to easily load and run models across multiple GPUs and CPU.
+- Specify custom chat templates easily: [chat templates](docs/CHAT_TOK.md)
 
 **Fast**:
 - Apple silicon support: ARM NEON, Accelerate, Metal

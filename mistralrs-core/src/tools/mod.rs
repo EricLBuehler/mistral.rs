@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::Pipeline;
 
-fn process_model_specfic_message(message: &str) -> &str {
+fn process_model_specific_message(message: &str) -> &str {
     if let Some(message) = message.strip_prefix("<|python_tag|>") {
         // Llama case
         message
@@ -50,7 +50,7 @@ impl ToolCallingMatcher {
         if matches!(self.tool_choice, ToolChoice::None) {
             return (false, false);
         }
-        let message_prefix = process_model_specfic_message(message_prefix);
+        let message_prefix = process_model_specific_message(message_prefix);
 
         // Check if the prefix could be a JSON serialization of any of the following types.
         [
@@ -77,7 +77,7 @@ impl ToolCallingMatcher {
         if matches!(self.tool_choice, ToolChoice::None) {
             return Ok(Vec::new());
         }
-        let message = process_model_specfic_message(message);
+        let message = process_model_specific_message(message);
 
         if let Ok(deser) = serde_json::from_str::<CalledFunctionParameters>(message) {
             let id = format!("call-{}", Uuid::new_v4());

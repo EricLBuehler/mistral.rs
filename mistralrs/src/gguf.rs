@@ -12,6 +12,7 @@ pub struct GgufModelBuilder {
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
     pub(crate) chat_template: Option<String>,
+    pub(crate) jinja_explicit: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
 
@@ -52,7 +53,14 @@ impl GgufModelBuilder {
             topology: None,
             tok_model_id: None,
             device_mapping: None,
+            jinja_explicit: None,
         }
+    }
+
+    /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
+    pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
+        self.jinja_explicit = Some(jinja_explicit);
+        self
     }
 
     /// Source the tokenizer and chat template from this model ID (must contain `tokenizer.json` and `tokenizer_config.json`).
@@ -167,6 +175,8 @@ impl GgufModelBuilder {
             self.model_id,
             self.files,
             config,
+            self.no_kv_cache,
+            self.jinja_explicit,
         )
         .build();
 

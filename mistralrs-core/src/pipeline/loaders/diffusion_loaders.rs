@@ -135,7 +135,7 @@ impl ModelPaths for DiffusionModelPaths {
     fn get_processor_config(&self) -> &Option<PathBuf> {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_chat_template_json(&self) -> &Option<PathBuf> {
+    fn get_chat_template_explicit(&self) -> &Option<PathBuf> {
         unreachable!("Use `std::any::Any`.")
     }
 }

@@ -286,6 +286,7 @@ class Runner:
         speculative_gamma: int = 32,
         which_draft: Which | None = None,
         chat_template: str | None = None,
+        jinja_explicit: str | None = None,
         num_device_layers: list[str] | None = None,
         in_situ_quant: str | None = None,
         anymoe_config: AnyMoeConfig | None = None,
@@ -309,9 +310,10 @@ class Runner:
             the target model. If `which_draft` is not specified, this is ignored.
         - `which_draft` specifies which draft model to load. Setting this parameter will cause a speculative decoding model to be loaded,
             with `which` as the target (higher quality) model and `which_draft` as the draft (lower quality) model.
-        - `chat_template` specifies an optional JINJA chat template.
-            The JINJA template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
+        - `chat_template` specifies an optional JINJA chat template as a JSON file.
+            This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
             It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
+        - `jinja_explicit` allows an explicit JINJA chat template file to be used. If specified, this overrides all other chat templates.
         - `num_device_layers` sets the number of layers to load and run on each device.
             Each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
             the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.

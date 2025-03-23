@@ -43,9 +43,10 @@ impl LoraModelBuilder {
             self.text_model.chat_template,
             self.text_model.tokenizer_json,
             Some(self.text_model.model_id),
+            self.text_model.no_kv_cache,
+            self.text_model.jinja_explicit,
         )
         .with_lora(self.lora_model_id, self.ordering)
-        .with_no_kv_cache(self.text_model.no_kv_cache)
         .build(self.text_model.loader_type)?;
 
         // Load, into a Pipeline

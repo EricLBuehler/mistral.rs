@@ -96,8 +96,8 @@ pub trait ModelPaths: AsAny + Debug + Send + Sync {
     /// Get the processor config (for the vision models). This is primarily used for the chat template.
     fn get_processor_config(&self) -> &Option<PathBuf>;
 
-    /// Get the explicit chat template. If specified, this overwrites anything in the tokenizer_config.json
-    fn get_chat_template_json(&self) -> &Option<PathBuf>;
+    /// Get the explicit chat template.
+    fn get_chat_template_explicit(&self) -> &Option<PathBuf>;
 }
 
 #[derive(Clone, Debug)]
@@ -196,7 +196,7 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
     fn get_processor_config(&self) -> &Option<PathBuf> {
         &self.processor_config
     }
-    fn get_chat_template_json(&self) -> &Option<PathBuf> {
+    fn get_chat_template_explicit(&self) -> &Option<PathBuf> {
         &self.chat_template_json_filename
     }
 }

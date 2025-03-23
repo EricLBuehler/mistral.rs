@@ -358,24 +358,27 @@ pub fn get_model_paths(
 ///   is used.*
 ///
 /// THE FOLLOWING IS IGNORED:
-/// After this, if the `chat_template_json` filename is specified (a json with one field: "chat_template"),
+/// After this, if the `chat_template_explicit` filename is specified (a json with one field: "chat_template" OR a jinja file),
 ///  the chat template is overwritten with this chat template.
 #[allow(clippy::borrowed_box)]
 pub(crate) fn get_chat_template(
     paths: &Box<dyn ModelPaths>,
-    chat_template_json: &Option<String>,
+    jinja_explicit: &Option<String>,
+    chat_template_explicit: &Option<String>,
     chat_template_fallback: &Option<String>,
     chat_template_ovrd: Option<String>,
 ) -> ChatTemplate {
     // Get template content, this may be overridden.
     let template_content = if let Some(template_filename) = paths.get_template_filename() {
-        if template_filename
-            .extension()
-            .expect("Template filename must be a file")
-            .to_string_lossy()
-            != "json"
-        {
-            panic!("Template filename {template_filename:?} must end with `.json`.");
+        if !["jinja", "json"].contains(
+            &template_filename
+                .extension()
+                .expect("Template filename must be a file")
+                .to_string_lossy()
+                .to_string()
+                .as_str(),
+        ) {
+            panic!("Template filename {template_filename:?} must end with `.json` or `.jinja`.");
         }
         Some(fs::read_to_string(template_filename).expect("Loading chat template failed."))
     } else if chat_template_fallback
@@ -404,17 +407,34 @@ pub(crate) fn get_chat_template(
     };
     // Overwrite to use any present `chat_template.json`, only if there is not one present already.
     if template.chat_template.is_none() {
-        if let Some(chat_template_json) = chat_template_json {
-            #[derive(Debug, serde::Deserialize)]
-            struct AutomaticTemplate {
-                chat_template: String,
-            }
-            let deser: AutomaticTemplate = serde_json::from_str(
-                &fs::read_to_string(chat_template_json).expect("Loading chat template failed."),
-            )
-            .unwrap();
-            template.chat_template = Some(ChatTemplateValue(Either::Left(deser.chat_template)));
+        if let Some(chat_template_explicit) = chat_template_explicit {
+            let ct =
+                fs::read_to_string(chat_template_explicit).expect("Loading chat template failed.");
+
+            let new_chat_template = if chat_template_explicit.ends_with(".jinja") {
+                ct
+            } else {
+                #[derive(Debug, serde::Deserialize)]
+                struct AutomaticTemplate {
+                    chat_template: String,
+                }
+                let deser: AutomaticTemplate = serde_json::from_str(&ct).unwrap();
+                deser.chat_template
+            };
+
+            template.chat_template = Some(ChatTemplateValue(Either::Left(new_chat_template)));
         }
+    }
+
+    // JINJA explicit
+    if let Some(jinja_explicit) = jinja_explicit {
+        if !jinja_explicit.ends_with(".jinja") {
+            panic!("jinja_explicit must end with .jinja!");
+        }
+
+        let ct = fs::read_to_string(jinja_explicit).expect("Loading chat template failed.");
+
+        template.chat_template = Some(ChatTemplateValue(Either::Left(ct)));
     }
 
     let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths

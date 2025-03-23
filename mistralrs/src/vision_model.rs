@@ -19,6 +19,7 @@ pub struct VisionModelBuilder {
     pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) imatrix: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
+    pub(crate) jinja_explicit: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) max_edge: Option<u32>,
@@ -64,7 +65,14 @@ impl VisionModelBuilder {
             device_mapping: None,
             calibration_file: None,
             imatrix: None,
+            jinja_explicit: None,
         }
+    }
+
+    /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
+    pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
+        self.jinja_explicit = Some(jinja_explicit);
+        self
     }
 
     /// Set the prompt batchsize to use for inference.
@@ -192,6 +200,7 @@ impl VisionModelBuilder {
             self.chat_template,
             self.tokenizer_json,
             Some(self.model_id),
+            self.jinja_explicit,
         )
         .build(self.loader_type);
 
