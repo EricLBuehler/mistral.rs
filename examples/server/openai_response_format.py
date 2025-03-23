@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Extra, Field
 
 from openai import OpenAI
 
@@ -23,9 +23,6 @@ class Airplane(BaseModel):
     type: AirplaneType = Field(default=AirplaneType.commercial, title="Airplane Type")
     capacity: Optional[int] = Field(None, title="Passenger Capacity", ge=1, le=1000)
 
-    class Config:
-        extra = "forbid"  # Forbid extra fields
-
 
 class Fleet(BaseModel):
     fleet_name: str = Field(..., title="Fleet Name", min_length=1, max_length=50)
@@ -33,13 +30,8 @@ class Fleet(BaseModel):
         ..., title="Fleet Airplanes", min_length=1, max_length=3
     )
 
-    class Config:
-        extra = "forbid"  # Forbid extra fields
 
-
-fleet_schema = Fleet.model_json_schema()
-
-completion = client.chat.completions.create(
+completion = client.beta.chat.completions.parse(
     model="mistral",
     messages=[
         {
@@ -50,7 +42,8 @@ completion = client.chat.completions.create(
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,
-    response_format={"type": "json_schema", "json_schema": fleet_schema},
+    response_format=Fleet,
 )
 
-print(completion.choices[0].message.content)
+event = completion.choices[0].message.parsed
+print(event)

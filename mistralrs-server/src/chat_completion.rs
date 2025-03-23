@@ -12,7 +12,10 @@ use std::{
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
-    openai::{ChatCompletionRequest, Grammar, MessageInnerContent, ResponseFormat, StopTokens},
+    openai::{
+        ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
+        ResponseFormat, StopTokens,
+    },
     util,
 };
 use anyhow::Result;
@@ -368,7 +371,9 @@ async fn parse_request(
         Some(Grammar::JsonSchema(schema)) => Constraint::JsonSchema(schema),
         Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
         None => match oairequest.response_format {
-            Some(ResponseFormat::JsonSchema { json_schema }) => Constraint::JsonSchema(json_schema),
+            Some(ResponseFormat::JsonSchema {
+                json_schema: JsonSchemaResponseFormat { name: _, schema },
+            }) => Constraint::JsonSchema(schema),
             Some(ResponseFormat::Text) => Constraint::None,
             None => Constraint::None,
         },

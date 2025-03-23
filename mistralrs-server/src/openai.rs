@@ -98,12 +98,20 @@ pub enum Grammar {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct JsonSchemaResponseFormat {
+    pub name: String,
+    pub schema: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 #[serde(tag = "type")]
 pub enum ResponseFormat {
     #[serde(rename = "text")]
     Text,
     #[serde(rename = "json_schema")]
-    JsonSchema { json_schema: serde_json::Value },
+    JsonSchema {
+        json_schema: JsonSchemaResponseFormat,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
