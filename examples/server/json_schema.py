@@ -25,7 +25,10 @@ completion = client.chat.completions.create(
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,
-    response_format={"type": "json_schema", "json_schema": addr_schema},
+    response_format={
+        "type": "json_schema",
+        "json_schema": {"name": "My Schema", "schema": addr_schema},
+    },
 )
 
 print(completion.choices[0].message.content)
