@@ -19,6 +19,12 @@ fn process_model_specific_message(message: &str) -> &str {
     {
         // Hermes case
         message
+    } else if let Some(message) = message
+        .strip_prefix("[TOOL_CALLS][")
+        .and_then(|s| s.strip_suffix("]"))
+    {
+        // Mistral Nemo case
+        message
     } else {
         message
     }

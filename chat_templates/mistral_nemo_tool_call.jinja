@@ -9,18 +9,6 @@
 {%- endif %}
 {%- set user_messages = loop_messages | selectattr("role", "equalto", "user") | list %}
 
-{#- This block checks for alternating user/assistant messages, skipping tool calling messages #}
-{%- set ns = namespace() %}
-{%- set ns.index = 0 %}
-{%- for message in loop_messages %}
-    {%- if not (message.role == "tool" or message.role == "tool_results" or (message.tool_calls is defined and message.tool_calls is not none)) %}
-        {%- if (message["role"] == "user") != (ns.index % 2 == 0) %}
-            {{- raise_exception("After the optional system message, conversation roles must alternate user/assistant/user/assistant/...") }}
-        {%- endif %}
-        {%- set ns.index = ns.index + 1 %}
-    {%- endif %}
-{%- endfor %}
-
 {{- bos_token }}
 {%- for message in loop_messages %}
     {%- if message["role"] == "user" %}
