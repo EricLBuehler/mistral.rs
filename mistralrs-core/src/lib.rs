@@ -443,7 +443,7 @@ impl MistralRs {
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!")
                 .as_secs(),
-            next_request_id: Mutex::new(RefCell::new(0)),
+            next_request_id: Mutex::new(RefCell::new(1)),
             reboot_state,
             engine_handler: RwLock::new(engine_handler),
             category,

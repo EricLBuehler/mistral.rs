@@ -2,6 +2,7 @@ use candle_core::Tensor;
 use either::Either;
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::toktrie::TokEnv;
+use logger::IntervalLogger;
 use once_cell::sync::Lazy;
 use std::{
     collections::HashMap,
@@ -10,7 +11,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc::Receiver, Mutex};
 
@@ -43,6 +44,8 @@ use crate::{
     Constraint, StopTokens,
 };
 
+mod logger;
+
 pub enum EngineInstruction {
     Terminate,
 }
@@ -66,6 +69,7 @@ pub struct Engine {
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
+    logger: IntervalLogger,
 }
 
 impl Engine {
@@ -98,10 +102,13 @@ impl Engine {
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
+            logger: IntervalLogger::new(Duration::from_secs(5)),
         }
     }
 
     pub async fn run(&mut self) {
+        self.logger.enable_logging();
+
         let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
         'lp: loop {
@@ -201,6 +208,13 @@ impl Engine {
                             self.prefix_cacher
                         );
 
+                        let total_processed_tokens: usize = scheduled
+                            .completion
+                            .iter()
+                            .map(|seq| seq.get_toks().len())
+                            .sum();
+                        self.logger.add_tokens_processed(total_processed_tokens);
+
                         let throughput_end = Instant::now();
                         #[allow(clippy::cast_precision_loss)]
                         if self.throughput_logging_enabled {
@@ -288,6 +302,13 @@ impl Engine {
                                     / prompt_exec_time.as_secs_f64(),
                             );
                         }
+
+                        let total_processed_tokens: usize = scheduled
+                            .prompt
+                            .iter()
+                            .map(|seq| seq.get_toks().len())
+                            .sum();
+                        self.logger.add_tokens_processed(total_processed_tokens);
 
                         for seq in scheduled.prompt.iter_mut() {
                             match seq.sequence_stepping_type() {
@@ -427,6 +448,10 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+
+                        let total_processed_tokens: usize =
+                            guards.iter().map(|seq| seq.get_toks().len()).sum();
+                        self.logger.add_tokens_processed(total_processed_tokens);
 
                         if self.is_debug {
                             let ms_from_last_run = run_start.elapsed().as_secs_f64();
@@ -965,7 +990,10 @@ impl Engine {
                 request.return_raw_logits,
                 eos_toks,
             );
+            self.logger.add_new_sequence();
             let seq = if let Some(prefill_cache) = prefill_cache.clone() {
+                self.logger.add_prefix_cache_hit();
+
                 seq.prefill_v2(
                     prefill_cache.normal,
                     prefill_cache.toks,
