@@ -12,7 +12,7 @@ use std::{
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
-    openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens},
+    openai::{ChatCompletionRequest, Grammar, MessageInnerContent, ResponseFormat, StopTokens},
     util,
 };
 use anyhow::Result;
@@ -357,6 +357,23 @@ async fn parse_request(
     };
 
     let is_streaming = oairequest.stream.unwrap_or(false);
+
+    if oairequest.grammar.is_some() && oairequest.response_format.is_some() {
+        anyhow::bail!("Request `grammar` and `response_format` were both provided but are mutually exclusive.")
+    }
+
+    let constraint = match oairequest.grammar {
+        Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
+        Some(Grammar::Lark(lark)) => Constraint::Lark(lark),
+        Some(Grammar::JsonSchema(schema)) => Constraint::JsonSchema(schema),
+        Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
+        None => match oairequest.response_format {
+            Some(ResponseFormat::JsonSchema { json_schema }) => Constraint::JsonSchema(json_schema),
+            Some(ResponseFormat::Text) => Constraint::None,
+            None => Constraint::None,
+        },
+    };
+
     Ok((
         Request::Normal(NormalRequest {
             id: state.next_request_id(),
@@ -379,13 +396,7 @@ async fn parse_request(
             return_logprobs: oairequest.logprobs,
             is_streaming,
             suffix: None,
-            constraint: match oairequest.grammar {
-                Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
-                Some(Grammar::Lark(lark)) => Constraint::Lark(lark),
-                Some(Grammar::JsonSchema(schema)) => Constraint::JsonSchema(schema),
-                Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
-                None => Constraint::None,
-            },
+            constraint,
             adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,

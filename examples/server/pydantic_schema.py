@@ -23,10 +23,18 @@ class Airplane(BaseModel):
     type: AirplaneType = Field(default=AirplaneType.commercial, title="Airplane Type")
     capacity: Optional[int] = Field(None, title="Passenger Capacity", ge=1, le=1000)
 
+    class Config:
+        extra = "forbid"  # Forbid extra fields
+
 
 class Fleet(BaseModel):
     fleet_name: str = Field(..., title="Fleet Name", min_length=1, max_length=50)
-    airplanes: List[Airplane] = Field(..., title="Fleet Airplanes", min_length=1)
+    airplanes: List[Airplane] = Field(
+        ..., title="Fleet Airplanes", min_length=1, max_length=3
+    )
+
+    class Config:
+        extra = "forbid"  # Forbid extra fields
 
 
 fleet_schema = Fleet.model_json_schema()
@@ -39,16 +47,10 @@ completion = client.chat.completions.create(
             "content": "Can you please make me a fleet of airplanes?",
         }
     ],
-    max_tokens=256,
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,
-    extra_body={
-        "grammar": {
-            "type": "json_schema",
-            "value": fleet_schema,
-        }
-    },
+    response_format={"type": "json_schema", "json_schema": fleet_schema},
 )
 
 print(completion.choices[0].message.content)

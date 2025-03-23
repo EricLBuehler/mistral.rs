@@ -98,6 +98,15 @@ pub enum Grammar {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum ResponseFormat {
+    #[serde(rename = "text")]
+    Text,
+    #[serde(rename = "json_schema")]
+    JsonSchema { json_schema: serde_json::Value },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
     #[schema(example = json!(vec![Message{content:"Why did the crab cross the road?".to_string(), role:"user".to_string(), name: None}]))]
     #[serde(with = "either::serde_untagged")]
@@ -135,6 +144,8 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<Tool>>,
     #[schema(example = json!(Option::None::<ToolChoice>))]
     pub tool_choice: Option<ToolChoice>,
+    #[schema(example = json!(Option::None::<ResponseFormat>))]
+    pub response_format: Option<ResponseFormat>,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]
