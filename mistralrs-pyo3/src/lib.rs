@@ -764,7 +764,7 @@ impl Runner {
                 ),
             }
         };
-        let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config)
+        let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, false)
             .with_no_kv_cache(no_kv_cache)
             .with_prefix_cache_n(prefix_cache_n)
             .build();

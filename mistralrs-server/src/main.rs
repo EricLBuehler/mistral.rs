@@ -479,23 +479,17 @@ async fn main() -> Result<()> {
         }
     };
     // Throughput logging in the server
-    let builder = MistralRsBuilder::new(pipeline, scheduler_config)
+    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, !args.interactive_mode)
         .with_opt_log(args.log)
         .with_truncate_sequence(args.truncate_sequence)
         .with_no_kv_cache(args.no_kv_cache)
-        .with_prefix_cache_n(args.prefix_cache_n);
+        .with_prefix_cache_n(args.prefix_cache_n)
+        .build();
 
     if args.interactive_mode {
-        interactive_mode(builder.build(), args.throughput_log).await;
+        interactive_mode(mistralrs, args.throughput_log).await;
         return Ok(());
     }
-
-    let builder = if args.throughput_log {
-        builder.with_throughput_logging()
-    } else {
-        builder
-    };
-    let mistralrs = builder.build();
 
     // Needs to be after the .build call as that is where the daemon waits.
     let setting_server = if !args.interactive_mode {

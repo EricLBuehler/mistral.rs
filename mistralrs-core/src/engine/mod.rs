@@ -107,7 +107,9 @@ impl Engine {
     }
 
     pub async fn run(&mut self) {
-        self.logger.enable_logging();
+        if self.throughput_logging_enabled {
+            self.logger.enable_logging();
+        }
 
         let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
@@ -142,10 +144,7 @@ impl Engine {
                 SchedulerOutput::DefaultScheduler {
                     output: mut scheduled,
                 } => {
-                    let mut prompt_ts = None;
-                    let mut completion_ts = None;
                     if scheduled.completion.len() > 0 {
-                        let throughput_start = Instant::now();
                         let current_completion_ids: Vec<usize> =
                             scheduled.completion.iter().map(|seq| *seq.id()).collect();
                         let res = {
@@ -215,17 +214,6 @@ impl Engine {
                             .sum();
                         self.logger.add_tokens_processed(total_processed_tokens);
 
-                        let throughput_end = Instant::now();
-                        #[allow(clippy::cast_precision_loss)]
-                        if self.throughput_logging_enabled {
-                            completion_ts = Some(
-                                scheduled.completion.len() as f64
-                                    / throughput_end
-                                        .duration_since(throughput_start)
-                                        .as_secs_f64(),
-                            );
-                        }
-
                         last_completion_ids = current_completion_ids;
                     }
 
@@ -291,18 +279,6 @@ impl Engine {
                             self.prefix_cacher
                         );
 
-                        #[allow(clippy::cast_precision_loss)]
-                        if self.throughput_logging_enabled {
-                            prompt_ts = Some(
-                                scheduled
-                                    .prompt
-                                    .iter()
-                                    .map(|seq| seq.get_toks().len())
-                                    .sum::<usize>() as f64
-                                    / prompt_exec_time.as_secs_f64(),
-                            );
-                        }
-
                         let total_processed_tokens: usize = scheduled
                             .prompt
                             .iter()
@@ -359,21 +335,6 @@ impl Engine {
                         }
                     }
 
-                    if self.throughput_logging_enabled {
-                        match (prompt_ts, completion_ts) {
-                            (Some(prompt), Some(completion)) => {
-                                info!("Throughput (scheduler V1): Prompt: {prompt} T/s Completion {completion} T/s");
-                            }
-                            (None, Some(completion)) => {
-                                info!("Throughput (scheduler V1): Completion {completion} T/s");
-                            }
-                            (Some(prompt), None) => {
-                                info!("Throughput (scheduler V1): Prompt: {prompt} T/s");
-                            }
-                            (None, None) => (),
-                        }
-                    }
-
                     if scheduled.prompt.len() == 0
                         && scheduled.completion.len() == 0
                         && self.scheduler.waiting_len() == 0
@@ -390,8 +351,6 @@ impl Engine {
                 }
                 SchedulerOutput::PagedAttention { mut output } => {
                     if !output.scheduled.is_empty() {
-                        let throughput_start = Instant::now();
-
                         let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
 
                         let mut guards = output
@@ -476,21 +435,6 @@ impl Engine {
                                     ms_from_last_run * 1000.,
                                 );
                             }
-                        }
-
-                        let throughput_end = Instant::now();
-                        #[allow(clippy::cast_precision_loss)]
-                        if self.throughput_logging_enabled {
-                            let n_toks = if is_prompt {
-                                guards.iter().map(|seq| seq.get_toks().len()).sum::<usize>()
-                            } else {
-                                guards.len()
-                            };
-                            let ts = n_toks as f64
-                                / throughput_end
-                                    .duration_since(throughput_start)
-                                    .as_secs_f64();
-                            info!("Throughput (scheduler V2): {ts} T/s");
                         }
 
                         if is_prompt {

@@ -32,6 +32,7 @@ pub struct VisionModelBuilder {
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
     pub(crate) isq: Option<IsqType>,
+    pub(crate) throughput_logging: bool,
 
     // Other things
     pub(crate) max_num_seqs: usize,
@@ -66,7 +67,14 @@ impl VisionModelBuilder {
             calibration_file: None,
             imatrix: None,
             jinja_explicit: None,
+            throughput_logging: false,
         }
+    }
+
+    /// Enable runner throughput logging.
+    pub fn with_throughput_logging(mut self) -> Self {
+        self.throughput_logging = true;
+        self
     }
 
     /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
@@ -221,7 +229,7 @@ impl VisionModelBuilder {
             method: DefaultSchedulerMethod::Fixed(self.max_num_seqs.try_into()?),
         };
 
-        let runner = MistralRsBuilder::new(pipeline, scheduler_method)
+        let runner = MistralRsBuilder::new(pipeline, scheduler_method, self.throughput_logging)
             .with_no_kv_cache(false)
             .with_no_prefix_cache(false);
 

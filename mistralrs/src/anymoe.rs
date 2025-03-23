@@ -111,9 +111,10 @@ impl AnyMoeModelBuilder {
             },
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
-            .with_no_kv_cache(self.base.no_kv_cache)
-            .with_no_prefix_cache(self.base.prefix_cache_n.is_none());
+        let mut runner =
+            MistralRsBuilder::new(pipeline, scheduler_method, self.base.throughput_logging)
+                .with_no_kv_cache(self.base.no_kv_cache)
+                .with_no_prefix_cache(self.base.prefix_cache_n.is_none());
 
         if let Some(n) = self.base.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

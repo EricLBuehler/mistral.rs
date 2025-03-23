@@ -20,6 +20,7 @@ pub struct GgufModelBuilder {
     pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) force_cpu: bool,
     pub(crate) topology: Option<Topology>,
+    pub(crate) throughput_logging: bool,
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
@@ -54,7 +55,14 @@ impl GgufModelBuilder {
             tok_model_id: None,
             device_mapping: None,
             jinja_explicit: None,
+            throughput_logging: false,
         }
+    }
+
+    /// Enable runner throughput logging.
+    pub fn with_throughput_logging(mut self) -> Self {
+        self.throughput_logging = true;
+        self
     }
 
     /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
@@ -214,7 +222,7 @@ impl GgufModelBuilder {
             },
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
+        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method, self.throughput_logging)
             .with_no_kv_cache(self.no_kv_cache)
             .with_no_prefix_cache(self.prefix_cache_n.is_none());
 
