@@ -12,7 +12,10 @@ use std::{
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
-    openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens},
+    openai::{
+        ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
+        ResponseFormat, StopTokens,
+    },
     util,
 };
 use anyhow::Result;
@@ -190,27 +193,33 @@ async fn parse_request(
             let mut messages = Vec::new();
             let mut image_urls = Vec::new();
             for message in req_messages {
-                match message.content.deref() {
-                    Either::Left(content) => {
+                let content = match message.content.as_deref() {
+                    Some(content) => content.clone(),
+                    None => {
                         // Handle tool call
-                        let content = match content {
-                            Some(content) => content.to_string(),
-                            None => {
-                                use anyhow::Context;
-                                let calls = message.tool_calls.as_ref()
-                                    .context("No content was provided, expected tool calls to be provided.")?
-                                    .iter().map(|call| &call.function).collect::<Vec<_>>();
+                        use anyhow::Context;
+                        let calls = message
+                            .tool_calls
+                            .as_ref()
+                            .context(
+                                "No content was provided, expected tool calls to be provided.",
+                            )?
+                            .iter()
+                            .map(|call| &call.function)
+                            .collect::<Vec<_>>();
 
-                                serde_json::to_string(&calls)?
-                            }
-                        };
+                        Either::Left(serde_json::to_string(&calls)?)
+                    }
+                };
 
+                match &content {
+                    Either::Left(content) => {
                         let mut message_map: IndexMap<
                             String,
                             Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
-                        message_map.insert("content".to_string(), Either::Left(content));
+                        message_map.insert("content".to_string(), Either::Left(content.clone()));
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
@@ -351,6 +360,25 @@ async fn parse_request(
     };
 
     let is_streaming = oairequest.stream.unwrap_or(false);
+
+    if oairequest.grammar.is_some() && oairequest.response_format.is_some() {
+        anyhow::bail!("Request `grammar` and `response_format` were both provided but are mutually exclusive.")
+    }
+
+    let constraint = match oairequest.grammar {
+        Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
+        Some(Grammar::Lark(lark)) => Constraint::Lark(lark),
+        Some(Grammar::JsonSchema(schema)) => Constraint::JsonSchema(schema),
+        Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
+        None => match oairequest.response_format {
+            Some(ResponseFormat::JsonSchema {
+                json_schema: JsonSchemaResponseFormat { name: _, schema },
+            }) => Constraint::JsonSchema(schema),
+            Some(ResponseFormat::Text) => Constraint::None,
+            None => Constraint::None,
+        },
+    };
+
     Ok((
         Request::Normal(NormalRequest {
             id: state.next_request_id(),
@@ -373,13 +401,7 @@ async fn parse_request(
             return_logprobs: oairequest.logprobs,
             is_streaming,
             suffix: None,
-            constraint: match oairequest.grammar {
-                Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
-                Some(Grammar::Lark(lark)) => Constraint::Lark(lark),
-                Some(Grammar::JsonSchema(schema)) => Constraint::JsonSchema(schema),
-                Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
-                None => Constraint::None,
-            },
+            constraint,
             adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,

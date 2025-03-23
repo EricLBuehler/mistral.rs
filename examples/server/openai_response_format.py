@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Extra, Field
 
 from openai import OpenAI
 
@@ -26,12 +26,12 @@ class Airplane(BaseModel):
 
 class Fleet(BaseModel):
     fleet_name: str = Field(..., title="Fleet Name", min_length=1, max_length=50)
-    airplanes: List[Airplane] = Field(..., title="Fleet Airplanes", min_length=1)
+    airplanes: List[Airplane] = Field(
+        ..., title="Fleet Airplanes", min_length=1, max_length=3
+    )
 
 
-fleet_schema = Fleet.model_json_schema()
-
-completion = client.chat.completions.create(
+completion = client.beta.chat.completions.parse(
     model="mistral",
     messages=[
         {
@@ -39,16 +39,11 @@ completion = client.chat.completions.create(
             "content": "Can you please make me a fleet of airplanes?",
         }
     ],
-    max_tokens=256,
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,
-    extra_body={
-        "grammar": {
-            "type": "json_schema",
-            "value": fleet_schema,
-        }
-    },
+    response_format=Fleet,
 )
 
-print(completion.choices[0].message.content)
+event = completion.choices[0].message.parsed
+print(event)

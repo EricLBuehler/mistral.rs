@@ -114,7 +114,7 @@ macro_rules! handle_pipeline_forward_error {
                             message: ResponseMessage {
                                 content: Some(res),
                                 role: "assistant".to_string(),
-                                tool_calls: Vec::new(),
+                                tool_calls: None,
                             },
                             logprobs: None,
                         };

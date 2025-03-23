@@ -21,11 +21,11 @@ impl Deref for MessageInnerContent {
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct MessageContent(
     #[serde(with = "either::serde_untagged")]
-    Either<Option<String>, Vec<HashMap<String, MessageInnerContent>>>,
+    Either<String, Vec<HashMap<String, MessageInnerContent>>>,
 );
 
 impl Deref for MessageContent {
-    type Target = Either<Option<String>, Vec<HashMap<String, MessageInnerContent>>>;
+    type Target = Either<String, Vec<HashMap<String, MessageInnerContent>>>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -33,7 +33,6 @@ impl Deref for MessageContent {
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct FunctionCalled {
-    pub description: Option<String>,
     pub name: String,
     #[serde(alias = "arguments")]
     pub parameters: String,
@@ -48,7 +47,7 @@ pub struct ToolCall {
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct Message {
-    pub content: MessageContent,
+    pub content: Option<MessageContent>,
     pub role: String,
     pub name: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -99,6 +98,23 @@ pub enum Grammar {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct JsonSchemaResponseFormat {
+    pub name: String,
+    pub schema: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum ResponseFormat {
+    #[serde(rename = "text")]
+    Text,
+    #[serde(rename = "json_schema")]
+    JsonSchema {
+        json_schema: JsonSchemaResponseFormat,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
     #[schema(example = json!(vec![Message{content:"Why did the crab cross the road?".to_string(), role:"user".to_string(), name: None}]))]
     #[serde(with = "either::serde_untagged")]
@@ -136,6 +152,8 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<Tool>>,
     #[schema(example = json!(Option::None::<ToolChoice>))]
     pub tool_choice: Option<ToolChoice>,
+    #[schema(example = json!(Option::None::<ResponseFormat>))]
+    pub response_format: Option<ResponseFormat>,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]
