@@ -531,7 +531,7 @@
                                 <span class="prelude-ty">Option</span> text_new.map(ToString::to_string)
                             ),
                             role: <span class="string">"assistant"</span>.to_string(),
-                            tool_calls: <span class="prelude-val">Some</span>(tool_calls),
+                            tool_calls: <span class="prelude-val">Some</span>(tool_calls).filter(|v| !v.is_empty()),
                         },
                         index: seq.get_response_index(),
                         finish_reason: is_done.map(|x| x.to_string()),
@@ -669,7 +669,7 @@
                     message: <span class="kw">crate</span>::ResponseMessage {
                         content: text_new.map(ToString::to_string),
                         role: <span class="string">"assistant"</span>.to_string(),
-                        tool_calls,
+                        tool_calls: <span class="prelude-val">Some</span>(tool_calls).filter(|v| !v.is_empty()),
                     },
                     logprobs: logprobs.map(|l| <span class="kw">crate</span>::Logprobs { content: <span class="prelude-val">Some</span>(l) }),
                 };

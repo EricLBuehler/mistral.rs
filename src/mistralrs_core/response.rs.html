@@ -368,7 +368,7 @@
 </span><span class="kw">pub struct </span>ResponseMessage {
     <span class="kw">pub </span>content: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub </span>role: String,
-    <span class="kw">pub </span>tool_calls: Vec&lt;ToolCallResponse&gt;,
+    <span class="kw">pub </span>tool_calls: <span class="prelude-ty">Option</span>&lt;Vec&lt;ToolCallResponse&gt;&gt;,
 }
 
 <span class="macro">generate_repr!</span>(ResponseMessage);

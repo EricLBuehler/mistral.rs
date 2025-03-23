@@ -466,7 +466,29 @@
 <a href="#465" id="465">465</a>
 <a href="#466" id="466">466</a>
 <a href="#467" id="467">467</a>
-<a href="#468" id="468">468</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
+<a href="#468" id="468">468</a>
+<a href="#469" id="469">469</a>
+<a href="#470" id="470">470</a>
+<a href="#471" id="471">471</a>
+<a href="#472" id="472">472</a>
+<a href="#473" id="473">473</a>
+<a href="#474" id="474">474</a>
+<a href="#475" id="475">475</a>
+<a href="#476" id="476">476</a>
+<a href="#477" id="477">477</a>
+<a href="#478" id="478">478</a>
+<a href="#479" id="479">479</a>
+<a href="#480" id="480">480</a>
+<a href="#481" id="481">481</a>
+<a href="#482" id="482">482</a>
+<a href="#483" id="483">483</a>
+<a href="#484" id="484">484</a>
+<a href="#485" id="485">485</a>
+<a href="#486" id="486">486</a>
+<a href="#487" id="487">487</a>
+<a href="#488" id="488">488</a>
+<a href="#489" id="489">489</a>
+<a href="#490" id="490">490</a></pre></div><pre class="rust"><code><span class="kw">use </span>serde_json::Value;
 <span class="kw">use </span>std::{
     collections::HashMap,
     env,
@@ -480,7 +502,10 @@
 <span class="kw">use </span>tokio::sync::mpsc::{channel, Receiver, Sender};
 
 <span class="kw">use crate</span>::{
-    openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens},
+    openai::{
+        ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
+        ResponseFormat, StopTokens,
+    },
     util,
 };
 <span class="kw">use </span>anyhow::Result;
@@ -658,27 +683,33 @@
             <span class="kw">let </span><span class="kw-2">mut </span>messages = Vec::new();
             <span class="kw">let </span><span class="kw-2">mut </span>image_urls = Vec::new();
             <span class="kw">for </span>message <span class="kw">in </span>req_messages {
-                <span class="kw">match </span>message.content.deref() {
-                    Either::Left(content) =&gt; {
+                <span class="kw">let </span>content = <span class="kw">match </span>message.content.as_deref() {
+                    <span class="prelude-val">Some</span>(content) =&gt; content.clone(),
+                    <span class="prelude-val">None </span>=&gt; {
                         <span class="comment">// Handle tool call
-                        </span><span class="kw">let </span>content = <span class="kw">match </span>content {
-                            <span class="prelude-val">Some</span>(content) =&gt; content.to_string(),
-                            <span class="prelude-val">None </span>=&gt; {
-                                <span class="kw">use </span>anyhow::Context;
-                                <span class="kw">let </span>calls = message.tool_calls.as_ref()
-                                    .context(<span class="string">"No content was provided, expected tool calls to be provided."</span>)<span class="question-mark">?
-                                    </span>.iter().map(|call| <span class="kw-2">&amp;</span>call.function).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+                        </span><span class="kw">use </span>anyhow::Context;
+                        <span class="kw">let </span>calls = message
+                            .tool_calls
+                            .as_ref()
+                            .context(
+                                <span class="string">"No content was provided, expected tool calls to be provided."</span>,
+                            )<span class="question-mark">?
+                            </span>.iter()
+                            .map(|call| <span class="kw-2">&amp;</span>call.function)
+                            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 
-                                serde_json::to_string(<span class="kw-2">&amp;</span>calls)<span class="question-mark">?
-                            </span>}
-                        };
+                        Either::Left(serde_json::to_string(<span class="kw-2">&amp;</span>calls)<span class="question-mark">?</span>)
+                    }
+                };
 
+                <span class="kw">match </span><span class="kw-2">&amp;</span>content {
+                    Either::Left(content) =&gt; {
                         <span class="kw">let </span><span class="kw-2">mut </span>message_map: IndexMap&lt;
                             String,
                             Either&lt;String, Vec&lt;IndexMap&lt;String, Value&gt;&gt;&gt;,
                         &gt; = IndexMap::new();
                         message_map.insert(<span class="string">"role"</span>.to_string(), Either::Left(message.role));
-                        message_map.insert(<span class="string">"content"</span>.to_string(), Either::Left(content));
+                        message_map.insert(<span class="string">"content"</span>.to_string(), Either::Left(content.clone()));
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) =&gt; {
@@ -819,6 +850,25 @@
     </span>};
 
     <span class="kw">let </span>is_streaming = oairequest.stream.unwrap_or(<span class="bool-val">false</span>);
+
+    <span class="kw">if </span>oairequest.grammar.is_some() &amp;&amp; oairequest.response_format.is_some() {
+        <span class="macro">anyhow::bail!</span>(<span class="string">"Request `grammar` and `response_format` were both provided but are mutually exclusive."</span>)
+    }
+
+    <span class="kw">let </span>constraint = <span class="kw">match </span>oairequest.grammar {
+        <span class="prelude-val">Some</span>(Grammar::Regex(regex)) =&gt; Constraint::Regex(regex),
+        <span class="prelude-val">Some</span>(Grammar::Lark(lark)) =&gt; Constraint::Lark(lark),
+        <span class="prelude-val">Some</span>(Grammar::JsonSchema(schema)) =&gt; Constraint::JsonSchema(schema),
+        <span class="prelude-val">Some</span>(Grammar::Llguidance(llguidance)) =&gt; Constraint::Llguidance(llguidance),
+        <span class="prelude-val">None </span>=&gt; <span class="kw">match </span>oairequest.response_format {
+            <span class="prelude-val">Some</span>(ResponseFormat::JsonSchema {
+                json_schema: JsonSchemaResponseFormat { name: <span class="kw">_</span>, schema },
+            }) =&gt; Constraint::JsonSchema(schema),
+            <span class="prelude-val">Some</span>(ResponseFormat::Text) =&gt; Constraint::None,
+            <span class="prelude-val">None </span>=&gt; Constraint::None,
+        },
+    };
+
     <span class="prelude-val">Ok</span>((
         Request::Normal(NormalRequest {
             id: state.next_request_id(),
@@ -841,13 +891,7 @@
             return_logprobs: oairequest.logprobs,
             is_streaming,
             suffix: <span class="prelude-val">None</span>,
-            constraint: <span class="kw">match </span>oairequest.grammar {
-                <span class="prelude-val">Some</span>(Grammar::Regex(regex)) =&gt; Constraint::Regex(regex),
-                <span class="prelude-val">Some</span>(Grammar::Lark(lark)) =&gt; Constraint::Lark(lark),
-                <span class="prelude-val">Some</span>(Grammar::JsonSchema(schema)) =&gt; Constraint::JsonSchema(schema),
-                <span class="prelude-val">Some</span>(Grammar::Llguidance(llguidance)) =&gt; Constraint::Llguidance(llguidance),
-                <span class="prelude-val">None </span>=&gt; Constraint::None,
-            },
+            constraint,
             adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
