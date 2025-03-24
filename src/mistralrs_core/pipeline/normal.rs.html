@@ -1499,9 +1499,9 @@
         <span class="kw">let </span>available_devices = <span class="kw">if let </span><span class="prelude-val">Ok</span>(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             <span class="kw">let </span>payload: WorkerTransferData = serde_json::from_str(<span class="kw-2">&amp;</span>payload)<span class="question-mark">?</span>;
             <span class="kw">let </span>WorkerTransferData::Init { id: <span class="kw">_</span>, worker_rank } = payload;
-            <span class="macro">vec!</span>[candle_core::Device::new_cuda_with_stream(worker_rank + <span class="number">1</span>)<span class="question-mark">?</span>]
+            <span class="macro">vec!</span>[candle_core::Device::new_cuda(worker_rank + <span class="number">1</span>)<span class="question-mark">?</span>]
         } <span class="kw">else if </span>use_nccl {
-            <span class="macro">vec!</span>[candle_core::Device::new_cuda_with_stream(<span class="number">0</span>)<span class="question-mark">?</span>]
+            <span class="macro">vec!</span>[candle_core::Device::new_cuda(<span class="number">0</span>)<span class="question-mark">?</span>]
         } <span class="kw">else </span>{
             device_map::get_all_similar_devices(device)<span class="question-mark">?
         </span>};
