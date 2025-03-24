@@ -442,7 +442,17 @@
 <a href="#441" id="441">441</a>
 <a href="#442" id="442">442</a>
 <a href="#443" id="443">443</a>
-<a href="#444" id="444">444</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#444" id="444">444</a>
+<a href="#445" id="445">445</a>
+<a href="#446" id="446">446</a>
+<a href="#447" id="447">447</a>
+<a href="#448" id="448">448</a>
+<a href="#449" id="449">449</a>
+<a href="#450" id="450">450</a>
+<a href="#451" id="451">451</a>
+<a href="#452" id="452">452</a>
+<a href="#453" id="453">453</a>
+<a href="#454" id="454">454</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -475,6 +485,7 @@
 
 <span class="kw">struct </span>Gemma3ImageProcessor {
     full_image_sequence: String,
+    supports_images: bool,
 }
 
 <span class="kw">const </span>IMAGE_TOKEN: <span class="kw-2">&amp;</span>str = <span class="string">"&lt;image_soft_token&gt;"</span>;
@@ -483,16 +494,18 @@
 
 <span class="kw">pub struct </span>Gemma3Processor {
     full_image_sequence: String,
+    supports_images: bool,
 }
 
 <span class="kw">impl </span>Gemma3Processor {
-    <span class="kw">pub fn </span>new(processor_config: ProcessorConfig) -&gt; <span class="self">Self </span>{
+    <span class="kw">pub fn </span>new(processor_config: ProcessorConfig, supports_images: bool) -&gt; <span class="self">Self </span>{
         <span class="kw">let </span>image_tokens_expanded =
             <span class="macro">vec!</span>[IMAGE_TOKEN.to_string(); processor_config.image_seq_len.unwrap_or(<span class="number">256</span>)].join(<span class="string">""</span>);
         <span class="kw">let </span>full_image_sequence = <span class="macro">format!</span>(<span class="string">"\n\n{BOI_TOKEN}{image_tokens_expanded}{EOI_TOKEN}\n\n"</span>);
 
         <span class="self">Self </span>{
             full_image_sequence,
+            supports_images,
         }
     }
 }
@@ -501,6 +514,7 @@
     <span class="kw">fn </span>inputs_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span>InputsProcessor&gt; {
         Arc::new(Gemma3ImageProcessor {
             full_image_sequence: <span class="self">self</span>.full_image_sequence.clone(),
+            supports_images: <span class="self">self</span>.supports_images,
         })
     }
 
@@ -558,6 +572,12 @@
         <span class="kw">let </span>has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         <span class="kw">let </span>pixel_values = <span class="kw">if </span>has_images {
+            <span class="kw">if </span>!<span class="self">self</span>.supports_images {
+                <span class="kw">return </span>Box::new(std::iter::once(<span class="prelude-val">Err</span>(anyhow::Error::msg(
+                    <span class="string">"This image processor does not support images."</span>,
+                ))));
+            }
+
             <span class="kw">let </span><span class="kw-2">mut </span>pixel_values_accum = Vec::new();
             <span class="kw">let </span>re = Regex::new(BOI_TOKEN).unwrap();
             <span class="kw">for </span>seq <span class="kw">in </span>input_seqs.iter_mut() {

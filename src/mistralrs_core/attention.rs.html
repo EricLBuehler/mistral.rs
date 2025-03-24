@@ -413,7 +413,13 @@
 <a href="#412" id="412">412</a>
 <a href="#413" id="413">413</a>
 <a href="#414" id="414">414</a>
-<a href="#415" id="415">415</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_precision_loss)]
 
 #[cfg(feature = <span class="string">"metal"</span>)]
 </span><span class="kw">use </span>std::sync::atomic::AtomicUsize;
@@ -733,8 +739,14 @@
             mask.layout().broadcast_as(tgt_mask_shape.clone()).is_ok()
                 &amp;&amp; sdpa_params.softcap.is_none_or(|x| x == <span class="number">1.0</span>)
         });
+        <span class="kw">let </span>valid_head_dims: <span class="kw-2">&amp;</span>[usize] = <span class="kw">if </span>can_use_mask &amp;&amp; mask.is_some() {
+            <span class="kw-2">&amp;</span>[<span class="number">64</span>, <span class="number">80</span>, <span class="number">128</span>]
+        } <span class="kw">else </span>{
+            <span class="kw-2">&amp;</span>[<span class="number">32</span>, <span class="number">64</span>, <span class="number">96</span>, <span class="number">128</span>, <span class="number">256</span>]
+        };
         <span class="kw">if </span>[q, k, v].into_iter().all(|x| x.device().is_metal())
             &amp;&amp; all_head_dims_match
+            &amp;&amp; valid_head_dims.contains(<span class="kw-2">&amp;</span>head_dim)
             &amp;&amp; can_use_mask
         {
             <span class="kw">let </span>mask = <span class="kw">match </span>mask {

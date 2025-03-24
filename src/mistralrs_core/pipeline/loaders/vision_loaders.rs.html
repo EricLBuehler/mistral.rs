@@ -3713,7 +3713,11 @@
 <a href="#3712" id="3712">3712</a>
 <a href="#3713" id="3713">3713</a>
 <a href="#3714" id="3714">3714</a>
-<a href="#3715" id="3715">3715</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
+<a href="#3715" id="3715">3715</a>
+<a href="#3716" id="3716">3716</a>
+<a href="#3717" id="3717">3717</a>
+<a href="#3718" id="3718">3718</a>
+<a href="#3719" id="3719">3719</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::any::Any;
 <span class="kw">use </span>std::sync::Arc;
 <span class="kw">use </span>std::{fmt::Debug, str::FromStr};
 
@@ -6860,13 +6864,17 @@
     }
     <span class="kw">fn </span>get_processor(
         <span class="kw-2">&amp;</span><span class="self">self</span>,
-        _model_config: <span class="kw-2">&amp;</span>str,
+        config: <span class="kw-2">&amp;</span>str,
         processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt;,
         _preprocessor_config: PreProcessorConfig,
         _max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     ) -&gt; Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt; {
+        <span class="kw">let </span>config: Gemma3Config = serde_json::from_str(config).unwrap();
         <span class="comment">// Handle the Gemma 3 1b case here
-        </span>Arc::new(Gemma3Processor::new(processor_config.unwrap_or_default()))
+        </span>Arc::new(Gemma3Processor::new(
+            processor_config.unwrap_or_default(),
+            <span class="macro">matches!</span>(config, Gemma3Config::WithVision { .. }),
+        ))
     }
     <span class="kw">fn </span>supports_paged_attention(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="bool-val">true
