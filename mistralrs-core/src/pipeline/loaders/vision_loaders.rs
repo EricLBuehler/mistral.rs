@@ -3145,13 +3145,17 @@ impl VisionModelLoader for Gemma3Loader {
     }
     fn get_processor(
         &self,
-        _model_config: &str,
+        config: &str,
         processor_config: Option<ProcessorConfig>,
         _preprocessor_config: PreProcessorConfig,
         _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
+        let config: Gemma3Config = serde_json::from_str(config).unwrap();
         // Handle the Gemma 3 1b case here
-        Arc::new(Gemma3Processor::new(processor_config.unwrap_or_default()))
+        Arc::new(Gemma3Processor::new(
+            processor_config.unwrap_or_default(),
+            matches!(config, Gemma3Config::WithVision { .. }),
+        ))
     }
     fn supports_paged_attention(&self) -> bool {
         true

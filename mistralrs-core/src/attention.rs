@@ -318,8 +318,14 @@ impl Sdpa {
             mask.layout().broadcast_as(tgt_mask_shape.clone()).is_ok()
                 && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         });
+        let valid_head_dims: &[usize] = if can_use_mask && mask.is_some() {
+            &[64, 80, 128]
+        } else {
+            &[32, 64, 96, 128, 256]
+        };
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
             && all_head_dims_match
+            && valid_head_dims.contains(&head_dim)
             && can_use_mask
         {
             let mask = match mask {
