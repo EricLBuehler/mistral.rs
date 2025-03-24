@@ -31,6 +31,7 @@ use super::Gemma3SpecificArgs;
 
 struct Gemma3ImageProcessor {
     full_image_sequence: String,
+    supports_images: bool,
 }
 
 const IMAGE_TOKEN: &str = "<image_soft_token>";
@@ -39,16 +40,18 @@ const EOI_TOKEN: &str = "<end_of_image>";
 
 pub struct Gemma3Processor {
     full_image_sequence: String,
+    supports_images: bool,
 }
 
 impl Gemma3Processor {
-    pub fn new(processor_config: ProcessorConfig) -> Self {
+    pub fn new(processor_config: ProcessorConfig, supports_images: bool) -> Self {
         let image_tokens_expanded =
             vec![IMAGE_TOKEN.to_string(); processor_config.image_seq_len.unwrap_or(256)].join("");
         let full_image_sequence = format!("\n\n{BOI_TOKEN}{image_tokens_expanded}{EOI_TOKEN}\n\n");
 
         Self {
             full_image_sequence,
+            supports_images,
         }
     }
 }
@@ -57,6 +60,7 @@ impl Processor for Gemma3Processor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Gemma3ImageProcessor {
             full_image_sequence: self.full_image_sequence.clone(),
+            supports_images: self.supports_images,
         })
     }
 
@@ -114,6 +118,12 @@ impl InputsProcessor for Gemma3ImageProcessor {
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let pixel_values = if has_images {
+            if self.supports_images {
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    "This image processor does not support images.",
+                ))));
+            }
+
             let mut pixel_values_accum = Vec::new();
             let re = Regex::new(BOI_TOKEN).unwrap();
             for seq in input_seqs.iter_mut() {
