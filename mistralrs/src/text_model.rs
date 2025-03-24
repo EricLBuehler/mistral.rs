@@ -54,7 +54,7 @@ impl Default for PagedAttentionMetaBuilder {
         Self {
             block_size: None,
             mem_cpu: 64,
-            mem_gpu: MemoryGpuConfig::Utilization(0.9),
+            mem_gpu: MemoryGpuConfig::ContextSize(4096),
         }
     }
 }
