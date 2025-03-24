@@ -207,12 +207,7 @@ impl Engine {
                             self.prefix_cacher
                         );
 
-                        let total_processed_tokens: usize = scheduled
-                            .completion
-                            .iter()
-                            .map(|seq| seq.get_toks().len())
-                            .sum();
-                        self.logger.add_tokens_processed(total_processed_tokens);
+                        self.logger.add_tokens_processed(scheduled.completion.len());
 
                         last_completion_ids = current_completion_ids;
                     }
@@ -408,8 +403,16 @@ impl Engine {
                             self.prefix_cacher
                         );
 
-                        let total_processed_tokens: usize =
-                            guards.iter().map(|seq| seq.get_toks().len()).sum();
+                        let total_processed_tokens: usize = guards
+                            .iter()
+                            .map(|seq| {
+                                if seq.is_prompt() {
+                                    seq.get_toks().len()
+                                } else {
+                                    1
+                                }
+                            })
+                            .sum();
                         self.logger.add_tokens_processed(total_processed_tokens);
 
                         if self.is_debug {
