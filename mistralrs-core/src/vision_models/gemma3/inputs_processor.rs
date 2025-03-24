@@ -118,7 +118,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let pixel_values = if has_images {
-            if self.supports_images {
+            if !self.supports_images {
                 return Box::new(std::iter::once(Err(anyhow::Error::msg(
                     "This image processor does not support images.",
                 ))));
