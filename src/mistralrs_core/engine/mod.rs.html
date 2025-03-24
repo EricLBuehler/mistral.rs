@@ -1051,7 +1051,10 @@
 <a href="#1050" id="1050">1050</a>
 <a href="#1051" id="1051">1051</a>
 <a href="#1052" id="1052">1052</a>
-<a href="#1053" id="1053">1053</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
+<a href="#1053" id="1053">1053</a>
+<a href="#1054" id="1054">1054</a>
+<a href="#1055" id="1055">1055</a>
+<a href="#1056" id="1056">1056</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Tensor;
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>interprocess::local_socket::{traits::Listener, ListenerOptions};
 <span class="kw">use </span>llguidance::toktrie::TokEnv;
@@ -1260,12 +1263,7 @@
                             <span class="self">self</span>.prefix_cacher
                         );
 
-                        <span class="kw">let </span>total_processed_tokens: usize = scheduled
-                            .completion
-                            .iter()
-                            .map(|seq| seq.get_toks().len())
-                            .sum();
-                        <span class="self">self</span>.logger.add_tokens_processed(total_processed_tokens);
+                        <span class="self">self</span>.logger.add_tokens_processed(scheduled.completion.len());
 
                         last_completion_ids = current_completion_ids;
                     }
@@ -1461,8 +1459,16 @@
                             <span class="self">self</span>.prefix_cacher
                         );
 
-                        <span class="kw">let </span>total_processed_tokens: usize =
-                            guards.iter().map(|seq| seq.get_toks().len()).sum();
+                        <span class="kw">let </span>total_processed_tokens: usize = guards
+                            .iter()
+                            .map(|seq| {
+                                <span class="kw">if </span>seq.is_prompt() {
+                                    seq.get_toks().len()
+                                } <span class="kw">else </span>{
+                                    <span class="number">1
+                                </span>}
+                            })
+                            .sum();
                         <span class="self">self</span>.logger.add_tokens_processed(total_processed_tokens);
 
                         <span class="kw">if </span><span class="self">self</span>.is_debug {
