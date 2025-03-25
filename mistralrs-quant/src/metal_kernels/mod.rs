@@ -1,7 +1,7 @@
 use candle_core::DType;
 use metal::{
     Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
-    FunctionConstantValues, Library,
+    FunctionConstantValues, Library, MTLSize,
 };
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -14,12 +14,14 @@ use crate::set_params;
 const HQQ_DEQUANTIZE: &str = include_str!("hqq_dequantize.metal");
 const BNB_DEQUANTIZE: &str = include_str!("bnb_dequantize.metal");
 const BITWISE: &str = include_str!("bitwise.metal");
+const RMS_NORM: &str = include_str!("rms_norm.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     HqqDequant,
     BnbDequant,
     Bitwise,
+    RmsNorm,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -43,7 +45,7 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
 }
 
 type Libraries = HashMap<Source, Library>;
-type Pipelines = HashMap<&'static str, ComputePipelineState>;
+type Pipelines = HashMap<String, ComputePipelineState>;
 
 #[derive(Debug)]
 pub struct Kernels {
@@ -72,6 +74,7 @@ impl Kernels {
             Source::HqqDequant => HQQ_DEQUANTIZE,
             Source::BnbDequant => BNB_DEQUANTIZE,
             Source::Bitwise => BITWISE,
+            Source::RmsNorm => RMS_NORM,
         }
     }
 
@@ -101,7 +104,7 @@ impl Kernels {
         &self,
         device: &Device,
         source: Source,
-        name: &'static str,
+        name: &str,
         constants: Option<FunctionConstantValues>,
     ) -> Result<Function, MetalKernelError> {
         let func = self
@@ -118,15 +121,15 @@ impl Kernels {
         &self,
         device: &Device,
         source: Source,
-        name: &'static str,
+        name: &str,
     ) -> Result<ComputePipelineState, MetalKernelError> {
         let mut pipelines = self.pipelines.write()?;
-        let key = name;
+        let key = name.to_string();
         if let Some(pipeline) = pipelines.get(&key) {
             Ok(pipeline.clone())
         } else {
             let name = key;
-            let func = self.load_function(device, source, name, None)?;
+            let func = self.load_function(device, source, &name, None)?;
             let pipeline = device
                 .new_compute_pipeline_state_with_function(&func)
                 .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
@@ -524,5 +527,91 @@ pub fn call_dequant_bnb_int8(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rms_norm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    x_shape: &[usize],
+    w: &Buffer,
+    w_offset: usize,
+    w_strides: &[usize],
+    output: &Buffer,
+    output_offset: usize,
+    eps: f32,
+) -> Result<(), MetalKernelError> {
+    let axis_size = x_shape[x_shape.len() - 1];
+    let n_rows = x_shape.iter().product::<usize>() / axis_size;
+
+    let w_stride = w_strides[0];
+
+    const SIMD_SIZE: usize = 32;
+    const N_READS: usize = 4;
+    const LOOPED_LIMIT: usize = 4096;
+
+    let mut name = "rms".to_string();
+    if axis_size > LOOPED_LIMIT {
+        name.push_str("_looped");
+    }
+    match ty {
+        DType::F32 => name.push_str("float"),
+        DType::BF16 => name.push_str("bfloat16"),
+        DType::F16 => name.push_str("half"),
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+
+    let pipeline = kernels.load_pipeline(device, Source::RmsNorm, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let threadgroup_size = if axis_size <= LOOPED_LIMIT {
+        let threadgroup_needed = (axis_size + N_READS - 1) / N_READS; //axis_size.div_ceil(N_READS);
+        let simds_needed = (threadgroup_needed + SIMD_SIZE - 1) / SIMD_SIZE; //threadgroup_needed.div_ceil(SIMD_SIZE);
+        let threadgroup_size = SIMD_SIZE * simds_needed;
+        assert!(threadgroup_size <= pipeline.max_total_threads_per_threadgroup() as usize);
+        threadgroup_size
+    } else {
+        pipeline.max_total_threads_per_threadgroup() as usize
+    };
+
+    let nthreads = n_rows * threadgroup_size;
+    let grid_dims = MTLSize {
+        width: nthreads as u64,
+        height: 1,
+        depth: 1,
+    };
+    let group_dims = MTLSize {
+        width: threadgroup_size as u64,
+        height: 1,
+        depth: 1,
+    };
+
+    set_params!(
+        encoder,
+        (
+            (x, x_offset),
+            (w, w_offset),
+            (output, output_offset),
+            eps,
+            axis_size as u32,
+            w_stride as u32
+        )
+    );
+
+    encoder.dispatch_threads(grid_dims, group_dims);
+
     Ok(())
 }
