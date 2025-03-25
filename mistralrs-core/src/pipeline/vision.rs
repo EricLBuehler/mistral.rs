@@ -35,6 +35,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
+use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
@@ -88,6 +89,7 @@ pub struct VisionLoader {
     revision: RwLock<Option<String>>,
     from_uqff: RwLock<Option<PathBuf>>,
     jinja_explicit: Option<String>,
+    hf_cache_path: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -99,6 +101,7 @@ pub struct VisionLoaderBuilder {
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     jinja_explicit: Option<String>,
+    hf_cache_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Default)]
@@ -112,6 +115,7 @@ pub struct VisionSpecificConfig {
     pub max_edge: Option<u32>,
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
+    pub hf_cache_path: Option<PathBuf>,
 }
 
 impl VisionLoaderBuilder {
@@ -129,7 +133,13 @@ impl VisionLoaderBuilder {
             model_id,
             jinja_explicit,
             kind: ModelKind::Normal,
+            hf_cache_path: None,
         }
+    }
+
+    pub fn hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
+        self.hf_cache_path = Some(hf_cache_path);
+        self
     }
 
     pub fn build(self, loader: VisionLoaderType) -> Box<dyn Loader> {
@@ -160,6 +170,7 @@ impl VisionLoaderBuilder {
             token_source: RwLock::new(None),
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
+            hf_cache_path: self.hf_cache_path,
         })
     }
 }
@@ -177,6 +188,13 @@ impl Loader for VisionLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let cache = self
+            .hf_cache_path
+            .clone()
+            .map(Cache::new)
+            .unwrap_or_default();
+        crate::GLOBAL_HF_CACHE.get_or_init(|| cache);
+
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
             &token_source,
@@ -893,7 +911,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let model_id = Path::new(&model_id);
 
             let api = {
-                let mut api = ApiBuilder::new()
+                let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
                 if let Ok(x) = std::env::var("HF_HUB_CACHE") {
@@ -948,7 +967,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let model_id = Path::new(&gate_model_id);
 
             let api = {
-                let mut api = ApiBuilder::new()
+                let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
                 if let Ok(x) = std::env::var("HF_HUB_CACHE") {

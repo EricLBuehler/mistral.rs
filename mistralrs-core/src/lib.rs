@@ -3,6 +3,7 @@ use candle_core::Device;
 use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
+use hf_hub::Cache;
 pub use lora::Ordering;
 pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
@@ -10,6 +11,7 @@ pub use pipeline::Pipeline;
 use pyo3::exceptions::PyValueError;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::sync::OnceLock;
 use std::time::Instant;
 use std::{
     cell::RefCell,
@@ -116,6 +118,7 @@ pub use llguidance;
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
+pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 static ENGINE_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub struct MistralRsConfig {

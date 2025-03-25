@@ -67,7 +67,8 @@ macro_rules! get_paths {
         $loading_uqff:expr
     ) => {{
         let api = {
-            let mut api = ApiBuilder::new()
+            let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+            let mut api = ApiBuilder::from_cache(cache)
                 .with_progress(!$silent)
                 .with_token(get_token($token_source)?);
             if let Ok(x) = std::env::var("HF_HUB_CACHE") {
@@ -197,7 +198,8 @@ macro_rules! get_paths {
 macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
         let api = {
-            let mut api = ApiBuilder::new()
+            let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+            let mut api = ApiBuilder::from_cache(cache)
                 .with_progress(!$silent)
                 .with_token(get_token(
                     &$this
@@ -243,7 +245,8 @@ macro_rules! get_paths_gguf {
         $silent:expr
     ) => {{
         let api = {
-            let mut api = ApiBuilder::new()
+            let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+            let mut api = ApiBuilder::from_cache(cache)
                 .with_progress(!$silent)
                 .with_token(get_token($token_source)?);
             if let Ok(x) = std::env::var("HF_HUB_CACHE") {

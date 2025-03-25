@@ -41,6 +41,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
+use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
 use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
@@ -93,6 +94,7 @@ pub struct NormalLoader {
     revision: RwLock<Option<String>>,
     from_uqff: RwLock<Option<PathBuf>>,
     jinja_explicit: Option<String>,
+    hf_cache_path: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -108,6 +110,7 @@ pub struct NormalLoaderBuilder {
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
     jinja_explicit: Option<String>,
+    hf_cache_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Default)]
@@ -121,6 +124,7 @@ pub struct NormalSpecificConfig {
     pub from_uqff: Option<PathBuf>,
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
+    pub hf_cache_path: Option<PathBuf>,
 }
 
 impl NormalLoaderBuilder {
@@ -192,6 +196,11 @@ impl NormalLoaderBuilder {
         self.with_adapter(lora_model_id, lora_order, false, None)
     }
 
+    pub fn hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
+        self.hf_cache_path = Some(hf_cache_path);
+        self
+    }
+
     /// If the loader type is not specified, loader type is automatically determined from the
     /// `architectures` array in the config.
     pub fn build(self, loader_tp: Option<NormalLoaderType>) -> anyhow::Result<Box<dyn Loader>> {
@@ -225,6 +234,7 @@ impl NormalLoaderBuilder {
             token_source: RwLock::new(None),
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
+            hf_cache_path: self.hf_cache_path,
         }))
     }
 }
@@ -242,6 +252,13 @@ impl Loader for NormalLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let cache = self
+            .hf_cache_path
+            .clone()
+            .map(Cache::new)
+            .unwrap_or_default();
+        crate::GLOBAL_HF_CACHE.get_or_init(|| cache);
+
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
             &token_source,
@@ -1084,7 +1101,8 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let model_id = Path::new(&model_id);
 
             let api = {
-                let mut api = ApiBuilder::new()
+                let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
                 if let Ok(x) = std::env::var("HF_HUB_CACHE") {
@@ -1139,7 +1157,8 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let model_id = Path::new(&gate_model_id);
 
             let api = {
-                let mut api = ApiBuilder::new()
+                let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
                 if let Ok(x) = std::env::var("HF_HUB_CACHE") {
