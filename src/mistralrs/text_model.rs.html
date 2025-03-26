@@ -387,7 +387,16 @@
 <a href="#386" id="386">386</a>
 <a href="#387" id="387">387</a>
 <a href="#388" id="388">388</a>
-<a href="#389" id="389">389</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -411,6 +420,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapSetting&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 
     <span class="comment">// Model running
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
@@ -498,6 +508,7 @@
             calibration_file: <span class="prelude-val">None</span>,
             jinja_explicit: <span class="prelude-val">None</span>,
             throughput_logging: <span class="bool-val">false</span>,
+            hf_cache_path: <span class="prelude-val">None</span>,
         }
     }
 
@@ -657,6 +668,12 @@
         <span class="self">self
     </span>}
 
+    <span class="doccomment">/// Cache path for Hugging Face models downloaded locally
+    </span><span class="kw">pub fn </span>from_hf_cache_pathf(<span class="kw-2">mut </span><span class="self">self</span>, hf_cache_path: PathBuf) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.hf_cache_path = <span class="prelude-val">Some</span>(hf_cache_path);
+        <span class="self">self
+    </span>}
+
     <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
         <span class="kw">let </span>config = NormalSpecificConfig {
             use_flash_attn: <span class="self">self</span>.use_flash_attn,
@@ -667,6 +684,7 @@
             from_uqff: <span class="self">self</span>.from_uqff,
             imatrix: <span class="self">self</span>.imatrix,
             calibration_file: <span class="self">self</span>.calibration_file,
+            hf_cache_path: <span class="self">self</span>.hf_cache_path,
         };
 
         <span class="kw">if </span><span class="self">self</span>.with_logging {

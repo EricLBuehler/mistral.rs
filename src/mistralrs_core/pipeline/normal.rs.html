@@ -1199,7 +1199,26 @@
 <a href="#1198" id="1198">1198</a>
 <a href="#1199" id="1199">1199</a>
 <a href="#1200" id="1200">1200</a>
-<a href="#1201" id="1201">1201</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
+<a href="#1201" id="1201">1201</a>
+<a href="#1202" id="1202">1202</a>
+<a href="#1203" id="1203">1203</a>
+<a href="#1204" id="1204">1204</a>
+<a href="#1205" id="1205">1205</a>
+<a href="#1206" id="1206">1206</a>
+<a href="#1207" id="1207">1207</a>
+<a href="#1208" id="1208">1208</a>
+<a href="#1209" id="1209">1209</a>
+<a href="#1210" id="1210">1210</a>
+<a href="#1211" id="1211">1211</a>
+<a href="#1212" id="1212">1212</a>
+<a href="#1213" id="1213">1213</a>
+<a href="#1214" id="1214">1214</a>
+<a href="#1215" id="1215">1215</a>
+<a href="#1216" id="1216">1216</a>
+<a href="#1217" id="1217">1217</a>
+<a href="#1218" id="1218">1218</a>
+<a href="#1219" id="1219">1219</a>
+<a href="#1220" id="1220">1220</a></pre></div><pre class="rust"><code><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <span class="kw">use </span><span class="kw">super</span>::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 <span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
 <span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
@@ -1238,10 +1257,11 @@
 <span class="kw">use crate</span>::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
     normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
-    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>candle_core::{Device, Tensor, Var};
+<span class="kw">use </span>hf_hub::Cache;
 <span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 <span class="kw">use </span>indicatif::MultiProgress;
 <span class="kw">use </span>mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
@@ -1294,6 +1314,7 @@
     revision: RwLock&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;,
     from_uqff: RwLock&lt;<span class="prelude-ty">Option</span>&lt;PathBuf&gt;&gt;,
     jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 }
 
 <span class="attr">#[derive(Default)]
@@ -1309,6 +1330,7 @@
     tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
+    hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 }
 
 <span class="attr">#[derive(Clone, Default)]
@@ -1322,6 +1344,7 @@
     <span class="kw">pub </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub </span>imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
     <span class="kw">pub </span>calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    <span class="kw">pub </span>hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 }
 
 <span class="kw">impl </span>NormalLoaderBuilder {
@@ -1393,6 +1416,11 @@
         <span class="self">self</span>.with_adapter(lora_model_id, lora_order, <span class="bool-val">false</span>, <span class="prelude-val">None</span>)
     }
 
+    <span class="kw">pub fn </span>hf_cache_path(<span class="kw-2">mut </span><span class="self">self</span>, hf_cache_path: PathBuf) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.hf_cache_path = <span class="prelude-val">Some</span>(hf_cache_path);
+        <span class="self">self
+    </span>}
+
     <span class="doccomment">/// If the loader type is not specified, loader type is automatically determined from the
     /// `architectures` array in the config.
     </span><span class="kw">pub fn </span>build(<span class="self">self</span>, loader_tp: <span class="prelude-ty">Option</span>&lt;NormalLoaderType&gt;) -&gt; anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>Loader&gt;&gt; {
@@ -1426,6 +1454,7 @@
             token_source: RwLock::new(<span class="prelude-val">None</span>),
             revision: RwLock::new(<span class="prelude-val">None</span>),
             from_uqff: RwLock::new(<span class="prelude-val">None</span>),
+            hf_cache_path: <span class="self">self</span>.hf_cache_path,
         }))
     }
 }
@@ -1443,6 +1472,13 @@
         in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
         paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt; {
+        <span class="kw">let </span>cache = <span class="self">self
+            </span>.hf_cache_path
+            .clone()
+            .map(Cache::new)
+            .unwrap_or_default();
+        GLOBAL_HF_CACHE.get_or_init(|| cache);
+
         <span class="kw">let </span>paths: anyhow::Result&lt;Box&lt;<span class="kw">dyn </span>ModelPaths&gt;&gt; = <span class="macro">get_paths!</span>(
             LocalModelPaths,
             <span class="kw-2">&amp;</span>token_source,
@@ -2285,7 +2321,8 @@
             <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>model_id);
 
             <span class="kw">let </span>api = {
-                <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::new()
+                <span class="kw">let </span>cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)<span class="question-mark">?</span>);
                 <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
@@ -2340,7 +2377,8 @@
             <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>gate_model_id);
 
             <span class="kw">let </span>api = {
-                <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::new()
+                <span class="kw">let </span>cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)<span class="question-mark">?</span>);
                 <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {

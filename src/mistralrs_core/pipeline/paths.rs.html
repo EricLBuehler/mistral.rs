@@ -564,7 +564,9 @@
 <a href="#563" id="563">563</a>
 <a href="#564" id="564">564</a>
 <a href="#565" id="565">565</a>
-<a href="#566" id="566">566</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#566" id="566">566</a>
+<a href="#567" id="567">567</a>
+<a href="#568" id="568">568</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -589,7 +591,7 @@
     },
     utils::tokens::get_token,
     xlora_models::XLoraConfig,
-    ModelPaths, Ordering, TokenSource,
+    ModelPaths, Ordering, TokenSource, GLOBAL_HF_CACHE,
 };
 
 <span class="comment">// Match files against these, avoids situations like `consolidated.safetensors`
@@ -615,7 +617,8 @@
 ) -&gt; <span class="prelude-ty">Result</span>&lt;XLoraPaths&gt; {
     <span class="prelude-val">Ok</span>(<span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>xlora_id) = xlora_model_id {
         <span class="kw">let </span>api = {
-            <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::new()
+            <span class="kw">let </span>cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+            <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::from_cache(cache)
                 .with_progress(<span class="bool-val">true</span>)
                 .with_token(get_token(token_source)<span class="question-mark">?</span>);
             <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
@@ -845,7 +848,8 @@
 
             <span class="kw">for </span>name <span class="kw">in </span>names {
                 <span class="kw">let </span>qapi = {
-                    <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::new()
+                    <span class="kw">let </span>cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                    <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::from_cache(cache)
                         .with_progress(<span class="bool-val">true</span>)
                         .with_token(get_token(token_source)<span class="question-mark">?</span>);
                     <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {

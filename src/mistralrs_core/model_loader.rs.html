@@ -527,7 +527,15 @@
 <a href="#526" id="526">526</a>
 <a href="#527" id="527">527</a>
 <a href="#528" id="528">528</a>
-<a href="#529" id="529">529</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#529" id="529">529</a>
+<a href="#530" id="530">530</a>
+<a href="#531" id="531">531</a>
+<a href="#532" id="532">532</a>
+<a href="#533" id="533">533</a>
+<a href="#534" id="534">534</a>
+<a href="#535" id="535">535</a>
+<a href="#536" id="536">536</a>
+<a href="#537" id="537">537</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     fs::{<span class="self">self</span>, File},
     num::NonZeroUsize,
 };
@@ -741,6 +749,7 @@
             calibration_file,
             max_seq_len: <span class="kw">_</span>,
             max_batch_size: <span class="kw">_</span>,
+            hf_cache_path,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -751,6 +760,7 @@
                 from_uqff,
                 imatrix,
                 calibration_file,
+                hf_cache_path,
             },
             args.chat_template,
             tokenizer_json,
@@ -772,6 +782,7 @@
             from_uqff,
             max_seq_len: <span class="kw">_</span>,
             max_batch_size: <span class="kw">_</span>,
+            hf_cache_path,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -782,6 +793,7 @@
                 from_uqff,
                 imatrix: <span class="prelude-val">None</span>,
                 calibration_file: <span class="prelude-val">None</span>,
+                hf_cache_path,
             },
             args.chat_template,
             tokenizer_json,
@@ -811,6 +823,7 @@
             from_uqff,
             max_seq_len: <span class="kw">_</span>,
             max_batch_size: <span class="kw">_</span>,
+            hf_cache_path,
         } =&gt; NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -821,6 +834,7 @@
                 from_uqff,
                 imatrix: <span class="prelude-val">None</span>,
                 calibration_file: <span class="prelude-val">None</span>,
+                hf_cache_path,
             },
             args.chat_template,
             tokenizer_json,
@@ -1027,6 +1041,7 @@
             max_batch_size: <span class="kw">_</span>,
             max_num_images: <span class="kw">_</span>,
             max_image_length: <span class="kw">_</span>,
+            hf_cache_path,
             imatrix,
         } =&gt; VisionLoaderBuilder::new(
             VisionSpecificConfig {
@@ -1038,6 +1053,7 @@
                 max_edge,
                 calibration_file,
                 imatrix,
+                hf_cache_path,
             },
             args.chat_template,
             tokenizer_json,

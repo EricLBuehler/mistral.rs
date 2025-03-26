@@ -317,7 +317,16 @@
 <a href="#316" id="316">316</a>
 <a href="#317" id="317">317</a>
 <a href="#318" id="318">318</a>
-<a href="#319" id="319">319</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#319" id="319">319</a>
+<a href="#320" id="320">320</a>
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a>
+<a href="#324" id="324">324</a>
+<a href="#325" id="325">325</a>
+<a href="#326" id="326">326</a>
+<a href="#327" id="327">327</a>
+<a href="#328" id="328">328</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -342,6 +351,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapSetting&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 
     <span class="comment">// Model running
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
@@ -389,6 +399,7 @@
             jinja_explicit: <span class="prelude-val">None</span>,
             throughput_logging: <span class="bool-val">false</span>,
             paged_attn_cfg: <span class="prelude-val">None</span>,
+            hf_cache_path: <span class="prelude-val">None</span>,
         }
     }
 
@@ -524,6 +535,12 @@
         <span class="self">self
     </span>}
 
+    <span class="doccomment">/// Cache path for Hugging Face models downloaded locally
+    </span><span class="kw">pub fn </span>from_hf_cache_pathf(<span class="kw-2">mut </span><span class="self">self</span>, hf_cache_path: PathBuf) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.hf_cache_path = <span class="prelude-val">Some</span>(hf_cache_path);
+        <span class="self">self
+    </span>}
+
     <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
         <span class="kw">let </span>config = VisionSpecificConfig {
             use_flash_attn: <span class="self">self</span>.use_flash_attn,
@@ -534,6 +551,7 @@
             max_edge: <span class="self">self</span>.max_edge,
             calibration_file: <span class="self">self</span>.calibration_file,
             imatrix: <span class="self">self</span>.imatrix,
+            hf_cache_path: <span class="self">self</span>.hf_cache_path,
         };
 
         <span class="kw">if </span><span class="self">self</span>.with_logging {

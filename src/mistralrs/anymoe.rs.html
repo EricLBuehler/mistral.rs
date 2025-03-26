@@ -123,7 +123,8 @@
 <a href="#122" id="122">122</a>
 <a href="#123" id="123">123</a>
 <a href="#124" id="124">124</a>
-<a href="#125" id="125">125</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::{
+<a href="#125" id="125">125</a>
+<a href="#126" id="126">126</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::{
     initialize_logging, AnyMoeConfig, AnyMoeLoader, AutoDeviceMapParams, DefaultSchedulerMethod,
     DeviceMapSetting, Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
     SchedulerConfig,
@@ -175,6 +176,7 @@
             from_uqff: <span class="self">self</span>.base.from_uqff,
             imatrix: <span class="prelude-val">None</span>,
             calibration_file: <span class="prelude-val">None</span>,
+            hf_cache_path: <span class="self">self</span>.base.hf_cache_path,
         };
 
         <span class="kw">if </span><span class="self">self</span>.base.with_logging {

@@ -99,7 +99,8 @@
 <a href="#98" id="98">98</a>
 <a href="#99" id="99">99</a>
 <a href="#100" id="100">100</a>
-<a href="#101" id="101">101</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#101" id="101">101</a>
+<a href="#102" id="102">102</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 
 <span class="kw">use crate</span>::{best_device, Model, TextModelBuilder};
 
@@ -133,6 +134,7 @@
             from_uqff: <span class="self">self</span>.text_model.from_uqff,
             imatrix: <span class="prelude-val">None</span>,
             calibration_file: <span class="prelude-val">None</span>,
+            hf_cache_path: <span class="self">self</span>.text_model.hf_cache_path,
         };
 
         <span class="kw">if </span><span class="self">self</span>.text_model.with_logging {
