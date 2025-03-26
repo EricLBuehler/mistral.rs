@@ -97,6 +97,7 @@ fn parse_which(
             imatrix,
             calibration_file,
             auto_map_params: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -107,6 +108,7 @@ fn parse_which(
                 from_uqff,
                 imatrix,
                 calibration_file,
+                hf_cache_path,
             },
             chat_template,
             tokenizer_json,
@@ -127,6 +129,7 @@ fn parse_which(
             from_uqff,
             dtype: _,
             auto_map_params: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -137,6 +140,7 @@ fn parse_which(
                 from_uqff,
                 imatrix: None,
                 calibration_file: None,
+                hf_cache_path,
             },
             chat_template,
             tokenizer_json,
@@ -165,6 +169,7 @@ fn parse_which(
             from_uqff,
             dtype: _,
             auto_map_params: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -175,6 +180,7 @@ fn parse_which(
                 from_uqff,
                 imatrix: None,
                 calibration_file: None,
+                hf_cache_path,
             },
             chat_template,
             tokenizer_json,
@@ -376,6 +382,7 @@ fn parse_which(
             calibration_file,
             imatrix,
             auto_map_params: _,
+            hf_cache_path,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -386,6 +393,7 @@ fn parse_which(
                 max_edge,
                 calibration_file,
                 imatrix,
+                hf_cache_path,
             },
             chat_template,
             tokenizer_json,

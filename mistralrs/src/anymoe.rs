@@ -50,6 +50,7 @@ impl AnyMoeModelBuilder {
             from_uqff: self.base.from_uqff,
             imatrix: None,
             calibration_file: None,
+            hf_cache_path: self.base.hf_cache_path,
         };
 
         if self.base.with_logging {

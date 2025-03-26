@@ -84,6 +84,10 @@ pub enum ModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
         max_batch_size: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        #[arg(short, long)]
+        hf_cache_path: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -136,6 +140,10 @@ pub enum ModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
         max_batch_size: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        #[arg(short, long)]
+        hf_cache_path: Option<PathBuf>,
     },
 
     /// Select a LoRA architecture
@@ -183,6 +191,10 @@ pub enum ModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
         max_batch_size: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        #[arg(short, long)]
+        hf_cache_path: Option<PathBuf>,
     },
 
     /// Select a GGUF model.
@@ -511,6 +523,10 @@ pub enum ModelSelected {
         /// This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH)]
         max_image_length: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        #[arg(short, long)]
+        hf_cache_path: Option<PathBuf>,
     },
 
     /// Select a diffusion plain model, without quantization or adapters

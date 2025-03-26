@@ -80,6 +80,9 @@ pub enum TomlModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_batch_size")]
         max_batch_size: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        hf_cache_path: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -120,6 +123,9 @@ pub enum TomlModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_batch_size")]
         max_batch_size: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        hf_cache_path: Option<PathBuf>,
     },
 
     /// Select a LoRA architecture
@@ -156,6 +162,9 @@ pub enum TomlModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_batch_size")]
         max_batch_size: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        hf_cache_path: Option<PathBuf>,
     },
 
     /// Select a GGUF model.
@@ -428,6 +437,9 @@ pub enum TomlModelSelected {
         /// This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_image_length")]
         max_image_length: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        hf_cache_path: Option<PathBuf>,
     },
 }
 
@@ -595,6 +607,7 @@ fn loader_from_selected(
             calibration_file,
             max_seq_len: _,
             max_batch_size: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -605,6 +618,7 @@ fn loader_from_selected(
                 from_uqff,
                 imatrix,
                 calibration_file,
+                hf_cache_path,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -625,6 +639,7 @@ fn loader_from_selected(
             from_uqff,
             max_seq_len: _,
             max_batch_size: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -635,6 +650,7 @@ fn loader_from_selected(
                 from_uqff,
                 imatrix: None,
                 calibration_file: None,
+                hf_cache_path,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -663,6 +679,7 @@ fn loader_from_selected(
             from_uqff,
             max_seq_len: _,
             max_batch_size: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -673,6 +690,7 @@ fn loader_from_selected(
                 from_uqff,
                 imatrix: None,
                 calibration_file: None,
+                hf_cache_path,
             },
             args.chat_template,
             args.tokenizer_json,
@@ -886,6 +904,7 @@ fn loader_from_selected(
             max_num_images: _,
             max_image_length: _,
             imatrix,
+            hf_cache_path,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
@@ -896,6 +915,7 @@ fn loader_from_selected(
                 max_edge,
                 calibration_file,
                 imatrix,
+                hf_cache_path,
             },
             args.chat_template,
             args.tokenizer_json,

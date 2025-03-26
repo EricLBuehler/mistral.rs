@@ -23,6 +23,7 @@ pub struct VisionModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) max_edge: Option<u32>,
+    pub(crate) hf_cache_path: Option<PathBuf>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
@@ -70,6 +71,7 @@ impl VisionModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             paged_attn_cfg: None,
+            hf_cache_path: None,
         }
     }
 
@@ -205,6 +207,12 @@ impl VisionModelBuilder {
         self
     }
 
+    /// Cache path for Hugging Face models downloaded locally
+    pub fn from_hf_cache_pathf(mut self, hf_cache_path: PathBuf) -> Self {
+        self.hf_cache_path = Some(hf_cache_path);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = VisionSpecificConfig {
             use_flash_attn: self.use_flash_attn,
@@ -215,6 +223,7 @@ impl VisionModelBuilder {
             max_edge: self.max_edge,
             calibration_file: self.calibration_file,
             imatrix: self.imatrix,
+            hf_cache_path: self.hf_cache_path,
         };
 
         if self.with_logging {
