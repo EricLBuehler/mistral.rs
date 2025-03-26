@@ -14,7 +14,7 @@ completion = client.chat.completions.create(
 )
 
 # print(completion.usage)
-print(completion.choices[0].message)
+print(completion.choices[0].message.content)
 
 tool_called = completion.choices[0].message.tool_calls[0].function
 print(tool_called)

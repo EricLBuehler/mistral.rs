@@ -581,7 +581,7 @@ impl Engine {
                             dbg!(&result);
                             let tool_result =
                                 serde_json::to_string(&result[0].description).unwrap();
-                            let tool_result = "Humidity 71%, Wind Speed E 10 mph, Barometer  29.93 in (1013.5 mb), Dewpoint 33°F (1°C), Visibility 10.00 mi, Wind Chill 36°F (2°C)".to_string();
+                            let tool_result = "BOS weather: Humidity 71%, Wind Speed E 10 mph, Barometer  29.93 in (1013.5 mb), Dewpoint 33°F (1°C), Visibility 10.00 mi, Wind Chill 36°F (2°C)".to_string();
 
                             let mut message: IndexMap<String, MessageContent> = IndexMap::new();
                             message.insert("role".to_string(), Either::Left("tool".to_string()));
