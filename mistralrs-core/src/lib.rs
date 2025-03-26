@@ -304,7 +304,7 @@ impl MistralRs {
         let engine_handler = thread::spawn(move || {
             let rt = Runtime::new().unwrap();
             rt.block_on(async move {
-                let mut engine = Engine::new(
+                let engine = Engine::new(
                     rx,
                     pipeline,
                     method,
@@ -315,7 +315,7 @@ impl MistralRs {
                     disable_eos_stop,
                     throughput_logging_enabled,
                 );
-                engine.run().await;
+                Arc::new(engine).run().await;
             });
         });
 
@@ -420,6 +420,7 @@ impl MistralRs {
                     tools: None,
                     logits_processors: None,
                     return_raw_logits: false,
+                    do_auto_search: false,
                 });
                 info!("Beginning dummy run.");
                 let start = Instant::now();
@@ -476,7 +477,7 @@ impl MistralRs {
             let new_engine_handler = thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
-                    let mut engine = Engine::new(
+                    let engine = Engine::new(
                         rx,
                         reboot_state.pipeline.clone(),
                         reboot_state.method,
@@ -487,7 +488,7 @@ impl MistralRs {
                         reboot_state.disable_eos_stop,
                         reboot_state.throughput_logging_enabled,
                     );
-                    engine.run().await;
+                    Arc::new(engine).run().await;
                 });
             });
             *sender_lock = new_sender;

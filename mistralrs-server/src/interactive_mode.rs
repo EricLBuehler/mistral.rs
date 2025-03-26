@@ -177,6 +177,7 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
+            do_auto_search: true,
         });
         sender.send(req).await.unwrap();
 
@@ -408,6 +409,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
+            do_auto_search: true,
         });
         sender.send(req).await.unwrap();
 
@@ -541,6 +543,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>) {
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
+            do_auto_search: true,
         });
 
         let start = Instant::now();

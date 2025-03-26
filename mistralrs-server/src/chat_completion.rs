@@ -407,6 +407,7 @@ async fn parse_request(
             tools: oairequest.tools,
             logits_processors: None,
             return_raw_logits: false,
+            do_auto_search: true,
         }),
         is_streaming,
     ))

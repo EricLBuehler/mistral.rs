@@ -8,7 +8,7 @@ use std::env::consts::{ARCH, FAMILY, OS};
 
 use crate::{Function, Tool, ToolType};
 
-const SEARCH_TOOL_NAME: &str = "__mistralrs_internal_search_web";
+pub(crate) const SEARCH_TOOL_NAME: &str = "search_the_web";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -16,6 +16,11 @@ pub struct SearchResult {
     title: String,
     description: String,
     url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchFunctionParamters {
+    query: String,
 }
 
 pub fn get_search_tool() -> Result<Tool> {
@@ -40,10 +45,10 @@ pub fn get_search_tool() -> Result<Tool> {
     })
 }
 
-pub fn run_search_tool(query: &str) -> Result<Vec<SearchResult>> {
+pub fn run_search_tool(params: SearchFunctionParamters) -> Result<Vec<SearchResult>> {
     let client = reqwest::blocking::Client::new();
 
-    let encoded_query = urlencoding::encode(query);
+    let encoded_query = urlencoding::encode(&params.query);
     let url = format!("https://html.duckduckgo.com/html/?q={}", encoded_query);
 
     let response = client
@@ -73,17 +78,20 @@ pub fn run_search_tool(query: &str) -> Result<Vec<SearchResult>> {
     for element in document.select(&result_selector) {
         let title = element
             .select(&title_selector)
-            .next().map(|e| e.text().collect::<String>().trim().to_string())
+            .next()
+            .map(|e| e.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
 
         let description = element
             .select(&snippet_selector)
-            .next().map(|e| e.text().collect::<String>().trim().to_string())
+            .next()
+            .map(|e| e.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
 
         let mut url = element
             .select(&url_selector)
-            .next().map(|e| e.text().collect::<String>().trim().to_string())
+            .next()
+            .map(|e| e.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
 
         if !title.is_empty() && !description.is_empty() && !url.is_empty() {

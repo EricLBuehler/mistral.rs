@@ -98,6 +98,7 @@ pub struct NormalRequest {
     #[serde(skip)]
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
+    pub do_auto_search: bool,
 }
 
 impl NormalRequest {
@@ -123,6 +124,7 @@ impl NormalRequest {
             adapters: None,
             logits_processors: None,
             return_raw_logits: false,
+            do_auto_search: true,
         }
     }
 }
