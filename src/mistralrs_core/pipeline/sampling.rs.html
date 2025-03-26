@@ -511,7 +511,7 @@
         <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>t) = seq.tools {
             <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(<span class="kw-2">ref </span>d)) = seq.peek_delta() {
                 (tool_use_still_possible, tool_use_is_done) =
-                    t.prefix_could_be_tool(this, d.as_str());
+                    t.prefix_could_be_tool(this, d.as_str())<span class="question-mark">?</span>;
             }
         };
 

@@ -1163,7 +1163,10 @@
 <a href="#1162" id="1162">1162</a>
 <a href="#1163" id="1163">1163</a>
 <a href="#1164" id="1164">1164</a>
-<a href="#1165" id="1165">1165</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
+<a href="#1165" id="1165">1165</a>
+<a href="#1166" id="1166">1166</a>
+<a href="#1167" id="1167">1167</a>
+<a href="#1168" id="1168">1168</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{
     backend::BackendStorage, shape::Dim, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout,
     <span class="prelude-ty">Result</span>, Shape, Tensor, WithDType, D,
 };
@@ -1936,7 +1939,10 @@
         </span><span class="kw">let </span>reorder_indices = indices.arg_sort(<span class="bool-val">true</span>)<span class="question-mark">?</span>;
         <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
         </span><span class="kw">let </span>reorder_indices = indices.arg_sort_last_dim(<span class="bool-val">true</span>)<span class="question-mark">?</span>;
-        <span class="kw">let </span>topk_indices_unsorted = indices.gather(<span class="kw-2">&amp;</span>reorder_indices, D::Minus1)<span class="question-mark">?</span>;
+        <span class="kw">let </span>topk_indices_unsorted = indices
+            .to_dtype(DType::F32)<span class="question-mark">?
+            </span>.gather(<span class="kw-2">&amp;</span>reorder_indices, D::Minus1)<span class="question-mark">?
+            </span>.to_dtype(DType::U32)<span class="question-mark">?</span>;
         <span class="kw">let </span>topk_values_unsorted = values.gather(<span class="kw-2">&amp;</span>reorder_indices, D::Minus1)<span class="question-mark">?</span>;
         <span class="prelude-val">Ok</span>(TopKOutput {
             values: topk_values_unsorted,
