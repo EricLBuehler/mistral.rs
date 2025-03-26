@@ -63,6 +63,7 @@ class Which(Enum):
         dtype: ModelDType = ModelDType.Auto
         calibration_file: str | None = None
         imatrix: str | None = None
+        hf_cache_path: str | None = None
 
     @dataclass
     class XLora:
@@ -75,6 +76,7 @@ class Which(Enum):
         topology: str | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        hf_cache_path: str | None = None
 
     @dataclass
     class Lora:
@@ -86,6 +88,7 @@ class Which(Enum):
         topology: str | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
+        hf_cache_path: str | None = None
 
     @dataclass
     class GGUF:
@@ -161,6 +164,7 @@ class Which(Enum):
         max_edge: int | None = None
         calibration_file: str | None = None
         imatrix: str | None = None
+        hf_cache_path: str | None = None
 
     @dataclass
     class DiffusionPlain:

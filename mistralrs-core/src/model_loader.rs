@@ -212,6 +212,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             calibration_file,
             max_seq_len: _,
             max_batch_size: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -222,6 +223,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 from_uqff,
                 imatrix,
                 calibration_file,
+                hf_cache_path,
             },
             args.chat_template,
             tokenizer_json,
@@ -243,6 +245,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             from_uqff,
             max_seq_len: _,
             max_batch_size: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -253,6 +256,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 from_uqff,
                 imatrix: None,
                 calibration_file: None,
+                hf_cache_path,
             },
             args.chat_template,
             tokenizer_json,
@@ -282,6 +286,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             from_uqff,
             max_seq_len: _,
             max_batch_size: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -292,6 +297,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 from_uqff,
                 imatrix: None,
                 calibration_file: None,
+                hf_cache_path,
             },
             args.chat_template,
             tokenizer_json,
@@ -498,6 +504,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             max_batch_size: _,
             max_num_images: _,
             max_image_length: _,
+            hf_cache_path,
             imatrix,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
@@ -509,6 +516,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 max_edge,
                 calibration_file,
                 imatrix,
+                hf_cache_path,
             },
             args.chat_template,
             tokenizer_json,

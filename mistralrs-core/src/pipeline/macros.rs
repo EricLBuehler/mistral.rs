@@ -67,7 +67,8 @@ macro_rules! get_paths {
         $loading_uqff:expr
     ) => {{
         let api = {
-            let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+            use $crate::GLOBAL_HF_CACHE;
+            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
             let mut api = ApiBuilder::from_cache(cache)
                 .with_progress(!$silent)
                 .with_token(get_token($token_source)?);
@@ -198,7 +199,8 @@ macro_rules! get_paths {
 macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
         let api = {
-            let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+            use $crate::GLOBAL_HF_CACHE;
+            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
             let mut api = ApiBuilder::from_cache(cache)
                 .with_progress(!$silent)
                 .with_token(get_token(
@@ -245,7 +247,8 @@ macro_rules! get_paths_gguf {
         $silent:expr
     ) => {{
         let api = {
-            let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+            use $crate::GLOBAL_HF_CACHE;
+            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
             let mut api = ApiBuilder::from_cache(cache)
                 .with_progress(!$silent)
                 .with_token(get_token($token_source)?);

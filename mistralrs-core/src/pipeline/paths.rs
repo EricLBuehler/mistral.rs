@@ -23,7 +23,7 @@ use crate::{
     },
     utils::tokens::get_token,
     xlora_models::XLoraConfig,
-    ModelPaths, Ordering, TokenSource,
+    ModelPaths, Ordering, TokenSource, GLOBAL_HF_CACHE,
 };
 
 // Match files against these, avoids situations like `consolidated.safetensors`
@@ -49,7 +49,7 @@ pub fn get_xlora_paths(
 ) -> Result<XLoraPaths> {
     Ok(if let Some(ref xlora_id) = xlora_model_id {
         let api = {
-            let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
             let mut api = ApiBuilder::from_cache(cache)
                 .with_progress(true)
                 .with_token(get_token(token_source)?);
@@ -280,7 +280,7 @@ pub fn get_model_paths(
 
             for name in names {
                 let qapi = {
-                    let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                    let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
                     let mut api = ApiBuilder::from_cache(cache)
                         .with_progress(true)
                         .with_token(get_token(token_source)?);

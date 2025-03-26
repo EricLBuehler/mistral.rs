@@ -182,6 +182,7 @@ pub enum Which {
         imatrix = None,
         calibration_file = None,
         auto_map_params = None,
+        hf_cache_path = None,
     ))]
     Plain {
         model_id: String,
@@ -195,6 +196,7 @@ pub enum Which {
         imatrix: Option<PathBuf>,
         calibration_file: Option<PathBuf>,
         auto_map_params: Option<TextAutoMapParams>,
+        hf_cache_path: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
@@ -209,6 +211,7 @@ pub enum Which {
         from_uqff = None,
         dtype = ModelDType::Auto,
         auto_map_params = None,
+        hf_cache_path = None,
     ))]
     XLora {
         xlora_model_id: String,
@@ -222,6 +225,7 @@ pub enum Which {
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,
         auto_map_params: Option<TextAutoMapParams>,
+        hf_cache_path: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
@@ -235,6 +239,7 @@ pub enum Which {
         from_uqff = None,
         dtype = ModelDType::Auto,
         auto_map_params = None,
+        hf_cache_path = None,
     ))]
     Lora {
         adapters_model_id: String,
@@ -247,6 +252,7 @@ pub enum Which {
         from_uqff: Option<PathBuf>,
         dtype: ModelDType,
         auto_map_params: Option<TextAutoMapParams>,
+        hf_cache_path: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (
@@ -397,6 +403,7 @@ pub enum Which {
         calibration_file = None,
         imatrix = None,
         auto_map_params = None,
+        hf_cache_path = None,
     ))]
     VisionPlain {
         model_id: String,
@@ -410,6 +417,7 @@ pub enum Which {
         calibration_file: Option<PathBuf>,
         imatrix: Option<PathBuf>,
         auto_map_params: Option<VisionAutoMapParams>,
+        hf_cache_path: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (

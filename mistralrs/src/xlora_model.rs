@@ -39,6 +39,7 @@ impl XLoraModelBuilder {
             from_uqff: self.text_model.from_uqff,
             imatrix: None,
             calibration_file: None,
+            hf_cache_path: self.text_model.hf_cache_path,
         };
 
         if self.text_model.with_logging {

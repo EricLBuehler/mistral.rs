@@ -48,6 +48,7 @@ impl TextSpeculativeBuilder {
             from_uqff: builder.from_uqff,
             imatrix: builder.imatrix,
             calibration_file: builder.calibration_file,
+            hf_cache_path: builder.hf_cache_path,
         };
 
         if builder.with_logging {

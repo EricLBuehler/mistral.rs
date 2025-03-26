@@ -22,6 +22,7 @@ pub struct TextModelBuilder {
     pub(crate) jinja_explicit: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
+    pub(crate) hf_cache_path: Option<PathBuf>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
@@ -109,6 +110,7 @@ impl TextModelBuilder {
             calibration_file: None,
             jinja_explicit: None,
             throughput_logging: false,
+            hf_cache_path: None,
         }
     }
 
@@ -268,6 +270,12 @@ impl TextModelBuilder {
         self
     }
 
+    /// Cache path for Hugging Face models downloaded locally
+    pub fn from_hf_cache_pathf(mut self, hf_cache_path: PathBuf) -> Self {
+        self.hf_cache_path = Some(hf_cache_path);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             use_flash_attn: self.use_flash_attn,
@@ -278,6 +286,7 @@ impl TextModelBuilder {
             from_uqff: self.from_uqff,
             imatrix: self.imatrix,
             calibration_file: self.calibration_file,
+            hf_cache_path: self.hf_cache_path,
         };
 
         if self.with_logging {

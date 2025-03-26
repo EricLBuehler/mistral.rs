@@ -37,7 +37,7 @@ use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
     normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
-    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
@@ -257,7 +257,7 @@ impl Loader for NormalLoader {
             .clone()
             .map(Cache::new)
             .unwrap_or_default();
-        crate::GLOBAL_HF_CACHE.get_or_init(|| cache);
+        GLOBAL_HF_CACHE.get_or_init(|| cache);
 
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -1101,7 +1101,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let model_id = Path::new(&model_id);
 
             let api = {
-                let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
@@ -1157,7 +1157,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let model_id = Path::new(&gate_model_id);
 
             let api = {
-                let cache = crate::GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
                 let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
