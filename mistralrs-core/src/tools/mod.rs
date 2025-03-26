@@ -106,7 +106,7 @@ impl ToolCallingMatcher {
             let (could_be_tool, is_complete_tool) = check(&message_prefix);
             if could_be_tool || is_complete_tool {
                 Some((could_be_tool, is_complete_tool))
-        } else {
+            } else {
                 None
             }
         })
