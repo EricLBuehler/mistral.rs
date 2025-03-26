@@ -184,12 +184,12 @@ mod ops {
     use std::sync::Arc;
 
     use candle_core::{
-        backend::BackendStorage, CpuStorage, DType, Device, Result, Storage, Tensor,
+        backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
     };
-    use half::{bf16, f16};
     use tokio::{
         net::{TcpListener, TcpStream},
         runtime::Runtime,
+        sync::Mutex,
     };
 
     #[derive(Debug, Clone, Copy)]
@@ -240,8 +240,8 @@ mod ops {
 
     #[derive(Clone, Debug)]
     pub struct SumAllReduce {
-        left: Arc<TcpStream>,
-        right: Arc<TcpStream>,
+        left: Arc<Mutex<TcpStream>>,
+        right: Arc<Mutex<TcpStream>>,
         rt: Arc<Runtime>,
     }
 
@@ -267,16 +267,66 @@ mod ops {
             });
 
             Self {
-                left: left.into(),
-                right: right.into(),
+                left: Arc::new(Mutex::new(left)),
+                right: Arc::new(Mutex::new(right)),
                 rt: rt.into(),
             }
         }
-    }
 
-    impl SumAllReduce {
-        fn run(&self, x: Vec<u8>, dtype: DType, dims: &[usize], device: &Device) -> Result<Tensor> {
-            Tensor::from_raw_buffer(&x, dtype, dims, device)
+        fn run<T: WithDType + Copy + std::ops::AddAssign>(
+            &self,
+            mut x: Vec<T>,
+            dims: &[usize],
+            device: &Device,
+        ) -> Result<Tensor> {
+            let nbytes = x.len() * std::mem::size_of::<T>();
+            self.rt.block_on(async {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+                // Clone the Arc references for use in spawned tasks
+                let right = self.right.clone();
+                let left = self.left.clone();
+
+                // Copy the data from x into a Vec<u8> for sending
+                let data =
+                    unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) }.to_vec();
+
+                // Send the data to the right
+                let send_handle = tokio::spawn(async move {
+                    let mut right_guard = right.lock().await;
+                    right_guard
+                        .write_all(&data)
+                        .await
+                        .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))
+                });
+
+                // Receive the data from the left
+                let recv_handle = tokio::spawn(async move {
+                    let mut left_guard = left.lock().await;
+                    let mut buf = Vec::with_capacity(nbytes);
+                    left_guard
+                        .read_exact(&mut buf)
+                        .await
+                        .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))
+                        .map(|_| buf)
+                });
+
+                // Await both tasks concurrently using tokio::join!
+                let (send_res, recv_res) = tokio::join!(send_handle, recv_handle);
+                send_res
+                    .map_err(|e| candle_core::Error::msg(format!("send task error: {:?}", e)))??;
+                let buf = recv_res
+                    .map_err(|e| candle_core::Error::msg(format!("recv task error: {:?}", e)))??;
+
+                // Interpret the received bytes as a slice of T and add element-wise into x
+                let received: &[T] =
+                    unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, x.len()) };
+                for (a, b) in x.iter_mut().zip(received.iter()) {
+                    *a += *b;
+                }
+                Ok::<_, candle_core::Error>(())
+            })?;
+            Tensor::from_slice(&x, dims, device)
         }
     }
 
@@ -287,32 +337,12 @@ mod ops {
                 candle_core::bail!("Expected metal storage for ring backend")
             };
 
-            let buffer: Vec<u8> = match &mut m.to_cpu_storage()? {
-                CpuStorage::BF16(x) => unsafe {
-                    Vec::from_raw_parts(
-                        x.as_mut_ptr() as *mut u8,
-                        x.len() * std::mem::size_of::<bf16>(),
-                        x.capacity() * std::mem::size_of::<bf16>(),
-                    )
-                },
-                CpuStorage::F32(x) => unsafe {
-                    Vec::from_raw_parts(
-                        x.as_mut_ptr() as *mut u8,
-                        x.len() * std::mem::size_of::<f32>(),
-                        x.capacity() * std::mem::size_of::<f32>(),
-                    )
-                },
-                CpuStorage::F16(x) => unsafe {
-                    Vec::from_raw_parts(
-                        x.as_mut_ptr() as *mut u8,
-                        x.len() * std::mem::size_of::<f16>(),
-                        x.capacity() * std::mem::size_of::<f16>(),
-                    )
-                },
+            match m.to_cpu_storage()? {
+                CpuStorage::BF16(x) => self.run(x, xs.dims(), xs.device()),
+                CpuStorage::F32(x) => self.run(x, xs.dims(), xs.device()),
+                CpuStorage::F16(x) => self.run(x, xs.dims(), xs.device()),
                 _ => candle_core::bail!("Unsupported dtype for ring backend"),
-            };
-
-            self.run(buffer, xs.dtype(), xs.dims(), xs.device())
+            }
         }
     }
 }
