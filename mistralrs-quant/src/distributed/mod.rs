@@ -179,7 +179,145 @@ mod ops {
     }
 }
 
-#[cfg(not(all(feature = "cuda", feature = "nccl")))]
+#[cfg(feature = "ring")]
+mod ops {
+    use std::sync::Arc;
+
+    use candle_core::{
+        backend::BackendStorage, CpuStorage, DType, Device, Result, Storage, Tensor,
+    };
+    use half::{bf16, f16};
+    use tokio::{
+        net::{TcpListener, TcpStream},
+        runtime::Runtime,
+    };
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Id;
+
+    impl Default for Id {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Id {
+        pub fn new() -> Self {
+            Self
+        }
+
+        pub fn uninit(_internal: [::core::ffi::c_char; 128usize]) -> Self {
+            Self
+        }
+
+        pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
+            static ZEROED_ID: [::core::ffi::c_char; 128] = [0; 128];
+            &ZEROED_ID
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Comm;
+
+    impl Comm {
+        pub fn from_device(
+            _id: Id,
+            _dev: &Device,
+            _rank: usize,
+            _world_size: usize,
+        ) -> Result<Self> {
+            Ok(Self)
+        }
+
+        pub fn rank(&self) -> usize {
+            0
+        }
+
+        pub fn world_size(&self) -> usize {
+            1
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct SumAllReduce {
+        left: Arc<TcpStream>,
+        right: Arc<TcpStream>,
+        rt: Arc<Runtime>,
+    }
+
+    impl SumAllReduce {
+        pub fn new(_comm: &Arc<Comm>) -> Self {
+            let left_port = 1000;
+            let right_port = 1001;
+
+            let rt = Runtime::new().unwrap();
+
+            let (left, right) = rt.block_on(async {
+                let left_listener = TcpListener::bind(format!("127.0.0.1:{left_port}"))
+                    .await
+                    .unwrap();
+
+                let (left, left_addr) = left_listener.accept().await.unwrap();
+                assert_eq!(left_addr.port(), right_port);
+
+                let right = TcpStream::connect(format!("127.0.0.1:{right_port}"))
+                    .await
+                    .unwrap();
+                (left, right)
+            });
+
+            Self {
+                left: left.into(),
+                right: right.into(),
+                rt: rt.into(),
+            }
+        }
+    }
+
+    impl SumAllReduce {
+        fn run(&self, x: Vec<u8>, dtype: DType, dims: &[usize], device: &Device) -> Result<Tensor> {
+            Tensor::from_raw_buffer(&x, dtype, dims, device)
+        }
+    }
+
+    impl super::DistributedOperation for SumAllReduce {
+        fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
+            let storage = xs.storage_and_layout().0;
+            let Storage::Metal(m) = &*storage else {
+                candle_core::bail!("Expected metal storage for ring backend")
+            };
+
+            let buffer: Vec<u8> = match &mut m.to_cpu_storage()? {
+                CpuStorage::BF16(x) => unsafe {
+                    Vec::from_raw_parts(
+                        x.as_mut_ptr() as *mut u8,
+                        x.len() * std::mem::size_of::<bf16>(),
+                        x.capacity() * std::mem::size_of::<bf16>(),
+                    )
+                },
+                CpuStorage::F32(x) => unsafe {
+                    Vec::from_raw_parts(
+                        x.as_mut_ptr() as *mut u8,
+                        x.len() * std::mem::size_of::<f32>(),
+                        x.capacity() * std::mem::size_of::<f32>(),
+                    )
+                },
+                CpuStorage::F16(x) => unsafe {
+                    Vec::from_raw_parts(
+                        x.as_mut_ptr() as *mut u8,
+                        x.len() * std::mem::size_of::<f16>(),
+                        x.capacity() * std::mem::size_of::<f16>(),
+                    )
+                },
+                _ => candle_core::bail!("Unsupported dtype for ring backend"),
+            };
+
+            self.run(buffer, xs.dtype(), xs.dims(), xs.device())
+        }
+    }
+}
+
+#[cfg(not(any(all(feature = "cuda", feature = "nccl"), feature = "ring")))]
 mod ops {
     use std::sync::Arc;
 

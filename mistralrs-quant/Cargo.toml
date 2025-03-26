@@ -31,6 +31,7 @@ memmap2 = "0.9.5"
 safetensors.workspace = true
 regex.workspace = true
 hf-hub.workspace = true
+tokio.workspace = true
 
 [features]
 cuda = [
@@ -41,6 +42,7 @@ cuda = [
 nccl = ["cuda", "candle-core/nccl"]
 metal = ["candle-core/metal", "candle-nn/metal", "dep:metal"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+ring = []
 
 [build-dependencies]
 bindgen_cuda = { version = "0.1.5", optional = true }
