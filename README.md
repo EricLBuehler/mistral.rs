@@ -128,7 +128,7 @@ Mistral.rs supports several model categories:
 - First X-LoRA inference platform with first class support
 - [AnyMoE](docs/ANYMOE.md): Build a memory-efficient MoE model from anything, in seconds
 - Various [sampling and penalty](docs/SAMPLING.mds) methods
-- Native tool calling support for Llama, Mistral Small, Mistral Nemo, and Hermes models: [docs](docs/TOOL_CALLING.md)
+- Native tool calling support for Llama, Mistral Small, Mistral Nemo, Hermes, and DeepSeek models: [docs](docs/TOOL_CALLING.md)
 - Prompt chunking: process large prompts in a more manageable way
 
 **Advanced features**:

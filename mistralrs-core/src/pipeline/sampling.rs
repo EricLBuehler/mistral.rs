@@ -53,7 +53,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         if let Some(ref t) = seq.tools {
             if let Ok(Some(ref d)) = seq.peek_delta() {
                 (tool_use_still_possible, tool_use_is_done) =
-                    t.prefix_could_be_tool(this, d.as_str());
+                    t.prefix_could_be_tool(this, d.as_str())?;
             }
         };
 
