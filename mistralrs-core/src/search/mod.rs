@@ -50,7 +50,6 @@ pub fn run_search_tool(query: &str) -> Result<Vec<SearchResult>> {
         .get(&url)
         .header(
             "User-Agent",
-            // "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             format!("mistralrs/{APP_VERSION} ({OS}; {ARCH}; {FAMILY})"),
         )
         .send()?;
@@ -74,20 +73,17 @@ pub fn run_search_tool(query: &str) -> Result<Vec<SearchResult>> {
     for element in document.select(&result_selector) {
         let title = element
             .select(&title_selector)
-            .next()
-            .and_then(|e| Some(e.text().collect::<String>().trim().to_string()))
+            .next().map(|e| e.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
 
         let description = element
             .select(&snippet_selector)
-            .next()
-            .and_then(|e| Some(e.text().collect::<String>().trim().to_string()))
+            .next().map(|e| e.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
 
         let mut url = element
             .select(&url_selector)
-            .next()
-            .and_then(|e| Some(e.text().collect::<String>().trim().to_string()))
+            .next().map(|e| e.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
 
         if !title.is_empty() && !description.is_empty() && !url.is_empty() {
