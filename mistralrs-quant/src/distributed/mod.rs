@@ -181,15 +181,16 @@ mod ops {
 
 #[cfg(feature = "ring")]
 mod ops {
-    use std::sync::Arc;
+    use std::{
+        env,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    };
 
     use candle_core::{
         backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
-    };
-    use tokio::{
-        net::{TcpListener, TcpStream},
-        runtime::Runtime,
-        sync::Mutex,
     };
 
     #[derive(Debug, Clone, Copy)]
@@ -230,11 +231,11 @@ mod ops {
         }
 
         pub fn rank(&self) -> usize {
-            0
+            env::var("RING_RANK").unwrap().parse().unwrap()
         }
 
         pub fn world_size(&self) -> usize {
-            1
+            env::var("RING_WORLD_SIZE").unwrap().parse().unwrap()
         }
     }
 
@@ -242,34 +243,44 @@ mod ops {
     pub struct SumAllReduce {
         left: Arc<Mutex<TcpStream>>,
         right: Arc<Mutex<TcpStream>>,
-        rt: Arc<Runtime>,
     }
 
     impl SumAllReduce {
         pub fn new(_comm: &Arc<Comm>) -> Self {
-            let left_port = 1000;
-            let right_port = 1001;
+            let cur_port: u16 = env::var("RING_PORT").unwrap().parse().unwrap();
+            let right_port: u16 = env::var("RING_RIGHT").unwrap().parse().unwrap();
 
-            let rt = Runtime::new().unwrap();
+            let left_h = std::thread::spawn(move || {
+                let left_listener = TcpListener::bind(format!("127.0.0.1:{cur_port}")).unwrap();
 
-            let (left, right) = rt.block_on(async {
-                let left_listener = TcpListener::bind(format!("127.0.0.1:{left_port}"))
-                    .await
-                    .unwrap();
-
-                let (left, left_addr) = left_listener.accept().await.unwrap();
-                assert_eq!(left_addr.port(), right_port);
-
-                let right = TcpStream::connect(format!("127.0.0.1:{right_port}"))
-                    .await
-                    .unwrap();
-                (left, right)
+                let (left, _left_addr) = left_listener.accept().unwrap();
+                left
             });
+            let right_h = std::thread::spawn(move || {
+                let start = Instant::now();
+                loop {
+                    let stream = TcpStream::connect(format!("127.0.0.1:{right_port}"));
+                    if let Ok(stream) = stream {
+                        return stream;
+                    }
+                    if start.elapsed() > Duration::from_secs(10) {
+                        panic!("Failed to connect to right node due to timeout: over 10s");
+                    }
+                }
+            });
+
+            while !left_h.is_finished() || !right_h.is_finished() {}
+            let left = left_h.join().unwrap();
+            let right = right_h.join().unwrap();
+
+            left.set_nodelay(true).unwrap();
+            left.set_nonblocking(false).unwrap();
+            right.set_nodelay(true).unwrap();
+            right.set_nonblocking(false).unwrap();
 
             Self {
                 left: Arc::new(Mutex::new(left)),
                 right: Arc::new(Mutex::new(right)),
-                rt: rt.into(),
             }
         }
 
@@ -280,52 +291,40 @@ mod ops {
             device: &Device,
         ) -> Result<Tensor> {
             let nbytes = x.len() * std::mem::size_of::<T>();
-            self.rt.block_on(async {
-                use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-                // Clone the Arc references for use in spawned tasks
-                let right = self.right.clone();
-                let left = self.left.clone();
+            // Clone the Arc references for use in spawned tasks
+            let right = self.right.clone();
+            let left = self.left.clone();
 
-                // Copy the data from x into a Vec<u8> for sending
-                let data =
-                    unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) }.to_vec();
+            // Copy the data from x into a Vec<u8> for sending
+            let data =
+                unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) }.to_vec();
 
-                // Send the data to the right
-                let send_handle = tokio::spawn(async move {
-                    let mut right_guard = right.lock().await;
-                    right_guard
-                        .write_all(&data)
-                        .await
-                        .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))
-                });
+            // Send the data to the right
+            {
+                let mut right_guard = right.lock().unwrap();
+                right_guard
+                    .write_all(&data)
+                    .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+            };
 
-                // Receive the data from the left
-                let recv_handle = tokio::spawn(async move {
-                    let mut left_guard = left.lock().await;
-                    let mut buf = Vec::with_capacity(nbytes);
-                    left_guard
-                        .read_exact(&mut buf)
-                        .await
-                        .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))
-                        .map(|_| buf)
-                });
+            // Receive the data from the left
+            let buf = {
+                let mut left_guard = left.lock().unwrap();
+                let mut buf = Vec::with_capacity(nbytes);
+                left_guard
+                    .read_exact(&mut buf)
+                    .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))
+                    .map(|_| buf)?
+            };
 
-                // Await both tasks concurrently using tokio::join!
-                let (send_res, recv_res) = tokio::join!(send_handle, recv_handle);
-                send_res
-                    .map_err(|e| candle_core::Error::msg(format!("send task error: {:?}", e)))??;
-                let buf = recv_res
-                    .map_err(|e| candle_core::Error::msg(format!("recv task error: {:?}", e)))??;
+            // Interpret the received bytes as a slice of T and add element-wise into x
+            let received: &[T] =
+                unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, x.len()) };
+            for (a, b) in x.iter_mut().zip(received.iter()) {
+                *a += *b;
+            }
 
-                // Interpret the received bytes as a slice of T and add element-wise into x
-                let received: &[T] =
-                    unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, x.len()) };
-                for (a, b) in x.iter_mut().zip(received.iter()) {
-                    *a += *b;
-                }
-                Ok::<_, candle_core::Error>(())
-            })?;
             Tensor::from_slice(&x, dims, device)
         }
     }

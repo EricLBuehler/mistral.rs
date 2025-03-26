@@ -74,7 +74,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
 ) -> Result<ShardedVarBuilder<'a>> {
-    if base_device.is_cuda() {
+    if base_device.is_cuda() || cfg!(feature = "ring") {
         return Ok(unsafe {
             ShardedSafeTensors::sharded(
                 &paths,
