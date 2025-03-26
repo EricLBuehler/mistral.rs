@@ -38,6 +38,7 @@ mod ops;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
+mod search;
 
 mod model_selected;
 pub use model_selected::ModelSelected;

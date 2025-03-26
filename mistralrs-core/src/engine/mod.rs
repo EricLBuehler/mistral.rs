@@ -26,6 +26,7 @@ use crate::{
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
+    search,
     sequence::{SeqStepType, StopReason},
     tools::{ToolCallingMatcher, ToolChoice},
     CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
@@ -557,14 +558,10 @@ impl Engine {
             _ => None,
         };
 
-        let matcher = if request.tools.is_some() {
-            Some(Arc::new(handle_seq_error!(
-                ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
-                request.response
-            )))
-        } else {
-            None
-        };
+        let matcher = Arc::new(handle_seq_error!(
+            ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
+            request.response
+        ));
 
         let image_generation_format = match &request.messages {
             RequestMessage::ImageGeneration { format, .. } => Some(*format),
@@ -590,13 +587,14 @@ impl Engine {
                 messages,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let template = pipeline.get_processor().process(
-                    pipeline,
-                    messages,
-                    true,
-                    true,
-                    request.tools.unwrap_or_default(),
-                );
+                let mut tools = request.tools.unwrap_or_default();
+                tools.push(handle_seq_error!(
+                    search::get_search_tool(),
+                    request.response
+                ));
+                let template = pipeline
+                    .get_processor()
+                    .process(pipeline, messages, true, true, tools);
                 handle_seq_error!(template, request.response)
             }
             RequestMessage::Completion { text, .. } => {
@@ -929,7 +927,7 @@ impl Engine {
                 request.adapters.clone(),
                 images.clone(),
                 block_size,
-                matcher.clone(),
+                Some(matcher.clone()),
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
@@ -958,12 +956,25 @@ impl Engine {
         match request.text {
             Either::Left(messages) => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
+                let mut tools = request.tools.unwrap_or_default();
+                let search_tool = match search::get_search_tool() {
+                    Ok(tool) => tool,
+                    Err(e) => {
+                        request
+                            .response
+                            .send(Err(e))
+                            .await
+                            .expect("Expected receiver.");
+                        return;
+                    }
+                };
+                tools.push(search_tool);
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
                     request.add_generation_prompt,
                     request.add_special_tokens,
-                    request.tools.unwrap_or_default(),
+                    tools,
                 );
                 let toks = match template {
                     Ok((toks, _)) => toks,
