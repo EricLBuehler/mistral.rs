@@ -17,9 +17,6 @@ macro_rules! get_mut_arcmutex {
         loop {
             if let Ok(inner) = $thing.try_lock() {
                 break inner;
-            } else {
-                println!("wait");
-                // panic!();
             }
         }
     };

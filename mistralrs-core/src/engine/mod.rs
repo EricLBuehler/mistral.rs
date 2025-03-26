@@ -205,7 +205,6 @@ impl Engine {
                                 "All sequences must either return raw logits, or not."
                             );
 
-                            println!("completion...");
                             pipeline
                                 .step(
                                     &mut scheduled.completion,
@@ -273,7 +272,6 @@ impl Engine {
                                 }
                             };
 
-                            println!("prompt...");
                             pipeline
                                 .step(
                                     &mut scheduled.prompt,
@@ -509,9 +507,9 @@ impl Engine {
                 }
             }
             Request::Normal(request) => {
-                dbg!(request.do_auto_search);
-                println!("got request");
-                if matches!(request.messages, RequestMessage::Chat { .. }) && request.do_auto_search && !request.is_streaming
+                if matches!(request.messages, RequestMessage::Chat { .. })
+                    && request.do_auto_search
+                    && !request.is_streaming
                 {
                     let mut first_request = request.clone();
                     let mut second_request = first_request.clone();
@@ -524,26 +522,21 @@ impl Engine {
                         second_request.response = new_sender;
                         std::mem::swap(&mut first_request.response, &mut second_request.response);
 
-                        println!("send");
                         this.add_request(first_request).await;
-                        println!("done send");
                         let ResponseOk::Done(done) =
                             first_reciever.recv().await.unwrap().as_result().unwrap()
                         else {
                             unreachable!()
                         };
-                        println!("got first resp");
 
                         let tool_calls = match &done.choices[0].message.tool_calls {
                             Some(tool_calls)
                                 if tool_calls.len() == 1
                                     && tool_calls[0].function.name == search::SEARCH_TOOL_NAME =>
                             {
-                                println!("A");
                                 &tool_calls[0]
                             }
                             None => {
-                                println!("B");
                                 second_request
                                     .response
                                     .send(Response::Done(done))
@@ -552,7 +545,6 @@ impl Engine {
                                 return;
                             }
                             Some(_) => {
-                                println!("C");
                                 second_request
                                     .response
                                     .send(Response::Done(done))
@@ -587,7 +579,9 @@ impl Engine {
                                 serde_json::from_str(&tool_calls.function.arguments).unwrap();
                             let result = search::run_search_tool(params).unwrap();
                             dbg!(&result);
-                            let tool_result = serde_json::to_string(&result[0]).unwrap();
+                            let tool_result =
+                                serde_json::to_string(&result[0].description).unwrap();
+                            let tool_result = "Humidity 71%, Wind Speed E 10 mph, Barometer  29.93 in (1013.5 mb), Dewpoint 33°F (1°C), Visibility 10.00 mi, Wind Chill 36°F (2°C)".to_string();
 
                             let mut message: IndexMap<String, MessageContent> = IndexMap::new();
                             message.insert("role".to_string(), Either::Left("tool".to_string()));
@@ -602,7 +596,6 @@ impl Engine {
                         return;
                     });
                     get_mut_arcmutex!(self.handles).push(handle);
-                    println!("continuing");
                 } else {
                     self.add_request(request).await
                 }
@@ -642,7 +635,6 @@ impl Engine {
             | RequestMessage::VisionChat { .. }
             | RequestMessage::ImageGeneration { .. } => None,
         };
-        println!("A");
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
                 .get_chat_template()
@@ -656,7 +648,6 @@ impl Engine {
                     )).await.expect("Expected receiver.");
             return;
         }
-        println!("B");
 
         let images = match request.messages {
             RequestMessage::VisionChat {
@@ -1009,7 +1000,6 @@ impl Engine {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!");
-            println!("C");
             let seq = Sequence::new_waiting(
                 prompt_tokens.clone(),
                 prompt_text.clone(),
@@ -1059,7 +1049,6 @@ impl Engine {
             *get_mut_arcmutex!(self.id) += 1;
             get_mut_arcmutex!(self.scheduler).add_seq(seq);
         }
-        println!("D");
     }
 
     async fn tokenize_text(&self, request: TokenizationRequest) {

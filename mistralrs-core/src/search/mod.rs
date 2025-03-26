@@ -13,9 +13,9 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResult {
-    title: String,
-    description: String,
-    url: String,
+    pub title: String,
+    pub description: String,
+    pub url: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,7 +38,7 @@ pub fn get_search_tool() -> Result<Tool> {
     Ok(Tool {
         tp: ToolType::Function,
         function: Function {
-            description: Some("Search the web using a given query. Use this tool if the user asks a question which requires realtime or up-to-date information.".to_string()),
+            description: Some("Search the web using a given query. Use this tool if the user asks a question which requires realtime or up-to-date information. Then, answer the user's query using this information.".to_string()),
             name: SEARCH_TOOL_NAME.to_string(),
             parameters: Some(parameters),
         },

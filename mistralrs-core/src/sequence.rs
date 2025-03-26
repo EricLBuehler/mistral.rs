@@ -917,11 +917,9 @@ impl SequenceGroup {
         response: ChatCompletionResponse,
         sender: Sender<Response>,
     ) -> Result<(), SendError<Response>> {
-        println!("sending...");
         if self.choices.len() == self.n_choices {
             sender.send(Response::Done(response)).await?;
         }
-        println!("sent...");
 
         Ok(())
     }
