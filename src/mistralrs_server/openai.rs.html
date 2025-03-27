@@ -281,7 +281,7 @@
 
 <span class="attr">#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 </span><span class="kw">pub struct </span>MessageInnerContent(
-    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span>Either&lt;String, HashMap&lt;String, String&gt;&gt;,
+    <span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span><span class="kw">pub </span>Either&lt;String, HashMap&lt;String, String&gt;&gt;,
 );
 
 <span class="kw">impl </span>Deref <span class="kw">for </span>MessageInnerContent {

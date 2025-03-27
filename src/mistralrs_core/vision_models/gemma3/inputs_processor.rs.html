@@ -450,9 +450,7 @@
 <a href="#449" id="449">449</a>
 <a href="#450" id="450">450</a>
 <a href="#451" id="451">451</a>
-<a href="#452" id="452">452</a>
-<a href="#453" id="453">453</a>
-<a href="#454" id="454">454</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#452" id="452">452</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{any::Any, num::NonZeroUsize, sync::Arc};
 
@@ -619,8 +617,6 @@
 
                 <span class="kw">let </span>image_indexes: Vec&lt;usize&gt; =
                     re.find_iter(<span class="kw-2">&amp;</span>prompt).map(|mat| mat.start()).collect();
-
-                <span class="macro">assert_ne!</span>(pixel_values.dim(<span class="number">0</span>).unwrap(), image_indexes.len());
 
                 <span class="kw">for </span>(num, idx) <span class="kw">in </span>num_crops.into_iter().zip(image_indexes).rev() {
                     <span class="kw">if </span>num != <span class="number">0 </span>{
