@@ -2120,7 +2120,41 @@
 <a href="#2119" id="2119">2119</a>
 <a href="#2120" id="2120">2120</a>
 <a href="#2121" id="2121">2121</a>
-<a href="#2122" id="2122">2122</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#2122" id="2122">2122</a>
+<a href="#2123" id="2123">2123</a>
+<a href="#2124" id="2124">2124</a>
+<a href="#2125" id="2125">2125</a>
+<a href="#2126" id="2126">2126</a>
+<a href="#2127" id="2127">2127</a>
+<a href="#2128" id="2128">2128</a>
+<a href="#2129" id="2129">2129</a>
+<a href="#2130" id="2130">2130</a>
+<a href="#2131" id="2131">2131</a>
+<a href="#2132" id="2132">2132</a>
+<a href="#2133" id="2133">2133</a>
+<a href="#2134" id="2134">2134</a>
+<a href="#2135" id="2135">2135</a>
+<a href="#2136" id="2136">2136</a>
+<a href="#2137" id="2137">2137</a>
+<a href="#2138" id="2138">2138</a>
+<a href="#2139" id="2139">2139</a>
+<a href="#2140" id="2140">2140</a>
+<a href="#2141" id="2141">2141</a>
+<a href="#2142" id="2142">2142</a>
+<a href="#2143" id="2143">2143</a>
+<a href="#2144" id="2144">2144</a>
+<a href="#2145" id="2145">2145</a>
+<a href="#2146" id="2146">2146</a>
+<a href="#2147" id="2147">2147</a>
+<a href="#2148" id="2148">2148</a>
+<a href="#2149" id="2149">2149</a>
+<a href="#2150" id="2150">2150</a>
+<a href="#2151" id="2151">2151</a>
+<a href="#2152" id="2152">2152</a>
+<a href="#2153" id="2153">2153</a>
+<a href="#2154" id="2154">2154</a>
+<a href="#2155" id="2155">2155</a>
+<a href="#2156" id="2156">2156</a></pre></div><pre class="rust"><code><span class="attr">#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 </span><span class="kw">use </span>std::{f32::consts::PI, ops::Mul, str::FromStr, sync::Arc};
 
@@ -2635,7 +2669,6 @@
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
         <span class="kw">let </span>(sin, cos) = <span class="self">self</span>.get_long_or_short_sin_cos(position_ids);
         <span class="kw">let </span>(_b_sz, _h, seq_len, _n_embd) = q.dims4()<span class="question-mark">?</span>;
-        <span class="kw">let </span>all_same = seqlen_offsets.iter().all(|<span class="kw-2">&amp;</span>x| x == seqlen_offsets[<span class="number">0</span>]);
 
         <span class="kw">let </span>rot_dim = cos.dim(D::Minus1)<span class="question-mark">? </span>* <span class="number">2</span>;
 
@@ -2647,7 +2680,7 @@
             <span class="kw">let </span>k_rot = k.narrow(D::Minus1, <span class="number">0</span>, rot_dim)<span class="question-mark">?</span>;
             <span class="kw">let </span>k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)<span class="question-mark">? </span>- rot_dim)<span class="question-mark">?</span>;
 
-            <span class="kw">let </span>(q_rot, k_rot) = <span class="kw">if </span>all_same {
+            <span class="kw">let </span>(q_rot, k_rot) = <span class="kw">if </span>seqlen_offsets.len() == <span class="number">1 </span>{
                 <span class="kw">let </span>cos = cos.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
                 <span class="kw">let </span>sin = sin.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
                 <span class="kw">let </span>q_embed = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>q_rot.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
@@ -2681,7 +2714,7 @@
                 Tensor::cat(<span class="kw-2">&amp;</span>[q_rot, q_pass], D::Minus1)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
                 Tensor::cat(<span class="kw-2">&amp;</span>[k_rot, k_pass], D::Minus1)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>,
             ))
-        } <span class="kw">else if </span>all_same {
+        } <span class="kw">else if </span>seqlen_offsets.len() == <span class="number">1 </span>{
             <span class="kw">let </span>cos = cos.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>sin = sin.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>q_embed = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
@@ -3228,8 +3261,8 @@
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
         <span class="kw">let </span>(_b_sz, _h, seq_len, _n_embd) = q.dims4()<span class="question-mark">?</span>;
-        <span class="kw">let </span>all_same = seqlen_offsets.iter().all(|<span class="kw-2">&amp;</span>x| x == seqlen_offsets[<span class="number">0</span>]);
-        <span class="kw">if </span>all_same {
+
+        <span class="kw">if </span>seqlen_offsets.len() == <span class="number">1 </span>{
             <span class="kw">let </span>cos = <span class="self">self</span>.cos.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>sin = <span class="self">self</span>.sin.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>q_embed = candle_nn::rotary_emb::rope_i(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
@@ -3418,8 +3451,7 @@
         <span class="kw">let </span>k_rot = k.narrow(D::Minus1, <span class="number">0</span>, rot_dim)<span class="question-mark">?</span>;
         <span class="kw">let </span>k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)<span class="question-mark">? </span>- rot_dim)<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>all_same = seqlen_offsets.iter().all(|<span class="kw-2">&amp;</span>x| x == seqlen_offsets[<span class="number">0</span>]);
-        <span class="kw">let </span>(q_rot, k_rot) = <span class="kw">if </span>all_same {
+        <span class="kw">let </span>(q_rot, k_rot) = <span class="kw">if </span>seqlen_offsets.len() == <span class="number">1 </span>{
             <span class="kw">let </span>cos = cos.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>sin = sin.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>q_embed = candle_nn::rotary_emb::rope(<span class="kw-2">&amp;</span>q_rot.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
@@ -3699,7 +3731,8 @@
         k: <span class="kw-2">&amp;</span>Tensor,
         seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
-        <span class="kw">let </span>(_b_sz, _h, seq_len, _n_embd) = q.dims4()<span class="question-mark">?</span>;
+        <span class="kw">let </span>(b_sz, qh, seq_len, n_embd) = q.dims4()<span class="question-mark">?</span>;
+        <span class="kw">let </span>(_b_sz, kh, _seq_len, __n_embd) = k.dims4()<span class="question-mark">?</span>;
 
         <span class="kw">let </span>rope = <span class="kw">if </span><span class="self">self</span>.is_gpt_neox {
             candle_nn::rotary_emb::rope
@@ -3707,8 +3740,43 @@
             candle_nn::rotary_emb::rope_i
         };
 
-        <span class="kw">let </span>all_same = seqlen_offsets.iter().all(|<span class="kw-2">&amp;</span>x| x == seqlen_offsets[<span class="number">0</span>]);
-        <span class="kw">if </span>all_same {
+        <span class="kw">if </span><span class="macro">cfg!</span>(feature = <span class="string">"cuda"</span>) {
+            <span class="kw">let </span>(cos, sin) = <span class="kw">if </span>seqlen_offsets.len() == <span class="number">1 </span>{
+                (
+                    <span class="self">self</span>.cos.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>,
+                    <span class="self">self</span>.sin.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>,
+                )
+            } <span class="kw">else </span>{
+                <span class="kw">let </span><span class="kw-2">mut </span>cos_s = Vec::new();
+                <span class="kw">let </span><span class="kw-2">mut </span>sin_s = Vec::new();
+                <span class="kw">for </span>offset <span class="kw">in </span>seqlen_offsets {
+                    cos_s.push(<span class="self">self</span>.cos.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>);
+                    sin_s.push(<span class="self">self</span>.sin.narrow(<span class="number">0</span>, <span class="kw-2">*</span>offset, seq_len)<span class="question-mark">?</span>);
+                }
+                (Tensor::cat(<span class="kw-2">&amp;</span>cos_s, <span class="number">0</span>)<span class="question-mark">?</span>, Tensor::cat(<span class="kw-2">&amp;</span>sin_s, <span class="number">0</span>)<span class="question-mark">?</span>)
+            };
+
+            <span class="kw">let </span>q_embed = q.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span>k_embed = k.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
+            mistralrs_quant::rotary::apply_rotary_inplace(
+                <span class="kw-2">&amp;</span>q_embed,
+                <span class="kw-2">&amp;</span>k_embed,
+                <span class="kw-2">&amp;</span>cos,
+                <span class="kw-2">&amp;</span>sin,
+                <span class="self">self</span>.is_gpt_neox,
+            )<span class="question-mark">?</span>;
+            <span class="kw">let </span><span class="kw-2">mut </span>q = q_embed
+                .reshape((b_sz, seq_len, qh, n_embd))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">let </span><span class="kw-2">mut </span>k = k_embed
+                .reshape((b_sz, seq_len, kh, n_embd))<span class="question-mark">?
+                </span>.transpose(<span class="number">1</span>, <span class="number">2</span>)<span class="question-mark">?</span>;
+            <span class="kw">if </span>!(<span class="macro">cfg!</span>(feature = <span class="string">"flash-attn"</span>) || <span class="macro">cfg!</span>(feature = <span class="string">"flash-attn-v3"</span>)) {
+                q = q.contiguous()<span class="question-mark">?</span>;
+                k = k.contiguous()<span class="question-mark">?</span>;
+            }
+            <span class="prelude-val">Ok</span>((q, k))
+        } <span class="kw">else if </span>seqlen_offsets.len() == <span class="number">1 </span>{
             <span class="kw">let </span>cos = <span class="self">self</span>.cos.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>sin = <span class="self">self</span>.sin.narrow(<span class="number">0</span>, seqlen_offsets[<span class="number">0</span>], seq_len)<span class="question-mark">?</span>;
             <span class="kw">let </span>q_embed = rope(<span class="kw-2">&amp;</span>q.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;</span>cos, <span class="kw-2">&amp;</span>sin)<span class="question-mark">?</span>;
