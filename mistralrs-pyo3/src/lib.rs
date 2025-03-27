@@ -881,7 +881,7 @@ impl Runner {
                                                     .context("Image sub-content `image_url` object must have a `url` key.")?.clone()
                                             });
                                         }
-                                        _ => return Err(PyApiErr::from("Expected array content sub-contnet to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
+                                        _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
                                     }
                                 }
 
