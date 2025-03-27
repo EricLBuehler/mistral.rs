@@ -166,8 +166,6 @@ impl InputsProcessor for Gemma3ImageProcessor {
                 let image_indexes: Vec<usize> =
                     re.find_iter(&prompt).map(|mat| mat.start()).collect();
 
-                assert_ne!(pixel_values.dim(0).unwrap(), image_indexes.len());
-
                 for (num, idx) in num_crops.into_iter().zip(image_indexes).rev() {
                     if num != 0 {
                         let formatted_image_text = format!(
