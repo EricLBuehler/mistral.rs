@@ -2375,6 +2375,7 @@ dependencies = [
  "image",
  "indexmap",
  "intel-mkl-src",
+ "itertools 0.13.0",
  "mistralrs-core",
  "pyo3",
  "pyo3-build-config",
