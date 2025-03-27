@@ -591,8 +591,9 @@ impl Engine {
                                     .map(|x| x.len())
                                     .unwrap_or(usize::MAX)
                             });
-                            let tool_result = serde_json::to_string(&results[0..6]).unwrap().replace("\\n", "\n");
-                            println!("{tool_result}");
+                            let tool_result = serde_json::to_string(&results[0..6])
+                                .unwrap()
+                                .replace("\\n", "\n");
                             dbg!(tool_result.len());
 
                             let mut message: IndexMap<String, MessageContent> = IndexMap::new();

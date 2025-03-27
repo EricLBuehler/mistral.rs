@@ -11,13 +11,7 @@ use crate::{Function, Tool, ToolType};
 
 pub(crate) const SEARCH_TOOL_NAME: &str = "search_the_web";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const DESCRIPTION: &str = r#"**Details about this tool**:
-- This tool is used to search the web given a query.
-- Use this tool if the user asks a question which requires realtime or up-to-date information.
-
-**Rules regarding calling a search tool:**
-- If you call that tool, then you MUST complete your answer using the output.
-- Do NOT search for the same thing repeatedly."#;
+const DESCRIPTION: &str = r#"This tool is used to search the web given a query. If you call this tool, then you MUST complete your answer using the output. YOU SHOULD NOT CALL THE SEARCH TOOL CONSECUTIVELY!"#;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResult {
