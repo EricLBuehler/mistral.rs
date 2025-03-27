@@ -513,7 +513,6 @@ impl PhiRotaryEmbedding {
     ) -> Result<(Tensor, Tensor)> {
         let (sin, cos) = self.get_long_or_short_sin_cos(position_ids);
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let all_same = seqlen_offsets.iter().all(|&x| x == seqlen_offsets[0]);
 
         let rot_dim = cos.dim(D::Minus1)? * 2;
 
@@ -525,7 +524,7 @@ impl PhiRotaryEmbedding {
             let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
             let k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)? - rot_dim)?;
 
-            let (q_rot, k_rot) = if all_same {
+            let (q_rot, k_rot) = if seqlen_offsets.len() == 1 {
                 let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
                 let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
                 let q_embed = candle_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
@@ -559,7 +558,7 @@ impl PhiRotaryEmbedding {
                 Tensor::cat(&[q_rot, q_pass], D::Minus1)?.contiguous()?,
                 Tensor::cat(&[k_rot, k_pass], D::Minus1)?.contiguous()?,
             ))
-        } else if all_same {
+        } else if seqlen_offsets.len() == 1 {
             let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
             let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
@@ -1106,8 +1105,8 @@ impl DeepSeekV2RotaryEmbedding {
         seqlen_offsets: &[usize],
     ) -> Result<(Tensor, Tensor)> {
         let (_b_sz, _h, seq_len, _n_embd) = q.dims4()?;
-        let all_same = seqlen_offsets.iter().all(|&x| x == seqlen_offsets[0]);
-        if all_same {
+
+        if seqlen_offsets.len() == 1 {
             let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
             let q_embed = candle_nn::rotary_emb::rope_i(&q.contiguous()?, &cos, &sin)?;
@@ -1296,8 +1295,7 @@ impl Phi4MMRotaryEmbedding {
         let k_rot = k.narrow(D::Minus1, 0, rot_dim)?;
         let k_pass = k.narrow(D::Minus1, rot_dim, k.dim(D::Minus1)? - rot_dim)?;
 
-        let all_same = seqlen_offsets.iter().all(|&x| x == seqlen_offsets[0]);
-        let (q_rot, k_rot) = if all_same {
+        let (q_rot, k_rot) = if seqlen_offsets.len() == 1 {
             let cos = cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = sin.narrow(0, seqlen_offsets[0], seq_len)?;
             let q_embed = candle_nn::rotary_emb::rope(&q_rot.contiguous()?, &cos, &sin)?;
@@ -1586,10 +1584,22 @@ impl RotaryEmbedding {
             candle_nn::rotary_emb::rope_i
         };
 
-        let all_same = seqlen_offsets.iter().all(|&x| x == seqlen_offsets[0]);
-        if all_same {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
+        if cfg!(feature = "cuda") {
+            let (cos, sin) = if seqlen_offsets.len() == 1 {
+                (
+                    self.cos.narrow(0, seqlen_offsets[0], seq_len)?,
+                    self.sin.narrow(0, seqlen_offsets[0], seq_len)?,
+                )
+            } else {
+                let mut cos_s = Vec::new();
+                let mut sin_s = Vec::new();
+                for offset in seqlen_offsets {
+                    cos_s.push(self.cos.narrow(0, *offset, seq_len)?);
+                    sin_s.push(self.sin.narrow(0, *offset, seq_len)?);
+                }
+                (Tensor::cat(&cos_s, 0)?, Tensor::cat(&sin_s, 0)?)
+            };
+
             let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
             let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
             mistralrs_quant::rotary::apply_rotary_inplace(
@@ -1599,18 +1609,23 @@ impl RotaryEmbedding {
                 &sin,
                 self.is_gpt_neox,
             )?;
-            // let q_embed = rope(&q.contiguous()?, &cos, &sin)?;
-            // let k_embed = rope(&k.contiguous()?, &cos, &sin)?;
-            Ok((
-                q_embed
-                    .reshape((b_sz, seq_len, qh, n_embd))?
-                    .transpose(1, 2)?
-                    .contiguous()?,
-                k_embed
-                    .reshape((b_sz, seq_len, kh, n_embd))?
-                    .transpose(1, 2)?
-                    .contiguous()?,
-            ))
+            let mut q = q_embed
+                .reshape((b_sz, seq_len, qh, n_embd))?
+                .transpose(1, 2)?;
+            let mut k = k_embed
+                .reshape((b_sz, seq_len, kh, n_embd))?
+                .transpose(1, 2)?;
+            if !(cfg!(feature = "flash-attn") || cfg!(feature = "flash-attn-v3")) {
+                q = q.contiguous()?;
+                k = k.contiguous()?;
+            }
+            Ok((q, k))
+        } else if seqlen_offsets.len() == 1 {
+            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
+            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
+            let q_embed = rope(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = rope(&k.contiguous()?, &cos, &sin)?;
+            Ok((q_embed, k_embed))
         } else {
             let mut q_embeds = Vec::new();
             let mut k_embeds = Vec::new();
