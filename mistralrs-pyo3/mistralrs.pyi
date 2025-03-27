@@ -382,7 +382,7 @@ class Runner:
         Tokenize some text, returning raw tokens.
         """
 
-    def detokenize_text(self, tokens: list[int], add_special_tokens: bool) -> str:
+    def detokenize_text(self, tokens: list[int], skip_special_tokens: bool) -> str:
         """
         Detokenize some tokens, returning text.
         """
