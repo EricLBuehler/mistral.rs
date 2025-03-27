@@ -9,7 +9,7 @@ use crate::{
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
-    search::{self, SearchFunctionParamters},
+    search::{self, SearchFunctionParameters},
     sequence::{SeqStepType, StopReason},
     tools::{ToolCallingMatcher, ToolChoice},
     CompletionResponse, MessageContent, RequestMessage, Response, ResponseOk, SchedulerConfig,
@@ -577,7 +577,7 @@ impl Engine {
 
                         // Add tool response
                         {
-                            let params: SearchFunctionParamters =
+                            let params: SearchFunctionParameters =
                                 serde_json::from_str(&tool_calls.function.arguments).unwrap();
                             let tokenizer = get_mut_arcmutex!(this.pipeline)
                                 .tokenizer()

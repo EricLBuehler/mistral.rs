@@ -48,7 +48,7 @@ pub fn get_search_tool() -> Result<Tool> {
     })
 }
 
-pub fn run_search_tool(params: SearchFunctionParamters) -> Result<Vec<SearchResult>> {
+pub fn run_search_tool(params: SearchFunctionParameters) -> Result<Vec<SearchResult>> {
     let client = reqwest::blocking::Client::new();
 
     let encoded_query = urlencoding::encode(&params.query);
