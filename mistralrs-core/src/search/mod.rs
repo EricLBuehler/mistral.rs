@@ -22,7 +22,7 @@ pub struct SearchResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SearchFunctionParamters {
+pub struct SearchFunctionParameters {
     query: String,
 }
 
