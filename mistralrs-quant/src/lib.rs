@@ -24,6 +24,7 @@ mod gguf;
 mod gptq;
 mod hqq;
 mod imatrix;
+pub mod rotary;
 pub mod safetensors;
 mod static_lora;
 mod unquantized;
