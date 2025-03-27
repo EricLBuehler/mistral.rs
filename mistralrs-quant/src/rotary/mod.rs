@@ -178,11 +178,11 @@ pub use cuda::*;
 /// * `is_neox` - Use neox encoding instead of gpt-j style rotary
 #[cfg(not(feature = "cuda"))]
 pub fn apply_rotary_inplace(
-    _query: &Tensor,
-    _key: &Tensor,
-    _cos_cache: &Tensor,
-    _sin_cache: &Tensor,
+    _query: &candle_core::Tensor,
+    _key: &candle_core::Tensor,
+    _cos_cache: &candle_core::Tensor,
+    _sin_cache: &candle_core::Tensor,
     _is_neox: bool,
-) -> Result<()> {
+) -> candle_core::Result<()> {
     candle_core::bail!("apply_rotary is only supported for cuda");
 }
