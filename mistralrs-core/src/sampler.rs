@@ -126,7 +126,7 @@ impl DrySamplingParamsInner {
                             // FIXME: This is a hack. See https://github.com/LostRuins/koboldcpp/pull/982
                             //        for the correct solution which covers multi-token sequence breakers
                             //        and ambiguous encodings.
-                            .encode(["a", &breaker].concat(), true)
+                            .encode_fast(["a", &breaker].concat(), true)
                             .map_err(anyhow::Error::msg)
                             .map(|enc| {
                                 let ids = enc.get_ids();

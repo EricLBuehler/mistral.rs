@@ -25,6 +25,7 @@ use once_cell::sync::Lazy;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     io::{BufWriter, Write},
     ops::Deref,
@@ -34,6 +35,7 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tokenizers::InputSequence;
 use tokio::{
     sync::{mpsc::Receiver, Mutex},
     task::JoinHandle,
@@ -577,10 +579,21 @@ impl Engine {
                         {
                             let params: SearchFunctionParamters =
                                 serde_json::from_str(&tool_calls.function.arguments).unwrap();
-                            let result = search::run_search_tool(params).unwrap();
-                            let tool_result =
-                                serde_json::to_string(&result[0].description).unwrap();
-                            let tool_result = "BOS weather: Humidity 71%, Wind Speed E 10 mph, Barometer  29.93 in (1013.5 mb), Dewpoint 33°F (1°C), Visibility 10.00 mi, Wind Chill 36°F (2°C)".to_string();
+                            let tokenizer = get_mut_arcmutex!(this.pipeline)
+                                .tokenizer()
+                                .expect("A tokenizer is expected for non-diffusion models.");
+                            let mut results = search::run_search_tool(params).unwrap();
+                            // Sort increasing by tokenized length, if it fails, put it at the end.
+                            results.sort_by_key(|result| {
+                                let inp = InputSequence::Raw(Cow::from(&result.content));
+                                tokenizer
+                                    .encode_fast(inp, false)
+                                    .map(|x| x.len())
+                                    .unwrap_or(usize::MAX)
+                            });
+                            let tool_result = serde_json::to_string(&results[0..6]).unwrap().replace("\\n", "\n");
+                            println!("{tool_result}");
+                            dbg!(tool_result.len());
 
                             let mut message: IndexMap<String, MessageContent> = IndexMap::new();
                             message.insert("role".to_string(), Either::Left("tool".to_string()));
@@ -706,7 +719,7 @@ impl Engine {
                     return;
                 };
                 let prompt = tokenizer
-                    .encode(text.clone(), true)
+                    .encode_fast(text.clone(), true)
                     .map_err(anyhow::Error::msg);
                 (
                     handle_seq_error!(prompt, request.response)
@@ -836,7 +849,7 @@ impl Engine {
                             .expect("Expected receiver.");
                         return;
                     };
-                    let encoded = tokenizer.encode(stop_txt.to_string(), true);
+                    let encoded = tokenizer.encode_fast(stop_txt.to_string(), true);
                     let toks = handle_seq_error!(encoded, request.response)
                         .get_ids()
                         .to_vec();
@@ -1106,7 +1119,7 @@ impl Engine {
                         return;
                     }
                 };
-                let toks = tokenizer.encode(text, request.add_special_tokens);
+                let toks = tokenizer.encode_fast(text, request.add_special_tokens);
                 let toks = match toks {
                     Ok(tokenizer) => tokenizer,
                     Err(e) => {

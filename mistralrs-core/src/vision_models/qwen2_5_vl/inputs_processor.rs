@@ -325,14 +325,14 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 seq.set_initial_prompt(detok.clone());
 
                 let toks = tokenizer
-                    .encode(detok, false)
+                    .encode_fast(detok, false)
                     .expect("Detokenization failed!");
 
                 let ids = toks.get_ids().to_vec();
                 all_ids.push(ids.clone());
 
                 let img_pad = tokenizer
-                    .encode(Qwen2_5VLProcessor::IMAGE_PAD, false)
+                    .encode_fast(Qwen2_5VLProcessor::IMAGE_PAD, false)
                     .expect("Detokenization failed!")
                     .get_ids()
                     .to_vec();
@@ -340,7 +340,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 all_continuous_img_pad.push(continuous_img_pad);
 
                 let vid_pad = tokenizer
-                    .encode(Qwen2_5VLProcessor::VIDEO_PAD, false)
+                    .encode_fast(Qwen2_5VLProcessor::VIDEO_PAD, false)
                     .expect("Detokenization failed!")
                     .get_ids()
                     .to_vec();
@@ -377,7 +377,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 );
 
                 let ids = tokenizer
-                    .encode(prompt, false)
+                    .encode_fast(prompt, false)
                     .expect("Tokenization failed!");
 
                 input_ids_searching.push(ids.get_ids().to_vec());

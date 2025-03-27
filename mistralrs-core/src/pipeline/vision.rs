@@ -511,7 +511,7 @@ impl Loader for VisionLoader {
             let calibration_data = std::fs::read_to_string(calibration_file)?;
             // Tokenize, don't add bos yet
             let tokens = tokenizer
-                .encode(calibration_data, false)
+                .encode_fast(calibration_data, false)
                 .map_err(anyhow::Error::msg)?
                 .get_ids()
                 .to_vec();

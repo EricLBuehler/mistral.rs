@@ -9,7 +9,7 @@ use tokenizers::Tokenizer;
 
 use crate::{device_map::DeviceMapper, sequence::Sequence};
 
-pub const DEFAULT_PROMPT_CHUNK_SIZE: usize = 512;
+pub const DEFAULT_PROMPT_CHUNK_SIZE: usize = 1024;
 
 #[derive(PartialEq)]
 pub enum InputsProcessorType {

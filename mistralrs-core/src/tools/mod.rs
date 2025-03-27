@@ -26,6 +26,11 @@ fn process_model_specific_message(message: &str) -> Result<String> {
         // Hermes case
         Ok(message.to_string())
     } else if let Some(message) = message
+        .strip_prefix("<tool_call>\n")
+    {
+        // Hermes case
+        Ok(message.to_string())
+    } else if let Some(message) = message
         .strip_prefix("[TOOL_CALLS][")
         .and_then(|s| s.strip_suffix("]"))
     {
