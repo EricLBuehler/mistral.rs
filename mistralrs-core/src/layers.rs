@@ -165,7 +165,11 @@ impl RmsNorm {
 
 impl Module for RmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        if mistralrs_quant::layers::rms_norm::CAN_USE_FAST_RMSNORM {
+            mistralrs_quant::layers::rms_norm::rms_norm(x, &self.weight, self.eps as f32)
+        } else {
+            candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        }
     }
 }
 

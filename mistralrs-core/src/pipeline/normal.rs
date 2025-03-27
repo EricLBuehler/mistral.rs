@@ -984,6 +984,7 @@ impl Pipeline for NormalPipeline {
             }
             (None, None) => None,
         };
+        // input_ids.device().as_metal_device()?.capture("output.gputrace")?;
         #[cfg(feature = "metal")]
         let logits = objc::rc::autoreleasepool(|| -> candle_core::Result<Tensor> {
             match self.model.is_xlora() {
@@ -1044,6 +1045,7 @@ impl Pipeline for NormalPipeline {
                 flash_meta_full.as_ref().unwrap_or(&flash_meta),
             )?,
         };
+        // panic!();
         if return_raw_logits {
             Ok(ForwardInputsResult::RawLogits { logits })
         } else {
