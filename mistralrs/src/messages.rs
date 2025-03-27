@@ -16,6 +16,7 @@ pub trait RequestLike {
     fn take_constraint(&mut self) -> Constraint;
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)>;
     fn take_sampling_params(&mut self) -> SamplingParams;
+    fn take_web_search_options(&mut self) -> Option<WebSearchOptions>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,6 +105,9 @@ impl RequestLike for TextMessages {
     }
     fn take_sampling_params(&mut self) -> SamplingParams {
         SamplingParams::deterministic()
+    }
+    fn take_web_search_options(&mut self) -> Option<WebSearchOptions> {
+        None
     }
 }
 
@@ -218,6 +222,9 @@ impl RequestLike for VisionMessages {
     fn take_sampling_params(&mut self) -> SamplingParams {
         SamplingParams::deterministic()
     }
+    fn take_web_search_options(&mut self) -> Option<WebSearchOptions> {
+        None
+    }
 }
 
 #[derive(Clone)]
@@ -239,6 +246,7 @@ pub struct RequestBuilder {
     tools: Vec<Tool>,
     tool_choice: ToolChoice,
     sampling_params: SamplingParams,
+    web_search_options: Option<WebSearchOptions>,
 }
 
 impl Default for RequestBuilder {
@@ -259,6 +267,7 @@ impl From<TextMessages> for RequestBuilder {
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
+            web_search_options: None,
         }
     }
 }
@@ -275,6 +284,7 @@ impl From<VisionMessages> for RequestBuilder {
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
+            web_search_options: None,
         }
     }
 }
@@ -291,7 +301,13 @@ impl RequestBuilder {
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
+            web_search_options: None,
         }
+    }
+
+    pub fn with_web_search_options(mut self, web_search_options: WebSearchOptions) -> Self {
+        self.web_search_options = Some(web_search_options);
+        self
     }
 
     /// Add a message to the request.
@@ -544,6 +560,12 @@ impl RequestLike for RequestBuilder {
     fn take_sampling_params(&mut self) -> SamplingParams {
         let mut other = SamplingParams::deterministic();
         std::mem::swap(&mut other, &mut self.sampling_params);
+        other
+    }
+
+    fn take_web_search_options(&mut self) -> Option<WebSearchOptions> {
+        let mut other = None;
+        std::mem::swap(&mut other, &mut self.web_search_options);
         other
     }
 }

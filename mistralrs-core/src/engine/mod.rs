@@ -6,7 +6,7 @@ use crate::{
         AdapterInstruction, CacheBackendMetadata, CacheInstruction, NormalCache,
     },
     prefix_cacher::PrefixCacheManagerV2,
-    request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
+    request::{DetokenizationRequest, NormalRequest, SearchContextSize, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
     search::{self, SearchFunctionParameters},
@@ -510,13 +510,22 @@ impl Engine {
             }
             Request::Normal(request) => {
                 if matches!(request.messages, RequestMessage::Chat { .. })
-                    && request.do_auto_search
+                    && request.web_search_options.is_some()
                     && !request.is_streaming
                 {
+                    let Some(web_search_options) = request.web_search_options.clone() else {
+                        unreachable!()
+                    };
                     let mut first_request = request.clone();
+                    // Actually add the search tool here
+                    first_request
+                        .tools
+                        .get_or_insert_with(Vec::new)
+                        .push(search::get_search_tool(&web_search_options).unwrap());
+
                     let mut second_request = first_request.clone();
-                    first_request.do_auto_search = false;
-                    second_request.do_auto_search = false;
+                    first_request.web_search_options = None;
+                    second_request.web_search_options = None;
 
                     let this = self.clone();
                     let handle = tokio::spawn(async move {
@@ -582,19 +591,44 @@ impl Engine {
                             let tokenizer = get_mut_arcmutex!(this.pipeline)
                                 .tokenizer()
                                 .expect("A tokenizer is expected for non-diffusion models.");
-                            let mut results = search::run_search_tool(params).unwrap();
+                            let mut results = search::run_search_tool(params)
+                                .unwrap()
+                                .into_iter()
+                                .map(|result| {
+                                    let len = {
+                                        let inp = InputSequence::Raw(Cow::from(&result.content));
+                                        tokenizer
+                                            .encode_fast(inp, false)
+                                            .map(|x| x.len())
+                                            .unwrap_or(usize::MAX)
+                                    };
+                                    (result, len)
+                                })
+                                .collect::<Vec<_>>();
                             // Sort increasing by tokenized length, if it fails, put it at the end.
-                            results.sort_by_key(|result| {
-                                let inp = InputSequence::Raw(Cow::from(&result.content));
-                                tokenizer
-                                    .encode_fast(inp, false)
-                                    .map(|x| x.len())
-                                    .unwrap_or(usize::MAX)
-                            });
-                            let tool_result = serde_json::to_string(&results[0..6])
+                            results.sort_by_key(|(_, len)| *len);
+
+                            // Manage context size by # of tokens. Apply default here.
+                            let max_results_len_toks =
+                                match web_search_options.search_context_size.unwrap_or_default() {
+                                    SearchContextSize::High => 10000 as usize,
+                                    SearchContextSize::Medium => 7500 as usize,
+                                    SearchContextSize::Low => 3000 as usize,
+                                };
+                            let mut used_results = Vec::new();
+                            let mut used_len = 0;
+                            for (item, len) in results {
+                                if used_len >= max_results_len_toks {
+                                    break;
+                                }
+                                used_len += len;
+                                used_results.push(item);
+                            }
+
+                            let tool_result = serde_json::to_string(&used_results)
                                 .unwrap()
                                 .replace("\\n", "\n");
-                            dbg!(tool_result.len());
+                            info!("Web search executed, using {used_len} tokens.");
 
                             let mut message: IndexMap<String, MessageContent> = IndexMap::new();
                             message.insert("role".to_string(), Either::Left("tool".to_string()));
@@ -698,11 +732,7 @@ impl Engine {
                 messages,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let mut tools = request.tools.unwrap_or_default();
-                tools.push(handle_seq_error!(
-                    search::get_search_tool(),
-                    request.response
-                ));
+                let tools = request.tools.unwrap_or_default();
                 let template = pipeline
                     .get_processor()
                     .process(pipeline, messages, true, true, tools);
@@ -1067,19 +1097,7 @@ impl Engine {
         match request.text {
             Either::Left(messages) => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let mut tools = request.tools.unwrap_or_default();
-                let search_tool = match search::get_search_tool() {
-                    Ok(tool) => tool,
-                    Err(e) => {
-                        request
-                            .response
-                            .send(Err(e))
-                            .await
-                            .expect("Expected receiver.");
-                        return;
-                    }
-                };
-                tools.push(search_tool);
+                let tools = request.tools.unwrap_or_default();
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,

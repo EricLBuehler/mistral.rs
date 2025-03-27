@@ -1,6 +1,6 @@
 use either::Either;
 use mistralrs_core::{
-    ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType,
+    ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
@@ -154,6 +154,8 @@ pub struct ChatCompletionRequest {
     pub tool_choice: Option<ToolChoice>,
     #[schema(example = json!(Option::None::<ResponseFormat>))]
     pub response_format: Option<ResponseFormat>,
+    #[schema(example = json!(Option::None::<WebSearchOptions>))]
+    pub web_search_options: Option<WebSearchOptions>,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]

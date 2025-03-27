@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env::consts::{ARCH, FAMILY, OS};
 
-use crate::{Function, Tool, ToolType};
+use crate::{Function, Tool, ToolType, WebSearchOptions, WebSearchUserLocation};
 
 pub(crate) const SEARCH_TOOL_NAME: &str = "search_the_web";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -26,7 +26,7 @@ pub struct SearchFunctionParameters {
     query: String,
 }
 
-pub fn get_search_tool() -> Result<Tool> {
+pub fn get_search_tool(web_search_options: &WebSearchOptions) -> Result<Tool> {
     let parameters: HashMap<String, Value> = serde_json::from_value(json!({
         "type": "object",
         "properties": {
@@ -38,10 +38,20 @@ pub fn get_search_tool() -> Result<Tool> {
         "required": ["query"],
     }))?;
 
+    let location_details = match &web_search_options.user_location {
+        Some(WebSearchUserLocation::Approximate { approximate }) => {
+            format!(
+                "\nThe user's location is: {}, {}, {}, {}.",
+                approximate.city, approximate.region, approximate.country, approximate.timezone
+            )
+        }
+        None => "".to_string(),
+    };
+
     Ok(Tool {
         tp: ToolType::Function,
         function: Function {
-            description: Some(DESCRIPTION.to_string()),
+            description: Some(format!("{DESCRIPTION}{location_details}")),
             name: SEARCH_TOOL_NAME.to_string(),
             parameters: Some(parameters),
         },

@@ -87,7 +87,11 @@ These code examples demonstrate how to use Mistral.rs to run the Llama 3.2 Visio
 """
 
 completion = client.chat.completions.create(
-    model="llama-3.1", messages=messages, tool_choice="auto", max_tokens=1024
+    model="llama-3.1",
+    messages=messages,
+    tool_choice="auto",
+    max_tokens=1024,
+    web_search_options={},
 )
 
 # print(completion.usage)

@@ -89,6 +89,7 @@ impl Model {
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
+            web_search_options: request.take_web_search_options(),
         });
 
         self.runner.get_sender()?.send(request).await?;
@@ -124,6 +125,7 @@ impl Model {
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
+            web_search_options: request.take_web_search_options(),
         });
 
         self.runner.get_sender()?.send(request).await?;
@@ -168,6 +170,7 @@ impl Model {
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: true,
+            web_search_options: request.take_web_search_options(),
         });
 
         self.runner.get_sender()?.send(request).await?;
@@ -213,6 +216,7 @@ impl Model {
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
+            web_search_options: None,
         });
 
         self.runner.get_sender()?.send(request).await?;

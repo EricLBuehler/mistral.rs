@@ -94,8 +94,9 @@ pub use pipeline::{
     VisionPromptPrefixer, VisionSpecificConfig,
 };
 pub use request::{
-    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
-    MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
+    ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
+    LlguidanceGrammar, MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
+    WebSearchOptions, WebSearchUserLocation,
 };
 pub use response::*;
 pub use sampler::{
@@ -420,7 +421,7 @@ impl MistralRs {
                     tools: None,
                     logits_processors: None,
                     return_raw_logits: false,
-                    do_auto_search: false,
+                    web_search_options: None,
                 });
                 info!("Beginning dummy run.");
                 let start = Instant::now();

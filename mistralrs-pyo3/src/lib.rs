@@ -1010,6 +1010,7 @@ impl Runner {
                 tools,
                 logits_processors: None,
                 return_raw_logits: false,
+                web_search_options: request.web_search_options.clone(),
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1116,6 +1117,7 @@ impl Runner {
                 tools,
                 logits_processors: None,
                 return_raw_logits: false,
+                web_search_options: None,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1173,6 +1175,7 @@ impl Runner {
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
+            web_search_options: None,
         });
 
         let sender = self.runner.get_sender()?;

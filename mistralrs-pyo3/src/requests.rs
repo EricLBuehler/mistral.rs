@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use either::Either;
+use mistralrs_core::WebSearchOptions;
 use pyo3::{
     exceptions::PyTypeError,
     pyclass, pymethods,
@@ -166,6 +167,7 @@ pub struct ChatCompletionRequest {
     pub(crate) dry_base: Option<f32>,
     pub(crate) dry_allowed_length: Option<usize>,
     pub(crate) dry_sequence_breakers: Option<Vec<String>>,
+    pub(crate) web_search_options: Option<WebSearchOptions>,
 }
 
 #[pymethods]
@@ -196,6 +198,7 @@ impl ChatCompletionRequest {
         dry_base=None,
         dry_allowed_length=None,
         dry_sequence_breakers=None,
+        web_search_options=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -222,6 +225,7 @@ impl ChatCompletionRequest {
         dry_base: Option<f32>,
         dry_allowed_length: Option<usize>,
         dry_sequence_breakers: Option<Vec<String>>,
+        web_search_options: Option<WebSearchOptions>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -296,6 +300,7 @@ impl ChatCompletionRequest {
             dry_allowed_length,
             dry_base,
             dry_sequence_breakers,
+            web_search_options,
         })
     }
 }

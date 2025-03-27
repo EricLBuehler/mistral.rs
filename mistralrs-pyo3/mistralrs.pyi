@@ -1,6 +1,30 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator
+from typing import Iterator, Literal, Optional
+
+from torch import OptionalType
+
+class SearchContextSize(Enum):
+    Low = "low"
+    Medium = "medium"
+    High = "high"
+
+@dataclass
+class ApproximateUserLocation:
+    city: str
+    country: str
+    region: str
+    timezone: str
+
+@dataclass
+class WebSearchUserLocation:
+    type: Literal["approximate"]
+    approximate: ApproximateUserLocation
+
+@dataclass
+class WebSearchOptions:
+    search_context_size: Optional[SearchContextSize]
+    user_location: Optional[WebSearchUserLocation]
 
 @dataclass
 class ToolChoice(Enum):
@@ -39,6 +63,7 @@ class ChatCompletionRequest:
     min_p: float | None = None
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
+    web_search_options: WebSearchOptions | None = None
 
 @dataclass
 class CompletionRequest:

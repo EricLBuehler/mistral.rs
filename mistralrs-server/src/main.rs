@@ -164,6 +164,10 @@ struct Args {
     /// Use CPU only
     #[arg(long)]
     cpu: bool,
+
+    /// Enable web searching for interactive mode.
+    #[arg(long = "interactive-search")]
+    interactive_search: bool,
 }
 
 #[utoipa::path(
@@ -487,7 +491,7 @@ async fn main() -> Result<()> {
         .build();
 
     if args.interactive_mode {
-        interactive_mode(mistralrs, args.throughput_log).await;
+        interactive_mode(mistralrs, args.throughput_log, args.interactive_search).await;
         return Ok(());
     }
 

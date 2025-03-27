@@ -3,7 +3,8 @@ use indexmap::IndexMap;
 use mistralrs_core::{
     ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
     ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
-    Request, RequestMessage, Response, ResponseOk, SamplingParams, TERMINATE_ALL_NEXT_STEP,
+    Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
+    TERMINATE_ALL_NEXT_STEP,
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -29,11 +30,13 @@ fn terminate_handler() {
 static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
     Lazy::new(|| Mutex::new(&exit_handler));
 
-pub async fn interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
+pub async fn interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_search: bool) {
     match mistralrs.get_model_category() {
-        ModelCategory::Text => text_interactive_mode(mistralrs, throughput).await,
-        ModelCategory::Vision { .. } => vision_interactive_mode(mistralrs, throughput).await,
-        ModelCategory::Diffusion => diffusion_interactive_mode(mistralrs).await,
+        ModelCategory::Text => text_interactive_mode(mistralrs, throughput, do_search).await,
+        ModelCategory::Vision { .. } => {
+            vision_interactive_mode(mistralrs, throughput, do_search).await
+        }
+        ModelCategory::Diffusion => diffusion_interactive_mode(mistralrs, do_search).await,
     }
 }
 
@@ -78,7 +81,7 @@ const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
 const IMAGE_CMD: &str = "\\image";
 
-async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
+async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_search: bool) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
 
@@ -177,7 +180,7 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
-            do_auto_search: true,
+            web_search_options: do_search.then(|| WebSearchOptions::default()),
         });
         sender.send(req).await.unwrap();
 
@@ -270,7 +273,7 @@ fn parse_image_path_and_message(input: &str) -> Option<(String, String)> {
     None
 }
 
-async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
+async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_search: bool) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
@@ -409,7 +412,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
-            do_auto_search: true,
+            web_search_options: do_search.then(|| WebSearchOptions::default()),
         });
         sender.send(req).await.unwrap();
 
@@ -476,7 +479,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool) {
     }
 }
 
-async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>) {
+async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
     let sender = mistralrs.get_sender().unwrap();
 
     let diffusion_params = DiffusionGenerationParams::default();
@@ -543,7 +546,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>) {
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
-            do_auto_search: true,
+            web_search_options: do_search.then(|| WebSearchOptions::default()),
         });
 
         let start = Instant::now();
