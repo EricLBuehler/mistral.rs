@@ -282,10 +282,13 @@ async fn parse_request(
                                 _ => None,
                             })
                             .join(" ");
-                        let image_urls_iter = items.iter().filter_map(|item| match item {
-                            ContentPart::Image { image_url } => Some(image_url.clone()),
-                            _ => None,
-                        });
+                        let image_urls_iter = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Image { image_url } => Some(image_url.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
 
                         let mut message_map: IndexMap<
                             String,
@@ -294,7 +297,7 @@ async fn parse_request(
                         message_map.insert("role".to_string(), Either::Left(message.role));
 
                         let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
-                        {
+                        for _ in &image_urls_iter {
                             let mut content_image_map = IndexMap::new();
                             content_image_map
                                 .insert("type".to_string(), Value::String("image".to_string()));
