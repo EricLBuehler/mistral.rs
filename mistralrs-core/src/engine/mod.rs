@@ -578,7 +578,6 @@ impl Engine {
                             let params: SearchFunctionParamters =
                                 serde_json::from_str(&tool_calls.function.arguments).unwrap();
                             let result = search::run_search_tool(params).unwrap();
-                            dbg!(&result);
                             let tool_result =
                                 serde_json::to_string(&result[0].description).unwrap();
                             let tool_result = "BOS weather: Humidity 71%, Wind Speed E 10 mph, Barometer  29.93 in (1013.5 mb), Dewpoint 33°F (1°C), Visibility 10.00 mi, Wind Chill 36°F (2°C)".to_string();
@@ -615,7 +614,6 @@ impl Engine {
     }
 
     async fn add_request(&self, request: NormalRequest) {
-        dbg!(&request.messages);
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat(_) | RequestMessage::VisionChat { .. }

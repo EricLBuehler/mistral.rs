@@ -10,6 +10,12 @@ use crate::{Function, Tool, ToolType};
 
 pub(crate) const SEARCH_TOOL_NAME: &str = "search_the_web";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const DESCRIPTION: &str = r#"**Details about this tool**:
+- This tool is used to search the web given a query.
+- Use this tool if the user asks a question which requires realtime or up-to-date information.
+
+**Rules regarding calling a search tool:**
+- If you call that tool, then you MUST complete your answer using the output."#;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchResult {
@@ -38,7 +44,7 @@ pub fn get_search_tool() -> Result<Tool> {
     Ok(Tool {
         tp: ToolType::Function,
         function: Function {
-            description: Some("Search the web using a given query. Use this tool if the user asks a question which requires realtime or up-to-date information. Then, answer the user's query using this information.".to_string()),
+            description: Some(DESCRIPTION.to_string()),
             name: SEARCH_TOOL_NAME.to_string(),
             parameters: Some(parameters),
         },

@@ -5,7 +5,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 messages = [
     {
         "role": "user",
-        "content": "What is the current weather at Boston Logan Airport?",
+        "content": "What is the current weather summary at Boston Logan Airport?",
     }
 ]
 
