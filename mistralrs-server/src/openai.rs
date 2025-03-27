@@ -8,7 +8,7 @@ use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct MessageInnerContent(
-    #[serde(with = "either::serde_untagged")] Either<String, HashMap<String, String>>,
+    #[serde(with = "either::serde_untagged")] pub Either<String, HashMap<String, String>>,
 );
 
 impl Deref for MessageInnerContent {
