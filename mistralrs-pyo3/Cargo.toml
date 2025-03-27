@@ -33,6 +33,7 @@ base64.workspace = true
 url.workspace = true
 data-url.workspace = true
 anyhow.workspace = true
+itertools.workspace = true
 
 [build-dependencies]
 pyo3-build-config = "0.22"
