@@ -1577,7 +1577,8 @@ impl RotaryEmbedding {
         k: &Tensor,
         seqlen_offsets: &[usize],
     ) -> Result<(Tensor, Tensor)> {
-        let (b_sz, h, seq_len, n_embd) = q.dims4()?;
+        let (b_sz, qh, seq_len, n_embd) = q.dims4()?;
+        let (_b_sz, kh, _seq_len, __n_embd) = k.dims4()?;
 
         let rope = if self.is_gpt_neox {
             candle_nn::rotary_emb::rope
@@ -1590,7 +1591,7 @@ impl RotaryEmbedding {
             let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
             let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
             let q_embed = q.transpose(1, 2)?.flatten(0, 1)?;
-            let k_embed = q.transpose(1, 2)?.flatten(0, 1)?;
+            let k_embed = k.transpose(1, 2)?.flatten(0, 1)?;
             mistralrs_quant::rotary::apply_rotary_inplace(
                 &q_embed,
                 &k_embed,
@@ -1602,11 +1603,13 @@ impl RotaryEmbedding {
             // let k_embed = rope(&k.contiguous()?, &cos, &sin)?;
             Ok((
                 q_embed
-                    .reshape((b_sz, seq_len, h, n_embd))?
-                    .transpose(1, 2)?,
+                    .reshape((b_sz, seq_len, qh, n_embd))?
+                    .transpose(1, 2)?
+                    .contiguous()?,
                 k_embed
-                    .reshape((b_sz, seq_len, h, n_embd))?
-                    .transpose(1, 2)?,
+                    .reshape((b_sz, seq_len, kh, n_embd))?
+                    .transpose(1, 2)?
+                    .contiguous()?,
             ))
         } else {
             let mut q_embeds = Vec::new();

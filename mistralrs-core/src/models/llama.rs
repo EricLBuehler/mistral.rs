@@ -111,9 +111,7 @@ impl CausalSelfAttention {
             (q, k, v)
         };
 
-        dbg!(&q, &k, &v);
         let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
-        dbg!(&q, &k, &v);
 
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
