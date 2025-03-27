@@ -60,3 +60,4 @@ metal = { version = "0.27.0", features = ["mps"] }
 safetensors = "0.4.5"
 toml = "0.8.12"
 hf-hub = { version = "0.4.1", default-features = false, features = ["ureq", "tokio", "rustls-tls"] }
+itertools = "0.13.0"

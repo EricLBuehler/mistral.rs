@@ -1,14 +1,5 @@
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    env,
-    error::Error,
-    ops::Deref,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::{env, error::Error, ops::Deref, pin::Pin, sync::Arc, task::Poll, time::Duration};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
@@ -18,6 +9,7 @@ use crate::{
     },
     util,
 };
+use anyhow::Context;
 use anyhow::Result;
 use axum::{
     extract::{Json, State},
@@ -29,6 +21,7 @@ use axum::{
 };
 use either::Either;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use mistralrs_core::{
     ChatCompletionResponse, Constraint, DrySamplingParams, MistralRs, NormalRequest, Request,
     RequestMessage, Response, SamplingParams, StopTokens as InternalStopTokens,
@@ -59,7 +52,10 @@ pub struct Streamer {
 impl futures::Stream for Streamer {
     type Item = Result<Event, axum::Error>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
         match self.done_state {
             DoneState::SendingDone => {
                 // https://platform.openai.com/docs/api-reference/completions/create
@@ -197,7 +193,6 @@ async fn parse_request(
                     Some(content) => content.clone(),
                     None => {
                         // Handle tool call
-                        use anyhow::Context;
                         let calls = message
                             .tool_calls
                             .as_ref()
@@ -243,11 +238,6 @@ async fn parse_request(
                             messages.push(message_map);
                             continue;
                         }
-                        if image_messages.len() != 2 {
-                            anyhow::bail!(
-                                "Expected 2 items for the content of a message with an image."
-                            );
-                        }
                         if message.role != "user" {
                             anyhow::bail!(
                                 "Role for an image message must be `user`, but it is {}",
@@ -255,77 +245,79 @@ async fn parse_request(
                             );
                         }
 
-                        let mut items = Vec::new();
-                        for image_message in image_messages {
-                            if image_message.len() != 2 {
-                                anyhow::bail!("Expected 2 items for the sub-content of a message with an image.");
-                            }
-                            if !image_message.contains_key("type") {
-                                anyhow::bail!("Expected `type` key in input message.");
-                            }
-                            if image_message["type"].is_right() {
-                                anyhow::bail!("Expected string value in `type`.");
-                            }
-                            items.push(image_message["type"].as_ref().unwrap_left().clone())
+                        enum ContentPart {
+                            Text { text: String },
+                            Image { image_url: String },
                         }
 
-                        fn get_content_and_url(
-                            text_idx: usize,
-                            url_idx: usize,
-                            image_messages: &[HashMap<String, MessageInnerContent>],
-                        ) -> Result<(String, String)> {
-                            if image_messages[text_idx]["text"].is_right() {
-                                anyhow::bail!("Expected string value in `text`.");
+                        let mut items = Vec::new();
+                        for image_message in image_messages {
+                            match image_message.get("type") {
+                                Some(MessageInnerContent(Either::Left(x))) if x == "text" => {
+                                    items.push(ContentPart::Text {
+                                        text: image_message
+                                            .get("text").as_ref()
+                                            .context("Text sub-content must have `text` key.")?.as_ref()
+                                            .left().context("Text sub-content `text` key must be a string.")?.clone(),
+                                    });
+                                }
+                                Some(MessageInnerContent(Either::Left(x))) if x == "image_url" => {
+                                    items.push(ContentPart::Image {
+                                        image_url: image_message.get("image_url").as_ref()
+                                            .context("Image sub-content must have `image_url` key.")?.as_ref()
+                                            .right()
+                                            .context("Image sub-content `image_url` key must be an object.")?
+                                            .get("url")
+                                            .context("Image sub-content `image_url` object must have a `url` key.")?.clone()
+                                    });
+                                }
+                                _ => anyhow::bail!("Expected array content sub-contnet to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}")
                             }
-                            let content = image_messages[text_idx]["text"]
-                                .as_ref()
-                                .unwrap_left()
-                                .clone();
-                            if image_messages[url_idx]["image_url"].is_left()
-                                || !image_messages[url_idx]["image_url"]
-                                    .as_ref()
-                                    .unwrap_right()
-                                    .contains_key("url")
-                            {
-                                anyhow::bail!("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}")
-                            }
-                            let url = image_messages[url_idx]["image_url"].as_ref().unwrap_right()
-                                ["url"]
-                                .clone();
-                            Ok((content, url))
                         }
+
+                        let text_content = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Text { text } => Some(text),
+                                _ => None,
+                            })
+                            .join(" ");
+                        let image_urls_iter = items.iter().filter_map(|item| match item {
+                            ContentPart::Image { image_url } => Some(image_url.clone()),
+                            _ => None,
+                        });
+
                         let mut message_map: IndexMap<
                             String,
                             Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
-                        let (content, url) = if items[0] == "text" {
-                            get_content_and_url(0, 1, image_messages)?
-                        } else {
-                            get_content_and_url(1, 0, image_messages)?
-                        };
 
                         let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
-                        let mut content_image_map = IndexMap::new();
-                        content_image_map
-                            .insert("type".to_string(), Value::String("image".to_string()));
-                        content_map.push(content_image_map);
-                        let mut content_text_map = IndexMap::new();
-                        content_text_map
-                            .insert("type".to_string(), Value::String("text".to_string()));
-                        content_text_map.insert("text".to_string(), Value::String(content));
-                        content_map.push(content_text_map);
+                        {
+                            let mut content_image_map = IndexMap::new();
+                            content_image_map
+                                .insert("type".to_string(), Value::String("image".to_string()));
+                            content_map.push(content_image_map);
+                        }
+                        {
+                            let mut content_text_map = IndexMap::new();
+                            content_text_map
+                                .insert("type".to_string(), Value::String("text".to_string()));
+                            content_text_map
+                                .insert("text".to_string(), Value::String(text_content));
+                            content_map.push(content_text_map);
+                        }
 
                         message_map.insert("content".to_string(), Either::Right(content_map));
                         messages.push(message_map);
-                        image_urls.push(url);
+                        image_urls.extend(image_urls_iter);
                     }
                 }
             }
             if !image_urls.is_empty() {
                 let mut images = Vec::new();
                 for url_unparsed in image_urls {
-                    use anyhow::Context;
                     let image = util::parse_image_url(&url_unparsed)
                         .await
                         .context(format!("Failed to parse image resource: {}", url_unparsed))?;

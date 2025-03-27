@@ -2427,6 +2427,7 @@ dependencies = [
  "image",
  "indexmap",
  "intel-mkl-src",
+ "itertools 0.13.0",
  "mistralrs-core",
  "once_cell",
  "regex",
