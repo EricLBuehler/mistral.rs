@@ -84,7 +84,7 @@ impl TextModelBuilder {
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
-    /// - Uses the `SnowflakeArcticEmbedL` BERT model for web searching. This can be disabled or customized.
+    /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     pub fn new(model_id: impl ToString) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -113,11 +113,11 @@ impl TextModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             hf_cache_path: None,
-            search_bert_model: Some(BertEmbeddingModel::default()),
+            search_bert_model: None,
         }
     }
 
-    /// Specify a custom BERT model to be used for web searches, or disable the BERT model and web searches.
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
     pub fn set_search_bert_model(mut self, search_bert_model: Option<BertEmbeddingModel>) -> Self {
         self.search_bert_model = search_bert_model;
         self

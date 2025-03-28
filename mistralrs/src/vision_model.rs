@@ -47,7 +47,7 @@ impl VisionModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
-    /// - Uses the `SnowflakeArcticEmbedL` BERT model for web searching. This can be disabled or customized.
+    /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     pub fn new(model_id: impl ToString, loader_type: VisionLoaderType) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -74,8 +74,14 @@ impl VisionModelBuilder {
             throughput_logging: false,
             paged_attn_cfg: None,
             hf_cache_path: None,
-            search_bert_model: Some(BertEmbeddingModel::default()),
+            search_bert_model: None,
         }
+    }
+
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
+    pub fn set_search_bert_model(mut self, search_bert_model: Option<BertEmbeddingModel>) -> Self {
+        self.search_bert_model = search_bert_model;
+        self
     }
 
     /// Enable runner throughput logging.

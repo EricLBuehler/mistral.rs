@@ -169,13 +169,13 @@ struct Args {
     #[arg(long = "interactive-search")]
     interactive_search: bool,
 
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
+    #[arg(long = "enable-search")]
+    enable_search: bool,
+
     /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
     #[arg(long = "search-bert-model")]
     search_bert_model: Option<String>,
-
-    /// Inhibit using a BERT model to assist web searching. This will disable web searching.
-    #[arg(long = "no-bert-model")]
-    no_bert_model: bool,
 }
 
 #[utoipa::path(
@@ -490,7 +490,7 @@ async fn main() -> Result<()> {
             method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         }
     };
-    let bert_model = if !args.no_bert_model {
+    let bert_model = if args.enable_search {
         Some(
             args.search_bert_model
                 .map(BertEmbeddingModel::Custom)

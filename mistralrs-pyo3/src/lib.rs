@@ -470,8 +470,8 @@ impl Runner {
         paged_attn = false,
         prompt_chunksize = None,
         seed = None,
+        enable_search = false,
         search_bert_model = None,
-        no_bert_model = false,
     ))]
     fn new(
         which: Which,
@@ -494,8 +494,8 @@ impl Runner {
         paged_attn: bool,
         prompt_chunksize: Option<usize>,
         seed: Option<u64>,
+        enable_search: bool,
         search_bert_model: Option<String>,
-        no_bert_model: bool,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -776,7 +776,7 @@ impl Runner {
                 ),
             }
         };
-        let bert_model = if !no_bert_model {
+        let bert_model = if enable_search {
             Some(
                 search_bert_model
                     .map(BertEmbeddingModel::Custom)
