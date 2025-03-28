@@ -529,13 +529,13 @@ impl Engine {
 
                     let this = self.clone();
                     let handle = tokio::spawn(async move {
-                        let (new_sender, mut first_reciever) = tokio::sync::mpsc::channel(1);
+                        let (new_sender, mut first_receiver) = tokio::sync::mpsc::channel(1);
                         second_request.response = new_sender;
                         std::mem::swap(&mut first_request.response, &mut second_request.response);
 
                         this.add_request(first_request).await;
                         let ResponseOk::Done(done) =
-                            first_reciever.recv().await.unwrap().as_result().unwrap()
+                            first_receiver.recv().await.unwrap().as_result().unwrap()
                         else {
                             unreachable!()
                         };
@@ -569,7 +569,7 @@ impl Engine {
                             unreachable!()
                         };
 
-                        // Add assisstant call message
+                        // Add assistant call message
                         {
                             let mut message: IndexMap<String, MessageContent> = IndexMap::new();
                             message
