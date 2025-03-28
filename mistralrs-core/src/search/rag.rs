@@ -7,7 +7,7 @@ use candle_core::{DType, Device, Error as E, Tensor};
 use itertools::Itertools;
 use tokenizers::{InputSequence, PaddingParams, PaddingStrategy, Tokenizer};
 
-use crate::embedding::bert::BertModel;
+use crate::embedding::bert::{BertModel, BertPipeline};
 
 use super::SearchResult;
 
@@ -20,8 +20,8 @@ pub fn compute_most_similar(
     device: &Device,
     query: &str,
     results: Vec<&SearchResult>,
+    BertPipeline { model, tokenizer }: &mut BertPipeline,
 ) -> Result<Vec<usize>> {
-    let (model, mut tokenizer) = crate::embedding::bert::build_model_and_tokenizer(device).unwrap();
     let normalize_embeddings = false;
 
     tokenizer.with_padding(Some(PaddingParams {
@@ -41,7 +41,7 @@ pub fn compute_most_similar(
                 .collect::<Vec<_>>();
             let sentences = [vec![query.to_string()], chunks].concat();
             let similarities =
-                compute_similarities(&model, &tokenizer, device, sentences, normalize_embeddings)?;
+                compute_similarities(model, tokenizer, device, sentences, normalize_embeddings)?;
             similarities.iter().sum::<f32>() / similarities.len() as f32
         };
 
@@ -49,7 +49,7 @@ pub fn compute_most_similar(
             let title = &result.title;
             let sentences = vec![query.to_string(), title.to_string()];
             let similarities =
-                compute_similarities(&model, &tokenizer, device, sentences, normalize_embeddings)?;
+                compute_similarities(model, tokenizer, device, sentences, normalize_embeddings)?;
             similarities.iter().sum::<f32>() / similarities.len() as f32
         };
         mean_similarities.push(title_similarity * 2. + mean_content_similarity);

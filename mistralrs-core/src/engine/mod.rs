@@ -1,5 +1,6 @@
 use crate::{
     distributed,
+    embedding::bert::BertPipeline,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -58,6 +59,14 @@ pub enum EngineInstruction {
     Terminate,
 }
 
+#[derive(Debug, Default, Clone)]
+/// Embedding model used for ranking web search results internally.
+pub enum BertEmbeddingModel {
+    #[default]
+    SnowflakeArcticEmbedL,
+    Custom(String),
+}
+
 const SEED: u64 = 0;
 /// Terminate all sequences on the next scheduling step. Be sure to reset this.
 pub static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
@@ -69,6 +78,7 @@ pub static ENGINE_INSTRUCTIONS: Lazy<std::sync::Mutex<HashMap<usize, Option<Engi
 pub struct Engine {
     rx: Arc<Mutex<Receiver<Request>>>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
+    bert_pipeline: Arc<Mutex<Option<BertPipeline>>>,
     scheduler: Arc<Mutex<dyn Scheduler>>,
     id: Arc<Mutex<usize>>,
     truncate_sequence: bool,
@@ -101,16 +111,26 @@ impl Engine {
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
-    ) -> Self {
+        search_embedding_model: Option<BertEmbeddingModel>,
+    ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
         no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
             || no_prefix_cache
             || no_kv_cache;
 
-        Self {
+        let bert_pipeline = match search_embedding_model {
+            Some(search_embedding_model) => Some(BertPipeline::new(
+                search_embedding_model,
+                &get_mut_arcmutex!(pipeline).device(),
+            )?),
+            None => None,
+        };
+
+        Ok(Self {
             rx: Arc::new(Mutex::new(rx)),
             pipeline,
+            bert_pipeline: Arc::new(Mutex::new(bert_pipeline)),
             scheduler: config.into_scheduler(),
             id: Arc::new(Mutex::new(0)),
             truncate_sequence,
@@ -124,7 +144,7 @@ impl Engine {
             throughput_logging_enabled,
             logger: IntervalLogger::new(Duration::from_secs(5)),
             handles: Arc::new(Mutex::new(Vec::new())),
-        }
+        })
     }
 
     pub async fn run(self: Arc<Self>) {
@@ -512,6 +532,7 @@ impl Engine {
                 if matches!(request.messages, RequestMessage::Chat { .. })
                     && request.web_search_options.is_some()
                     && !request.is_streaming
+                    && get_mut_arcmutex!(self.bert_pipeline).is_some()
                 {
                     let Some(web_search_options) = request.web_search_options.clone() else {
                         unreachable!()
@@ -610,10 +631,18 @@ impl Engine {
 
                             {
                                 let device = get_mut_arcmutex!(this.pipeline).device();
+
+                                let Some(bert_pipeline) =
+                                    &mut *get_mut_arcmutex!(this.bert_pipeline)
+                                else {
+                                    unreachable!()
+                                };
+
                                 let decreasing_indexes = search::rag::compute_most_similar(
                                     &device,
                                     &tool_call_params.query,
                                     results.iter().map(|(res, _)| res).collect::<Vec<_>>(),
+                                    bert_pipeline,
                                 )
                                 .unwrap();
 

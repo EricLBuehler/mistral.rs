@@ -537,7 +537,7 @@ fn main() -> anyhow::Result<()> {
             ),
         }
     };
-    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, false)
+    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, false, None)
         .with_no_prefix_cache(true)
         .with_disable_eos_stop(true)
         .build();

@@ -2,7 +2,9 @@
 use candle_core::Device;
 use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
-pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
+pub use engine::{
+    BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+};
 use hf_hub::Cache;
 pub use lora::Ordering;
 pub use pipeline::ModelCategory;
@@ -157,6 +159,7 @@ struct RebootState {
     prefix_cache_n: usize,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
+    search_embedding_model: Option<BertEmbeddingModel>,
 }
 
 #[derive(Debug)]
@@ -193,6 +196,7 @@ pub struct MistralRsBuilder {
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
     throughput_logging_enabled: bool,
+    search_embedding_model: Option<BertEmbeddingModel>,
 }
 
 impl MistralRsBuilder {
@@ -200,6 +204,7 @@ impl MistralRsBuilder {
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
         throughput_logging: bool,
+        search_embedding_model: Option<BertEmbeddingModel>,
     ) -> Self {
         Self {
             pipeline,
@@ -211,6 +216,7 @@ impl MistralRsBuilder {
             prefix_cache_n: None,
             disable_eos_stop: None,
             throughput_logging_enabled: throughput_logging,
+            search_embedding_model,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -268,6 +274,7 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
+            search_embedding_model,
         } = config;
 
         let category = pipeline.try_lock().unwrap().category();
@@ -288,6 +295,7 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
+            search_embedding_model: search_embedding_model.clone(),
         };
 
         let (tx, rx) = channel(10_000);
@@ -316,7 +324,9 @@ impl MistralRs {
                     prefix_cache_n,
                     disable_eos_stop,
                     throughput_logging_enabled,
-                );
+                    search_embedding_model,
+                )
+                .expect("Engine creation failed.");
                 Arc::new(engine).run().await;
             });
         });
@@ -489,7 +499,9 @@ impl MistralRs {
                         reboot_state.prefix_cache_n,
                         reboot_state.disable_eos_stop,
                         reboot_state.throughput_logging_enabled,
-                    );
+                        reboot_state.search_embedding_model,
+                    )
+                    .expect("Engine creation failed");
                     Arc::new(engine).run().await;
                 });
             });

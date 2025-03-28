@@ -6,7 +6,9 @@ use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use serde::Deserialize;
 use tokenizers::Tokenizer;
 
-use crate::{layers::Activation, utils::log::once_log_info, GLOBAL_HF_CACHE};
+use crate::{
+    engine::BertEmbeddingModel, layers::Activation, utils::log::once_log_info, GLOBAL_HF_CACHE,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -397,29 +399,43 @@ impl BertModel {
     }
 }
 
-pub fn build_model_and_tokenizer(device: &Device) -> anyhow::Result<(BertModel, Tokenizer)> {
-    let model_id = "Snowflake/snowflake-arctic-embed-l-v2.0".to_string();
-    once_log_info(format!("Loading embedding model ({model_id})."));
+pub struct BertPipeline {
+    pub model: BertModel,
+    pub tokenizer: Tokenizer,
+}
 
-    let repo = Repo::with_revision(model_id, RepoType::Model, "main".to_string());
-    let (config_filename, tokenizer_filename, weights_filename) = {
-        let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-        let api = ApiBuilder::from_cache(cache)
-            .with_progress(true)
-            .with_token(None)
-            .build()?;
-        let api = api.repo(repo);
-        let config = api.get("config.json")?;
-        let tokenizer = api.get("tokenizer.json")?;
-        let weights = api.get("model.safetensors")?;
-        (config, tokenizer, weights)
-    };
-    let config = std::fs::read_to_string(config_filename)?;
-    let config: Config = serde_json::from_str(&config)?;
-    let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(candle_core::Error::msg)?;
+impl BertPipeline {
+    pub fn new(model: BertEmbeddingModel, device: &Device) -> anyhow::Result<Self> {
+        let model_id = match model {
+            BertEmbeddingModel::SnowflakeArcticEmbedL => {
+                "Snowflake/snowflake-arctic-embed-l-v2.0".to_string()
+            }
+            BertEmbeddingModel::Custom(model_id) => model_id,
+        };
+        once_log_info(format!("Loading embedding model ({model_id})."));
 
-    let vb =
-        unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, device)? };
-    let model = BertModel::load(vb, &config)?;
-    Ok((model, tokenizer))
+        let repo = Repo::with_revision(model_id, RepoType::Model, "main".to_string());
+        let (config_filename, tokenizer_filename, weights_filename) = {
+            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+            let api = ApiBuilder::from_cache(cache)
+                .with_progress(true)
+                .with_token(None)
+                .build()?;
+            let api = api.repo(repo);
+            let config = api.get("config.json")?;
+            let tokenizer = api.get("tokenizer.json")?;
+            let weights = api.get("model.safetensors")?;
+            (config, tokenizer, weights)
+        };
+        let config = std::fs::read_to_string(config_filename)?;
+        let config: Config = serde_json::from_str(&config)?;
+        let tokenizer =
+            Tokenizer::from_file(tokenizer_filename).map_err(candle_core::Error::msg)?;
+
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, device)?
+        };
+        let model = BertModel::load(vb, &config)?;
+        Ok(Self { model, tokenizer })
+    }
 }

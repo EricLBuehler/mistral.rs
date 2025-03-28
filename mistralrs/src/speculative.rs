@@ -95,8 +95,12 @@ impl TextSpeculativeBuilder {
             self.speculative_config,
         )?));
 
-        let runner =
-            MistralRsBuilder::new(pipeline, scheduler_method, self.target.throughput_logging);
+        let runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            self.target.throughput_logging,
+            self.target.search_bert_model,
+        );
 
         Ok(Model::new(runner.build()))
     }

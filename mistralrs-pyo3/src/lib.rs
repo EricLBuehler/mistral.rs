@@ -20,12 +20,12 @@ use util::{PyApiErr, PyApiResult};
 use candle_core::{Device, Result};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, AutoDeviceMapParams,
-    ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
-    DiffusionGenerationParams, DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
-    ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
+    BertEmbeddingModel, ChatCompletionResponse, CompletionResponse, Constraint,
+    DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DiffusionSpecificConfig,
+    DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
+    GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar,
+    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
     ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
     TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
@@ -470,6 +470,8 @@ impl Runner {
         paged_attn = false,
         prompt_chunksize = None,
         seed = None,
+        search_bert_model = None,
+        no_bert_model = false,
     ))]
     fn new(
         which: Which,
@@ -492,6 +494,8 @@ impl Runner {
         paged_attn: bool,
         prompt_chunksize: Option<usize>,
         seed: Option<u64>,
+        search_bert_model: Option<String>,
+        no_bert_model: bool,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -772,7 +776,16 @@ impl Runner {
                 ),
             }
         };
-        let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, false)
+        let bert_model = if !no_bert_model {
+            Some(
+                search_bert_model
+                    .map(BertEmbeddingModel::Custom)
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
+        let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, false, bert_model)
             .with_no_kv_cache(no_kv_cache)
             .with_prefix_cache_n(prefix_cache_n)
             .build();
