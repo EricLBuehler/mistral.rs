@@ -48,6 +48,7 @@ mod amoe;
 mod cublaslt;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 mod dummy_paged_attention;
+mod embedding;
 mod gguf;
 pub mod layers;
 mod layers_masker;

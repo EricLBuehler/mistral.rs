@@ -63,7 +63,7 @@ fn default_responder<T>() -> Sender<T> {
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub enum SearchContextSize {
     #[serde(rename = "low")]
     Low,

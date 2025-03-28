@@ -97,5 +97,6 @@ completion = client.chat.completions.create(
 # print(completion.usage)
 print(completion.choices[0].message.content)
 
-tool_called = completion.choices[0].message.tool_calls[0].function
-print(tool_called)
+if completion.choices[0].message.tool_calls is not None:
+    tool_called = completion.choices[0].message.tool_calls[0].function
+    print(tool_called)

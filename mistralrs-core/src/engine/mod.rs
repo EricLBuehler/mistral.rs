@@ -9,7 +9,7 @@ use crate::{
     request::{DetokenizationRequest, NormalRequest, SearchContextSize, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
-    search::{self, SearchFunctionParameters},
+    search::{self, SearchFunctionParameters, SearchResult},
     sequence::{SeqStepType, StopReason},
     tools::{ToolCallingMatcher, ToolChoice},
     CompletionResponse, MessageContent, RequestMessage, Response, ResponseOk, SchedulerConfig,
@@ -139,7 +139,7 @@ impl Engine {
                 ENGINE_INSTRUCTIONS
                     .lock()
                     .expect("`ENGINE_INSTRUCTIONS` was poisioned")
-                    .get(&*get_mut_arcmutex!(self.id).deref()),
+                    .get(get_mut_arcmutex!(self.id).deref()),
                 Some(Some(EngineInstruction::Terminate))
             ) {
                 self.replicate_request_to_daemons(&Request::Terminate);
@@ -583,15 +583,15 @@ impl Engine {
                             );
                             messages.push(message);
                         }
+                        let tool_call_params: SearchFunctionParameters =
+                            serde_json::from_str(&tool_calls.function.arguments).unwrap();
 
                         // Add tool response
                         {
-                            let params: SearchFunctionParameters =
-                                serde_json::from_str(&tool_calls.function.arguments).unwrap();
                             let tokenizer = get_mut_arcmutex!(this.pipeline)
                                 .tokenizer()
                                 .expect("A tokenizer is expected for non-diffusion models.");
-                            let mut results = search::run_search_tool(params)
+                            let mut results = search::run_search_tool(&tool_call_params)
                                 .unwrap()
                                 .into_iter()
                                 .map(|result| {
@@ -608,26 +608,51 @@ impl Engine {
                             // Sort increasing by tokenized length, if it fails, put it at the end.
                             results.sort_by_key(|(_, len)| *len);
 
+                            {
+                                let device = get_mut_arcmutex!(this.pipeline).device();
+                                let decreasing_indexes = search::rag::compute_most_similar(
+                                    &device,
+                                    &tool_call_params.query,
+                                    results.iter().map(|(res, _)| res).collect::<Vec<_>>(),
+                                )
+                                .unwrap();
+
+                                // Rerank the results
+                                let mut results_old = Vec::new();
+                                std::mem::swap(&mut results_old, &mut results);
+                                for &index in &decreasing_indexes {
+                                    let mut current_result: (SearchResult, usize) =
+                                        Default::default();
+                                    std::mem::swap(&mut current_result, &mut results_old[index]);
+
+                                    results.push(current_result);
+                                }
+                            }
+
                             // Manage context size by # of tokens. Apply default here.
-                            let max_results_len_toks =
+                            let max_results_budget_toks =
                                 match web_search_options.search_context_size.unwrap_or_default() {
-                                    SearchContextSize::High => 10000 as usize,
-                                    SearchContextSize::Medium => 7500 as usize,
-                                    SearchContextSize::Low => 3000 as usize,
+                                    SearchContextSize::High => 10000_usize,
+                                    SearchContextSize::Medium => 7500_usize,
+                                    SearchContextSize::Low => 3000_usize,
                                 };
                             let mut used_results = Vec::new();
                             let mut used_len = 0;
                             for (item, len) in results {
-                                if used_len >= max_results_len_toks {
+                                if used_len + len >= max_results_budget_toks {
                                     break;
                                 }
+                                // So the info! below gets the correct value
                                 used_len += len;
                                 used_results.push(item);
                             }
 
                             let tool_result = serde_json::to_string(&used_results)
                                 .unwrap()
-                                .replace("\\n", "\n");
+                                .replace("\\n", "\n")
+                                .replace("\\\"", "\"")
+                                .replace("\\\\", "\\");
+                            println!("{tool_result}");
                             info!("Web search executed, using {used_len} tokens.");
 
                             let mut message: IndexMap<String, MessageContent> = IndexMap::new();
@@ -640,7 +665,6 @@ impl Engine {
                         }
 
                         this.add_request(second_request).await;
-                        return;
                     });
                     get_mut_arcmutex!(self.handles).push(handle);
                 } else {

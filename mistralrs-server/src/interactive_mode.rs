@@ -180,7 +180,7 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_s
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
-            web_search_options: do_search.then(|| WebSearchOptions::default()),
+            web_search_options: do_search.then(WebSearchOptions::default),
         });
         sender.send(req).await.unwrap();
 
@@ -412,7 +412,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
-            web_search_options: do_search.then(|| WebSearchOptions::default()),
+            web_search_options: do_search.then(WebSearchOptions::default),
         });
         sender.send(req).await.unwrap();
 
@@ -546,7 +546,7 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
-            web_search_options: do_search.then(|| WebSearchOptions::default()),
+            web_search_options: do_search.then(WebSearchOptions::default),
         });
 
         let start = Instant::now();

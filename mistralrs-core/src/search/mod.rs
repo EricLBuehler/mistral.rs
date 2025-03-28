@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+pub mod rag;
+
 use anyhow::Result;
 use html2text::{config, render::PlainDecorator};
 use scraper::{Html, Selector};
@@ -13,7 +15,7 @@ pub(crate) const SEARCH_TOOL_NAME: &str = "search_the_web";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DESCRIPTION: &str = r#"This tool is used to search the web given a query. If you call this tool, then you MUST complete your answer using the output. YOU SHOULD NOT CALL THE SEARCH TOOL CONSECUTIVELY!"#;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct SearchResult {
     pub title: String,
     pub description: String,
@@ -23,7 +25,7 @@ pub struct SearchResult {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SearchFunctionParameters {
-    query: String,
+    pub query: String,
 }
 
 pub fn get_search_tool(web_search_options: &WebSearchOptions) -> Result<Tool> {
@@ -58,7 +60,7 @@ pub fn get_search_tool(web_search_options: &WebSearchOptions) -> Result<Tool> {
     })
 }
 
-pub fn run_search_tool(params: SearchFunctionParameters) -> Result<Vec<SearchResult>> {
+pub fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<SearchResult>> {
     let client = reqwest::blocking::Client::new();
 
     let encoded_query = urlencoding::encode(&params.query);
@@ -110,10 +112,10 @@ pub fn run_search_tool(params: SearchFunctionParameters) -> Result<Vec<SearchRes
             let content = match client.get(&url).header("User-Agent", &user_agent).send() {
                 Ok(response) => {
                     let html = response.text()?;
-                    let content = config::with_decorator(PlainDecorator::new())
+
+                    config::with_decorator(PlainDecorator::new())
                         .do_decorate()
-                        .string_from_read(html.as_bytes(), 80)?;
-                    content
+                        .string_from_read(html.as_bytes(), 80)?
                 }
                 Err(_) => "".to_string(),
             };
