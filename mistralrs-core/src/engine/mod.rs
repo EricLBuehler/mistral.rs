@@ -652,8 +652,7 @@ impl Engine {
                                 .replace("\\n", "\n")
                                 .replace("\\\"", "\"")
                                 .replace("\\\\", "\\");
-                            println!("{tool_result}");
-                            info!("Web search executed, using {used_len} tokens.");
+                            info!("Web search executed, using {used_len} tokens of {} search results.", used_results.len());
 
                             let mut message: IndexMap<String, MessageContent> = IndexMap::new();
                             message.insert("role".to_string(), Either::Left("tool".to_string()));
