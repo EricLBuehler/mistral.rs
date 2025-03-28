@@ -373,11 +373,24 @@ pub trait QuantizedSerde {
     fn serialize(&self) -> Result<Cow<[u8]>> {
         candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
     }
-    fn deserialize(_data: Cow<[u8]>, _device: &Device) -> Result<Arc<dyn QuantMethod>>
+    fn deserialize(
+        _data: Cow<[u8]>,
+        _device: &Device,
+        _comm: &Arc<crate::Comm>,
+    ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
         candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
+    }
+    fn deserialize_ext_bias(
+        _data: Cow<[u8]>,
+        _device: &Device,
+    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
+    where
+        Self: Sized,
+    {
+        candle_core::bail!("`QuantizedSerde::deserialize_ext_bias` is not supported.")
     }
     /// NOT meant for external calling
     fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<[u8]>> {
@@ -418,6 +431,12 @@ impl QuantizeOntoGuard {
             QuantizeOntoDropGuard::Real(self.0.lock().expect("QuantizeOntoGuard was poisoned!"))
         }
     }
+}
+
+pub enum DistributedKind {
+    ColumnParallel,
+    RowParallel,
+    Replicated,
 }
 
 /// Quantized method for a quantized matmul.
@@ -476,6 +495,10 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// End tracking stats into an ImatrixLayerStats. Returns the computed imatrix.
     fn end_track_stats(&self) -> Result<Tensor> {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
+    }
+
+    fn is_distributed(&self) -> Option<DistributedKind> {
+        None
     }
 }
 

@@ -209,6 +209,9 @@ impl QuantizedSerde for FP8Linear {
         "fp8-linear"
     }
     fn serialize(&self) -> Result<Cow<[u8]>> {
+        self.serialize_with_bias(self.lin.bias().cloned())
+    }
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
         // Version is always first!
@@ -218,7 +221,7 @@ impl QuantizedSerde for FP8Linear {
         buffer.push(QuantizedSerdeType::Fp8 as u8);
 
         // Has bias
-        buffer.push(self.lin.bias().is_some() as u8);
+        buffer.push(bias.is_some() as u8);
 
         // Weight
         serialize_tensor(&mut buffer, self.lin.weight())?;
@@ -233,7 +236,7 @@ impl QuantizedSerde for FP8Linear {
         // DType
         write_dtype(self.dtype, &mut buffer);
 
-        if let Some(bias) = self.lin.bias() {
+        if let Some(bias) = &bias {
             // Bias
             serialize_tensor(&mut buffer, bias)?;
         }
@@ -241,7 +244,11 @@ impl QuantizedSerde for FP8Linear {
         Ok(Cow::from(buffer))
     }
 
-    fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>>
+    fn deserialize(
+        data: Cow<[u8]>,
+        device: &Device,
+        _comm: &Arc<crate::Comm>,
+    ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
@@ -284,5 +291,55 @@ impl QuantizedSerde for FP8Linear {
             quant_scale,
             dtype,
         }))
+    }
+    fn deserialize_ext_bias(
+        data: Cow<[u8]>,
+        device: &Device,
+    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
+    where
+        Self: Sized,
+    {
+        let mut buffer = Cursor::new(data.to_vec());
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Fp8 as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Fp8 as usize
+            );
+        }
+
+        let has_bias = buffer.read_u8()? != 0;
+
+        let w = deserialize_tensor(&mut buffer, device)?;
+
+        let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
+        let dequant_x_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
+        let quant_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
+
+        // DType
+        let dtype = read_dtype(&mut buffer)?;
+
+        let b = if has_bias {
+            Some(deserialize_tensor(&mut buffer, device)?)
+        } else {
+            None
+        };
+
+        Ok((
+            Arc::new(Self {
+                lin: Linear::new(w, None),
+                dequant_w_scale,
+                dequant_x_scale,
+                quant_scale,
+                dtype,
+            }),
+            b,
+        ))
     }
 }
