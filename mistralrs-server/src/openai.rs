@@ -130,6 +130,7 @@ pub struct ChatCompletionRequest {
     #[schema(example = json!(Option::None::<usize>))]
     pub top_logprobs: Option<usize>,
     #[schema(example = 256)]
+    #[serde(alias = "max_completion_tokens")]
     pub max_tokens: Option<usize>,
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
