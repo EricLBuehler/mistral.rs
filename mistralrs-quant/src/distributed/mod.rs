@@ -304,8 +304,7 @@ mod ops {
             // Send the data to the right
             {
                 // Copy the data from x into a Vec<u8> for sending
-                let data =
-                    unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) }.to_vec();
+                let data = unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) };
 
                 let mut right_guard = right.lock().unwrap();
                 right_guard
