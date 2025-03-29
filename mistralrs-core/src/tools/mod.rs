@@ -164,6 +164,9 @@ fn could_be_json<T>(text_prefix: &str) -> (bool, bool)
 where
     T: serde::de::DeserializeOwned,
 {
+    if text_prefix == "" {
+        return (false, false);
+    }
     match serde_json::from_str::<T>(text_prefix) {
         Ok(_) => (false, true),
         // EOF show that JSON parsing was successful up to the end of the entire string.

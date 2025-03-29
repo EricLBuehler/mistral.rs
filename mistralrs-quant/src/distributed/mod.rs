@@ -312,11 +312,15 @@ mod ops {
             let buf = {
                 let mut left_guard = left.lock().unwrap();
                 let mut buf = Vec::with_capacity(nbytes);
+                unsafe {
+                    buf.set_len(nbytes);
+                }
                 left_guard
                     .read_exact(&mut buf)
-                    .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))
-                    .map(|_| buf)?
+                    .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
+                buf
             };
+            assert_ne!(buf.len(), 0);
 
             // Interpret the received bytes as a slice of T and add element-wise into x
             let received: &[T] =
