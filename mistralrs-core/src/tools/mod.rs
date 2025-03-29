@@ -164,7 +164,7 @@ fn could_be_json<T>(text_prefix: &str) -> (bool, bool)
 where
     T: serde::de::DeserializeOwned,
 {
-    if text_prefix == "" {
+    if text_prefix.is_empty() {
         return (false, false);
     }
     match serde_json::from_str::<T>(text_prefix) {

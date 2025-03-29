@@ -182,6 +182,7 @@ mod ops {
 #[cfg(feature = "ring")]
 mod ops {
     use std::{
+        collections::HashMap,
         env,
         io::{Read, Write},
         net::{TcpListener, TcpStream},
@@ -243,6 +244,7 @@ mod ops {
     pub struct SumAllReduce {
         left: Arc<Mutex<TcpStream>>,
         right: Arc<Mutex<TcpStream>>,
+        buffers: Arc<Mutex<HashMap<usize, Vec<u8>>>>,
     }
 
     impl SumAllReduce {
@@ -281,12 +283,15 @@ mod ops {
             Self {
                 left: Arc::new(Mutex::new(left)),
                 right: Arc::new(Mutex::new(right)),
+                buffers: Arc::new(Mutex::new(HashMap::new())),
             }
         }
 
+        /// Send data to the right and receive data from the left.
+        /// This received data is returned as a tensor and should be added to the original data.
         fn run<T: WithDType + Copy + std::ops::AddAssign>(
             &self,
-            mut x: Vec<T>,
+            x: &Vec<T>,
             dims: &[usize],
             device: &Device,
         ) -> Result<Tensor> {
@@ -296,27 +301,35 @@ mod ops {
             let right = self.right.clone();
             let left = self.left.clone();
 
-            // Copy the data from x into a Vec<u8> for sending
-            let data =
-                unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) }.to_vec();
-
             // Send the data to the right
             {
+                // Copy the data from x into a Vec<u8> for sending
+                let data =
+                    unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) }.to_vec();
+
                 let mut right_guard = right.lock().unwrap();
                 right_guard
                     .write_all(&data)
                     .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
             };
 
+            // We save reallocation of buffers here.
+            let mut buffers_guard = self.buffers.lock().unwrap();
+            let buf = {
+                buffers_guard.entry(nbytes).or_insert({
+                    let mut buf = Vec::with_capacity(nbytes);
+                    unsafe {
+                        buf.set_len(nbytes);
+                    }
+                    buf
+                })
+            };
+
             // Receive the data from the left
             let buf = {
                 let mut left_guard = left.lock().unwrap();
-                let mut buf = Vec::with_capacity(nbytes);
-                unsafe {
-                    buf.set_len(nbytes);
-                }
                 left_guard
-                    .read_exact(&mut buf)
+                    .read_exact(buf)
                     .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))?;
                 buf
             };
@@ -325,27 +338,28 @@ mod ops {
             // Interpret the received bytes as a slice of T and add element-wise into x
             let received: &[T] =
                 unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, x.len()) };
-            for (a, b) in x.iter_mut().zip(received.iter()) {
-                *a += *b;
-            }
 
-            Tensor::from_slice(&x, dims, device)
+            Tensor::from_slice(&received, dims, device)
         }
     }
 
     impl super::DistributedOperation for SumAllReduce {
         fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
             let storage = xs.storage_and_layout().0;
-            let Storage::Metal(m) = &*storage else {
-                candle_core::bail!("Expected metal storage for ring backend")
+            let cpu_storage = match &*storage {
+                Storage::Cpu(storage) => storage,
+                Storage::Cuda(storage) => &storage.to_cpu_storage()?,
+                Storage::Metal(storage) => &storage.to_cpu_storage()?,
             };
 
-            match m.to_cpu_storage()? {
-                CpuStorage::BF16(x) => self.run(x, xs.dims(), xs.device()),
-                CpuStorage::F32(x) => self.run(x, xs.dims(), xs.device()),
-                CpuStorage::F16(x) => self.run(x, xs.dims(), xs.device()),
+            let delta = match cpu_storage {
+                CpuStorage::BF16(x) => self.run(x, xs.dims(), xs.device())?,
+                CpuStorage::F32(x) => self.run(x, xs.dims(), xs.device())?,
+                CpuStorage::F16(x) => self.run(x, xs.dims(), xs.device())?,
                 _ => candle_core::bail!("Unsupported dtype for ring backend"),
-            }
+            };
+
+            xs + delta
         }
     }
 }
