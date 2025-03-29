@@ -195,6 +195,7 @@ impl QuantizedSerde for RowParallelLayer {
         data: std::borrow::Cow<[u8]>,
         device: &candle_core::Device,
         comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -202,10 +203,12 @@ impl QuantizedSerde for RowParallelLayer {
         // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
         let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
         let (weight, bias) = match QuantizedSerdeType::try_from(isq_type as usize)? {
-            QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Unquant => UnquantLinear::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device)?,
+            QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Unquant => {
+                UnquantLinear::deserialize_ext_bias(data, device, guard)?
+            }
+            QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device, guard)?,
         };
         Ok(Arc::new(Self {
             weight,
@@ -399,6 +402,7 @@ impl QuantizedSerde for ColumnParallelLayer {
         data: std::borrow::Cow<[u8]>,
         device: &candle_core::Device,
         _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -406,10 +410,12 @@ impl QuantizedSerde for ColumnParallelLayer {
         // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
         let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
         let (weight, bias) = match QuantizedSerdeType::try_from(isq_type as usize)? {
-            QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Unquant => UnquantLinear::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device)?,
-            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device)?,
+            QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Unquant => {
+                UnquantLinear::deserialize_ext_bias(data, device, guard)?
+            }
+            QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device, guard)?,
         };
         Ok(Arc::new(Self { weight, bias }))
     }
@@ -552,6 +558,7 @@ impl QuantizedSerde for ReplicatedLayer {
         data: std::borrow::Cow<[u8]>,
         device: &candle_core::Device,
         comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -559,10 +566,10 @@ impl QuantizedSerde for ReplicatedLayer {
         // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
         let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
         let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
-            QuantizedSerdeType::Gguf => GgufMatMul::deserialize(data, device, comm)?,
-            QuantizedSerdeType::Unquant => UnquantLinear::deserialize(data, device, comm)?,
-            QuantizedSerdeType::Hqq => HqqLayer::deserialize(data, device, comm)?,
-            QuantizedSerdeType::Fp8 => FP8Linear::deserialize(data, device, comm)?,
+            QuantizedSerdeType::Gguf => GgufMatMul::deserialize(data, device, comm, guard)?,
+            QuantizedSerdeType::Unquant => UnquantLinear::deserialize(data, device, comm, guard)?,
+            QuantizedSerdeType::Hqq => HqqLayer::deserialize(data, device, comm, guard)?,
+            QuantizedSerdeType::Fp8 => FP8Linear::deserialize(data, device, comm, guard)?,
         };
         Ok(Arc::new(Self(deserialized)))
     }

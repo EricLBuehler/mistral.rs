@@ -286,6 +286,7 @@ impl QuantizedSerde for BnbLinear {
         _data: Cow<[u8]>,
         _device: &Device,
         _comm: &Arc<crate::Comm>,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,

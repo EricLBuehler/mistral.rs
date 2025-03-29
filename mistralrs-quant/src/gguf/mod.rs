@@ -247,6 +247,7 @@ impl QuantizedSerde for GgufMatMul {
         data: Cow<[u8]>,
         device: &Device,
         _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         let mut buffer = Cursor::new(data);
 
@@ -299,6 +300,7 @@ impl QuantizedSerde for GgufMatMul {
         let mut tensor_data = vec![0; data_len];
         buffer.read_exact(&mut tensor_data)?;
 
+        let _acquired_load_guard = guard.acquire();
         // If we have bias
         let b = if has_bias {
             Some(deserialize_tensor(&mut buffer, device)?)
@@ -315,6 +317,7 @@ impl QuantizedSerde for GgufMatMul {
     fn deserialize_ext_bias(
         data: Cow<[u8]>,
         device: &Device,
+        guard: QuantizeOntoGuard,
     ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)> {
         let mut buffer = Cursor::new(data);
 
@@ -367,6 +370,7 @@ impl QuantizedSerde for GgufMatMul {
         let mut tensor_data = vec![0; data_len];
         buffer.read_exact(&mut tensor_data)?;
 
+        let _acquired_load_guard = guard.acquire();
         // If we have bias
         let b = if has_bias {
             Some(deserialize_tensor(&mut buffer, device)?)

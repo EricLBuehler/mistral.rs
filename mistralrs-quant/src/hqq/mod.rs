@@ -729,6 +729,7 @@ impl QuantizedSerde for HqqLayer {
         data: Cow<[u8]>,
         device: &Device,
         _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -750,6 +751,7 @@ impl QuantizedSerde for HqqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        let _acquired_load_guard = guard.acquire();
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
         let zeros = deserialize_tensor(&mut buffer, device)?;
@@ -800,6 +802,7 @@ impl QuantizedSerde for HqqLayer {
     fn deserialize_ext_bias(
         data: Cow<[u8]>,
         device: &Device,
+        guard: QuantizeOntoGuard,
     ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
     where
         Self: Sized,
@@ -821,6 +824,7 @@ impl QuantizedSerde for HqqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        let _acquired_load_guard = guard.acquire();
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
         let zeros = deserialize_tensor(&mut buffer, device)?;
