@@ -321,14 +321,14 @@ impl Loader for NormalLoader {
         } else {
             device_map::get_all_similar_devices(device)?
         };
-        let device = if use_nccl {
+        let device = if use_nccl || cfg!(feature = "ring") {
             available_devices[0].clone()
         } else {
             device.clone()
         };
 
         // If auto, convert to Map if not using nccl
-        if use_nccl {
+        if use_nccl || cfg!(feature = "ring") {
             mapper = DeviceMapSetting::DummyNccl {
                 nm_device: available_devices[0].clone(),
             };
@@ -486,7 +486,7 @@ impl Loader for NormalLoader {
 
         let multi_progress = Arc::new(MultiProgress::new());
 
-        let mut model = if use_nccl {
+        let mut model = if cfg!(feature = "ring") {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,

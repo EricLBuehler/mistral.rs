@@ -179,7 +179,174 @@ mod ops {
     }
 }
 
-#[cfg(not(all(feature = "cuda", feature = "nccl")))]
+#[cfg(feature = "ring")]
+mod ops {
+    use std::{
+        env,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    };
+
+    use candle_core::{
+        backend::BackendStorage, CpuStorage, Device, Result, Storage, Tensor, WithDType,
+    };
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Id;
+
+    impl Default for Id {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Id {
+        pub fn new() -> Self {
+            Self
+        }
+
+        pub fn uninit(_internal: [::core::ffi::c_char; 128usize]) -> Self {
+            Self
+        }
+
+        pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
+            static ZEROED_ID: [::core::ffi::c_char; 128] = [0; 128];
+            &ZEROED_ID
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Comm;
+
+    impl Comm {
+        pub fn from_device(
+            _id: Id,
+            _dev: &Device,
+            _rank: usize,
+            _world_size: usize,
+        ) -> Result<Self> {
+            Ok(Self)
+        }
+
+        pub fn rank(&self) -> usize {
+            env::var("RING_RANK").unwrap().parse().unwrap()
+        }
+
+        pub fn world_size(&self) -> usize {
+            env::var("RING_WORLD_SIZE").unwrap().parse().unwrap()
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct SumAllReduce {
+        left: Arc<Mutex<TcpStream>>,
+        right: Arc<Mutex<TcpStream>>,
+    }
+
+    impl SumAllReduce {
+        pub fn new(_comm: &Arc<Comm>) -> Self {
+            let cur_port: u16 = env::var("RING_PORT").unwrap().parse().unwrap();
+            let right_port: u16 = env::var("RING_RIGHT").unwrap().parse().unwrap();
+
+            let left_h = std::thread::spawn(move || {
+                let left_listener = TcpListener::bind(format!("127.0.0.1:{cur_port}")).unwrap();
+
+                let (left, _left_addr) = left_listener.accept().unwrap();
+                left
+            });
+            let right_h = std::thread::spawn(move || {
+                let start = Instant::now();
+                loop {
+                    let stream = TcpStream::connect(format!("127.0.0.1:{right_port}"));
+                    if let Ok(stream) = stream {
+                        return stream;
+                    }
+                    if start.elapsed() > Duration::from_secs(10) {
+                        panic!("Failed to connect to right node due to timeout: over 10s");
+                    }
+                }
+            });
+
+            while !left_h.is_finished() || !right_h.is_finished() {}
+            let left = left_h.join().unwrap();
+            let right = right_h.join().unwrap();
+
+            left.set_nodelay(true).unwrap();
+            left.set_nonblocking(false).unwrap();
+            right.set_nodelay(true).unwrap();
+            right.set_nonblocking(false).unwrap();
+
+            Self {
+                left: Arc::new(Mutex::new(left)),
+                right: Arc::new(Mutex::new(right)),
+            }
+        }
+
+        fn run<T: WithDType + Copy + std::ops::AddAssign>(
+            &self,
+            mut x: Vec<T>,
+            dims: &[usize],
+            device: &Device,
+        ) -> Result<Tensor> {
+            let nbytes = x.len() * std::mem::size_of::<T>();
+
+            // Clone the Arc references for use in spawned tasks
+            let right = self.right.clone();
+            let left = self.left.clone();
+
+            // Copy the data from x into a Vec<u8> for sending
+            let data =
+                unsafe { std::slice::from_raw_parts(x.as_ptr() as *const u8, nbytes) }.to_vec();
+
+            // Send the data to the right
+            {
+                let mut right_guard = right.lock().unwrap();
+                right_guard
+                    .write_all(&data)
+                    .map_err(|e| candle_core::Error::msg(format!("write error: {:?}", e)))?;
+            };
+
+            // Receive the data from the left
+            let buf = {
+                let mut left_guard = left.lock().unwrap();
+                let mut buf = Vec::with_capacity(nbytes);
+                left_guard
+                    .read_exact(&mut buf)
+                    .map_err(|e| candle_core::Error::msg(format!("read error: {:?}", e)))
+                    .map(|_| buf)?
+            };
+
+            // Interpret the received bytes as a slice of T and add element-wise into x
+            let received: &[T] =
+                unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const T, x.len()) };
+            for (a, b) in x.iter_mut().zip(received.iter()) {
+                *a += *b;
+            }
+
+            Tensor::from_slice(&x, dims, device)
+        }
+    }
+
+    impl super::DistributedOperation for SumAllReduce {
+        fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
+            let storage = xs.storage_and_layout().0;
+            let Storage::Metal(m) = &*storage else {
+                candle_core::bail!("Expected metal storage for ring backend")
+            };
+
+            match m.to_cpu_storage()? {
+                CpuStorage::BF16(x) => self.run(x, xs.dims(), xs.device()),
+                CpuStorage::F32(x) => self.run(x, xs.dims(), xs.device()),
+                CpuStorage::F16(x) => self.run(x, xs.dims(), xs.device()),
+                _ => candle_core::bail!("Unsupported dtype for ring backend"),
+            }
+        }
+    }
+}
+
+#[cfg(not(any(all(feature = "cuda", feature = "nccl"), feature = "ring")))]
 mod ops {
     use std::sync::Arc;
 
