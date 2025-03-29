@@ -6,7 +6,7 @@ use rand_isaac::Isaac64Rng;
 use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
-    sequence::{Sequence, SequenceRecognizer, StopReason},
+    sequence::{Sequence, SequenceRecognizer, SequenceState, StopReason},
     tools::parse_text_tools,
 };
 
@@ -46,6 +46,26 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             .decode(&[logprobs.token]),
         &is_done,
     );
+
+    // If we can have a tool and we got a tool, stop the sequence early.
+    // Doesn't conflict with the logic below because it does the same thing anyway.
+    if let Some(ref t) = seq.tools {
+        if let Ok(Some(ref d)) = seq.peek_delta() {
+            let (_tool_use_still_possible, tool_use_is_done) =
+                t.prefix_could_be_tool(this, d.as_str())?;
+
+            if tool_use_is_done
+                && matches!(
+                    parse_text_tools(this, d, seq.tools.clone()),
+                    Ok((None, _tools))
+                )
+            {
+                seq.set_state(SequenceState::Done(StopReason::Eos));
+                is_done = Some(StopReason::Eos);
+            }
+        }
+    };
+
     // Handle streaming requests
     if seq.get_mut_group().is_streaming {
         let mut tool_use_still_possible = false;

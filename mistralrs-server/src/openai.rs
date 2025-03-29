@@ -1,6 +1,6 @@
 use either::Either;
 use mistralrs_core::{
-    ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType,
+    ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
@@ -130,6 +130,7 @@ pub struct ChatCompletionRequest {
     #[schema(example = json!(Option::None::<usize>))]
     pub top_logprobs: Option<usize>,
     #[schema(example = 256)]
+    #[serde(alias = "max_completion_tokens")]
     pub max_tokens: Option<usize>,
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
@@ -154,6 +155,8 @@ pub struct ChatCompletionRequest {
     pub tool_choice: Option<ToolChoice>,
     #[schema(example = json!(Option::None::<ResponseFormat>))]
     pub response_format: Option<ResponseFormat>,
+    #[schema(example = json!(Option::None::<WebSearchOptions>))]
+    pub web_search_options: Option<WebSearchOptions>,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]

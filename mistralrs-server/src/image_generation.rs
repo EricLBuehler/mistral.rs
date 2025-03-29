@@ -83,6 +83,7 @@ fn parse_request(
         tools: None,
         logits_processors: None,
         return_raw_logits: false,
+        web_search_options: None,
     }))
 }
 

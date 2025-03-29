@@ -2,7 +2,9 @@
 use candle_core::Device;
 use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
-pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
+pub use engine::{
+    BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+};
 use hf_hub::Cache;
 pub use lora::Ordering;
 pub use pipeline::ModelCategory;
@@ -38,6 +40,7 @@ mod ops;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
+mod search;
 
 mod model_selected;
 pub use model_selected::ModelSelected;
@@ -47,6 +50,7 @@ mod amoe;
 mod cublaslt;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 mod dummy_paged_attention;
+mod embedding;
 mod gguf;
 pub mod layers;
 mod layers_masker;
@@ -93,8 +97,9 @@ pub use pipeline::{
     VisionPromptPrefixer, VisionSpecificConfig,
 };
 pub use request::{
-    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
-    MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
+    ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
+    LlguidanceGrammar, MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
+    WebSearchOptions, WebSearchUserLocation,
 };
 pub use response::*;
 pub use sampler::{
@@ -154,6 +159,7 @@ struct RebootState {
     prefix_cache_n: usize,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
+    search_embedding_model: Option<BertEmbeddingModel>,
 }
 
 #[derive(Debug)]
@@ -190,6 +196,7 @@ pub struct MistralRsBuilder {
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
     throughput_logging_enabled: bool,
+    search_embedding_model: Option<BertEmbeddingModel>,
 }
 
 impl MistralRsBuilder {
@@ -197,6 +204,7 @@ impl MistralRsBuilder {
         pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         method: SchedulerConfig,
         throughput_logging: bool,
+        search_embedding_model: Option<BertEmbeddingModel>,
     ) -> Self {
         Self {
             pipeline,
@@ -208,6 +216,7 @@ impl MistralRsBuilder {
             prefix_cache_n: None,
             disable_eos_stop: None,
             throughput_logging_enabled: throughput_logging,
+            search_embedding_model,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -265,6 +274,7 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
+            search_embedding_model,
         } = config;
 
         let category = pipeline.try_lock().unwrap().category();
@@ -285,6 +295,7 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
+            search_embedding_model: search_embedding_model.clone(),
         };
 
         let (tx, rx) = channel(10_000);
@@ -303,7 +314,7 @@ impl MistralRs {
         let engine_handler = thread::spawn(move || {
             let rt = Runtime::new().unwrap();
             rt.block_on(async move {
-                let mut engine = Engine::new(
+                let engine = Engine::new(
                     rx,
                     pipeline,
                     method,
@@ -313,8 +324,10 @@ impl MistralRs {
                     prefix_cache_n,
                     disable_eos_stop,
                     throughput_logging_enabled,
-                );
-                engine.run().await;
+                    search_embedding_model,
+                )
+                .expect("Engine creation failed.");
+                Arc::new(engine).run().await;
             });
         });
 
@@ -419,6 +432,7 @@ impl MistralRs {
                     tools: None,
                     logits_processors: None,
                     return_raw_logits: false,
+                    web_search_options: None,
                 });
                 info!("Beginning dummy run.");
                 let start = Instant::now();
@@ -475,7 +489,7 @@ impl MistralRs {
             let new_engine_handler = thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
-                    let mut engine = Engine::new(
+                    let engine = Engine::new(
                         rx,
                         reboot_state.pipeline.clone(),
                         reboot_state.method,
@@ -485,8 +499,10 @@ impl MistralRs {
                         reboot_state.prefix_cache_n,
                         reboot_state.disable_eos_stop,
                         reboot_state.throughput_logging_enabled,
-                    );
-                    engine.run().await;
+                        reboot_state.search_embedding_model,
+                    )
+                    .expect("Engine creation failed");
+                    Arc::new(engine).run().await;
                 });
             });
             *sender_lock = new_sender;

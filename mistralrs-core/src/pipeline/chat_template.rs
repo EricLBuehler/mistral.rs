@@ -12,8 +12,9 @@ use tracing::info;
 use crate::{MessageContent, Tool};
 
 const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
-    "<|im_end|>",    // Handle ChatML case
-    "<end_of_turn>", // Handle Gemma2 chat case
+    "<|im_end|>",      // Handle ChatML case
+    "<end_of_turn>",   // Handle Gemma2 chat case
+    "<|end_of_text|>", // Hermes
 ];
 
 #[allow(dead_code)]

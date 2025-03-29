@@ -9,10 +9,10 @@ use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
-    paged_attn_supported, parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
-    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
-    TokenSource,
+    paged_attn_supported, parse_isq_value, BertEmbeddingModel, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, IsqType, Loader, LoaderBuilder,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request,
+    SchedulerConfig, TokenSource,
 };
 use openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
@@ -164,6 +164,18 @@ struct Args {
     /// Use CPU only
     #[arg(long)]
     cpu: bool,
+
+    /// Enable web searching for interactive mode.
+    #[arg(long = "interactive-search")]
+    interactive_search: bool,
+
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
+    #[arg(long = "enable-search")]
+    enable_search: bool,
+
+    /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
+    #[arg(long = "search-bert-model")]
+    search_bert_model: Option<String>,
 }
 
 #[utoipa::path(
@@ -478,16 +490,30 @@ async fn main() -> Result<()> {
             method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         }
     };
+    let bert_model = if args.enable_search {
+        Some(
+            args.search_bert_model
+                .map(BertEmbeddingModel::Custom)
+                .unwrap_or_default(),
+        )
+    } else {
+        None
+    };
     // Throughput logging in the server
-    let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, !args.interactive_mode)
-        .with_opt_log(args.log)
-        .with_truncate_sequence(args.truncate_sequence)
-        .with_no_kv_cache(args.no_kv_cache)
-        .with_prefix_cache_n(args.prefix_cache_n)
-        .build();
+    let mistralrs = MistralRsBuilder::new(
+        pipeline,
+        scheduler_config,
+        !args.interactive_mode,
+        bert_model,
+    )
+    .with_opt_log(args.log)
+    .with_truncate_sequence(args.truncate_sequence)
+    .with_no_kv_cache(args.no_kv_cache)
+    .with_prefix_cache_n(args.prefix_cache_n)
+    .build();
 
     if args.interactive_mode {
-        interactive_mode(mistralrs, args.throughput_log).await;
+        interactive_mode(mistralrs, args.throughput_log, args.interactive_search).await;
         return Ok(());
     }
 

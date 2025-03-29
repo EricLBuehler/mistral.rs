@@ -24,6 +24,7 @@ pub struct VisionModelBuilder {
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) max_edge: Option<u32>,
     pub(crate) hf_cache_path: Option<PathBuf>,
+    pub(crate) search_bert_model: Option<BertEmbeddingModel>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
@@ -46,6 +47,7 @@ impl VisionModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     pub fn new(model_id: impl ToString, loader_type: VisionLoaderType) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -72,7 +74,14 @@ impl VisionModelBuilder {
             throughput_logging: false,
             paged_attn_cfg: None,
             hf_cache_path: None,
+            search_bert_model: None,
         }
+    }
+
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
+    pub fn with_search(mut self, search_bert_model: BertEmbeddingModel) -> Self {
+        self.search_bert_model = Some(search_bert_model);
+        self
     }
 
     /// Enable runner throughput logging.
@@ -273,9 +282,14 @@ impl VisionModelBuilder {
             },
         };
 
-        let runner = MistralRsBuilder::new(pipeline, scheduler_method, self.throughput_logging)
-            .with_no_kv_cache(false)
-            .with_no_prefix_cache(false);
+        let runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            self.throughput_logging,
+            self.search_bert_model,
+        )
+        .with_no_kv_cache(false)
+        .with_no_prefix_cache(false);
 
         Ok(Model::new(runner.build()))
     }

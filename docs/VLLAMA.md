@@ -16,11 +16,13 @@ The Rust API takes an image from the [image](https://docs.rs/image/latest/image/
 > Note: When using device mapping or model topology, only the text model and its layers will be managed. This is because it contains most of the model parameters. *The text model has 40 layers*.
 
 ## ToC
-- [Interactive mode](#interactive-mode)
-- [HTTP server](#http-server)
-- [Rust API](#rust)
-- [Python API](#python)
-- [UQFF models](#uqff-models)
+- [Llama 3.2 Vision Model: `meta-llama/Llama-3.2-11B-Vision-Instruct`](#llama-32-vision-model-meta-llamallama-32-11b-vision-instruct)
+  - [ToC](#toc)
+  - [Interactive mode](#interactive-mode)
+  - [HTTP server](#http-server)
+  - [Rust](#rust)
+  - [Python](#python)
+  - [UQFF models](#uqff-models)
 
 ## Interactive mode
 

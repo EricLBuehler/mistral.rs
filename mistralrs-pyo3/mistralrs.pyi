@@ -1,6 +1,30 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator
+from typing import Iterator, Literal, Optional
+
+from torch import OptionalType
+
+class SearchContextSize(Enum):
+    Low = "low"
+    Medium = "medium"
+    High = "high"
+
+@dataclass
+class ApproximateUserLocation:
+    city: str
+    country: str
+    region: str
+    timezone: str
+
+@dataclass
+class WebSearchUserLocation:
+    type: Literal["approximate"]
+    approximate: ApproximateUserLocation
+
+@dataclass
+class WebSearchOptions:
+    search_context_size: Optional[SearchContextSize]
+    user_location: Optional[WebSearchUserLocation]
 
 @dataclass
 class ToolChoice(Enum):
@@ -39,6 +63,7 @@ class ChatCompletionRequest:
     min_p: float | None = None
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
+    web_search_options: WebSearchOptions | None = None
 
 @dataclass
 class CompletionRequest:
@@ -300,6 +325,8 @@ class Runner:
         paged_attn: bool = False,
         prompt_batchsize: int | None = None,
         seed: int | None = None,
+        search_bert_model: str | None = None,
+        no_bert_model: bool = False,
     ) -> None:
         """
         Load a model.
@@ -340,6 +367,8 @@ class Runner:
         - `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
         - `prompt_batchsize` Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
         - `seed`, used to ensure reproducible random number generation.
+        - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
+        - `search_bert_model`: specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
         """
         ...
 

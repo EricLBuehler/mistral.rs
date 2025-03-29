@@ -220,7 +220,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
 
                 let image_bounds = {
                     let im_start_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             self.config
                                 .im_start_token
                                 .clone()
@@ -230,7 +230,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         .unwrap()
                         .get_ids()[0];
                     let im_end_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             self.config
                                 .im_end_token
                                 .clone()
@@ -240,7 +240,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         .unwrap()
                         .get_ids()[0];
                     let slice_start_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             self.config
                                 .slice_start_token
                                 .clone()
@@ -250,7 +250,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         .unwrap()
                         .get_ids()[0];
                     let slice_end_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             self.config
                                 .slice_end_token
                                 .clone()
@@ -261,7 +261,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         .get_ids()[0];
 
                     let input_ids = tokenizer
-                        .encode(final_text, false)
+                        .encode_fast(final_text, false)
                         .unwrap()
                         .get_ids()
                         .to_vec();

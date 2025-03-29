@@ -95,6 +95,7 @@ impl GgufXLoraModelBuilder {
             pipeline,
             scheduler_method,
             self.gguf_model.throughput_logging,
+            self.gguf_model.search_bert_model,
         )
         .with_no_kv_cache(self.gguf_model.no_kv_cache)
         .with_no_prefix_cache(self.gguf_model.prefix_cache_n.is_none());
