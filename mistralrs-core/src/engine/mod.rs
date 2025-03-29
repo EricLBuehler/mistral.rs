@@ -529,8 +529,10 @@ impl Engine {
                 }
             }
             Request::Normal(request) => {
-                if matches!(request.messages, RequestMessage::Chat { .. })
-                    && request.web_search_options.is_some()
+                if matches!(
+                    request.messages,
+                    RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
+                ) && request.web_search_options.is_some()
                     && !request.is_streaming
                     && get_mut_arcmutex!(self.bert_pipeline).is_some()
                 {

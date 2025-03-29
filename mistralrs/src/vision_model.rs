@@ -79,8 +79,8 @@ impl VisionModelBuilder {
     }
 
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
-    pub fn set_search_bert_model(mut self, search_bert_model: Option<BertEmbeddingModel>) -> Self {
-        self.search_bert_model = search_bert_model;
+    pub fn with_search(mut self, search_bert_model: BertEmbeddingModel) -> Self {
+        self.search_bert_model = Some(search_bert_model);
         self
     }
 
