@@ -117,6 +117,12 @@ impl QuantMethod for UnquantLinear {
                     }
                 }
             }
+        } else if let (Device::Cuda(_), Some(cublaslt)) =
+            (a.device(), *CUBLASLT_HANDLE.lock().unwrap())
+        {
+            cublaslt
+                .batch_matmul(a, &w, None, None, None, None, None)?
+                .t()
         } else {
             MatMul.matmul(a, &w.t()?)
         }
