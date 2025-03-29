@@ -567,7 +567,30 @@
 <a href="#566" id="566">566</a>
 <a href="#567" id="567">567</a>
 <a href="#568" id="568">568</a>
-<a href="#569" id="569">569</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#569" id="569">569</a>
+<a href="#570" id="570">570</a>
+<a href="#571" id="571">571</a>
+<a href="#572" id="572">572</a>
+<a href="#573" id="573">573</a>
+<a href="#574" id="574">574</a>
+<a href="#575" id="575">575</a>
+<a href="#576" id="576">576</a>
+<a href="#577" id="577">577</a>
+<a href="#578" id="578">578</a>
+<a href="#579" id="579">579</a>
+<a href="#580" id="580">580</a>
+<a href="#581" id="581">581</a>
+<a href="#582" id="582">582</a>
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
@@ -942,11 +965,24 @@
     <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
         <span class="macro">candle_core::bail!</span>(<span class="string">"`QuantizedSerde::serialize` is not supported."</span>)
     }
-    <span class="kw">fn </span>deserialize(_data: Cow&lt;[u8]&gt;, _device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
+    <span class="kw">fn </span>deserialize(
+        _data: Cow&lt;[u8]&gt;,
+        _device: <span class="kw-2">&amp;</span>Device,
+        _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
     {
         <span class="macro">candle_core::bail!</span>(<span class="string">"`QuantizedSerde::deserialize` is not supported."</span>)
+    }
+    <span class="kw">fn </span>deserialize_ext_bias(
+        _data: Cow&lt;[u8]&gt;,
+        _device: <span class="kw-2">&amp;</span>Device,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt;
+    <span class="kw">where
+        </span><span class="self">Self</span>: Sized,
+    {
+        <span class="macro">candle_core::bail!</span>(<span class="string">"`QuantizedSerde::deserialize_ext_bias` is not supported."</span>)
     }
     <span class="doccomment">/// NOT meant for external calling
     </span><span class="kw">fn </span>serialize_with_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, _bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
@@ -989,6 +1025,12 @@
     }
 }
 
+<span class="kw">pub enum </span>DistributedKind {
+    ColumnParallel,
+    RowParallel,
+    Replicated,
+}
+
 <span class="doccomment">/// Quantized method for a quantized matmul.
 </span><span class="kw">pub trait </span>QuantMethod: Send + Sync + Debug + QuantizedSerde {
     <span class="kw">fn </span>new(method: QuantMethodConfig) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt;
@@ -998,7 +1040,7 @@
     <span class="kw">fn </span>dequantize_w(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
 
     <span class="doccomment">/// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// Automatically cast to required quantization actiation type and back
+    /// Automatically cast to required quantization activation type and back
     </span><span class="kw">fn </span>forward_autocast(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="kw">let </span>original_ty = a.dtype();
         <span class="kw">let </span>a = <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.quantized_act_type() {
@@ -1046,6 +1088,10 @@
     </span><span class="kw">fn </span>end_track_stats(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
         <span class="macro">candle_core::bail!</span>(<span class="string">"`{}` does not support tracking stats."</span>, <span class="self">self</span>.name())
     }
+
+    <span class="kw">fn </span>is_distributed(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DistributedKind&gt; {
+        <span class="prelude-val">None
+    </span>}
 }
 
 <span class="kw">impl </span>Module <span class="kw">for dyn </span>QuantMethod {

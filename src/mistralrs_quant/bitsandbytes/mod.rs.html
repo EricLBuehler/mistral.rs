@@ -289,7 +289,11 @@
 <a href="#288" id="288">288</a>
 <a href="#289" id="289">289</a>
 <a href="#290" id="290">290</a>
-<a href="#291" id="291">291</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#291" id="291">291</a>
+<a href="#292" id="292">292</a>
+<a href="#293" id="293">293</a>
+<a href="#294" id="294">294</a>
+<a href="#295" id="295">295</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
@@ -573,7 +577,11 @@
         <span class="macro">todo!</span>()
     }
 
-    <span class="kw">fn </span>deserialize(_data: Cow&lt;[u8]&gt;, _device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
+    <span class="kw">fn </span>deserialize(
+        _data: Cow&lt;[u8]&gt;,
+        _device: <span class="kw-2">&amp;</span>Device,
+        _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
     {

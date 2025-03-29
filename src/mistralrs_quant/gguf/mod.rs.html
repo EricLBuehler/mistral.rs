@@ -352,7 +352,85 @@
 <a href="#351" id="351">351</a>
 <a href="#352" id="352">352</a>
 <a href="#353" id="353">353</a>
-<a href="#354" id="354">354</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#354" id="354">354</a>
+<a href="#355" id="355">355</a>
+<a href="#356" id="356">356</a>
+<a href="#357" id="357">357</a>
+<a href="#358" id="358">358</a>
+<a href="#359" id="359">359</a>
+<a href="#360" id="360">360</a>
+<a href="#361" id="361">361</a>
+<a href="#362" id="362">362</a>
+<a href="#363" id="363">363</a>
+<a href="#364" id="364">364</a>
+<a href="#365" id="365">365</a>
+<a href="#366" id="366">366</a>
+<a href="#367" id="367">367</a>
+<a href="#368" id="368">368</a>
+<a href="#369" id="369">369</a>
+<a href="#370" id="370">370</a>
+<a href="#371" id="371">371</a>
+<a href="#372" id="372">372</a>
+<a href="#373" id="373">373</a>
+<a href="#374" id="374">374</a>
+<a href="#375" id="375">375</a>
+<a href="#376" id="376">376</a>
+<a href="#377" id="377">377</a>
+<a href="#378" id="378">378</a>
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a>
+<a href="#383" id="383">383</a>
+<a href="#384" id="384">384</a>
+<a href="#385" id="385">385</a>
+<a href="#386" id="386">386</a>
+<a href="#387" id="387">387</a>
+<a href="#388" id="388">388</a>
+<a href="#389" id="389">389</a>
+<a href="#390" id="390">390</a>
+<a href="#391" id="391">391</a>
+<a href="#392" id="392">392</a>
+<a href="#393" id="393">393</a>
+<a href="#394" id="394">394</a>
+<a href="#395" id="395">395</a>
+<a href="#396" id="396">396</a>
+<a href="#397" id="397">397</a>
+<a href="#398" id="398">398</a>
+<a href="#399" id="399">399</a>
+<a href="#400" id="400">400</a>
+<a href="#401" id="401">401</a>
+<a href="#402" id="402">402</a>
+<a href="#403" id="403">403</a>
+<a href="#404" id="404">404</a>
+<a href="#405" id="405">405</a>
+<a href="#406" id="406">406</a>
+<a href="#407" id="407">407</a>
+<a href="#408" id="408">408</a>
+<a href="#409" id="409">409</a>
+<a href="#410" id="410">410</a>
+<a href="#411" id="411">411</a>
+<a href="#412" id="412">412</a>
+<a href="#413" id="413">413</a>
+<a href="#414" id="414">414</a>
+<a href="#415" id="415">415</a>
+<a href="#416" id="416">416</a>
+<a href="#417" id="417">417</a>
+<a href="#418" id="418">418</a>
+<a href="#419" id="419">419</a>
+<a href="#420" id="420">420</a>
+<a href="#421" id="421">421</a>
+<a href="#422" id="422">422</a>
+<a href="#423" id="423">423</a>
+<a href="#424" id="424">424</a>
+<a href="#425" id="425">425</a>
+<a href="#426" id="426">426</a>
+<a href="#427" id="427">427</a>
+<a href="#428" id="428">428</a>
+<a href="#429" id="429">429</a>
+<a href="#430" id="430">430</a>
+<a href="#431" id="431">431</a>
+<a href="#432" id="432">432</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::{Cursor, Read},
     num::NonZeroUsize,
@@ -531,6 +609,9 @@
         <span class="string">"gguf"
     </span>}
     <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
+        <span class="self">self</span>.serialize_with_bias(<span class="self">self</span>.b.clone())
+    }
+    <span class="kw">fn </span>serialize_with_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.w {
             QMatMul::QTensor(qw) =&gt; {
                 <span class="kw">let </span>w = qw.data()<span class="question-mark">?</span>.to_vec();
@@ -566,7 +647,7 @@
                 </span>buffer.extend(<span class="kw-2">&amp;</span>(w.len() <span class="kw">as </span>u32).to_le_bytes());
 
                 <span class="comment">// Has bias
-                </span>buffer.push(<span class="self">self</span>.b.is_some() <span class="kw">as </span>u8);
+                </span>buffer.push(bias.is_some() <span class="kw">as </span>u8);
 
                 <span class="comment">// Dtype (u32)
                 </span>buffer.extend(<span class="kw-2">&amp;</span>dtype.to_le_bytes());
@@ -587,14 +668,18 @@
             }
         };
 
-        <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = <span class="self">self</span>.b.as_ref() {
+        <span class="kw">if let </span><span class="prelude-val">Some</span>(b) = bias.as_ref() {
             serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, b)<span class="question-mark">?</span>;
         }
 
         <span class="prelude-val">Ok</span>(Cow::from(buffer))
     }
 
-    <span class="kw">fn </span>deserialize(data: Cow&lt;[u8]&gt;, device: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+    <span class="kw">fn </span>deserialize(
+        data: Cow&lt;[u8]&gt;,
+        device: <span class="kw-2">&amp;</span>Device,
+        _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
 
         <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
@@ -658,6 +743,77 @@
             w: QMatMul::QTensor(w.into()),
             b,
         }))
+    }
+    <span class="kw">fn </span>deserialize_ext_bias(
+        data: Cow&lt;[u8]&gt;,
+        device: <span class="kw-2">&amp;</span>Device,
+    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
+        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
+
+        <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
+        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
+            <span class="kw">return </span><span class="prelude-val">Err</span>(candle_core::Error::wrap(e));
+        }
+
+        <span class="kw">let </span>isq_type = buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize;
+        <span class="kw">if </span>isq_type != QuantizedSerdeType::Gguf <span class="kw">as </span>usize {
+            <span class="macro">candle_core::bail!</span>(
+                <span class="string">"ISQ type ({isq_type}) doesn't match expected type {}"</span>,
+                QuantizedSerdeType::Gguf <span class="kw">as </span>usize
+            );
+        }
+
+        <span class="kw">let </span>data_len = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
+
+        <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+
+        <span class="comment">// TODO: keep this in sync with get_isq_type_from_uqff!
+        </span><span class="kw">let </span>dtype = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
+        <span class="kw">let </span>dtype = <span class="kw">match </span>dtype {
+            <span class="number">0 </span>=&gt; GgmlDType::F32,
+            <span class="number">1 </span>=&gt; GgmlDType::F16,
+            <span class="number">2 </span>=&gt; GgmlDType::Q4_0,
+            <span class="number">3 </span>=&gt; GgmlDType::Q4_1,
+            <span class="number">6 </span>=&gt; GgmlDType::Q5_0,
+            <span class="number">7 </span>=&gt; GgmlDType::Q5_1,
+            <span class="number">8 </span>=&gt; GgmlDType::Q8_0,
+            <span class="number">9 </span>=&gt; GgmlDType::Q8_1,
+            <span class="number">10 </span>=&gt; GgmlDType::Q2K,
+            <span class="number">11 </span>=&gt; GgmlDType::Q3K,
+            <span class="number">12 </span>=&gt; GgmlDType::Q4K,
+            <span class="number">13 </span>=&gt; GgmlDType::Q5K,
+            <span class="number">14 </span>=&gt; GgmlDType::Q6K,
+            <span class="number">15 </span>=&gt; GgmlDType::Q8K,
+            <span class="comment">// https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
+            </span><span class="number">30 </span>=&gt; GgmlDType::BF16,
+            <span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"unknown dtype for quantized weight tensor {dtype}"</span>),
+        };
+
+        <span class="kw">let </span>n_dims = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
+
+        <span class="kw">let </span><span class="kw-2">mut </span>dims = Vec::with_capacity(n_dims);
+        <span class="kw">for _ in </span><span class="number">0</span>..n_dims {
+            dims.push(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)
+        }
+
+        <span class="kw">let </span><span class="kw-2">mut </span>tensor_data = <span class="macro">vec!</span>[<span class="number">0</span>; data_len];
+        buffer.read_exact(<span class="kw-2">&amp;mut </span>tensor_data)<span class="question-mark">?</span>;
+
+        <span class="comment">// If we have bias
+        </span><span class="kw">let </span>b = <span class="kw">if </span>has_bias {
+            <span class="prelude-val">Some</span>(deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>)
+        } <span class="kw">else </span>{
+            <span class="prelude-val">None
+        </span>};
+
+        <span class="kw">let </span>w = qtensor_from_ggml(dtype, <span class="kw-2">&amp;</span>tensor_data, dims, device)<span class="question-mark">?</span>;
+        <span class="prelude-val">Ok</span>((
+            Arc::new(<span class="self">Self </span>{
+                w: QMatMul::QTensor(w.into()),
+                b: <span class="prelude-val">None</span>,
+            }),
+            b,
+        ))
     }
 }
 
