@@ -394,7 +394,7 @@
     waiting: Backer,
 }
 
-<span class="kw">pub trait </span>BucketingManager&lt;Backer: FcfsBacker&gt; {
+<span class="kw">pub trait </span>BucketingManager&lt;Backer: FcfsBacker&gt;: Send + Sync {
     <span class="doccomment">/// Bucket and waitlist running input sequences, returning the newly running sequences.
     </span><span class="kw">fn </span>bucket_and_waitlist_seqs_waiting(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,

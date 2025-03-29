@@ -148,7 +148,8 @@
 <a href="#147" id="147">147</a>
 <a href="#148" id="148">148</a>
 <a href="#149" id="149">149</a>
-<a href="#150" id="150">150</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#150" id="150">150</a>
+<a href="#151" id="151">151</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>std::{error::Error, sync::Arc};
 <span class="kw">use </span>tokio::sync::mpsc::{channel, Sender};
 
@@ -233,6 +234,7 @@
         tools: <span class="prelude-val">None</span>,
         logits_processors: <span class="prelude-val">None</span>,
         return_raw_logits: <span class="bool-val">false</span>,
+        web_search_options: <span class="prelude-val">None</span>,
     }))
 }
 

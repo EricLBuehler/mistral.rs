@@ -1160,7 +1160,7 @@
 
             <span class="comment">// Create cross attn mask
             </span><span class="kw">let </span>image_token_id = tokenizer
-                .encode(IMAGE_TOKEN, <span class="bool-val">false</span>)
+                .encode_fast(IMAGE_TOKEN, <span class="bool-val">false</span>)
                 .unwrap()
                 .get_ids()
                 .to_vec();

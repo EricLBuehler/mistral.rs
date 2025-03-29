@@ -320,7 +320,8 @@
 <a href="#319" id="319">319</a>
 <a href="#320" id="320">320</a>
 <a href="#321" id="321">321</a>
-<a href="#322" id="322">322</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
+<a href="#322" id="322">322</a>
+<a href="#323" id="323">323</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::collections::HashMap;
 
 <span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>either::Either;
@@ -334,8 +335,9 @@
 <span class="kw">use crate</span>::{MessageContent, Tool};
 
 <span class="kw">const </span>SUPPORTED_ALTERNATE_EOS: <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;</span>str] = <span class="kw-2">&amp;</span>[
-    <span class="string">"&lt;|im_end|&gt;"</span>,    <span class="comment">// Handle ChatML case
-    </span><span class="string">"&lt;end_of_turn&gt;"</span>, <span class="comment">// Handle Gemma2 chat case
+    <span class="string">"&lt;|im_end|&gt;"</span>,      <span class="comment">// Handle ChatML case
+    </span><span class="string">"&lt;end_of_turn&gt;"</span>,   <span class="comment">// Handle Gemma2 chat case
+    </span><span class="string">"&lt;|end_of_text|&gt;"</span>, <span class="comment">// Hermes
 </span>];
 
 <span class="attr">#[allow(dead_code)]

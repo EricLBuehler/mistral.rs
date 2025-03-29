@@ -582,7 +582,9 @@
 <a href="#581" id="581">581</a>
 <a href="#582" id="582">582</a>
 <a href="#583" id="583">583</a>
-<a href="#584" id="584">584</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>clap::Parser;
 <span class="kw">use </span>cli_table::{format::Justify, print_stdout, Cell, CellStruct, Style, Table};
 <span class="kw">use </span>mistralrs_core::{
@@ -668,6 +670,7 @@
         tool_choice: <span class="prelude-val">None</span>,
         logits_processors: <span class="prelude-val">None</span>,
         return_raw_logits: <span class="bool-val">false</span>,
+        web_search_options: <span class="prelude-val">None</span>,
     });
 
     <span class="kw">let </span><span class="kw-2">mut </span>usages = Vec::new();
@@ -839,6 +842,7 @@
         tool_choice: <span class="prelude-val">None</span>,
         logits_processors: <span class="prelude-val">None</span>,
         return_raw_logits: <span class="bool-val">false</span>,
+        web_search_options: <span class="prelude-val">None</span>,
     });
 
     sender
@@ -1119,7 +1123,7 @@
             ),
         }
     };
-    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, <span class="bool-val">false</span>)
+    <span class="kw">let </span>mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, <span class="bool-val">false</span>, <span class="prelude-val">None</span>)
         .with_no_prefix_cache(<span class="bool-val">true</span>)
         .with_disable_eos_stop(<span class="bool-val">true</span>)
         .build();

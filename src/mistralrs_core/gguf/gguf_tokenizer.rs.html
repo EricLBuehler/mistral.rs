@@ -1025,7 +1025,7 @@
         add_special_tokens: bool,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
         <span class="kw">let </span>tokenized = tokenizer
-            .encode(passage, add_special_tokens)
+            .encode_fast(passage, add_special_tokens)
             .map_err(anyhow::Error::msg)<span class="question-mark">?</span>;
 
         <span class="comment">// NOTE: The special tokens bool param meaning differs between encode() / decode():

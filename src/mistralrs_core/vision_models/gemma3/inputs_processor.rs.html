@@ -635,7 +635,7 @@
 
                 seq.set_initial_prompt(prompt.clone());
                 <span class="kw">let </span>toks = tokenizer
-                    .encode(prompt, <span class="bool-val">false</span>)
+                    .encode_fast(prompt, <span class="bool-val">false</span>)
                     .expect(<span class="string">"Detokenization failed!"</span>);
 
                 <span class="kw">let </span>ids = toks.get_ids().to_vec();

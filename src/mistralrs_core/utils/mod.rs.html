@@ -417,7 +417,7 @@
                 // - The sequence is gone
                 // - We should reset the state then, including draft.
                 </span>p.set_none_cache(<span class="macro-nonterminal">$seq_slice</span>, <span class="bool-val">true</span>, <span class="bool-val">true</span>, <span class="bool-val">false</span>);
-                <span class="macro-nonterminal">$prefix_cacher</span>.evict_all_to_cpu().unwrap();
+                <span class="macro">get_mut_arcmutex!</span>(<span class="macro-nonterminal">$prefix_cacher</span>).evict_all_to_cpu().unwrap();
 
                 <span class="kw">continue </span><span class="macro-nonterminal">$label</span>;
             }

@@ -326,7 +326,21 @@
 <a href="#325" id="325">325</a>
 <a href="#326" id="326">326</a>
 <a href="#327" id="327">327</a>
-<a href="#328" id="328">328</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#328" id="328">328</a>
+<a href="#329" id="329">329</a>
+<a href="#330" id="330">330</a>
+<a href="#331" id="331">331</a>
+<a href="#332" id="332">332</a>
+<a href="#333" id="333">333</a>
+<a href="#334" id="334">334</a>
+<a href="#335" id="335">335</a>
+<a href="#336" id="336">336</a>
+<a href="#337" id="337">337</a>
+<a href="#338" id="338">338</a>
+<a href="#339" id="339">339</a>
+<a href="#340" id="340">340</a>
+<a href="#341" id="341">341</a>
+<a href="#342" id="342">342</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::{
     num::NonZeroUsize,
     ops::{Deref, DerefMut},
@@ -352,6 +366,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapSetting&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) search_bert_model: <span class="prelude-ty">Option</span>&lt;BertEmbeddingModel&gt;,
 
     <span class="comment">// Model running
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) use_flash_attn: bool,
@@ -374,6 +389,7 @@
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     </span><span class="kw">pub fn </span>new(model_id: <span class="kw">impl </span>ToString, loader_type: VisionLoaderType) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             model_id: model_id.to_string(),
@@ -400,8 +416,15 @@
             throughput_logging: <span class="bool-val">false</span>,
             paged_attn_cfg: <span class="prelude-val">None</span>,
             hf_cache_path: <span class="prelude-val">None</span>,
+            search_bert_model: <span class="prelude-val">None</span>,
         }
     }
+
+    <span class="doccomment">/// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
+    </span><span class="kw">pub fn </span>with_search(<span class="kw-2">mut </span><span class="self">self</span>, search_bert_model: BertEmbeddingModel) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.search_bert_model = <span class="prelude-val">Some</span>(search_bert_model);
+        <span class="self">self
+    </span>}
 
     <span class="doccomment">/// Enable runner throughput logging.
     </span><span class="kw">pub fn </span>with_throughput_logging(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
@@ -601,9 +624,14 @@
             },
         };
 
-        <span class="kw">let </span>runner = MistralRsBuilder::new(pipeline, scheduler_method, <span class="self">self</span>.throughput_logging)
-            .with_no_kv_cache(<span class="bool-val">false</span>)
-            .with_no_prefix_cache(<span class="bool-val">false</span>);
+        <span class="kw">let </span>runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            <span class="self">self</span>.throughput_logging,
+            <span class="self">self</span>.search_bert_model,
+        )
+        .with_no_kv_cache(<span class="bool-val">false</span>)
+        .with_no_prefix_cache(<span class="bool-val">false</span>);
 
         <span class="prelude-val">Ok</span>(Model::new(runner.build()))
     }

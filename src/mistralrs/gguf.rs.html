@@ -233,7 +233,21 @@
 <a href="#232" id="232">232</a>
 <a href="#233" id="233">233</a>
 <a href="#234" id="234">234</a>
-<a href="#235" id="235">235</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#235" id="235">235</a>
+<a href="#236" id="236">236</a>
+<a href="#237" id="237">237</a>
+<a href="#238" id="238">238</a>
+<a href="#239" id="239">239</a>
+<a href="#240" id="240">240</a>
+<a href="#241" id="241">241</a>
+<a href="#242" id="242">242</a>
+<a href="#243" id="243">243</a>
+<a href="#244" id="244">244</a>
+<a href="#245" id="245">245</a>
+<a href="#246" id="246">246</a>
+<a href="#247" id="247">247</a>
+<a href="#248" id="248">248</a>
+<a href="#249" id="249">249</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 <span class="kw">use </span>std::num::NonZeroUsize;
 
 <span class="kw">use crate</span>::{best_device, Model};
@@ -250,6 +264,7 @@
     <span class="kw">pub</span>(<span class="kw">crate</span>) jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
     <span class="kw">pub</span>(<span class="kw">crate</span>) device_mapping: <span class="prelude-ty">Option</span>&lt;DeviceMapSetting&gt;,
+    <span class="kw">pub</span>(<span class="kw">crate</span>) search_bert_model: <span class="prelude-ty">Option</span>&lt;BertEmbeddingModel&gt;,
 
     <span class="comment">// Model running
     </span><span class="kw">pub</span>(<span class="kw">crate</span>) prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
@@ -271,6 +286,7 @@
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     </span><span class="kw">pub fn </span>new(model_id: <span class="kw">impl </span>ToString, files: Vec&lt;<span class="kw">impl </span>ToString&gt;) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             model_id: model_id.to_string(),
@@ -291,8 +307,15 @@
             device_mapping: <span class="prelude-val">None</span>,
             jinja_explicit: <span class="prelude-val">None</span>,
             throughput_logging: <span class="bool-val">false</span>,
+            search_bert_model: <span class="prelude-val">None</span>,
         }
     }
+
+    <span class="doccomment">/// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
+    </span><span class="kw">pub fn </span>with_search(<span class="kw-2">mut </span><span class="self">self</span>, search_bert_model: BertEmbeddingModel) -&gt; <span class="self">Self </span>{
+        <span class="self">self</span>.search_bert_model = <span class="prelude-val">Some</span>(search_bert_model);
+        <span class="self">self
+    </span>}
 
     <span class="doccomment">/// Enable runner throughput logging.
     </span><span class="kw">pub fn </span>with_throughput_logging(<span class="kw-2">mut </span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
@@ -457,9 +480,14 @@
             },
         };
 
-        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(pipeline, scheduler_method, <span class="self">self</span>.throughput_logging)
-            .with_no_kv_cache(<span class="self">self</span>.no_kv_cache)
-            .with_no_prefix_cache(<span class="self">self</span>.prefix_cache_n.is_none());
+        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            <span class="self">self</span>.throughput_logging,
+            <span class="self">self</span>.search_bert_model,
+        )
+        .with_no_kv_cache(<span class="self">self</span>.no_kv_cache)
+        .with_no_prefix_cache(<span class="self">self</span>.prefix_cache_n.is_none());
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

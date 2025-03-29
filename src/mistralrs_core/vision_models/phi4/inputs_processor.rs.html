@@ -906,7 +906,7 @@
 
             seq.set_toks_and_reallocate(
                 tokenizer
-                    .encode(detokenized.clone(), <span class="bool-val">false</span>)
+                    .encode_fast(detokenized.clone(), <span class="bool-val">false</span>)
                     .expect(<span class="string">"Encode failed"</span>)
                     .get_ids()
                     .to_vec(),

@@ -271,9 +271,12 @@
 <a href="#270" id="270">270</a>
 <a href="#271" id="271">271</a>
 <a href="#272" id="272">272</a>
-<a href="#273" id="273">273</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
+<a href="#273" id="273">273</a>
+<a href="#274" id="274">274</a>
+<a href="#275" id="275">275</a>
+<a href="#276" id="276">276</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>mistralrs_core::{
-    ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType,
+    ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType, WebSearchOptions,
 };
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 <span class="kw">use </span>std::{collections::HashMap, ops::Deref};
@@ -403,6 +406,7 @@
     <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;usize&gt;))]
     </span><span class="kw">pub </span>top_logprobs: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="attr">#[schema(example = <span class="number">256</span>)]
+    #[serde(alias = <span class="string">"max_completion_tokens"</span>)]
     </span><span class="kw">pub </span>max_tokens: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     <span class="attr">#[serde(rename = <span class="string">"n"</span>)]
     #[serde(default = <span class="string">"default_1usize"</span>)]
@@ -427,6 +431,8 @@
     </span><span class="kw">pub </span>tool_choice: <span class="prelude-ty">Option</span>&lt;ToolChoice&gt;,
     <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;ResponseFormat&gt;))]
     </span><span class="kw">pub </span>response_format: <span class="prelude-ty">Option</span>&lt;ResponseFormat&gt;,
+    <span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;WebSearchOptions&gt;))]
+    </span><span class="kw">pub </span>web_search_options: <span class="prelude-ty">Option</span>&lt;WebSearchOptions&gt;,
 
     <span class="comment">// mistral.rs additional
     </span><span class="attr">#[schema(example = <span class="macro">json!</span>(Option::None::&lt;usize&gt;))]

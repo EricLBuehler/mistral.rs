@@ -1068,14 +1068,14 @@
                 seq.set_initial_prompt(detok.clone());
 
                 <span class="kw">let </span>toks = tokenizer
-                    .encode(detok, <span class="bool-val">false</span>)
+                    .encode_fast(detok, <span class="bool-val">false</span>)
                     .expect(<span class="string">"Detokenization failed!"</span>);
 
                 <span class="kw">let </span>ids = toks.get_ids().to_vec();
                 all_ids.push(ids.clone());
 
                 <span class="kw">let </span>img_pad = tokenizer
-                    .encode(Qwen2_5VLProcessor::IMAGE_PAD, <span class="bool-val">false</span>)
+                    .encode_fast(Qwen2_5VLProcessor::IMAGE_PAD, <span class="bool-val">false</span>)
                     .expect(<span class="string">"Detokenization failed!"</span>)
                     .get_ids()
                     .to_vec();
@@ -1083,7 +1083,7 @@
                 all_continuous_img_pad.push(continuous_img_pad);
 
                 <span class="kw">let </span>vid_pad = tokenizer
-                    .encode(Qwen2_5VLProcessor::VIDEO_PAD, <span class="bool-val">false</span>)
+                    .encode_fast(Qwen2_5VLProcessor::VIDEO_PAD, <span class="bool-val">false</span>)
                     .expect(<span class="string">"Detokenization failed!"</span>)
                     .get_ids()
                     .to_vec();
@@ -1120,7 +1120,7 @@
                 );
 
                 <span class="kw">let </span>ids = tokenizer
-                    .encode(prompt, <span class="bool-val">false</span>)
+                    .encode_fast(prompt, <span class="bool-val">false</span>)
                     .expect(<span class="string">"Tokenization failed!"</span>);
 
                 input_ids_searching.push(ids.get_ids().to_vec());

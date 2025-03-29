@@ -58,9 +58,17 @@
 <a href="#57" id="57">57</a>
 <a href="#58" id="58">58</a>
 <a href="#59" id="59">59</a>
-<a href="#60" id="60">60</a></pre></div><pre class="rust"><code><span class="kw">mod </span>default_scheduler;
+<a href="#60" id="60">60</a>
+<a href="#61" id="61">61</a>
+<a href="#62" id="62">62</a>
+<a href="#63" id="63">63</a>
+<a href="#64" id="64">64</a>
+<a href="#65" id="65">65</a></pre></div><pre class="rust"><code><span class="kw">mod </span>default_scheduler;
+
+<span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">pub use </span>default_scheduler::{DefaultScheduler, DefaultSchedulerMethod, DefaultSchedulerOutput};
+<span class="kw">use </span>tokio::sync::Mutex;
 
 <span class="kw">use crate</span>::{
     paged_attention::{
@@ -82,16 +90,18 @@
 }
 
 <span class="kw">impl </span>SchedulerConfig {
-    <span class="kw">pub fn </span>into_scheduler(<span class="self">self</span>) -&gt; Box&lt;<span class="kw">dyn </span>Scheduler&gt; {
+    <span class="kw">pub fn </span>into_scheduler(<span class="self">self</span>) -&gt; Arc&lt;Mutex&lt;<span class="kw">dyn </span>Scheduler&gt;&gt; {
         <span class="kw">match </span><span class="self">self </span>{
-            <span class="self">Self</span>::DefaultScheduler { method } =&gt; Box::new(DefaultScheduler::new(method)),
+            <span class="self">Self</span>::DefaultScheduler { method } =&gt; {
+                Arc::new(Mutex::new(DefaultScheduler::new(method)))
+            }
             <span class="self">Self</span>::PagedAttentionMeta {
                 max_num_seqs,
                 config,
-            } =&gt; Box::new(PagedAttentionScheduler::new(
+            } =&gt; Arc::new(Mutex::new(PagedAttentionScheduler::new(
                 PagedAttentionSchedulerConfig { max_num_seqs },
                 config,
-            )),
+            ))),
         }
     }
 }
@@ -105,7 +115,7 @@
     },
 }
 
-<span class="kw">pub trait </span>Scheduler {
+<span class="kw">pub trait </span>Scheduler: Send + Sync {
     <span class="kw">fn </span>schedule(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; SchedulerOutput&lt;<span class="lifetime">'_</span>&gt;;
     <span class="kw">fn </span>waiting_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;
     <span class="kw">fn </span>running_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize;

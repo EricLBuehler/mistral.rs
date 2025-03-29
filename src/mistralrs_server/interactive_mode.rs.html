@@ -656,12 +656,19 @@
 <a href="#655" id="655">655</a>
 <a href="#656" id="656">656</a>
 <a href="#657" id="657">657</a>
-<a href="#658" id="658">658</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
+<a href="#658" id="658">658</a>
+<a href="#659" id="659">659</a>
+<a href="#660" id="660">660</a>
+<a href="#661" id="661">661</a>
+<a href="#662" id="662">662</a>
+<a href="#663" id="663">663</a>
+<a href="#664" id="664">664</a></pre></div><pre class="rust"><code><span class="kw">use </span>either::Either;
 <span class="kw">use </span>indexmap::IndexMap;
 <span class="kw">use </span>mistralrs_core::{
     ChunkChoice, Constraint, Delta, DiffusionGenerationParams, DrySamplingParams,
     ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory, NormalRequest,
-    Request, RequestMessage, Response, ResponseOk, SamplingParams, TERMINATE_ALL_NEXT_STEP,
+    Request, RequestMessage, Response, ResponseOk, SamplingParams, WebSearchOptions,
+    TERMINATE_ALL_NEXT_STEP,
 };
 <span class="kw">use </span>once_cell::sync::Lazy;
 <span class="kw">use </span>regex::Regex;
@@ -687,11 +694,13 @@
 <span class="kw">static </span>CTRLC_HANDLER: Lazy&lt;Mutex&lt;<span class="kw-2">&amp;</span><span class="lifetime">'static </span>(<span class="kw">dyn </span>Fn() + Sync)&gt;&gt; =
     Lazy::new(|| Mutex::new(<span class="kw-2">&amp;</span>exit_handler));
 
-<span class="kw">pub async fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, throughput: bool) {
+<span class="kw">pub async fn </span>interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, throughput: bool, do_search: bool) {
     <span class="kw">match </span>mistralrs.get_model_category() {
-        ModelCategory::Text =&gt; text_interactive_mode(mistralrs, throughput).<span class="kw">await</span>,
-        ModelCategory::Vision { .. } =&gt; vision_interactive_mode(mistralrs, throughput).<span class="kw">await</span>,
-        ModelCategory::Diffusion =&gt; diffusion_interactive_mode(mistralrs).<span class="kw">await</span>,
+        ModelCategory::Text =&gt; text_interactive_mode(mistralrs, throughput, do_search).<span class="kw">await</span>,
+        ModelCategory::Vision { .. } =&gt; {
+            vision_interactive_mode(mistralrs, throughput, do_search).<span class="kw">await
+        </span>}
+        ModelCategory::Diffusion =&gt; diffusion_interactive_mode(mistralrs, do_search).<span class="kw">await</span>,
     }
 }
 
@@ -736,7 +745,7 @@ Commands:
 <span class="kw">const </span>SYSTEM_CMD: <span class="kw-2">&amp;</span>str = <span class="string">"\\system"</span>;
 <span class="kw">const </span>IMAGE_CMD: <span class="kw-2">&amp;</span>str = <span class="string">"\\image"</span>;
 
-<span class="kw">async fn </span>text_interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, throughput: bool) {
+<span class="kw">async fn </span>text_interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, throughput: bool, do_search: bool) {
     <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
     <span class="kw">let </span><span class="kw-2">mut </span>messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt; = Vec::new();
 
@@ -835,6 +844,7 @@ Commands:
             tools: <span class="prelude-val">None</span>,
             logits_processors: <span class="prelude-val">None</span>,
             return_raw_logits: <span class="bool-val">false</span>,
+            web_search_options: do_search.then(WebSearchOptions::default),
         });
         sender.send(req).<span class="kw">await</span>.unwrap();
 
@@ -927,7 +937,7 @@ Commands:
     <span class="prelude-val">None
 </span>}
 
-<span class="kw">async fn </span>vision_interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, throughput: bool) {
+<span class="kw">async fn </span>vision_interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, throughput: bool, do_search: bool) {
     <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
     <span class="kw">let </span><span class="kw-2">mut </span>messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt; = Vec::new();
     <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
@@ -1066,6 +1076,7 @@ Commands:
             tools: <span class="prelude-val">None</span>,
             logits_processors: <span class="prelude-val">None</span>,
             return_raw_logits: <span class="bool-val">false</span>,
+            web_search_options: do_search.then(WebSearchOptions::default),
         });
         sender.send(req).<span class="kw">await</span>.unwrap();
 
@@ -1132,7 +1143,7 @@ Commands:
     }
 }
 
-<span class="kw">async fn </span>diffusion_interactive_mode(mistralrs: Arc&lt;MistralRs&gt;) {
+<span class="kw">async fn </span>diffusion_interactive_mode(mistralrs: Arc&lt;MistralRs&gt;, do_search: bool) {
     <span class="kw">let </span>sender = mistralrs.get_sender().unwrap();
 
     <span class="kw">let </span>diffusion_params = DiffusionGenerationParams::default();
@@ -1199,6 +1210,7 @@ Commands:
             tools: <span class="prelude-val">None</span>,
             logits_processors: <span class="prelude-val">None</span>,
             return_raw_logits: <span class="bool-val">false</span>,
+            web_search_options: do_search.then(WebSearchOptions::default),
         });
 
         <span class="kw">let </span>start = Instant::now();

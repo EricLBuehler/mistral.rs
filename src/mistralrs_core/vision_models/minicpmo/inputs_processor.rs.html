@@ -987,7 +987,7 @@
 
                 <span class="kw">let </span>image_bounds = {
                     <span class="kw">let </span>im_start_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             <span class="self">self</span>.config
                                 .im_start_token
                                 .clone()
@@ -997,7 +997,7 @@
                         .unwrap()
                         .get_ids()[<span class="number">0</span>];
                     <span class="kw">let </span>im_end_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             <span class="self">self</span>.config
                                 .im_end_token
                                 .clone()
@@ -1007,7 +1007,7 @@
                         .unwrap()
                         .get_ids()[<span class="number">0</span>];
                     <span class="kw">let </span>slice_start_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             <span class="self">self</span>.config
                                 .slice_start_token
                                 .clone()
@@ -1017,7 +1017,7 @@
                         .unwrap()
                         .get_ids()[<span class="number">0</span>];
                     <span class="kw">let </span>slice_end_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             <span class="self">self</span>.config
                                 .slice_end_token
                                 .clone()
@@ -1028,7 +1028,7 @@
                         .get_ids()[<span class="number">0</span>];
 
                     <span class="kw">let </span>input_ids = tokenizer
-                        .encode(final_text, <span class="bool-val">false</span>)
+                        .encode_fast(final_text, <span class="bool-val">false</span>)
                         .unwrap()
                         .get_ids()
                         .to_vec();

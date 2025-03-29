@@ -319,7 +319,8 @@
 <a href="#318" id="318">318</a>
 <a href="#319" id="319">319</a>
 <a href="#320" id="320">320</a>
-<a href="#321" id="321">321</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
+<a href="#321" id="321">321</a>
+<a href="#322" id="322">322</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Result;
 <span class="kw">use </span>std::{
     env,
     error::Error,
@@ -552,6 +553,7 @@
             tools: oairequest.tools,
             logits_processors: <span class="prelude-val">None</span>,
             return_raw_logits: <span class="bool-val">false</span>,
+            web_search_options: <span class="prelude-val">None</span>,
         }),
         is_streaming,
     ))

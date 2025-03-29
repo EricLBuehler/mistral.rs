@@ -744,7 +744,7 @@
                 .map(|s| {
                     <span class="comment">// we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
                     </span>tokenizer
-                        .encode(<span class="kw-2">*</span>s, <span class="bool-val">false</span>)
+                        .encode_fast(<span class="kw-2">*</span>s, <span class="bool-val">false</span>)
                         .unwrap()
                         .get_ids()
                         .to_vec()

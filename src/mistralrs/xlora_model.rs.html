@@ -112,7 +112,8 @@
 <a href="#111" id="111">111</a>
 <a href="#112" id="112">112</a>
 <a href="#113" id="113">113</a>
-<a href="#114" id="114">114</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
+<a href="#114" id="114">114</a>
+<a href="#115" id="115">115</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
 
 <span class="kw">use crate</span>::{best_device, Model, TextModelBuilder};
 
@@ -215,6 +216,7 @@
             pipeline,
             scheduler_method,
             <span class="self">self</span>.text_model.throughput_logging,
+            <span class="self">self</span>.text_model.search_bert_model,
         )
         .with_no_kv_cache(<span class="self">self</span>.text_model.no_kv_cache)
         .with_no_prefix_cache(<span class="self">self</span>.text_model.prefix_cache_n.is_none());

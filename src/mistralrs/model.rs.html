@@ -296,7 +296,11 @@
 <a href="#295" id="295">295</a>
 <a href="#296" id="296">296</a>
 <a href="#297" id="297">297</a>
-<a href="#298" id="298">298</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Context;
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a>
+<a href="#302" id="302">302</a></pre></div><pre class="rust"><code><span class="kw">use </span>anyhow::Context;
 <span class="kw">use </span>candle_core::{Device, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>either::Either;
 <span class="kw">use </span>mistralrs_core::<span class="kw-2">*</span>;
@@ -387,6 +391,7 @@
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: <span class="bool-val">false</span>,
+            web_search_options: request.take_web_search_options(),
         });
 
         <span class="self">self</span>.runner.get_sender()<span class="question-mark">?</span>.send(request).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -422,6 +427,7 @@
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: <span class="bool-val">false</span>,
+            web_search_options: request.take_web_search_options(),
         });
 
         <span class="self">self</span>.runner.get_sender()<span class="question-mark">?</span>.send(request).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -466,6 +472,7 @@
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: <span class="bool-val">true</span>,
+            web_search_options: request.take_web_search_options(),
         });
 
         <span class="self">self</span>.runner.get_sender()<span class="question-mark">?</span>.send(request).<span class="kw">await</span><span class="question-mark">?</span>;
@@ -511,6 +518,7 @@
             tools: <span class="prelude-val">None</span>,
             logits_processors: <span class="prelude-val">None</span>,
             return_raw_logits: <span class="bool-val">false</span>,
+            web_search_options: <span class="prelude-val">None</span>,
         });
 
         <span class="self">self</span>.runner.get_sender()<span class="question-mark">?</span>.send(request).<span class="kw">await</span><span class="question-mark">?</span>;

@@ -124,7 +124,11 @@
 <a href="#123" id="123">123</a>
 <a href="#124" id="124">124</a>
 <a href="#125" id="125">125</a>
-<a href="#126" id="126">126</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::{
+<a href="#126" id="126">126</a>
+<a href="#127" id="127">127</a>
+<a href="#128" id="128">128</a>
+<a href="#129" id="129">129</a>
+<a href="#130" id="130">130</a></pre></div><pre class="rust"><code><span class="kw">use </span>mistralrs_core::{
     initialize_logging, AnyMoeConfig, AnyMoeLoader, AutoDeviceMapParams, DefaultSchedulerMethod,
     DeviceMapSetting, Loader, MistralRsBuilder, NormalLoaderBuilder, NormalSpecificConfig,
     SchedulerConfig,
@@ -238,10 +242,14 @@
             },
         };
 
-        <span class="kw">let </span><span class="kw-2">mut </span>runner =
-            MistralRsBuilder::new(pipeline, scheduler_method, <span class="self">self</span>.base.throughput_logging)
-                .with_no_kv_cache(<span class="self">self</span>.base.no_kv_cache)
-                .with_no_prefix_cache(<span class="self">self</span>.base.prefix_cache_n.is_none());
+        <span class="kw">let </span><span class="kw-2">mut </span>runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            <span class="self">self</span>.base.throughput_logging,
+            <span class="self">self</span>.base.search_bert_model,
+        )
+        .with_no_kv_cache(<span class="self">self</span>.base.no_kv_cache)
+        .with_no_prefix_cache(<span class="self">self</span>.base.prefix_cache_n.is_none());
 
         <span class="kw">if let </span><span class="prelude-val">Some</span>(n) = <span class="self">self</span>.base.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

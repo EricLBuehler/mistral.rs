@@ -581,11 +581,29 @@
 <a href="#580" id="580">580</a>
 <a href="#581" id="581">581</a>
 <a href="#582" id="582">582</a>
-<a href="#583" id="583">583</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href="#583" id="583">583</a>
+<a href="#584" id="584">584</a>
+<a href="#585" id="585">585</a>
+<a href="#586" id="586">586</a>
+<a href="#587" id="587">587</a>
+<a href="#588" id="588">588</a>
+<a href="#589" id="589">589</a>
+<a href="#590" id="590">590</a>
+<a href="#591" id="591">591</a>
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a>
+<a href="#595" id="595">595</a>
+<a href="#596" id="596">596</a>
+<a href="#597" id="597">597</a>
+<a href="#598" id="598">598</a>
+<a href="#599" id="599">599</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>candle_core::Device;
 <span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
 <span class="kw">use </span>engine::Engine;
-<span class="kw">pub use </span>engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
+<span class="kw">pub use </span>engine::{
+    BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+};
 <span class="kw">use </span>hf_hub::Cache;
 <span class="kw">pub use </span>lora::Ordering;
 <span class="kw">pub use </span>pipeline::ModelCategory;
@@ -621,6 +639,7 @@
 <span class="kw">pub use </span>model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
+<span class="kw">mod </span>search;
 
 <span class="kw">mod </span>model_selected;
 <span class="kw">pub use </span>model_selected::ModelSelected;
@@ -630,6 +649,7 @@
 <span class="kw">mod </span>cublaslt;
 <span class="attr">#[cfg(not(any(all(feature = <span class="string">"cuda"</span>, target_family = <span class="string">"unix"</span>), feature = <span class="string">"metal"</span>)))]
 </span><span class="kw">mod </span>dummy_paged_attention;
+<span class="kw">mod </span>embedding;
 <span class="kw">mod </span>gguf;
 <span class="kw">pub mod </span>layers;
 <span class="kw">mod </span>layers_masker;
@@ -676,8 +696,9 @@
     VisionPromptPrefixer, VisionSpecificConfig,
 };
 <span class="kw">pub use </span>request::{
-    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
-    MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
+    ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
+    LlguidanceGrammar, MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
+    WebSearchOptions, WebSearchUserLocation,
 };
 <span class="kw">pub use </span>response::<span class="kw-2">*</span>;
 <span class="kw">pub use </span>sampler::{
@@ -737,6 +758,7 @@
     prefix_cache_n: usize,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
+    search_embedding_model: <span class="prelude-ty">Option</span>&lt;BertEmbeddingModel&gt;,
 }
 
 <span class="attr">#[derive(Debug)]
@@ -773,6 +795,7 @@
     prefix_cache_n: <span class="prelude-ty">Option</span>&lt;usize&gt;,
     disable_eos_stop: <span class="prelude-ty">Option</span>&lt;bool&gt;,
     throughput_logging_enabled: bool,
+    search_embedding_model: <span class="prelude-ty">Option</span>&lt;BertEmbeddingModel&gt;,
 }
 
 <span class="kw">impl </span>MistralRsBuilder {
@@ -780,6 +803,7 @@
         pipeline: Arc&lt;tokio::sync::Mutex&lt;<span class="kw">dyn </span>Pipeline&gt;&gt;,
         method: SchedulerConfig,
         throughput_logging: bool,
+        search_embedding_model: <span class="prelude-ty">Option</span>&lt;BertEmbeddingModel&gt;,
     ) -&gt; <span class="self">Self </span>{
         <span class="self">Self </span>{
             pipeline,
@@ -791,6 +815,7 @@
             prefix_cache_n: <span class="prelude-val">None</span>,
             disable_eos_stop: <span class="prelude-val">None</span>,
             throughput_logging_enabled: throughput_logging,
+            search_embedding_model,
         }
     }
     <span class="kw">pub fn </span>with_log(<span class="kw-2">mut </span><span class="self">self</span>, log: String) -&gt; <span class="self">Self </span>{
@@ -848,6 +873,7 @@
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
+            search_embedding_model,
         } = config;
 
         <span class="kw">let </span>category = pipeline.try_lock().unwrap().category();
@@ -868,6 +894,7 @@
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
+            search_embedding_model: search_embedding_model.clone(),
         };
 
         <span class="kw">let </span>(tx, rx) = channel(<span class="number">10_000</span>);
@@ -886,7 +913,7 @@
         <span class="kw">let </span>engine_handler = thread::spawn(<span class="kw">move </span>|| {
             <span class="kw">let </span>rt = Runtime::new().unwrap();
             rt.block_on(<span class="kw">async move </span>{
-                <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(
+                <span class="kw">let </span>engine = Engine::new(
                     rx,
                     pipeline,
                     method,
@@ -896,8 +923,10 @@
                     prefix_cache_n,
                     disable_eos_stop,
                     throughput_logging_enabled,
-                );
-                engine.run().<span class="kw">await</span>;
+                    search_embedding_model,
+                )
+                .expect(<span class="string">"Engine creation failed."</span>);
+                Arc::new(engine).run().<span class="kw">await</span>;
             });
         });
 
@@ -1002,6 +1031,7 @@
                     tools: <span class="prelude-val">None</span>,
                     logits_processors: <span class="prelude-val">None</span>,
                     return_raw_logits: <span class="bool-val">false</span>,
+                    web_search_options: <span class="prelude-val">None</span>,
                 });
                 <span class="macro">info!</span>(<span class="string">"Beginning dummy run."</span>);
                 <span class="kw">let </span>start = Instant::now();
@@ -1058,7 +1088,7 @@
             </span><span class="kw">let </span>new_engine_handler = thread::spawn(<span class="kw">move </span>|| {
                 <span class="kw">let </span>rt = Runtime::new().unwrap();
                 rt.block_on(<span class="kw">async move </span>{
-                    <span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(
+                    <span class="kw">let </span>engine = Engine::new(
                         rx,
                         reboot_state.pipeline.clone(),
                         reboot_state.method,
@@ -1068,8 +1098,10 @@
                         reboot_state.prefix_cache_n,
                         reboot_state.disable_eos_stop,
                         reboot_state.throughput_logging_enabled,
-                    );
-                    engine.run().<span class="kw">await</span>;
+                        reboot_state.search_embedding_model,
+                    )
+                    .expect(<span class="string">"Engine creation failed"</span>);
+                    Arc::new(engine).run().<span class="kw">await</span>;
                 });
             });
             <span class="kw-2">*</span>sender_lock = new_sender;

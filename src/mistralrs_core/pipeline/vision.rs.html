@@ -1533,7 +1533,7 @@
             <span class="kw">let </span>calibration_data = std::fs::read_to_string(calibration_file)<span class="question-mark">?</span>;
             <span class="comment">// Tokenize, don't add bos yet
             </span><span class="kw">let </span>tokens = tokenizer
-                .encode(calibration_data, <span class="bool-val">false</span>)
+                .encode_fast(calibration_data, <span class="bool-val">false</span>)
                 .map_err(anyhow::Error::msg)<span class="question-mark">?
                 </span>.get_ids()
                 .to_vec();
