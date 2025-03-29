@@ -340,6 +340,7 @@ impl QuantizedSerde for UnquantLinear {
         data: Cow<[u8]>,
         device: &Device,
         _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -361,6 +362,7 @@ impl QuantizedSerde for UnquantLinear {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        let _acquired_load_guard = guard.acquire();
         let w = deserialize_tensor(&mut buffer, device)?;
 
         let b = if has_bias {
@@ -374,6 +376,7 @@ impl QuantizedSerde for UnquantLinear {
     fn deserialize_ext_bias(
         data: Cow<[u8]>,
         device: &Device,
+        guard: QuantizeOntoGuard,
     ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
     where
         Self: Sized,
@@ -395,6 +398,7 @@ impl QuantizedSerde for UnquantLinear {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        let _acquired_load_guard = guard.acquire();
         let w = deserialize_tensor(&mut buffer, device)?;
 
         let b = if has_bias {

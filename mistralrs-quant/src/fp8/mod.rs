@@ -248,6 +248,7 @@ impl QuantizedSerde for FP8Linear {
         data: Cow<[u8]>,
         device: &Device,
         _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -271,6 +272,7 @@ impl QuantizedSerde for FP8Linear {
 
         let w = deserialize_tensor(&mut buffer, device)?;
 
+        let _acquired_load_guard = guard.acquire();
         let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
         let dequant_x_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
         let quant_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
@@ -295,6 +297,7 @@ impl QuantizedSerde for FP8Linear {
     fn deserialize_ext_bias(
         data: Cow<[u8]>,
         device: &Device,
+        guard: QuantizeOntoGuard,
     ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
     where
         Self: Sized,
@@ -316,6 +319,7 @@ impl QuantizedSerde for FP8Linear {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        let _acquired_load_guard = guard.acquire();
         let w = deserialize_tensor(&mut buffer, device)?;
 
         let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;

@@ -377,6 +377,7 @@ pub trait QuantizedSerde {
         _data: Cow<[u8]>,
         _device: &Device,
         _comm: &Arc<crate::Comm>,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
@@ -386,6 +387,7 @@ pub trait QuantizedSerde {
     fn deserialize_ext_bias(
         _data: Cow<[u8]>,
         _device: &Device,
+        _guard: QuantizeOntoGuard,
     ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
     where
         Self: Sized,

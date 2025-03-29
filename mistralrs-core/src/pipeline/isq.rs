@@ -747,6 +747,8 @@ pub trait IsqModel {
 
         let t_start = Instant::now();
 
+        let guard = QuantizeOntoGuard::new();
+
         if silent {
             (0..tensors.len())
                 .into_par_iter()
@@ -762,17 +764,20 @@ pub trait IsqModel {
                                     Cow::from(artifact),
                                     &devices[i],
                                     &comm,
+                                    guard.clone(),
                                 )?
                             }
                             Some(DistributedKind::RowParallel) => RowParallelLayer::deserialize(
                                 Cow::from(artifact),
                                 &devices[i],
                                 &comm,
+                                guard.clone(),
                             )?,
                             Some(DistributedKind::Replicated) => ReplicatedLayer::deserialize(
                                 Cow::from(artifact),
                                 &devices[i],
                                 &comm,
+                                guard.clone(),
                             )?,
                             None => {
                                 // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
@@ -782,21 +787,25 @@ pub trait IsqModel {
                                         Cow::from(artifact),
                                         &devices[i],
                                         &comm,
+                                        guard.clone(),
                                     )?,
                                     QuantizedSerdeType::Unquant => UnquantLinear::deserialize(
                                         Cow::from(artifact),
                                         &devices[i],
                                         &comm,
+                                        guard.clone(),
                                     )?,
                                     QuantizedSerdeType::Hqq => HqqLayer::deserialize(
                                         Cow::from(artifact),
                                         &devices[i],
                                         &comm,
+                                        guard.clone(),
                                     )?,
                                     QuantizedSerdeType::Fp8 => FP8Linear::deserialize(
                                         Cow::from(artifact),
                                         &devices[i],
                                         &comm,
+                                        guard.clone(),
                                     )?,
                                 }
                             }
@@ -822,17 +831,20 @@ pub trait IsqModel {
                                     Cow::from(artifact),
                                     &devices[i],
                                     &comm,
+                                    guard.clone(),
                                 )?
                             }
                             Some(DistributedKind::RowParallel) => RowParallelLayer::deserialize(
                                 Cow::from(artifact),
                                 &devices[i],
                                 &comm,
+                                guard.clone(),
                             )?,
                             Some(DistributedKind::Replicated) => ReplicatedLayer::deserialize(
                                 Cow::from(artifact),
                                 &devices[i],
                                 &comm,
+                                guard.clone(),
                             )?,
                             None => {
                                 // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
@@ -842,21 +854,25 @@ pub trait IsqModel {
                                         Cow::from(artifact),
                                         &devices[i],
                                         &comm,
+                                        guard.clone(),
                                     )?,
                                     QuantizedSerdeType::Unquant => UnquantLinear::deserialize(
                                         Cow::from(artifact),
                                         &devices[i],
                                         &comm,
+                                        guard.clone(),
                                     )?,
                                     QuantizedSerdeType::Hqq => HqqLayer::deserialize(
                                         Cow::from(artifact),
                                         &devices[i],
                                         &comm,
+                                        guard.clone(),
                                     )?,
                                     QuantizedSerdeType::Fp8 => FP8Linear::deserialize(
                                         Cow::from(artifact),
                                         &devices[i],
                                         &comm,
+                                        guard.clone(),
                                     )?,
                                 }
                             }
