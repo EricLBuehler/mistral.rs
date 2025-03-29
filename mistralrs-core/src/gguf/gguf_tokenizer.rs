@@ -461,7 +461,7 @@ mod tests {
         add_special_tokens: bool,
     ) -> Result<String> {
         let tokenized = tokenizer
-            .encode(passage, add_special_tokens)
+            .encode_fast(passage, add_special_tokens)
             .map_err(anyhow::Error::msg)?;
 
         // NOTE: The special tokens bool param meaning differs between encode() / decode():

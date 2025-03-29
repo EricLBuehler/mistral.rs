@@ -281,7 +281,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
                 .map(|s| {
                     // we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
                     tokenizer
-                        .encode(*s, false)
+                        .encode_fast(*s, false)
                         .unwrap()
                         .get_ids()
                         .to_vec()

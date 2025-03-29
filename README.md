@@ -31,6 +31,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
+- 🔍🌐 Easily add web search capabilities to your models! Compatible with OpenAI's `web_search_options` parameter: [documentation](docs/WEB_SEARCH.md)
+
+    ```
+    ./mistralrs-server --enable-search --port 1234 --isq q4k plain -m NousResearch/Hermes-3-Llama-3.1-8B
+    ```
+
 - 💎💎💎 Run the entire **Gemma 3** Model family (1b, 4b, 12b, 27b) with 128k context length and vision support: [documentation](docs/GEMMA3.md)
 
     ```
@@ -128,7 +134,7 @@ Mistral.rs supports several model categories:
 - First X-LoRA inference platform with first class support
 - [AnyMoE](docs/ANYMOE.md): Build a memory-efficient MoE model from anything, in seconds
 - Various [sampling and penalty](docs/SAMPLING.mds) methods
-- Native tool calling support for Llama, Mistral Small, Mistral Nemo, and Hermes models: [docs](docs/TOOL_CALLING.md)
+- Native tool calling support for Llama, Mistral Small, Mistral Nemo, Hermes, and DeepSeek models: [docs](docs/TOOL_CALLING.md)
 - Prompt chunking: process large prompts in a more manageable way
 
 **Advanced features**:
@@ -139,6 +145,7 @@ Mistral.rs supports several model categories:
 - [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 - Speculative Decoding: Mix supported models as the draft model or the target model
 - Dynamic LoRA adapter activation with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
+- Integrated agentic web search capabilities, enabling models to easily access the internet.
 
 **Documentation for mistral.rs can be found [here](docs/README.md).**
 

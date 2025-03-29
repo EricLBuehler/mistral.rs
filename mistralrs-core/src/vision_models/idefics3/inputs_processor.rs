@@ -196,7 +196,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
 
                 seq.set_initial_prompt(sample.clone());
                 let toks = tokenizer
-                    .encode(sample, false)
+                    .encode_fast(sample, false)
                     .expect("Detokenization failed!");
 
                 let ids = toks.get_ids().to_vec();

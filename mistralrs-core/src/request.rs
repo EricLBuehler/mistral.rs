@@ -62,6 +62,44 @@ fn default_responder<T>() -> Sender<T> {
     sender
 }
 
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub enum SearchContextSize {
+    #[serde(rename = "low")]
+    Low,
+    #[default]
+    #[serde(rename = "medium")]
+    Medium,
+    #[serde(rename = "high")]
+    High,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ApproximateUserLocation {
+    pub city: String,
+    pub country: String,
+    pub region: String,
+    pub timezone: String,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum WebSearchUserLocation {
+    #[serde(rename = "approximate")]
+    Approximate {
+        approximate: ApproximateUserLocation,
+    },
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct WebSearchOptions {
+    pub search_context_size: Option<SearchContextSize>,
+    pub user_location: Option<WebSearchUserLocation>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 /// A normal request request to the `MistralRs`.
 /// - `messages`: Messages for the request
@@ -98,6 +136,7 @@ pub struct NormalRequest {
     #[serde(skip)]
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
+    pub web_search_options: Option<WebSearchOptions>,
 }
 
 impl NormalRequest {
@@ -123,6 +162,7 @@ impl NormalRequest {
             adapters: None,
             logits_processors: None,
             return_raw_logits: false,
+            web_search_options: None,
         }
     }
 }

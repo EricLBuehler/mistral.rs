@@ -1,37 +1,46 @@
-use candle_core::Tensor;
-use either::Either;
-use interprocess::local_socket::{traits::Listener, ListenerOptions};
-use llguidance::toktrie::TokEnv;
-use logger::IntervalLogger;
-use once_cell::sync::Lazy;
-use std::{
-    collections::HashMap,
-    io::{BufWriter, Write},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-use tokio::sync::{mpsc::Receiver, Mutex};
-
 use crate::{
     distributed,
+    embedding::bert::BertPipeline,
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
         AdapterInstruction, CacheBackendMetadata, CacheInstruction, NormalCache,
     },
     prefix_cacher::PrefixCacheManagerV2,
-    request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
+    request::{DetokenizationRequest, NormalRequest, SearchContextSize, TokenizationRequest},
     response::CompletionChoice,
     scheduler::{Scheduler, SchedulerOutput},
+    search::{self, SearchFunctionParameters, SearchResult},
     sequence::{SeqStepType, StopReason},
     tools::{ToolCallingMatcher, ToolChoice},
-    CompletionResponse, RequestMessage, Response, SchedulerConfig, DEBUG,
+    CompletionResponse, MessageContent, RequestMessage, Response, ResponseOk, SchedulerConfig,
+    DEBUG,
 };
+use candle_core::Tensor;
+use either::Either;
+use indexmap::IndexMap;
+use interprocess::local_socket::{traits::Listener, ListenerOptions};
+use llguidance::toktrie::TokEnv;
+use logger::IntervalLogger;
+use once_cell::sync::Lazy;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    io::{BufWriter, Write},
+    ops::Deref,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use tokenizers::InputSequence;
+use tokio::{
+    sync::{mpsc::Receiver, Mutex},
+    task::JoinHandle,
+};
 use tracing::{info, warn};
 
 use crate::{
@@ -50,6 +59,14 @@ pub enum EngineInstruction {
     Terminate,
 }
 
+#[derive(Debug, Default, Clone)]
+/// Embedding model used for ranking web search results internally.
+pub enum BertEmbeddingModel {
+    #[default]
+    SnowflakeArcticEmbedL,
+    Custom(String),
+}
+
 const SEED: u64 = 0;
 /// Terminate all sequences on the next scheduling step. Be sure to reset this.
 pub static TERMINATE_ALL_NEXT_STEP: AtomicBool = AtomicBool::new(false);
@@ -59,17 +76,27 @@ pub static ENGINE_INSTRUCTIONS: Lazy<std::sync::Mutex<HashMap<usize, Option<Engi
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
 pub struct Engine {
-    rx: Receiver<Request>,
+    rx: Arc<Mutex<Receiver<Request>>>,
     pipeline: Arc<Mutex<dyn Pipeline>>,
-    scheduler: Box<dyn Scheduler>,
-    id: usize,
+    bert_pipeline: Arc<Mutex<Option<BertPipeline>>>,
+    scheduler: Arc<Mutex<dyn Scheduler>>,
+    id: Arc<Mutex<usize>>,
     truncate_sequence: bool,
     no_kv_cache: bool,
-    prefix_cacher: PrefixCacheManagerV2,
+    prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
     logger: IntervalLogger,
+    handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        for handle in &*get_mut_arcmutex!(self.handles) {
+            handle.abort();
+        }
+    }
 }
 
 impl Engine {
@@ -84,29 +111,43 @@ impl Engine {
         prefix_cache_n: usize,
         disable_eos_stop: bool,
         throughput_logging_enabled: bool,
-    ) -> Self {
+        search_embedding_model: Option<BertEmbeddingModel>,
+    ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
         no_prefix_cache = matches!(config, SchedulerConfig::PagedAttentionMeta { .. })
             || no_prefix_cache
             || no_kv_cache;
 
-        Self {
-            rx,
+        let bert_pipeline = match search_embedding_model {
+            Some(search_embedding_model) => Some(BertPipeline::new(
+                search_embedding_model,
+                &get_mut_arcmutex!(pipeline).device(),
+            )?),
+            None => None,
+        };
+
+        Ok(Self {
+            rx: Arc::new(Mutex::new(rx)),
             pipeline,
+            bert_pipeline: Arc::new(Mutex::new(bert_pipeline)),
             scheduler: config.into_scheduler(),
-            id: 0,
+            id: Arc::new(Mutex::new(0)),
             truncate_sequence,
             no_kv_cache,
-            prefix_cacher: PrefixCacheManagerV2::new(prefix_cache_n, no_prefix_cache),
+            prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
+                prefix_cache_n,
+                no_prefix_cache,
+            ))),
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
             logger: IntervalLogger::new(Duration::from_secs(5)),
-        }
+            handles: Arc::new(Mutex::new(Vec::new())),
+        })
     }
 
-    pub async fn run(&mut self) {
+    pub async fn run(self: Arc<Self>) {
         if self.throughput_logging_enabled {
             self.logger.enable_logging();
         }
@@ -118,19 +159,19 @@ impl Engine {
                 ENGINE_INSTRUCTIONS
                     .lock()
                     .expect("`ENGINE_INSTRUCTIONS` was poisioned")
-                    .get(&self.id),
+                    .get(get_mut_arcmutex!(self.id).deref()),
                 Some(Some(EngineInstruction::Terminate))
             ) {
                 self.replicate_request_to_daemons(&Request::Terminate);
                 break 'lp;
             }
 
-            while let Ok(request) = self.rx.try_recv() {
+            while let Ok(request) = get_mut_arcmutex!(self.rx).try_recv() {
                 self.replicate_request_to_daemons(&request);
                 if matches!(request, Request::Terminate) {
                     break 'lp;
                 }
-                self.handle_request(request).await;
+                self.clone().handle_request(request).await;
             }
 
             if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
@@ -138,7 +179,8 @@ impl Engine {
             }
 
             let run_start = Instant::now();
-            let scheduled = self.scheduler.schedule();
+            let mut scheduler = get_mut_arcmutex!(self.scheduler);
+            let scheduled = scheduler.schedule();
 
             match scheduled {
                 SchedulerOutput::DefaultScheduler {
@@ -190,7 +232,7 @@ impl Engine {
                                     &mut scheduled.completion,
                                     false,
                                     return_raw_logits,
-                                    &mut self.prefix_cacher,
+                                    &mut *get_mut_arcmutex!(self.prefix_cacher),
                                     self.disable_eos_stop,
                                     rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
@@ -257,7 +299,7 @@ impl Engine {
                                     &mut scheduled.prompt,
                                     true,
                                     return_raw_logits,
-                                    &mut self.prefix_cacher,
+                                    &mut *get_mut_arcmutex!(self.prefix_cacher),
                                     self.disable_eos_stop,
                                     rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
@@ -329,20 +371,6 @@ impl Engine {
                             );
                         }
                     }
-
-                    if scheduled.prompt.len() == 0
-                        && scheduled.completion.len() == 0
-                        && self.scheduler.waiting_len() == 0
-                    {
-                        // If there is nothing to do, sleep until a request comes in
-                        if let Some(request) = self.rx.recv().await {
-                            self.replicate_request_to_daemons(&request);
-                            if matches!(request, Request::Terminate) {
-                                break 'lp;
-                            }
-                            self.handle_request(request).await;
-                        }
-                    }
                 }
                 SchedulerOutput::PagedAttention { mut output } => {
                     if !output.scheduled.is_empty() {
@@ -360,12 +388,12 @@ impl Engine {
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
-                            let block_size = self.scheduler.block_size().unwrap();
+                            let block_size = scheduler.block_size().unwrap();
 
                             let metadata = PagedAttentionMeta {
                                 block_size,
                                 sliding_window: pipeline.get_metadata().sliding_window,
-                                block_engine: self.scheduler.block_engine().unwrap(),
+                                block_engine: scheduler.block_engine().unwrap(),
                             };
 
                             let return_raw_logits = guards_mut[0].return_raw_logits;
@@ -381,7 +409,7 @@ impl Engine {
                                     &mut guards_mut,
                                     is_prompt,
                                     return_raw_logits,
-                                    &mut self.prefix_cacher,
+                                    &mut *get_mut_arcmutex!(self.prefix_cacher),
                                     self.disable_eos_stop,
                                     rng.clone(),
                                     CacheBackendMetadata::PagedAttention {
@@ -457,7 +485,7 @@ impl Engine {
                 }
             }
 
-            self.scheduler.free_finished_sequence_groups();
+            scheduler.free_finished_sequence_groups();
         }
     }
 
@@ -476,7 +504,7 @@ impl Engine {
         }
     }
 
-    fn replicate_request_to_daemons(&mut self, request: &Request) {
+    fn replicate_request_to_daemons(&self, request: &Request) {
         if !distributed::is_daemon() && mistralrs_quant::distributed::use_nccl() {
             let name = distributed::ipc_name().unwrap();
             let num_workers =
@@ -492,7 +520,7 @@ impl Engine {
         };
     }
 
-    async fn handle_request(&mut self, request: Request) {
+    async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
             Request::ActivateAdapters(adapters) => {
                 match get_mut_arcmutex!(self.pipeline).activate_adapters(adapters) {
@@ -500,7 +528,179 @@ impl Engine {
                     Err(e) => warn!("Adapter activation failed: {e:?}"),
                 }
             }
-            Request::Normal(request) => self.add_request(request).await,
+            Request::Normal(request) => {
+                if matches!(
+                    request.messages,
+                    RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
+                ) && request.web_search_options.is_some()
+                    && !request.is_streaming
+                    && get_mut_arcmutex!(self.bert_pipeline).is_some()
+                {
+                    let Some(web_search_options) = request.web_search_options.clone() else {
+                        unreachable!()
+                    };
+                    let mut first_request = request.clone();
+                    // Actually add the search tool here
+                    first_request
+                        .tools
+                        .get_or_insert_with(Vec::new)
+                        .push(search::get_search_tool(&web_search_options).unwrap());
+
+                    let mut second_request = first_request.clone();
+                    first_request.web_search_options = None;
+                    second_request.web_search_options = None;
+
+                    let this = self.clone();
+                    let handle = tokio::spawn(async move {
+                        let (new_sender, mut first_receiver) = tokio::sync::mpsc::channel(1);
+                        second_request.response = new_sender;
+                        std::mem::swap(&mut first_request.response, &mut second_request.response);
+
+                        this.add_request(first_request).await;
+                        let ResponseOk::Done(done) =
+                            first_receiver.recv().await.unwrap().as_result().unwrap()
+                        else {
+                            unreachable!()
+                        };
+
+                        let tool_calls = match &done.choices[0].message.tool_calls {
+                            Some(tool_calls)
+                                if tool_calls.len() == 1
+                                    && tool_calls[0].function.name == search::SEARCH_TOOL_NAME =>
+                            {
+                                &tool_calls[0]
+                            }
+                            None => {
+                                second_request
+                                    .response
+                                    .send(Response::Done(done))
+                                    .await
+                                    .unwrap();
+                                return;
+                            }
+                            Some(_) => {
+                                second_request
+                                    .response
+                                    .send(Response::Done(done))
+                                    .await
+                                    .unwrap();
+                                return;
+                            }
+                        };
+
+                        let RequestMessage::Chat(messages) = &mut second_request.messages else {
+                            unreachable!()
+                        };
+
+                        // Add assistant call message
+                        {
+                            let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+                            message
+                                .insert("role".to_string(), Either::Left("assistant".to_string()));
+                            message.insert(
+                                "content".to_string(),
+                                Either::Left(format!(
+                                    "{{\"name\":\"{}\",\"arguments\":\"{}\"}}",
+                                    tool_calls.function.name, tool_calls.function.arguments
+                                )),
+                            );
+                            messages.push(message);
+                        }
+                        let tool_call_params: SearchFunctionParameters =
+                            serde_json::from_str(&tool_calls.function.arguments).unwrap();
+
+                        // Add tool response
+                        {
+                            let tokenizer = get_mut_arcmutex!(this.pipeline)
+                                .tokenizer()
+                                .expect("A tokenizer is expected for non-diffusion models.");
+                            let mut results = search::run_search_tool(&tool_call_params)
+                                .unwrap()
+                                .into_iter()
+                                .map(|result| {
+                                    let len = {
+                                        let inp = InputSequence::Raw(Cow::from(&result.content));
+                                        tokenizer
+                                            .encode_fast(inp, false)
+                                            .map(|x| x.len())
+                                            .unwrap_or(usize::MAX)
+                                    };
+                                    (result, len)
+                                })
+                                .collect::<Vec<_>>();
+                            // Sort increasing by tokenized length, if it fails, put it at the end.
+                            results.sort_by_key(|(_, len)| *len);
+
+                            {
+                                let device = get_mut_arcmutex!(this.pipeline).device();
+
+                                let Some(bert_pipeline) =
+                                    &mut *get_mut_arcmutex!(this.bert_pipeline)
+                                else {
+                                    unreachable!()
+                                };
+
+                                let decreasing_indexes = search::rag::compute_most_similar(
+                                    &device,
+                                    &tool_call_params.query,
+                                    results.iter().map(|(res, _)| res).collect::<Vec<_>>(),
+                                    bert_pipeline,
+                                )
+                                .unwrap();
+
+                                // Rerank the results
+                                let mut results_old = Vec::new();
+                                std::mem::swap(&mut results_old, &mut results);
+                                for &index in &decreasing_indexes {
+                                    let mut current_result: (SearchResult, usize) =
+                                        Default::default();
+                                    std::mem::swap(&mut current_result, &mut results_old[index]);
+
+                                    results.push(current_result);
+                                }
+                            }
+
+                            // Manage context size by # of tokens. Apply default here.
+                            let max_results_budget_toks =
+                                match web_search_options.search_context_size.unwrap_or_default() {
+                                    SearchContextSize::High => 10000_usize,
+                                    SearchContextSize::Medium => 7500_usize,
+                                    SearchContextSize::Low => 3000_usize,
+                                };
+                            let mut used_results = Vec::new();
+                            let mut used_len = 0;
+                            for (item, len) in results {
+                                if used_len + len >= max_results_budget_toks {
+                                    break;
+                                }
+                                // So the info! below gets the correct value
+                                used_len += len;
+                                used_results.push(item);
+                            }
+
+                            let tool_result = serde_json::to_string(&used_results)
+                                .unwrap()
+                                .replace("\\n", "\n")
+                                .replace("\\\"", "\"")
+                                .replace("\\\\", "\\");
+                            info!("Web search executed, using {used_len} tokens of {} search results.", used_results.len());
+
+                            let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+                            message.insert("role".to_string(), Either::Left("tool".to_string()));
+                            message.insert(
+                                "content".to_string(),
+                                Either::Left(format!("{{\"output\": \"{tool_result}\"}}")),
+                            );
+                            messages.push(message);
+                        }
+
+                        this.add_request(second_request).await;
+                    });
+                    get_mut_arcmutex!(self.handles).push(handle);
+                } else {
+                    self.add_request(request).await
+                }
+            }
             Request::ReIsq(level) => {
                 if let Err(e) = get_mut_arcmutex!(self.pipeline).re_isq_model(level) {
                     warn!("ISQ requantization failed: {e:?}");
@@ -515,7 +715,7 @@ impl Engine {
         }
     }
 
-    async fn add_request(&mut self, request: NormalRequest) {
+    async fn add_request(&self, request: NormalRequest) {
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat(_) | RequestMessage::VisionChat { .. }
@@ -557,14 +757,10 @@ impl Engine {
             _ => None,
         };
 
-        let matcher = if request.tools.is_some() {
-            Some(Arc::new(handle_seq_error!(
-                ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
-                request.response
-            )))
-        } else {
-            None
-        };
+        let matcher = Arc::new(handle_seq_error!(
+            ToolCallingMatcher::new(request.tool_choice.unwrap_or(ToolChoice::Auto),),
+            request.response
+        ));
 
         let image_generation_format = match &request.messages {
             RequestMessage::ImageGeneration { format, .. } => Some(*format),
@@ -590,13 +786,10 @@ impl Engine {
                 messages,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let template = pipeline.get_processor().process(
-                    pipeline,
-                    messages,
-                    true,
-                    true,
-                    request.tools.unwrap_or_default(),
-                );
+                let tools = request.tools.unwrap_or_default();
+                let template = pipeline
+                    .get_processor()
+                    .process(pipeline, messages, true, true, tools);
                 handle_seq_error!(template, request.response)
             }
             RequestMessage::Completion { text, .. } => {
@@ -611,7 +804,7 @@ impl Engine {
                     return;
                 };
                 let prompt = tokenizer
-                    .encode(text.clone(), true)
+                    .encode_fast(text.clone(), true)
                     .map_err(anyhow::Error::msg);
                 (
                     handle_seq_error!(prompt, request.response)
@@ -675,7 +868,7 @@ impl Engine {
             }
         }
         let prefill_cache = handle_seq_error!(
-            self.prefix_cacher.search_for_matching_cache(
+            get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
                 &prompt_tokens,
                 images.as_ref().is_some_and(|x| !x.is_empty())
             ),
@@ -741,7 +934,7 @@ impl Engine {
                             .expect("Expected receiver.");
                         return;
                     };
-                    let encoded = tokenizer.encode(stop_txt.to_string(), true);
+                    let encoded = tokenizer.encode_fast(stop_txt.to_string(), true);
                     let toks = handle_seq_error!(encoded, request.response)
                         .get_ids()
                         .to_vec();
@@ -906,7 +1099,7 @@ impl Engine {
             let seq = Sequence::new_waiting(
                 prompt_tokens.clone(),
                 prompt_text.clone(),
-                self.id,
+                *get_mut_arcmutex!(self.id).deref(),
                 now.as_millis(),
                 num_hidden_layers,
                 request.response.clone(),
@@ -929,7 +1122,7 @@ impl Engine {
                 request.adapters.clone(),
                 images.clone(),
                 block_size,
-                matcher.clone(),
+                Some(matcher.clone()),
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
@@ -949,8 +1142,8 @@ impl Engine {
             } else {
                 seq
             };
-            self.id += 1;
-            self.scheduler.add_seq(seq);
+            *get_mut_arcmutex!(self.id) += 1;
+            get_mut_arcmutex!(self.scheduler).add_seq(seq);
         }
     }
 
@@ -958,12 +1151,13 @@ impl Engine {
         match request.text {
             Either::Left(messages) => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
+                let tools = request.tools.unwrap_or_default();
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
                     request.add_generation_prompt,
                     request.add_special_tokens,
-                    request.tools.unwrap_or_default(),
+                    tools,
                 );
                 let toks = match template {
                     Ok((toks, _)) => toks,
@@ -998,7 +1192,7 @@ impl Engine {
                         return;
                     }
                 };
-                let toks = tokenizer.encode(text, request.add_special_tokens);
+                let toks = tokenizer.encode_fast(text, request.add_special_tokens);
                 let toks = match toks {
                     Ok(tokenizer) => tokenizer,
                     Err(e) => {

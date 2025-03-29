@@ -38,6 +38,7 @@ url.workspace = true
 data-url.workspace = true
 regex.workspace = true
 toml.workspace = true
+itertools.workspace = true
 
 [features]
 cuda = ["mistralrs-core/cuda"]

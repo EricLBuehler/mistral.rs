@@ -242,7 +242,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
 
             seq.set_toks_and_reallocate(
                 tokenizer
-                    .encode(detokenized.clone(), false)
+                    .encode_fast(detokenized.clone(), false)
                     .expect("Encode failed")
                     .get_ids()
                     .to_vec(),

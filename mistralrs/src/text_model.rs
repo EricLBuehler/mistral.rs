@@ -23,6 +23,7 @@ pub struct TextModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) hf_cache_path: Option<PathBuf>,
+    pub(crate) search_bert_model: Option<BertEmbeddingModel>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
@@ -83,6 +84,7 @@ impl TextModelBuilder {
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     pub fn new(model_id: impl ToString) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -111,7 +113,14 @@ impl TextModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             hf_cache_path: None,
+            search_bert_model: None,
         }
+    }
+
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
+    pub fn with_search(mut self, search_bert_model: BertEmbeddingModel) -> Self {
+        self.search_bert_model = Some(search_bert_model);
+        self
     }
 
     /// Enable runner throughput logging.
@@ -337,9 +346,14 @@ impl TextModelBuilder {
             },
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method, self.throughput_logging)
-            .with_no_kv_cache(self.no_kv_cache)
-            .with_no_prefix_cache(self.prefix_cache_n.is_none());
+        let mut runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            self.throughput_logging,
+            self.search_bert_model,
+        )
+        .with_no_kv_cache(self.no_kv_cache)
+        .with_no_prefix_cache(self.prefix_cache_n.is_none());
 
         if let Some(n) = self.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

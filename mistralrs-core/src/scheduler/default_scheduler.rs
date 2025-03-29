@@ -58,7 +58,7 @@ pub struct BucketedSeqs<Backer: FcfsBacker> {
     waiting: Backer,
 }
 
-pub trait BucketingManager<Backer: FcfsBacker> {
+pub trait BucketingManager<Backer: FcfsBacker>: Send + Sync {
     /// Bucket and waitlist running input sequences, returning the newly running sequences.
     fn bucket_and_waitlist_seqs_waiting(
         &mut self,

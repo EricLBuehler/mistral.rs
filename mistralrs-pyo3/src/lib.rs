@@ -4,11 +4,11 @@ use anyhow::Context;
 use anymoe::{AnyMoeConfig, AnyMoeExpertType};
 use either::Either;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use requests::{ChatCompletionRequest, CompletionRequest, ToolChoice};
 use serde_json::Value;
 use std::{
     cell::RefCell,
-    collections::HashMap,
     num::NonZeroUsize,
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
@@ -20,12 +20,12 @@ use util::{PyApiErr, PyApiResult};
 use candle_core::{Device, Result};
 use mistralrs_core::{
     initialize_logging, paged_attn_supported, parse_isq_value, AnyMoeLoader, AutoDeviceMapParams,
-    ChatCompletionResponse, CompletionResponse, Constraint, DefaultSchedulerMethod,
-    DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
-    DiffusionGenerationParams, DiffusionLoaderBuilder, DiffusionSpecificConfig, DrySamplingParams,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
-    ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
-    MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
+    BertEmbeddingModel, ChatCompletionResponse, CompletionResponse, Constraint,
+    DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
+    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DiffusionSpecificConfig,
+    DrySamplingParams, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder,
+    GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar,
+    Loader, MemoryGpuConfig, MistralRs, MistralRsBuilder, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, Request as _Request, RequestMessage, Response,
     ResponseOk, SamplingParams, SchedulerConfig, SpeculativeConfig, SpeculativeLoader, StopTokens,
     TokenSource, TokenizationRequest, Tool, Topology, VisionLoaderBuilder, VisionSpecificConfig,
@@ -470,6 +470,8 @@ impl Runner {
         paged_attn = false,
         prompt_chunksize = None,
         seed = None,
+        enable_search = false,
+        search_bert_model = None,
     ))]
     fn new(
         which: Which,
@@ -492,6 +494,8 @@ impl Runner {
         paged_attn: bool,
         prompt_chunksize: Option<usize>,
         seed: Option<u64>,
+        enable_search: bool,
+        search_bert_model: Option<String>,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -772,7 +776,16 @@ impl Runner {
                 ),
             }
         };
-        let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, false)
+        let bert_model = if enable_search {
+            Some(
+                search_bert_model
+                    .map(BertEmbeddingModel::Custom)
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
+        let mistralrs = MistralRsBuilder::new(pipeline, scheduler_config, false, bert_model)
             .with_no_kv_cache(no_kv_cache)
             .with_prefix_cache_n(prefix_cache_n)
             .build();
@@ -811,16 +824,14 @@ impl Runner {
                     let mut messages_vec = Vec::new();
                     let mut image_urls = Vec::new();
                     for message in messages {
+                        let role = message["role"].as_ref().left().unwrap().clone();
                         match &message["content"] {
                             Either::Left(content) => {
                                 let mut message_map: IndexMap<
                                     String,
                                     Either<String, Vec<IndexMap<String, Value>>>,
                                 > = IndexMap::new();
-                                message_map.insert(
-                                    "role".to_string(),
-                                    Either::Left(message["role"].as_ref().left().unwrap().clone()),
-                                );
+                                message_map.insert("role".to_string(), Either::Left(role));
                                 message_map.insert(
                                     "content".to_string(),
                                     Either::Left(content.to_string()),
@@ -828,97 +839,110 @@ impl Runner {
                                 messages_vec.push(message_map);
                             }
                             Either::Right(image_messages) => {
-                                if image_messages.len() != 2 {
+                                // If there is only one message, it is possible a text message
+                                // found when rig is used as client. In this case, we need to check if
+                                // the message is a text message or an image message.
+                                if image_messages.len() == 1 {
+                                    if !image_messages[0].contains_key("text") {
+                                        return Err(PyApiErr::from(
+                                            "Expected `text` key in input message.",
+                                        ));
+                                    }
+                                    let content = match &image_messages[0]["text"] {
+                                        Either::Left(left) => left.to_string(),
+                                        Either::Right(right) => format!("{:?}", right),
+                                    };
+                                    let mut message_map: IndexMap<
+                                        String,
+                                        Either<String, Vec<IndexMap<String, Value>>>,
+                                    > = IndexMap::new();
+                                    message_map.insert("role".to_string(), Either::Left(role));
+                                    message_map
+                                        .insert("content".to_string(), Either::Left(content));
+                                    messages_vec.push(message_map);
+                                    continue;
+                                }
+                                if role != "user" {
                                     return Err(PyApiErr::from(
-                                        "Expected 2 items for the content of a message with an image."
+                                        "Role for an image message must be `user`, but it is {role}",
                                     ));
                                 }
-                                if message["role"].as_ref().left().unwrap() != "user" {
-                                    return Err(PyApiErr::from(format!(
-                                        "Role for an image message must be `user`, but it is {}",
-                                        &message["role"].as_ref().left().unwrap()
-                                    )));
+
+                                enum ContentPart {
+                                    Text { text: String },
+                                    Image { image_url: String },
                                 }
 
                                 let mut items = Vec::new();
                                 for image_message in image_messages {
-                                    if image_message.len() != 2 {
-                                        return Err(PyApiErr::from("Expected 2 items for the sub-content of a message with an image.".to_string()));
+                                    match image_message.get("type") {
+                                        Some(Either::Left(x)) if x == "text" => {
+                                            items.push(ContentPart::Text {
+                                                text: image_message
+                                                    .get("text").as_ref()
+                                                    .context("Text sub-content must have `text` key.")?.as_ref()
+                                                    .left().context("Text sub-content `text` key must be a string.")?.clone(),
+                                            });
+                                        }
+                                        Some(Either::Left(x)) if x == "image_url" => {
+                                            items.push(ContentPart::Image {
+                                                image_url: image_message.get("image_url").as_ref()
+                                                    .context("Image sub-content must have `image_url` key.")?.as_ref()
+                                                    .right()
+                                                    .context("Image sub-content `image_url` key must be an object.")?
+                                                    .get("url")
+                                                    .context("Image sub-content `image_url` object must have a `url` key.")?.clone()
+                                            });
+                                        }
+                                        _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
                                     }
-                                    if !image_message.contains_key("type") {
-                                        return Err(PyApiErr::from(
-                                            "Expected `type` key in input message.".to_string(),
-                                        ));
-                                    }
-                                    if image_message["type"].is_right() {
-                                        return Err(PyApiErr::from(
-                                            "Expected string value in `type`.".to_string(),
-                                        ));
-                                    }
-                                    items.push(image_message["type"].as_ref().unwrap_left().clone())
                                 }
 
-                                #[allow(clippy::type_complexity)]
-                                fn get_content_and_url(
-                                    text_idx: usize,
-                                    url_idx: usize,
-                                    image_messages: &[HashMap<
-                                        String,
-                                        Either<String, HashMap<String, String>>,
-                                    >],
-                                ) -> PyApiResult<(String, String)> {
-                                    if image_messages[text_idx]["text"].is_right() {
-                                        return Err(PyApiErr::from(
-                                            "Expected string value in `text`.".to_string(),
-                                        ));
-                                    }
-                                    let content = image_messages[text_idx]["text"]
-                                        .as_ref()
-                                        .unwrap_left()
-                                        .clone();
-                                    if image_messages[url_idx]["image_url"].is_left()
-                                        || !image_messages[url_idx]["image_url"]
-                                            .as_ref()
-                                            .unwrap_right()
-                                            .contains_key("url")
-                                    {
-                                        return Err(PyApiErr::from("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}".to_string()));
-                                    }
-                                    let url = image_messages[url_idx]["image_url"]
-                                        .as_ref()
-                                        .unwrap_right()["url"]
-                                        .clone();
-                                    Ok((content, url))
-                                }
+                                let text_content = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Text { text } => Some(text),
+                                        _ => None,
+                                    })
+                                    .join(" ");
+                                let image_urls_iter = items
+                                    .iter()
+                                    .filter_map(|item| match item {
+                                        ContentPart::Image { image_url } => Some(image_url.clone()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>();
+
                                 let mut message_map: IndexMap<
                                     String,
                                     Either<String, Vec<IndexMap<String, Value>>>,
                                 > = IndexMap::new();
-                                message_map.insert(
-                                    "role".to_string(),
-                                    Either::Left(message["role"].as_ref().left().unwrap().clone()),
-                                );
-                                let (content, url) = if items[0] == "text" {
-                                    get_content_and_url(0, 1, image_messages)?
-                                } else {
-                                    get_content_and_url(1, 0, image_messages)?
-                                };
+                                message_map.insert("role".to_string(), Either::Left(role));
 
-                                let mut content_map = Vec::new();
-                                let mut content_image_map = IndexMap::new();
-                                content_image_map
-                                    .insert("type".to_string(), Value::String("image".to_string()));
-                                content_map.push(content_image_map);
-                                let mut content_text_map = IndexMap::new();
-                                content_text_map
-                                    .insert("type".to_string(), Value::String("text".to_string()));
-                                content_text_map.insert("text".to_string(), Value::String(content));
-                                content_map.push(content_text_map);
+                                let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
+                                for _ in &image_urls_iter {
+                                    let mut content_image_map = IndexMap::new();
+                                    content_image_map.insert(
+                                        "type".to_string(),
+                                        Value::String("image".to_string()),
+                                    );
+                                    content_map.push(content_image_map);
+                                }
+                                {
+                                    let mut content_text_map = IndexMap::new();
+                                    content_text_map.insert(
+                                        "type".to_string(),
+                                        Value::String("text".to_string()),
+                                    );
+                                    content_text_map
+                                        .insert("text".to_string(), Value::String(text_content));
+                                    content_map.push(content_text_map);
+                                }
 
                                 message_map
                                     .insert("content".to_string(), Either::Right(content_map));
                                 messages_vec.push(message_map);
-                                image_urls.push(url);
+                                image_urls.extend(image_urls_iter);
                             }
                         }
                     }
@@ -999,6 +1023,7 @@ impl Runner {
                 tools,
                 logits_processors: None,
                 return_raw_logits: false,
+                web_search_options: request.web_search_options.clone(),
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1105,6 +1130,7 @@ impl Runner {
                 tools,
                 logits_processors: None,
                 return_raw_logits: false,
+                web_search_options: None,
             });
 
             MistralRs::maybe_log_request(self.runner.clone(), format!("{request:?}"));
@@ -1162,6 +1188,7 @@ impl Runner {
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
+            web_search_options: None,
         });
 
         let sender = self.runner.get_sender()?;

@@ -196,7 +196,7 @@ impl InputsProcessor for Mistral3ImageProcessor {
 
                 seq.set_initial_prompt(prompt.clone());
                 let toks = tokenizer
-                    .encode(prompt, false)
+                    .encode_fast(prompt, false)
                     .expect("Detokenization failed!");
 
                 let ids = toks.get_ids().to_vec();

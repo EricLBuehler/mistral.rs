@@ -85,6 +85,7 @@ fn main() {
             "kernels/hqq/hqq.cu",
             "kernels/ops/ops.cu",
             "kernels/bitsandbytes/dequant.cu",
+            "kernels/rotary/rotary.cu",
         ];
         if cc_over_800 {
             lib_files.push("kernels/marlin/marlin_kernel.cu");
