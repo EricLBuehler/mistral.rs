@@ -590,7 +590,9 @@
 <a href="#589" id="589">589</a>
 <a href="#590" id="590">590</a>
 <a href="#591" id="591">591</a>
-<a href="#592" id="592">592</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#592" id="592">592</a>
+<a href="#593" id="593">593</a>
+<a href="#594" id="594">594</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     fmt::{Debug, Display},
     num::NonZeroUsize,
@@ -969,6 +971,7 @@
         _data: Cow&lt;[u8]&gt;,
         _device: <span class="kw-2">&amp;</span>Device,
         _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+        _guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
@@ -978,6 +981,7 @@
     <span class="kw">fn </span>deserialize_ext_bias(
         _data: Cow&lt;[u8]&gt;,
         _device: <span class="kw-2">&amp;</span>Device,
+        _guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,

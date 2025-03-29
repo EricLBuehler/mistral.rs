@@ -613,7 +613,14 @@
 <a href="#612" id="612">612</a>
 <a href="#613" id="613">613</a>
 <a href="#614" id="614">614</a>
-<a href="#615" id="615">615</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
+<a href="#615" id="615">615</a>
+<a href="#616" id="616">616</a>
+<a href="#617" id="617">617</a>
+<a href="#618" id="618">618</a>
+<a href="#619" id="619">619</a>
+<a href="#620" id="620">620</a>
+<a href="#621" id="621">621</a>
+<a href="#622" id="622">622</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::sync::Arc;
 
 <span class="kw">use </span>candle_core::{Context, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::Linear;
@@ -810,6 +817,7 @@
         data: std::borrow::Cow&lt;[u8]&gt;,
         device: <span class="kw-2">&amp;</span>candle_core::Device,
         comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+        guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
@@ -817,10 +825,12 @@
         <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
         </span><span class="kw">let </span>isq_type = data[<span class="kw">crate</span>::UQFF_QUANT_TYPE_OFFSET];
         <span class="kw">let </span>(weight, bias) = <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
-            QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize_ext_bias(data, device)<span class="question-mark">?</span>,
-            QuantizedSerdeType::Unquant =&gt; UnquantLinear::deserialize_ext_bias(data, device)<span class="question-mark">?</span>,
-            QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize_ext_bias(data, device)<span class="question-mark">?</span>,
-            QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize_ext_bias(data, device)<span class="question-mark">?</span>,
+            QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
+            QuantizedSerdeType::Unquant =&gt; {
+                UnquantLinear::deserialize_ext_bias(data, device, guard)<span class="question-mark">?
+            </span>}
+            QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
+            QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
         };
         <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{
             weight,
@@ -1014,6 +1024,7 @@
         data: std::borrow::Cow&lt;[u8]&gt;,
         device: <span class="kw-2">&amp;</span>candle_core::Device,
         _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+        guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
@@ -1021,10 +1032,12 @@
         <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
         </span><span class="kw">let </span>isq_type = data[<span class="kw">crate</span>::UQFF_QUANT_TYPE_OFFSET];
         <span class="kw">let </span>(weight, bias) = <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
-            QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize_ext_bias(data, device)<span class="question-mark">?</span>,
-            QuantizedSerdeType::Unquant =&gt; UnquantLinear::deserialize_ext_bias(data, device)<span class="question-mark">?</span>,
-            QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize_ext_bias(data, device)<span class="question-mark">?</span>,
-            QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize_ext_bias(data, device)<span class="question-mark">?</span>,
+            QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
+            QuantizedSerdeType::Unquant =&gt; {
+                UnquantLinear::deserialize_ext_bias(data, device, guard)<span class="question-mark">?
+            </span>}
+            QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
+            QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize_ext_bias(data, device, guard)<span class="question-mark">?</span>,
         };
         <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{ weight, bias }))
     }
@@ -1167,6 +1180,7 @@
         data: std::borrow::Cow&lt;[u8]&gt;,
         device: <span class="kw-2">&amp;</span>candle_core::Device,
         comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+        guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
@@ -1174,10 +1188,10 @@
         <span class="comment">// NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
         </span><span class="kw">let </span>isq_type = data[<span class="kw">crate</span>::UQFF_QUANT_TYPE_OFFSET];
         <span class="kw">let </span>deserialized = <span class="kw">match </span>QuantizedSerdeType::try_from(isq_type <span class="kw">as </span>usize)<span class="question-mark">? </span>{
-            QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize(data, device, comm)<span class="question-mark">?</span>,
-            QuantizedSerdeType::Unquant =&gt; UnquantLinear::deserialize(data, device, comm)<span class="question-mark">?</span>,
-            QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize(data, device, comm)<span class="question-mark">?</span>,
-            QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize(data, device, comm)<span class="question-mark">?</span>,
+            QuantizedSerdeType::Gguf =&gt; GgufMatMul::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
+            QuantizedSerdeType::Unquant =&gt; UnquantLinear::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
+            QuantizedSerdeType::Hqq =&gt; HqqLayer::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
+            QuantizedSerdeType::Fp8 =&gt; FP8Linear::deserialize(data, device, comm, guard)<span class="question-mark">?</span>,
         };
         <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self</span>(deserialized)))
     }

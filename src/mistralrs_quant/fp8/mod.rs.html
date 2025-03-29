@@ -343,7 +343,11 @@
 <a href="#342" id="342">342</a>
 <a href="#343" id="343">343</a>
 <a href="#344" id="344">344</a>
-<a href="#345" id="345">345</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#345" id="345">345</a>
+<a href="#346" id="346">346</a>
+<a href="#347" id="347">347</a>
+<a href="#348" id="348">348</a>
+<a href="#349" id="349">349</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::Cursor,
     num::NonZeroUsize,
@@ -593,6 +597,7 @@
         data: Cow&lt;[u8]&gt;,
         device: <span class="kw-2">&amp;</span>Device,
         _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+        guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
@@ -616,6 +621,7 @@
 
         <span class="kw">let </span>w = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
         <span class="kw">let </span>dequant_w_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>dequant_x_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;
         <span class="kw">let </span>quant_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;
@@ -640,6 +646,7 @@
     <span class="kw">fn </span>deserialize_ext_bias(
         data: Cow&lt;[u8]&gt;,
         device: <span class="kw-2">&amp;</span>Device,
+        guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,
@@ -661,6 +668,7 @@
 
         <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
 
+        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
         <span class="kw">let </span>w = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>dequant_w_scale = Tensor::new(buffer.read_f32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>, device)<span class="question-mark">?</span>;

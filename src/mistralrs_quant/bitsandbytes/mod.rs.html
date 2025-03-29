@@ -293,7 +293,8 @@
 <a href="#292" id="292">292</a>
 <a href="#293" id="293">293</a>
 <a href="#294" id="294">294</a>
-<a href="#295" id="295">295</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#295" id="295">295</a>
+<a href="#296" id="296">296</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
@@ -581,6 +582,7 @@
         _data: Cow&lt;[u8]&gt;,
         _device: <span class="kw-2">&amp;</span>Device,
         _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+        _guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
     <span class="kw">where
         </span><span class="self">Self</span>: Sized,

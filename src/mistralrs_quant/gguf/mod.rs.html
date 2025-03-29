@@ -430,7 +430,11 @@
 <a href="#429" id="429">429</a>
 <a href="#430" id="430">430</a>
 <a href="#431" id="431">431</a>
-<a href="#432" id="432">432</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#432" id="432">432</a>
+<a href="#433" id="433">433</a>
+<a href="#434" id="434">434</a>
+<a href="#435" id="435">435</a>
+<a href="#436" id="436">436</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     borrow::Cow,
     io::{Cursor, Read},
     num::NonZeroUsize,
@@ -679,6 +683,7 @@
         data: Cow&lt;[u8]&gt;,
         device: <span class="kw-2">&amp;</span>Device,
         _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+        guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
 
@@ -731,6 +736,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>tensor_data = <span class="macro">vec!</span>[<span class="number">0</span>; data_len];
         buffer.read_exact(<span class="kw-2">&amp;mut </span>tensor_data)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
         <span class="comment">// If we have bias
         </span><span class="kw">let </span>b = <span class="kw">if </span>has_bias {
             <span class="prelude-val">Some</span>(deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>)
@@ -747,6 +753,7 @@
     <span class="kw">fn </span>deserialize_ext_bias(
         data: Cow&lt;[u8]&gt;,
         device: <span class="kw-2">&amp;</span>Device,
+        guard: QuantizeOntoGuard,
     ) -&gt; <span class="prelude-ty">Result</span>&lt;(Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
         <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
 
@@ -799,6 +806,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>tensor_data = <span class="macro">vec!</span>[<span class="number">0</span>; data_len];
         buffer.read_exact(<span class="kw-2">&amp;mut </span>tensor_data)<span class="question-mark">?</span>;
 
+        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
         <span class="comment">// If we have bias
         </span><span class="kw">let </span>b = <span class="kw">if </span>has_bias {
             <span class="prelude-val">Some</span>(deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>)
