@@ -4,12 +4,13 @@ use candle_core::{Context, Result, Tensor};
 use candle_nn::Linear;
 
 use crate::{
-    blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear, BnbLinear, DummyLayer,
-    QuantMethod, QuantMethodConfig, QuantMethodType, QuantizeOntoGuard, QuantizedConfig,
-    QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
+    blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear, BnbLinear,
+    DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig,
+    QuantMethodType, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, QuantizedSerdeType, Shard,
+    ShardedVarBuilder, UnquantLinear,
 };
 
-use super::{Comm, DistributedOperation};
+use super::{Comm, DistributedOperation, SumAllReduce};
 
 fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {
@@ -174,6 +175,10 @@ impl QuantMethod for RowParallelLayer {
             all_reduce: self.all_reduce.clone(),
         }))
     }
+
+    fn is_distributed(&self) -> Option<DistributedKind> {
+        Some(DistributedKind::RowParallel)
+    }
 }
 
 impl QuantizedSerde for RowParallelLayer {
@@ -185,6 +190,28 @@ impl QuantizedSerde for RowParallelLayer {
     }
     fn serialize(&self) -> Result<std::borrow::Cow<[u8]>> {
         self.weight.serialize_with_bias(self.bias.clone())
+    }
+    fn deserialize(
+        data: std::borrow::Cow<[u8]>,
+        device: &candle_core::Device,
+        comm: &Arc<crate::Comm>,
+    ) -> Result<Arc<dyn QuantMethod>>
+    where
+        Self: Sized,
+    {
+        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+        let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
+        let (weight, bias) = match QuantizedSerdeType::try_from(isq_type as usize)? {
+            QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device)?,
+            QuantizedSerdeType::Unquant => UnquantLinear::deserialize_ext_bias(data, device)?,
+            QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device)?,
+            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device)?,
+        };
+        Ok(Arc::new(Self {
+            weight,
+            bias,
+            all_reduce: SumAllReduce::new(comm),
+        }))
     }
 }
 
@@ -352,6 +379,10 @@ impl QuantMethod for ColumnParallelLayer {
         };
         Ok(Arc::new(Self { weight, bias }))
     }
+
+    fn is_distributed(&self) -> Option<DistributedKind> {
+        Some(DistributedKind::ColumnParallel)
+    }
 }
 
 impl QuantizedSerde for ColumnParallelLayer {
@@ -363,6 +394,24 @@ impl QuantizedSerde for ColumnParallelLayer {
     }
     fn serialize(&self) -> Result<std::borrow::Cow<[u8]>> {
         self.weight.serialize_with_bias(self.bias.clone())
+    }
+    fn deserialize(
+        data: std::borrow::Cow<[u8]>,
+        device: &candle_core::Device,
+        _comm: &Arc<crate::Comm>,
+    ) -> Result<Arc<dyn QuantMethod>>
+    where
+        Self: Sized,
+    {
+        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+        let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
+        let (weight, bias) = match QuantizedSerdeType::try_from(isq_type as usize)? {
+            QuantizedSerdeType::Gguf => GgufMatMul::deserialize_ext_bias(data, device)?,
+            QuantizedSerdeType::Unquant => UnquantLinear::deserialize_ext_bias(data, device)?,
+            QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device)?,
+            QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device)?,
+        };
+        Ok(Arc::new(Self { weight, bias }))
     }
 }
 
@@ -483,6 +532,10 @@ impl QuantMethod for ReplicatedLayer {
             .clone()
             .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)
     }
+
+    fn is_distributed(&self) -> Option<DistributedKind> {
+        Some(DistributedKind::Replicated)
+    }
 }
 
 impl QuantizedSerde for ReplicatedLayer {
@@ -494,6 +547,24 @@ impl QuantizedSerde for ReplicatedLayer {
     }
     fn serialize(&self) -> Result<std::borrow::Cow<[u8]>> {
         self.0.serialize()
+    }
+    fn deserialize(
+        data: std::borrow::Cow<[u8]>,
+        device: &candle_core::Device,
+        comm: &Arc<crate::Comm>,
+    ) -> Result<Arc<dyn QuantMethod>>
+    where
+        Self: Sized,
+    {
+        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+        let isq_type = data[crate::UQFF_QUANT_TYPE_OFFSET];
+        let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
+            QuantizedSerdeType::Gguf => GgufMatMul::deserialize(data, device, comm)?,
+            QuantizedSerdeType::Unquant => UnquantLinear::deserialize(data, device, comm)?,
+            QuantizedSerdeType::Hqq => HqqLayer::deserialize(data, device, comm)?,
+            QuantizedSerdeType::Fp8 => FP8Linear::deserialize(data, device, comm)?,
+        };
+        Ok(Arc::new(Self(deserialized)))
     }
 }
 

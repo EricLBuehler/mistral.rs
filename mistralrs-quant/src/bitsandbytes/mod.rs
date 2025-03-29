@@ -282,7 +282,11 @@ impl QuantizedSerde for BnbLinear {
         todo!()
     }
 
-    fn deserialize(_data: Cow<[u8]>, _device: &Device) -> Result<Arc<dyn QuantMethod>>
+    fn deserialize(
+        _data: Cow<[u8]>,
+        _device: &Device,
+        _comm: &Arc<crate::Comm>,
+    ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {

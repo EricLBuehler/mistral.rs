@@ -682,6 +682,9 @@ impl QuantizedSerde for HqqLayer {
         "hqq"
     }
     fn serialize(&self) -> Result<Cow<[u8]>> {
+        self.serialize_with_bias(self.bias.clone())
+    }
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
         // Version is always first!
@@ -691,7 +694,7 @@ impl QuantizedSerde for HqqLayer {
         buffer.push(QuantizedSerdeType::Hqq as u8);
 
         // Has bias
-        buffer.push(self.bias.is_some() as u8);
+        buffer.push(bias.is_some() as u8);
 
         serialize_tensor(&mut buffer, &self.w_q)?;
         serialize_tensor(&mut buffer, &self.scales)?;
@@ -714,7 +717,7 @@ impl QuantizedSerde for HqqLayer {
         buffer.push(self.cfg.round_zeros as u8);
         buffer.push(self.cfg.channel_wise as u8);
 
-        if let Some(bias) = &self.bias {
+        if let Some(bias) = &bias {
             // Bias
             serialize_tensor(&mut buffer, bias)?;
         }
@@ -722,7 +725,11 @@ impl QuantizedSerde for HqqLayer {
         Ok(Cow::from(buffer))
     }
 
-    fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>>
+    fn deserialize(
+        data: Cow<[u8]>,
+        device: &Device,
+        _comm: &Arc<crate::Comm>,
+    ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
@@ -789,6 +796,80 @@ impl QuantizedSerde for HqqLayer {
             w_shape,
             cfg,
         }))
+    }
+    fn deserialize_ext_bias(
+        data: Cow<[u8]>,
+        device: &Device,
+    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
+    where
+        Self: Sized,
+    {
+        let mut buffer = Cursor::new(data);
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Hqq as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Hqq as usize
+            );
+        }
+
+        let has_bias = buffer.read_u8()? != 0;
+
+        let w_q = deserialize_tensor(&mut buffer, device)?;
+        let scales = deserialize_tensor(&mut buffer, device)?;
+        let zeros = deserialize_tensor(&mut buffer, device)?;
+
+        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
+
+        let mut dims = Vec::with_capacity(n_dims);
+        for _ in 0..n_dims {
+            dims.push(buffer.read_u32::<LittleEndian>()? as usize)
+        }
+        let w_shape = Shape::from_dims(&dims);
+
+        // TODO: keep this in sync with get_isq_type_from_uqff!
+        let bits = HqqBits::try_from(buffer.read_u8()? as usize)?;
+        let group_size = NonZeroUsize::try_from(buffer.read_u32::<LittleEndian>()? as usize)?;
+        let axis = HqqAxis::try_from(buffer.read_u8()? as usize)?;
+        let optimization_steps = match buffer.read_u32::<LittleEndian>()? as usize {
+            0 => None,
+            other => Some(other),
+        };
+        let round_zeros = buffer.read_u8()? != 0;
+        let channel_wise = buffer.read_u8()? != 0;
+
+        let cfg = HqqConfig {
+            bits,
+            group_size,
+            axis,
+            optimization_steps,
+            round_zeros,
+            channel_wise,
+        };
+
+        let b = if has_bias {
+            Some(deserialize_tensor(&mut buffer, device)?)
+        } else {
+            None
+        };
+
+        Ok((
+            Arc::new(Self {
+                w_q,
+                zeros,
+                scales,
+                bias: None,
+                w_shape,
+                cfg,
+            }),
+            b,
+        ))
     }
 }
 

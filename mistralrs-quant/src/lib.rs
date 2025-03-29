@@ -373,11 +373,24 @@ pub trait QuantizedSerde {
     fn serialize(&self) -> Result<Cow<[u8]>> {
         candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
     }
-    fn deserialize(_data: Cow<[u8]>, _device: &Device) -> Result<Arc<dyn QuantMethod>>
+    fn deserialize(
+        _data: Cow<[u8]>,
+        _device: &Device,
+        _comm: &Arc<crate::Comm>,
+    ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
         candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
+    }
+    fn deserialize_ext_bias(
+        _data: Cow<[u8]>,
+        _device: &Device,
+    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
+    where
+        Self: Sized,
+    {
+        candle_core::bail!("`QuantizedSerde::deserialize_ext_bias` is not supported.")
     }
     /// NOT meant for external calling
     fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<[u8]>> {
@@ -420,6 +433,12 @@ impl QuantizeOntoGuard {
     }
 }
 
+pub enum DistributedKind {
+    ColumnParallel,
+    RowParallel,
+    Replicated,
+}
+
 /// Quantized method for a quantized matmul.
 pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn new(method: QuantMethodConfig) -> Result<Self>
@@ -429,7 +448,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn dequantize_w(&self) -> Result<Tensor>;
 
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// Automatically cast to required quantization actiation type and back
+    /// Automatically cast to required quantization activation type and back
     fn forward_autocast(&self, a: &Tensor) -> Result<Tensor> {
         let original_ty = a.dtype();
         let a = if let Some(t) = self.quantized_act_type() {
@@ -476,6 +495,10 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// End tracking stats into an ImatrixLayerStats. Returns the computed imatrix.
     fn end_track_stats(&self) -> Result<Tensor> {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
+    }
+
+    fn is_distributed(&self) -> Option<DistributedKind> {
+        None
     }
 }
 
