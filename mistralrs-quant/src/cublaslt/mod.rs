@@ -12,6 +12,7 @@ mod api;
 #[cfg(feature = "cuda")]
 mod matmul;
 #[cfg(test)]
+#[cfg(feature = "cuda")]
 mod tests;
 
 #[cfg(feature = "cuda")]
