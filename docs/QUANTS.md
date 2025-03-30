@@ -47,11 +47,17 @@ cargo run --features cuda -- -i --isq Q4K plain -m microsoft/Phi-3-mini-4k-instr
 ```
 
 ## Using a GPTQ quantized model
-- Use the `plain` (cli) / `Plain` (Python) model selector
 - Provide the model ID for the GPTQ model
-- Mistral.rs will automatically detect and use GPTQ quantization.
-- The [Marlin](https://github.com/IST-DASLab/marlin) kernel will automatically be used in 4-bit and 8-bit.
+- Mistral.rs will automatically detect and use GPTQ quantization for plain and vision models!
+- The [Marlin](https://github.com/IST-DASLab/marlin) kernel will automatically be used for 4-bit and 8-bit.
 
 ```
 cargo run --features cuda -- -i plain -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit -a phi3
+```
+
+You can create your own GPTQ model using [`scripts/convert_to_gptq.py`][../scripts/convert_to_gptq.py]:
+```
+pip install gptqmodel transformers datasets
+
+python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path --bits 4
 ```
