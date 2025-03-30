@@ -179,7 +179,10 @@
 <a href="#178" id="178">178</a>
 <a href="#179" id="179">179</a>
 <a href="#180" id="180">180</a>
-<a href="#181" id="181">181</a></pre></div><pre class="rust"><code><span class="comment">// https://github.com/huggingface/text-embeddings-inference/blob/cc1c510e8d8af8447c01e6b14c417473cf2dfda9/backends/candle/src/layers/cublaslt.rs
+<a href="#181" id="181">181</a>
+<a href="#182" id="182">182</a>
+<a href="#183" id="183">183</a>
+<a href="#184" id="184">184</a></pre></div><pre class="rust"><code><span class="comment">// https://github.com/huggingface/text-embeddings-inference/blob/cc1c510e8d8af8447c01e6b14c417473cf2dfda9/backends/candle/src/layers/cublaslt.rs
 
 </span><span class="attr">#![allow(unused_variables, unused_imports, dead_code)]
 
@@ -192,6 +195,9 @@
 </span><span class="kw">mod </span>api;
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 </span><span class="kw">mod </span>matmul;
+<span class="attr">#[cfg(test)]
+#[cfg(feature = <span class="string">"cuda"</span>)]
+</span><span class="kw">mod </span>tests;
 
 <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
 </span><span class="kw">pub use </span>api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};

@@ -295,13 +295,17 @@
 <a href="#294" id="294">294</a>
 <a href="#295" id="295">295</a>
 <a href="#296" id="296">296</a>
-<a href="#297" id="297">297</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#297" id="297">297</a>
+<a href="#298" id="298">298</a>
+<a href="#299" id="299">299</a>
+<a href="#300" id="300">300</a>
+<a href="#301" id="301">301</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
 <span class="kw">use </span>candle_core::{quantized::GgmlDType, DType, Device, <span class="prelude-ty">Result</span>, Tensor};
-<span class="kw">use </span>candle_nn::{Linear, Module};
+<span class="kw">use </span>candle_nn::Linear;
 
 <span class="kw">mod </span>ops;
 
@@ -366,8 +370,12 @@
         <span class="comment">// Dequantize matmul always.
         // TODO: add a specific kernel?
         </span><span class="kw">let </span>weight = <span class="self">self</span>.dequantize_w()<span class="question-mark">?</span>;
-        <span class="kw">let </span>lin = Linear::new(weight, <span class="self">self</span>.bias.clone());
-        lin.forward(x)
+        <span class="comment">// Dispatch to unquant. This uses some cublaslt for bias &amp; on cuda always, so it is better
+        </span><span class="kw">let </span>unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+            weight,
+            <span class="self">self</span>.bias.clone(),
+        )))<span class="question-mark">?</span>;
+        unquant.forward(x)
     }
 
     <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DType&gt; {

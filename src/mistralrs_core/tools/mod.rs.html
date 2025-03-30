@@ -192,7 +192,10 @@
 <a href="#191" id="191">191</a>
 <a href="#192" id="192">192</a>
 <a href="#193" id="193">193</a>
-<a href="#194" id="194">194</a></pre></div><pre class="rust"><code><span class="kw">mod </span>request;
+<a href="#194" id="194">194</a>
+<a href="#195" id="195">195</a>
+<a href="#196" id="196">196</a>
+<a href="#197" id="197">197</a></pre></div><pre class="rust"><code><span class="kw">mod </span>request;
 <span class="kw">mod </span>response;
 
 <span class="kw">use </span>candle_core::Result;
@@ -358,6 +361,9 @@
 <span class="kw">where
     </span>T: serde::de::DeserializeOwned,
 {
+    <span class="kw">if </span>text_prefix.is_empty() {
+        <span class="kw">return </span>(<span class="bool-val">false</span>, <span class="bool-val">false</span>);
+    }
     <span class="kw">match </span>serde_json::from_str::&lt;T&gt;(text_prefix) {
         <span class="prelude-val">Ok</span>(<span class="kw">_</span>) =&gt; (<span class="bool-val">false</span>, <span class="bool-val">true</span>),
         <span class="comment">// EOF show that JSON parsing was successful up to the end of the entire string.

@@ -599,7 +599,6 @@
 <a href="#598" id="598">598</a>
 <a href="#599" id="599">599</a></pre></div><pre class="rust"><code><span class="attr">#![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 </span><span class="kw">use </span>candle_core::Device;
-<span class="kw">use </span>cublaslt::setup_cublas_lt_wrapper;
 <span class="kw">use </span>engine::Engine;
 <span class="kw">pub use </span>engine::{
     BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
@@ -646,7 +645,6 @@
 <span class="kw">pub use </span>toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 <span class="kw">mod </span>amoe;
-<span class="kw">mod </span>cublaslt;
 <span class="attr">#[cfg(not(any(all(feature = <span class="string">"cuda"</span>, target_family = <span class="string">"unix"</span>), feature = <span class="string">"metal"</span>)))]
 </span><span class="kw">mod </span>dummy_paged_attention;
 <span class="kw">mod </span>embedding;
@@ -877,7 +875,9 @@
         } = config;
 
         <span class="kw">let </span>category = pipeline.try_lock().unwrap().category();
-        setup_cublas_lt_wrapper(<span class="macro">get_mut_arcmutex!</span>(pipeline).device());
+        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
+            <span class="macro">get_mut_arcmutex!</span>(pipeline).device(),
+        );
 
         <span class="kw">let </span>truncate_sequence = truncate_sequence.unwrap_or(<span class="bool-val">false</span>);
         <span class="kw">let </span>no_kv_cache = no_kv_cache.unwrap_or(<span class="bool-val">false</span>);
