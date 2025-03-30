@@ -4,7 +4,7 @@ use std::{
 };
 
 use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
-use candle_nn::{Linear, Module};
+use candle_nn::Linear;
 
 mod ops;
 
@@ -69,8 +69,12 @@ impl QuantMethod for BlockwiseFP8Linear {
         // Dequantize matmul always.
         // TODO: add a specific kernel?
         let weight = self.dequantize_w()?;
-        let lin = Linear::new(weight, self.bias.clone());
-        lin.forward(x)
+        // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
+        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+            weight,
+            self.bias.clone(),
+        )))?;
+        unquant.forward(x)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
