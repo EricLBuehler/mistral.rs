@@ -11,6 +11,9 @@ use std::sync::{Mutex, Once};
 mod api;
 #[cfg(feature = "cuda")]
 mod matmul;
+#[cfg(test)]
+#[cfg(feature = "cuda")]
+mod tests;
 
 #[cfg(feature = "cuda")]
 pub use api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};

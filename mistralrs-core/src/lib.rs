@@ -1,6 +1,5 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::Device;
-use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
 pub use engine::{
     BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
@@ -47,7 +46,6 @@ pub use model_selected::ModelSelected;
 pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 mod amoe;
-mod cublaslt;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 mod dummy_paged_attention;
 mod embedding;
@@ -278,7 +276,9 @@ impl MistralRs {
         } = config;
 
         let category = pipeline.try_lock().unwrap().category();
-        setup_cublas_lt_wrapper(get_mut_arcmutex!(pipeline).device());
+        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
+            get_mut_arcmutex!(pipeline).device(),
+        );
 
         let truncate_sequence = truncate_sequence.unwrap_or(false);
         let no_kv_cache = no_kv_cache.unwrap_or(false);

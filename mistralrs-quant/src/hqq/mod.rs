@@ -7,6 +7,7 @@ use candle_core::{
     from_storage_no_op, CudaStorage, Storage,
 };
 
+use candle_nn::Linear;
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
 use std::{
@@ -21,8 +22,8 @@ use crate::{
         deserialize_tensor, fake_deserialize_tensor, serialize_tensor, version_is_compatible,
         BitWiseOp, LeftshiftOp, UQFF_VERSION,
     },
-    IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
-    QuantizedSerdeType,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    UnquantLinear,
 };
 
 #[cfg(feature = "cuda")]
@@ -500,17 +501,12 @@ impl HqqLayer {
 
     fn dequantize_matmul(&self, xs: &Tensor) -> Result<Tensor> {
         let w = self.dequantize()?;
-        let w = match *xs.dims() {
-            [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
-            [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
-            _ => w.t()?,
-        };
-        let res = MatMul.matmul(xs, &w)?;
-        if let Some(ref bias) = self.bias {
-            res + bias
-        } else {
-            Ok(res)
-        }
+        // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
+        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+            w,
+            self.bias.clone(),
+        )))?;
+        unquant.forward(xs)
     }
 
     pub fn with_bias(mut self, bias: Tensor) -> Self {

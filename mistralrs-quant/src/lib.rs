@@ -16,7 +16,7 @@ mod metal_kernels;
 
 mod bitsandbytes;
 mod blockwise_fp8;
-mod cublaslt;
+pub mod cublaslt;
 pub mod distributed;
 mod dummy;
 mod fp8;
