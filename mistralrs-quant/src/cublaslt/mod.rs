@@ -81,13 +81,13 @@ impl CublasLtWrapper {
     ///
     /// The resulting tensor is of shape NxM
     #[allow(clippy::too_many_arguments)]
-    pub fn batch_matmul_f8(
+    pub fn batch_matmul_fp8(
         &self,
         a: &Tensor,
         b: &Tensor,
         dequant_a_scale: &Tensor,
         dequant_b_scale: &Tensor,
-        quantize_scale: &Tensor,
+        quantize_scale: Option<&Tensor>,
         out: Option<&Tensor>,
         alpha: Option<f32>,
         beta: Option<f32>,

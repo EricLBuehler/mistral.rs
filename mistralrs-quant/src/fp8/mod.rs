@@ -25,8 +25,6 @@ use crate::{
 pub struct FP8Linear {
     lin: Linear,
     dequant_w_scale: Tensor,
-    dequant_x_scale: Tensor,
-    quant_scale: Tensor,
     /// Quantized type
     dtype: DType,
 }
@@ -47,14 +45,12 @@ impl QuantMethod for FP8Linear {
             QuantMethodConfig::FP8 { lin, dtype } => {
                 let QuantizationResult {
                     qw,
-                    quantize_scale,
+
                     dequantize_scale,
                 } = Self::quantize(lin.weight(), dtype)?;
                 Ok(Self {
                     lin: Linear::new(qw, lin.bias().cloned()),
-                    dequant_x_scale: dequantize_scale.clone(), // This is probably wrong!
                     dequant_w_scale: dequantize_scale,
-                    quant_scale: quantize_scale,
                     dtype,
                 })
             }
@@ -84,16 +80,16 @@ impl QuantMethod for FP8Linear {
                 let mut x = x.flatten_to(D::Minus(3))?;
 
                 // Prepare the b tensor. If it is not quantized, quantize it
-                let mut dequant_x_scale = self.dequant_x_scale.clone();
-                if !matches!(x.dtype(), DType::F8E4M3) {
+                let dequant_x_scale = if !matches!(x.dtype(), DType::F8E4M3) {
                     let QuantizationResult {
                         qw,
-                        quantize_scale: _,
                         dequantize_scale,
                     } = Self::quantize(&x, DType::F8E4M3)?;
                     x = qw;
-                    dequant_x_scale = dequantize_scale;
-                }
+                    dequantize_scale
+                } else {
+                    todo!()
+                };
 
                 // Handle bias
                 let beta = match self.lin.bias().is_some() {
@@ -103,19 +99,19 @@ impl QuantMethod for FP8Linear {
 
                 // Naming
                 let a = self.lin.weight().unsqueeze(0)?;
-                let b = x;
+                let b = x.unsqueeze(0)?;
 
                 handle
-                    .batch_matmul_f8(
+                    .batch_matmul_fp8(
                         &a,
                         &b,
                         &self.dequant_w_scale,
                         &dequant_x_scale,
-                        &self.quant_scale,
-                        self.lin.bias(),
+                        None,
+                        None,
                         None,
                         beta,
-                        None,
+                        self.lin.bias(),
                         None,
                         F8MatmulOutType::BF16, // Output in bf16 to avoid manual dequant
                     )?
@@ -228,10 +224,6 @@ impl QuantizedSerde for FP8Linear {
 
         // Dequant a scale
         buffer.extend(self.dequant_w_scale.to_scalar::<f32>()?.to_le_bytes());
-        // Dequant b scale
-        buffer.extend(self.dequant_x_scale.to_scalar::<f32>()?.to_le_bytes());
-        // Quant scale
-        buffer.extend(self.quant_scale.to_scalar::<f32>()?.to_le_bytes());
 
         // DType
         write_dtype(self.dtype, &mut buffer);
@@ -274,8 +266,6 @@ impl QuantizedSerde for FP8Linear {
 
         let _acquired_load_guard = guard.acquire();
         let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
-        let dequant_x_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
-        let quant_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
 
         // DType
         let dtype = read_dtype(&mut buffer)?;
@@ -289,8 +279,6 @@ impl QuantizedSerde for FP8Linear {
         Ok(Arc::new(Self {
             lin: Linear::new(w, b),
             dequant_w_scale,
-            dequant_x_scale,
-            quant_scale,
             dtype,
         }))
     }
@@ -323,8 +311,6 @@ impl QuantizedSerde for FP8Linear {
         let w = deserialize_tensor(&mut buffer, device)?;
 
         let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
-        let dequant_x_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
-        let quant_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
 
         // DType
         let dtype = read_dtype(&mut buffer)?;
@@ -339,8 +325,6 @@ impl QuantizedSerde for FP8Linear {
             Arc::new(Self {
                 lin: Linear::new(w, None),
                 dequant_w_scale,
-                dequant_x_scale,
-                quant_scale,
                 dtype,
             }),
             b,

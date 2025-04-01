@@ -197,6 +197,27 @@ impl MatmulDesc {
         Ok(())
     }
 
+    #[cfg(feature = "cuda_nvcc_version_12_8")]
+    fn set_vec_scale_fp8_ptr(&self, matrix: Matrix) -> Result<(), CublasError> {
+        let attr = match matrix {
+            Matrix::A => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_A_SCALE_MODE,
+            Matrix::B => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_B_SCALE_MODE,
+            Matrix::C => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_C_SCALE_MODE,
+            Matrix::D => sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_D_SCALE_MODE,
+        };
+        let scale_mode = sys::cublasLtMatmulMatrixScale_t::CUBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
+
+        unsafe {
+            result::set_matmul_desc_attribute(
+                self.handle,
+                attr,
+                (&scale_mode) as *const _ as *const _,
+                mem::size_of::<CUdeviceptr>(),
+            )?;
+        }
+        Ok(())
+    }
+
     // Epilogue system can be leveraged to fuse add and activation operations
     fn set_epilogue(
         &self,
@@ -329,6 +350,19 @@ pub struct MatmulConfig {
     pub batch_size: Option<c_int>,
 }
 
+pub enum ScalesSlice<'a, S: DevicePtr<f32>, V: DevicePtr<u8>> {
+    Scalar {
+        scale_a: &'a S,
+        scale_b: &'a S,
+        scale_d: Option<&'a S>,
+    },
+    Vec32U8 {
+        scale_a: &'a V,
+        scale_b: &'a V,
+        scale_d: Option<&'a S>,
+    },
+}
+
 pub enum OutSlice<A: DevicePtrMut<F8E4M3>, B: DevicePtrMut<bf16>> {
     F8(A),
     BF16(B),
@@ -383,24 +417,22 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
     /// This is unsafe because improper arguments may lead to invalid
     /// memory accesses.
     #[allow(clippy::too_many_arguments)]
-    unsafe fn matmul_fp8_like<
+    unsafe fn matmul_fp8<
         I: DevicePtr<T>,
         C: DevicePtr<bf16>,
         OA: DevicePtrMut<F8E4M3>,
         OB: DevicePtrMut<bf16>,
-        S: DevicePtr<f32>,
+        SS: DevicePtr<f32>,
+        SV: DevicePtr<u8>,
         B: DevicePtr<bf16>,
     >(
         &self,
         cfg: MatmulConfig,
         a: &I,
         b: &I,
-        scale_a: &S,
-        scale_b: &S,
-        scale_d: &S,
+        scales: &ScalesSlice<SS, SV>,
         c: &C,
         out: &mut OutSlice<OA, OB>,
-        // amax_d: &mut A,
         bias: Option<&B>,
         act: Option<&Activation>,
     ) -> Result<(), CublasError> {
@@ -445,21 +477,41 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
             d_layout.set_batch(batch_size, stride_c)?;
         }
 
-        // Set scale factors
-        matmul_desc.set_scale_ptr(scale_a.device_ptr(), Matrix::A)?;
-        matmul_desc.set_scale_ptr(scale_b.device_ptr(), Matrix::B)?;
-        matmul_desc.set_scale_ptr(scale_d.device_ptr(), Matrix::D)?;
+        match scales {
+            ScalesSlice::Scalar {
+                scale_a,
+                scale_b,
+                scale_d,
+            } => {
+                // Set scale pointers
+                matmul_desc.set_scale_ptr(scale_a.device_ptr(), Matrix::A)?;
+                matmul_desc.set_scale_ptr(scale_b.device_ptr(), Matrix::B)?;
+                if let Some(scale_d) = scale_d {
+                    matmul_desc.set_scale_ptr(scale_d.device_ptr(), Matrix::D)?;
+                }
+            }
+            ScalesSlice::Vec32U8 {
+                scale_a,
+                scale_b,
+                scale_d,
+            } => {
+                // Set scale pointers. A/B are vec32 and D are scalars.
+                matmul_desc.set_scale_ptr(scale_a.device_ptr(), Matrix::A)?;
+                matmul_desc.set_scale_ptr(scale_b.device_ptr(), Matrix::B)?;
+                if let Some(scale_d) = scale_d {
+                    matmul_desc.set_scale_ptr(scale_d.device_ptr(), Matrix::D)?;
+                }
 
-        // Pass amaxd ptr
-        // unsafe {
-        //     result::set_matmul_desc_attribute(
-        //         matmul_desc.handle,
-        //         sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_AMAX_D_POINTER,
-        //         amax_d.device_ptr_mut() as *const CUdeviceptr as *const _,
-        //         mem::size_of::<CUdeviceptr>(),
-        //     )
-        //     ?;
-        // }
+                // Set scale types to vec32 for fp8
+                #[cfg(feature = "cuda_nvcc_version_12_8")]
+                {
+                    matmul_desc.set_vec_scale_fp8_ptr(Matrix::A)?;
+                    matmul_desc.set_vec_scale_fp8_ptr(Matrix::B)?;
+                }
+                #[cfg(not(feature = "cuda_nvcc_version_12_8"))]
+                panic!("ScalesSlice::Vec32U8 requires cuda_nvcc_version_12_8.");
+            }
+        }
 
         // Epilogue system can be leveraged to fuse add and activation operations
         matmul_desc.set_epilogue(act, bias.map(|b| b.device_ptr()), cfg.stride_bias)?;

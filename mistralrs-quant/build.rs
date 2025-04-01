@@ -1,6 +1,51 @@
 fn main() {
     #[cfg(feature = "cuda")]
     {
+        fn cuda_version_from_build_system() -> (usize, usize) {
+            let output = std::process::Command::new("nvcc")
+                .arg("--version")
+                .output()
+                .expect("Failed to execute `nvcc`");
+
+            if !output.status.success() {
+                panic!(
+                    "`nvcc --version` failed.\nstdout:\n{}\n\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let version_line = stdout.lines().nth(3).unwrap();
+            let release_section = version_line.split(", ").nth(1).unwrap();
+            let version_number = release_section.split(' ').nth(1).unwrap();
+
+            match version_number {
+                "12.8" => (12, 8),
+                "12.6" => (12, 6),
+                "12.5" => (12, 5),
+                "12.4" => (12, 4),
+                "12.3" => (12, 3),
+                "12.2" => (12, 2),
+                "12.1" => (12, 1),
+                "12.0" => (12, 0),
+                "11.8" => (11, 8),
+                "11.7" => (11, 7),
+                "11.6" => (11, 6),
+                "11.5" => (11, 5),
+                "11.4" => (11, 4),
+                v => {
+                    panic!("Unsupported cuda toolkit version: `{v}`. Please raise a github issue.")
+                }
+            }
+        }
+
+        let (cuda_version_major, cuda_version_minor) = cuda_version_from_build_system();
+        if cuda_version_major >= 12 && cuda_version_minor >= 8 {
+            println!("cargo:rustc-cfg=cuda_nvcc_version_12_8");
+            println!("cargo:rustc-check-cfg=cfg(cuda_nvcc_version_12_8, values(none()))");
+        }
+
         use std::{fs::read_to_string, path::PathBuf, process::Command, vec};
         const MARLIN_FFI_PATH: &str = "src/gptq/marlin_ffi.rs";
         const BLOCKWISE_FP8_FFI_PATH: &str = "src/blockwise_fp8/ffi.rs";

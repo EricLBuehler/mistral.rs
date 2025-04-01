@@ -1,15 +1,19 @@
-use candle_core::cuda::cudarc::driver::{DevicePtr, DeviceRepr};
+use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr, DeviceRepr};
 use candle_core::cuda::CudaDType;
 use float8::F8E4M3;
 use std::ffi::c_int;
 
 use candle_core::backend::BackendStorage;
 use candle_core::cuda_backend::WrapErr;
-use candle_core::{CpuStorage, DType, Device, Layout, Result, Shape, Storage, Tensor, WithDType};
+use candle_core::{
+    CpuStorage, DType, Device, Layout, Result, Shape, Storage, Tensor, WithDType, D,
+};
 use half::{bf16, f16};
 use std::sync::Arc;
 
-use super::matmul::{Activation, CublasLTDType, CudaBlasLT, Matmul, MatmulConfig, OutSlice};
+use super::matmul::{
+    Activation, CublasLTDType, CudaBlasLT, Matmul, MatmulConfig, OutSlice, ScalesSlice,
+};
 use super::F8MatmulOutType;
 
 #[derive(Debug, Clone)]
@@ -38,7 +42,7 @@ pub struct CublasLTBatchMatmulF8 {
     pub a_scale: Tensor,
     pub b_scale: Tensor,
     // Quantize
-    pub d_scale: Tensor,
+    pub d_scale: Option<Tensor>,
     pub out_dtype: F8MatmulOutType,
 }
 
@@ -66,30 +70,39 @@ impl CublasLTBatchMatmulF8 {
             candle_core::bail!("`b` must have the same batch size as `a`")
         }
 
-        if !self.a_scale.dims().is_empty() || self.a_scale.dtype() != DType::F32 {
-            candle_core::bail!("`a_scale` must be a f32 scalar.");
+        if a.dtype() == DType::F8E4M3 && a_l.dim(D::Minus1)? != 32 {
+            candle_core::bail!("`a` f8e4m3 must bei in vec32 format.");
         }
-        if !self.b_scale.dims().is_empty() || self.b_scale.dtype() != DType::F32 {
-            candle_core::bail!("`b_scale` must be a f32 scalar.");
+        if b.dtype() == DType::F8E4M3 && a_l.dim(D::Minus1)? != 32 {
+            candle_core::bail!("`b` f8e4m3 must bei in vec32 format.");
         }
-        if !self.d_scale.dims().is_empty() || self.d_scale.dtype() != DType::F32 {
-            candle_core::bail!("`d_scale` must be a f32 scalar.");
+        if self.a_scale.dims() != &[batch_size * m] || self.a_scale.dtype() != DType::U8 {
+            candle_core::bail!("`a_scale` must be a u8 vec32 format.");
+        }
+        if self.b_scale.dims() != &[b_0 * n] || self.b_scale.dtype() != DType::U8 {
+            candle_core::bail!("`b_scale` must be a u8 vec32 format.");
+        }
+        if let Some(d_scale) = &self.d_scale {
+            if !d_scale.dims().is_empty() || d_scale.dtype() != DType::F32 {
+                candle_core::bail!("`d_scale` must be a f32 scalar.");
+            }
         }
         let (a_s, _) = self.a_scale.storage_and_layout();
         let (b_s, _) = self.b_scale.storage_and_layout();
-        let (d_s, _) = self.d_scale.storage_and_layout();
+        let d_s = self.d_scale.as_ref().map(|s| s.storage_and_layout().0);
 
         let a_scale = match &*a_s {
-            Storage::Cuda(scale) => scale.as_cuda_slice::<f32>()?,
+            Storage::Cuda(scale) => scale.as_cuda_slice::<u8>()?,
             _ => candle_core::bail!("`a_scale` must be a cuda tensor"),
         };
         let b_scale = match &*b_s {
-            Storage::Cuda(scale) => scale.as_cuda_slice::<f32>()?,
+            Storage::Cuda(scale) => scale.as_cuda_slice::<u8>()?,
             _ => candle_core::bail!("`b_scale` must be a cuda tensor"),
         };
-        let d_scale = match &*d_s {
-            Storage::Cuda(scale) => scale.as_cuda_slice::<f32>()?,
-            _ => candle_core::bail!("`d_scale` must be a cuda tensor"),
+        let d_scale = match d_s.as_deref() {
+            Some(Storage::Cuda(scale)) => Some(scale.as_cuda_slice::<f32>()?),
+            Some(_) => candle_core::bail!("`d_scale` must be a cuda tensor"),
+            None => None,
         };
 
         let lda = k;
@@ -169,7 +182,7 @@ impl CublasLTBatchMatmulF8 {
             ),
         };
 
-        let cases = [
+        let mut cases = vec![
             k * std::mem::size_of::<F8E4M3>(),
             k * std::mem::size_of::<F8E4M3>(),
             m * std::mem::size_of::<F8E4M3>(),   // C type size
@@ -181,8 +194,10 @@ impl CublasLTBatchMatmulF8 {
             *c.device_ptr() as usize,
             *a_scale.device_ptr() as usize,
             *b_scale.device_ptr() as usize,
-            *d_scale.device_ptr() as usize,
         ];
+        if let Some(d_scale) = d_scale {
+            cases.push(*d_scale.device_ptr() as usize);
+        }
 
         for case in cases {
             if case % 16 != 0 {
@@ -208,20 +223,21 @@ impl CublasLTBatchMatmulF8 {
             batch_size: Some(c_int::try_from(batch_size)?),
         };
 
-        // let mut amaxd = unsafe { dev.alloc_zeros::<f32>(1).w()? };
+        let scales: ScalesSlice<'_, CudaSlice<f32>, CudaSlice<u8>> = ScalesSlice::Vec32U8 {
+            scale_a: a_scale,
+            scale_b: b_scale,
+            scale_d: d_scale,
+        };
 
         unsafe {
             self.cublaslt
-                .matmul_fp8_like(
+                .matmul_fp8(
                     config,
                     &a,
                     &b,
-                    a_scale,
-                    b_scale,
-                    d_scale,
+                    &scales,
                     &c,
                     &mut out,
-                    // &mut amaxd,
                     bias.as_ref(),
                     self.act.as_ref(),
                 )
@@ -261,7 +277,7 @@ pub fn fused_batch_matmul_f8(
     b: &Tensor,
     dequant_a_scale: &Tensor,
     dequant_b_scale: &Tensor,
-    quantize_scale: &Tensor,
+    quantize_scale: Option<&Tensor>,
     out: Option<&Tensor>,
     alpha: Option<f32>,
     beta: Option<f32>,
@@ -278,7 +294,7 @@ pub fn fused_batch_matmul_f8(
         beta,
         a_scale: dequant_a_scale.clone(),
         b_scale: dequant_b_scale.clone(),
-        d_scale: quantize_scale.clone(),
+        d_scale: quantize_scale.cloned(),
         out_dtype,
     };
 
