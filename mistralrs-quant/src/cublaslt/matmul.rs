@@ -212,7 +212,7 @@ impl MatmulDesc {
                 self.handle,
                 attr,
                 (&scale_mode) as *const _ as *const _,
-                mem::size_of::<CUdeviceptr>(),
+                mem::size_of::<sys::cublasLtMatmulMatrixScale_t>(),
             )?;
         }
         Ok(())
