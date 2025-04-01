@@ -86,7 +86,7 @@ pub enum ModelSelected {
         max_batch_size: usize,
 
         /// Cache path for Hugging Face models downloaded locally
-        #[arg(short, long)]
+        #[arg(long)]
         hf_cache_path: Option<PathBuf>,
     },
 
@@ -142,7 +142,7 @@ pub enum ModelSelected {
         max_batch_size: usize,
 
         /// Cache path for Hugging Face models downloaded locally
-        #[arg(short, long)]
+        #[arg(long)]
         hf_cache_path: Option<PathBuf>,
     },
 
@@ -193,7 +193,7 @@ pub enum ModelSelected {
         max_batch_size: usize,
 
         /// Cache path for Hugging Face models downloaded locally
-        #[arg(short, long)]
+        #[arg(long)]
         hf_cache_path: Option<PathBuf>,
     },
 
@@ -525,7 +525,7 @@ pub enum ModelSelected {
         max_image_length: usize,
 
         /// Cache path for Hugging Face models downloaded locally
-        #[arg(short, long)]
+        #[arg(long)]
         hf_cache_path: Option<PathBuf>,
     },
 

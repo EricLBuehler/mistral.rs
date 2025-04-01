@@ -8,11 +8,6 @@ use super::FP8Linear;
 pub(super) struct QuantizationResult {
     /// Quantized tensor (f8)
     pub(super) qw: Tensor,
-    /// Scalar, f32 tensor.
-    ///
-    /// Convert unquantized to quantized tensor as follows:
-    /// `q = x * qs`
-    pub(super) quantize_scale: Tensor,
     /// Scalar, f32 tensor. Reciprocal of `quantize_scale`.
     ///
     /// Convert unquantized to quantized tensor as follows:
@@ -22,22 +17,13 @@ pub(super) struct QuantizationResult {
 
 impl FP8Linear {
     pub(super) fn quantize(data: &Tensor, dtype: DType) -> Result<QuantizationResult> {
-        let data = data.to_dtype(DType::BF16)?;
-        let mut absmax = data.clone();
-        let mut absmin = data.clone();
-        while !absmax.dims().is_empty() {
-            absmax = absmax.max(0)?;
-            absmin = absmin.min(0)?;
-        }
+        let data = data.to_dtype(DType::BF16)?.reshape(((), 32))?;
+        let amax = data.abs()?.max(1)?.to_dtype(DType::F32)?;
 
-        let absmax = absmax.to_dtype(DType::F32)?.to_scalar::<f32>()?;
-        let absmin = absmin.to_dtype(DType::F32)?.to_scalar::<f32>()?;
-        let amax = f32::max(absmax.abs(), absmin.abs());
+        let max_v = F8E4M3::MAX.to_f64();
+        let scale = (max_v / amax)?;
 
-        let max_v = F8E4M3::MAX.to_f32();
-        let scale = (max_v / amax).clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32());
-        let scale = Tensor::new(scale, data.device())?;
-        let to_cast = data.broadcast_mul(&scale.to_dtype(data.dtype())?)?;
+        let to_cast = data.broadcast_mul(&scale.to_dtype(data.dtype())?.unsqueeze(1)?)?;
         let qw = if data.device().is_metal() {
             // Evil hack to allow metal shader to get the double value!
             let transmute_data = to_cast
@@ -50,10 +36,16 @@ impl FP8Linear {
         } else {
             to_cast.to_dtype(dtype)?
         };
+
+        // https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/struct____nv__fp8__e8m0.html
+        // This structure implements the datatype for handling 8-bit scale factors of e8m0 kind: interpreted as powers of two with biased exponent.
+        // Bias equals to 127, so numbers 0 through 254 represent 2^-127 through 2^127. Number 0xFF = 255 is reserved for NaN.
+        let iscale = scale.recip()?;
+        let ue8m0_scale =
+            ((iscale.log()? / (iscale.ones_like()? * 2.)?.log()?)? + 127.)?.to_dtype(DType::U8)?;
         Ok(QuantizationResult {
             qw,
-            quantize_scale: scale.clone(),
-            dequantize_scale: scale.recip()?,
+            dequantize_scale: ue8m0_scale,
         })
     }
 
@@ -79,6 +71,26 @@ mod tests {
     use super::QuantizationResult;
 
     #[test]
+    fn test_quantize_f8e4m3() -> Result<()> {
+        #[cfg(not(feature = "metal"))]
+        let dev = Device::cuda_if_available(0)?;
+        #[cfg(feature = "metal")]
+        let dev = Device::new_metal(0)?;
+
+        let data = Tensor::ones((8, 8), DType::F32, &dev)?;
+
+        let QuantizationResult {
+            qw,
+            dequantize_scale,
+        } = FP8Linear::quantize(&data, DType::F8E4M3)?;
+
+        println!("{data}");
+        println!("{qw}");
+        println!("{dequantize_scale}");
+        Ok(())
+    }
+
+    #[test]
     fn test_roundtrip_f8e4m3() -> Result<()> {
         #[cfg(not(feature = "metal"))]
         let dev = Device::cuda_if_available(0)?;
@@ -89,7 +101,6 @@ mod tests {
 
         let QuantizationResult {
             qw,
-            quantize_scale: _,
             dequantize_scale,
         } = FP8Linear::quantize(&data, DType::F8E4M3)?;
 
@@ -122,7 +133,6 @@ mod tests {
 
         let QuantizationResult {
             qw,
-            quantize_scale: quant_scale,
             dequantize_scale: dequant_a_scale,
         } = FP8Linear::quantize(&w, DType::F8E4M3)?;
 
@@ -130,7 +140,7 @@ mod tests {
         if !matches!(x.dtype(), DType::F8E4M3) {
             let QuantizationResult {
                 qw,
-                quantize_scale: _,
+
                 dequantize_scale,
             } = FP8Linear::quantize(&x, DType::F8E4M3)?;
             x = qw;
@@ -141,12 +151,12 @@ mod tests {
         let b = x;
 
         // FP8 quantized matmul
-        let _res = handle.batch_matmul_f8(
+        let _res = handle.batch_matmul_fp8(
             &a,
             &b,
             &dequant_a_scale,
             &dequant_b_scale,
-            &quant_scale,
+            None,
             None,
             None,
             None,
