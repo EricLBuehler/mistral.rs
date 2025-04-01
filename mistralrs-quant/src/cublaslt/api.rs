@@ -71,10 +71,10 @@ impl CublasLTBatchMatmulF8 {
         }
 
         if a.dtype() == DType::F8E4M3 && a_l.dim(D::Minus1)? != 32 {
-            candle_core::bail!("`a` f8e4m3 must bei in vec32 format.");
+            candle_core::bail!("`a` f8e4m3 must be in vec32 format.");
         }
         if b.dtype() == DType::F8E4M3 && a_l.dim(D::Minus1)? != 32 {
-            candle_core::bail!("`b` f8e4m3 must bei in vec32 format.");
+            candle_core::bail!("`b` f8e4m3 must be in vec32 format.");
         }
         if self.a_scale.dims() != &[batch_size * m] || self.a_scale.dtype() != DType::U8 {
             candle_core::bail!("`a_scale` must be a u8 vec32 format.");

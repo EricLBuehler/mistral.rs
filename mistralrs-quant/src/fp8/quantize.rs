@@ -21,7 +21,7 @@ impl FP8Linear {
         let amax = data.abs()?.max(1)?.to_dtype(DType::F32)?;
 
         let max_v = F8E4M3::MAX.to_f64();
-        let scale = (max_v / amax)?.clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32())?;
+        let scale = (max_v / amax)?;
 
         let to_cast = data.broadcast_mul(&scale.to_dtype(data.dtype())?.unsqueeze(1)?)?;
         let qw = if data.device().is_metal() {
@@ -36,9 +36,16 @@ impl FP8Linear {
         } else {
             to_cast.to_dtype(dtype)?
         };
+
+        // https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/struct____nv__fp8__e8m0.html
+        // This structure implements the datatype for handling 8-bit scale factors of e8m0 kind: interpreted as powers of two with biased exponent.
+        // Bias equals to 127, so numbers 0 through 254 represent 2^-127 through 2^127. Number 0xFF = 255 is reserved for NaN.
+        let iscale = scale.recip()?;
+        let ue8m0_scale =
+            ((iscale.log()? / (iscale.ones_like()? * 2.)?.log()?)? + 127.)?.to_dtype(DType::U8)?;
         Ok(QuantizationResult {
             qw,
-            dequantize_scale: scale.recip()?,
+            dequantize_scale: ue8m0_scale,
         })
     }
 
