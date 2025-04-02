@@ -23,20 +23,13 @@ pub(super) struct QuantizationResult {
 impl FP8Linear {
     pub(super) fn quantize(data: &Tensor, dtype: DType) -> Result<QuantizationResult> {
         let data = data.to_dtype(DType::BF16)?;
-        let mut absmax = data.clone();
-        let mut absmin = data.clone();
+        let mut absmax = data.abs()?;
         while !absmax.dims().is_empty() {
             absmax = absmax.max(0)?;
-            absmin = absmin.min(0)?;
         }
 
-        let absmax = absmax.to_dtype(DType::F32)?.to_scalar::<f32>()?;
-        let absmin = absmin.to_dtype(DType::F32)?.to_scalar::<f32>()?;
-        let amax = f32::max(absmax.abs(), absmin.abs());
-
-        let max_v = F8E4M3::MAX.to_f32();
-        let scale = (max_v / amax).clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32());
-        let scale = Tensor::new(scale, data.device())?;
+        let max_v = F8E4M3::MAX.to_f64();
+        let scale = (max_v / absmax)?.clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32())?;
         let to_cast = data.broadcast_mul(&scale.to_dtype(data.dtype())?)?;
         let qw = if data.device().is_metal() {
             // Evil hack to allow metal shader to get the double value!
