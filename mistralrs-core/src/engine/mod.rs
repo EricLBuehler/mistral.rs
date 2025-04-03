@@ -186,7 +186,7 @@ impl Engine {
                 SchedulerOutput::DefaultScheduler {
                     output: mut scheduled,
                 } => {
-                    if scheduled.completion.len() > 0 {
+                    if !scheduled.completion.is_empty() {
                         let current_completion_ids: Vec<usize> =
                             scheduled.completion.iter().map(|seq| *seq.id()).collect();
                         let res = {
@@ -254,7 +254,7 @@ impl Engine {
                         last_completion_ids = current_completion_ids;
                     }
 
-                    if scheduled.prompt.len() > 0 {
+                    if !scheduled.prompt.is_empty() {
                         let prompt_exec_time = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 

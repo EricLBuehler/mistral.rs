@@ -51,9 +51,7 @@ pub trait InputsProcessor {
 // ========================= Test models input processor
 
 pub mod text_models_inputs_processor {
-    use std::{
-        any::Any, collections::HashMap, fmt::Debug, iter::repeat, num::NonZeroUsize, sync::Arc,
-    };
+    use std::{any::Any, collections::HashMap, fmt::Debug, num::NonZeroUsize, sync::Arc};
 
     use anyhow::Result;
     use candle_core::{DType, Device, DeviceLocation, Tensor, WithDType};
@@ -170,7 +168,10 @@ pub mod text_models_inputs_processor {
             seqlen_offsets.push(offset.1 + chunk_offset_toks);
 
             position_ids.push(ctxt.len() + chunk_offset_toks);
-            ctxt.extend(repeat(padding_tok).take(max_len.saturating_sub(ctxt.len())));
+            ctxt.extend(std::iter::repeat_n(
+                padding_tok,
+                max_len.saturating_sub(ctxt.len()),
+            ));
             // If we are returning raw logits, we want to not trim the logits at all.
             if return_raw_logits {
                 if last_n_context_len.is_some() {

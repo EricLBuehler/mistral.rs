@@ -339,7 +339,7 @@ pub fn get_model_paths(
                 "Found model weight filenames {:?}",
                 files
                     .iter()
-                    .map(|x| x.split('/').last().unwrap())
+                    .map(|x| x.split('/').next_back().unwrap())
                     .collect::<Vec<_>>()
             );
             for rfilename in files {
