@@ -29,7 +29,9 @@ impl FP8Linear {
         }
 
         let max_v = F8E4M3::MAX.to_f64();
-        let scale = (max_v / absmax)?.clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32())?;
+        let scale = (max_v / absmax)?
+            .clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32())?
+            .to_dtype(DType::F32)?;
         let to_cast = data.broadcast_mul(&scale.to_dtype(data.dtype())?)?;
         let qw = if data.device().is_metal() {
             // Evil hack to allow metal shader to get the double value!
