@@ -3,7 +3,7 @@ use candle_nn::Linear;
 use float8::F8E4M3;
 use half::bf16;
 
-use super::FP8Linear;
+use super::{ops, FP8Linear};
 
 pub(super) struct QuantizationResult {
     /// Quantized tensor (f8)
@@ -22,6 +22,15 @@ pub(super) struct QuantizationResult {
 
 impl FP8Linear {
     pub(super) fn quantize(data: &Tensor, dtype: DType) -> Result<QuantizationResult> {
+        assert_eq!(dtype, DType::F8E4M3);
+
+        let (qw, scale) = ops::quantize_scalar_fp8(data)?;
+        return Ok(QuantizationResult {
+            qw,
+            quantize_scale: scale.clone(),
+            dequantize_scale: scale.recip()?,
+        });
+
         let data = data.to_dtype(DType::BF16)?;
         let mut absmax = data.abs()?;
         while !absmax.dims().is_empty() {
