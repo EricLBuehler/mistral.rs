@@ -2,7 +2,7 @@
 
 mistral.rs controls compilation of hardware accelerator-specific and optimized components with feature flags. These are used for the CLI and the from-scratch Python APIs.
 
-Feature flags can be chained by using commas as delimeters: `--features feature1,feature2`.
+Feature flags can be chained by using commas as delimiters: `--features feature1,feature2`.
 
 **Use the following table to determine which features to use for your GPU:**
 

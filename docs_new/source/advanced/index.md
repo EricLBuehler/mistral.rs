@@ -21,4 +21,4 @@ paged_attention
 - <project:flash_attention.md>
   - FlashAttention V2/V3
 - <project:paged_attention.md>
-  - PagedAttnetion
+  - PagedAttention

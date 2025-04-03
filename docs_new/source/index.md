@@ -1,17 +1,15 @@
 # mistral.rs
 
-:::{figure} ./assets/logos/mistralrs-logo-text-light.png
-:align: center
-:alt: mistral.rs
-:class: no-scaled-link
-:width: 60%
-:::
-
 :::{raw} html
-<p style="text-align:center">
+<h1 style="text-align:center">
+<strong>mistral.rs
+</strong>
+</h1>
+
+<h3 style="text-align:center">
 <strong>Blazingly fast LLM inference
 </strong>
-</p>
+</h3>
 
 <p style="text-align:center">
 <script async defer src="https://buttons.github.io/buttons.js"></script>
@@ -21,7 +19,7 @@
 </p>
 :::
 
-mistral.rs is fast, powerful, and easy to use:
+mistral.rs is a fast, powerful, and easy to use AI inference platform:
 
 **Broad model support**:
 - Text models
@@ -74,7 +72,6 @@ mistral.rs is fast, powerful, and easy to use:
 
 getting_started/installation
 getting_started/quickstart
-getting_started/examples
 
 :::
 
