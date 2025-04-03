@@ -103,12 +103,8 @@ void quantize_scalar_fp8(const T *d_in, __nv_fp8_e4m3 *d_out, float *s_out,
       d_in, d_out, elem_count, abs_max, fp8_max_val, fp8_min_val);
   CUDA_CHECK(cudaGetLastError());
 
-  // CUDA_CHECK(cudaMemcpyAsync((void *)s_out, (void *)abs_max, sizeof(float),
-  //                            cudaMemcpyDeviceToDevice, stream));
-  
-  float test_value = 2;
-  CUDA_CHECK(cudaMemcpyAsync((void *)s_out, (void *)&test_value, sizeof(float),
-                             cudaMemcpyHostToDevice, stream));
+  CUDA_CHECK(cudaMemcpyAsync((void *)s_out, (void *)abs_max, sizeof(float),
+                             cudaMemcpyDeviceToDevice, stream));
 
   // Clean up
   CUDA_CHECK(cudaFreeAsync(d_temp_storage, stream));
