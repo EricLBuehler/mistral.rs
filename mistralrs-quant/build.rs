@@ -4,6 +4,7 @@ fn main() {
         use std::{fs::read_to_string, path::PathBuf, process::Command, vec};
         const MARLIN_FFI_PATH: &str = "src/gptq/marlin_ffi.rs";
         const BLOCKWISE_FP8_FFI_PATH: &str = "src/blockwise_fp8/ffi.rs";
+        const QUANT_FP8_FFI_PATH: &str = "src/fp8/ffi.rs";
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
@@ -77,7 +78,20 @@ fn main() {
             );
         }
         std::fs::write(BLOCKWISE_FP8_FFI_PATH, blockwise_fp8_ffi_ct).unwrap();
-        // ========
+
+        let mut quant_fp8_ffi_ct = read_to_string(QUANT_FP8_FFI_PATH).unwrap();
+        if quant_fp8_ffi_ct.contains("pub(crate) const HAVE_FP8_QUANT_KERNELS: bool = true;") {
+            quant_fp8_ffi_ct = quant_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_FP8_QUANT_KERNELS: bool = true;",
+                &format!("pub(crate) const HAVE_FP8_QUANT_KERNELS: bool = {cc_is_over_800};"),
+            );
+        } else {
+            quant_fp8_ffi_ct = quant_fp8_ffi_ct.replace(
+                "pub(crate) const HAVE_FP8_QUANT_KERNELS: bool = false;",
+                &format!("pub(crate) const HAVE_FP8_QUANT_KERNELS: bool = {cc_is_over_800};"),
+            );
+        }
+        std::fs::write(QUANT_FP8_FFI_PATH, quant_fp8_ffi_ct).unwrap(); // ========
 
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
         let mut lib_files = vec![
@@ -86,13 +100,16 @@ fn main() {
             "kernels/ops/ops.cu",
             "kernels/bitsandbytes/dequant.cu",
             "kernels/rotary/rotary.cu",
+            "kernels/fp8_quantize/fp8_quantize.cu",
         ];
         if cc_over_800 {
             lib_files.push("kernels/marlin/marlin_kernel.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8.cu");
+            lib_files.push("kernels/fp8_quantize/fp8_quantize.cu");
         } else {
             lib_files.push("kernels/marlin/dummy_marlin_kernel.cu");
             lib_files.push("kernels/blockwise_fp8/blockwise_fp8_dummy.cu");
+            lib_files.push("kernels/fp8_quantize/fp8_quantize_dummy.cu");
         }
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
