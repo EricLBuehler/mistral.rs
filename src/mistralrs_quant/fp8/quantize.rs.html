@@ -153,12 +153,7 @@
 <a href="#152" id="152">152</a>
 <a href="#153" id="153">153</a>
 <a href="#154" id="154">154</a>
-<a href="#155" id="155">155</a>
-<a href="#156" id="156">156</a>
-<a href="#157" id="157">157</a>
-<a href="#158" id="158">158</a>
-<a href="#159" id="159">159</a>
-<a href="#160" id="160">160</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, <span class="prelude-ty">Result</span>, Tensor};
+<a href="#155" id="155">155</a></pre></div><pre class="rust"><code><span class="kw">use </span>candle_core::{DType, <span class="prelude-ty">Result</span>, Tensor};
 <span class="kw">use </span>candle_nn::Linear;
 <span class="kw">use </span>float8::F8E4M3;
 <span class="kw">use </span>half::bf16;
@@ -183,20 +178,15 @@
 <span class="kw">impl </span>FP8Linear {
     <span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>quantize(data: <span class="kw-2">&amp;</span>Tensor, dtype: DType) -&gt; <span class="prelude-ty">Result</span>&lt;QuantizationResult&gt; {
         <span class="kw">let </span>data = data.to_dtype(DType::BF16)<span class="question-mark">?</span>;
-        <span class="kw">let </span><span class="kw-2">mut </span>absmax = data.clone();
-        <span class="kw">let </span><span class="kw-2">mut </span>absmin = data.clone();
+        <span class="kw">let </span><span class="kw-2">mut </span>absmax = data.abs()<span class="question-mark">?</span>;
         <span class="kw">while </span>!absmax.dims().is_empty() {
             absmax = absmax.max(<span class="number">0</span>)<span class="question-mark">?</span>;
-            absmin = absmin.min(<span class="number">0</span>)<span class="question-mark">?</span>;
         }
 
-        <span class="kw">let </span>absmax = absmax.to_dtype(DType::F32)<span class="question-mark">?</span>.to_scalar::&lt;f32&gt;()<span class="question-mark">?</span>;
-        <span class="kw">let </span>absmin = absmin.to_dtype(DType::F32)<span class="question-mark">?</span>.to_scalar::&lt;f32&gt;()<span class="question-mark">?</span>;
-        <span class="kw">let </span>amax = f32::max(absmax.abs(), absmin.abs());
-
-        <span class="kw">let </span>max_v = F8E4M3::MAX.to_f32();
-        <span class="kw">let </span>scale = (max_v / amax).clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32());
-        <span class="kw">let </span>scale = Tensor::new(scale, data.device())<span class="question-mark">?</span>;
+        <span class="kw">let </span>max_v = F8E4M3::MAX.to_f64();
+        <span class="kw">let </span>scale = (max_v / absmax)<span class="question-mark">?
+            </span>.clamp(F8E4M3::MIN.to_f32(), F8E4M3::MAX.to_f32())<span class="question-mark">?
+            </span>.to_dtype(DType::F32)<span class="question-mark">?</span>;
         <span class="kw">let </span>to_cast = data.broadcast_mul(<span class="kw-2">&amp;</span>scale.to_dtype(data.dtype())<span class="question-mark">?</span>)<span class="question-mark">?</span>;
         <span class="kw">let </span>qw = <span class="kw">if </span>data.device().is_metal() {
             <span class="comment">// Evil hack to allow metal shader to get the double value!
