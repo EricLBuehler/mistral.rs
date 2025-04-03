@@ -72,8 +72,7 @@ impl CublasLtWrapper {
     /// * `dequant_a_scale` - F32 scalar tensor, used to `a` the out tensor.
     /// * `dequant_b_scale` - F32 scalar tensor, used to `b` the out tensor.
     /// * `quantize_scale` - F32 scalar tensor, used to requantize.
-    /// * `out` - Optional Output tensor of size BxNxK.
-    ///           If set and beta != 0, will be added to the end result of A*B before `act`
+    /// * `out` - Optional Output tensor of size BxNxK. If set and beta != 0, will be added to the end result of A*B before `act`
     /// * `alpha` - Optional scaling factor for A*B
     /// * `beta` - Optional scaling factor for C
     /// * `bias` - Optional bias tensor of size M
@@ -134,8 +133,7 @@ impl CublasLtWrapper {
     ///
     /// * `a` - Input tensor of size BxMxK
     /// * `b` - Input tensor of size BxNxK
-    /// * `out` - Optional Output tensor of size BxNxK.
-    ///           If set and beta != 0, will be added to the end result of A*B before `act`
+    /// * `out` - Optional Output tensor of size BxNxK. If set and beta != 0, will be added to the end result of A*B before `act`
     /// * `alpha` - Optional scaling factor for A*B
     /// * `beta` - Optional scaling factor for C
     /// * `bias` - Optional bias tensor of size M

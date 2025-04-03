@@ -59,7 +59,7 @@ impl QLoraLinear {
             )?),
         };
 
-        let module = prefix.split('.').last().unwrap();
+        let module = prefix.split('.').next_back().unwrap();
         if target_modules.is_some_and(|target_modules| !target_modules.contains(module)) {
             return Ok(Self {
                 old,

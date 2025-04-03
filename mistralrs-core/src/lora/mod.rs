@@ -185,7 +185,7 @@ pub fn linear(
     preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
-    let module = prefix.split('.').last().unwrap();
+    let module = prefix.split('.').next_back().unwrap();
 
     let linear_config = LoraLinearConfig::new(d1, d2);
     let inner = layers::linear(d1, d2, base_vb.clone())?;
@@ -237,7 +237,7 @@ pub fn linear_no_bias(
     preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
 ) -> Result<Arc<dyn LinearLayerLike + Send + Sync>> {
     let prefix = vb.prefix();
-    let module = prefix.split('.').last().unwrap();
+    let module = prefix.split('.').next_back().unwrap();
 
     let linear_config = LoraLinearConfig::new(d1, d2);
     let inner = layers::linear_no_bias(d1, d2, base_vb.clone())?;
