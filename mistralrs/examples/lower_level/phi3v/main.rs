@@ -87,7 +87,6 @@ fn main() -> anyhow::Result<()> {
         id: 0,
         constraint: Constraint::None,
         suffix: None,
-        adapters: None,
         tools: None,
         tool_choice: None,
         logits_processors: None,

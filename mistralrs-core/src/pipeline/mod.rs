@@ -93,21 +93,15 @@ pub struct GeneralMetadata {
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
 }
 
-pub enum AdapterInstruction {
-    Activate(Vec<String>),
-    None,
-}
-
 pub enum CacheInstruction {
-    In(AdapterInstruction),
+    In,
     Out,
     /// load_preallocated_cache means to load the preallocated cache, if applicable.
     Reset {
         load_preallocated_cache: bool,
         reset_non_granular: bool,
-        adapter_inst: AdapterInstruction,
     },
-    Nothing(AdapterInstruction),
+    Nothing,
 }
 
 pub trait PreProcessingMixin: MetadataMixin {
@@ -144,11 +138,6 @@ pub trait CacheManagerMixin {
     fn do_preallocated_cache(&self) -> bool {
         matches!(self.cache(), EitherCache::Normal(_))
     }
-}
-
-pub trait AdapterActivationMixin {
-    /// Returns the number of activated adapters.
-    fn activate_adapters(&mut self, adapters: Vec<String>) -> Result<usize>;
 }
 
 pub trait MetadataMixin {
@@ -301,7 +290,6 @@ pub trait Pipeline:
     + PreProcessingMixin
     + IsqPipelineMixin
     + CacheManagerMixin
-    + AdapterActivationMixin
     + MetadataMixin
     + AnyMoePipelineMixin
 {
@@ -361,59 +349,17 @@ pub trait Pipeline:
                     } = inputs.map_err(candle_core::Error::msg)?;
                     if i == 0 {
                         match pre_op {
-                            CacheInstruction::In(ref adapter_inst) => {
-                                match adapter_inst {
-                                    AdapterInstruction::Activate(adapters) => {
-                                        self.activate_adapters(adapters.clone()).map_err(|e| {
-                                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                                dyn std::error::Error,
-                                            >>::as_ref(
-                                                &e
-                                            ))
-                                        })?
-                                    }
-                                    AdapterInstruction::None => 0,
-                                };
-                                self.clone_in_cache(input_seqs)
-                            }
-                            CacheInstruction::Nothing(ref adapter_inst) => {
-                                match adapter_inst {
-                                    AdapterInstruction::Activate(adapters) => {
-                                        self.activate_adapters(adapters.clone()).map_err(|e| {
-                                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                                dyn std::error::Error,
-                                            >>::as_ref(
-                                                &e
-                                            ))
-                                        })?
-                                    }
-                                    AdapterInstruction::None => 0,
-                                };
-                            }
+                            CacheInstruction::In => self.clone_in_cache(input_seqs),
+                            CacheInstruction::Nothing => (),
                             CacheInstruction::Reset {
                                 load_preallocated_cache,
                                 reset_non_granular,
-                                ref adapter_inst,
-                            } => {
-                                match adapter_inst {
-                                    AdapterInstruction::Activate(adapters) => {
-                                        self.activate_adapters(adapters.clone()).map_err(|e| {
-                                            candle_core::Error::msg(<anyhow::Error as AsRef<
-                                                dyn std::error::Error,
-                                            >>::as_ref(
-                                                &e
-                                            ))
-                                        })?
-                                    }
-                                    AdapterInstruction::None => 0,
-                                };
-                                self.set_none_cache(
-                                    input_seqs,
-                                    reset_non_granular,
-                                    false,
-                                    load_preallocated_cache,
-                                )
-                            }
+                            } => self.set_none_cache(
+                                input_seqs,
+                                reset_non_granular,
+                                false,
+                                load_preallocated_cache,
+                            ),
                             _ => unreachable!("Unreachable PRE cache op."),
                         }
                     }
@@ -435,11 +381,10 @@ pub trait Pipeline:
 
                 match post_op {
                     CacheInstruction::Out => self.clone_out_cache(input_seqs),
-                    CacheInstruction::Nothing(_) => (),
+                    CacheInstruction::Nothing => (),
                     CacheInstruction::Reset {
                         load_preallocated_cache,
                         reset_non_granular,
-                        adapter_inst: _,
                     } => self.set_none_cache(
                         input_seqs,
                         reset_non_granular,

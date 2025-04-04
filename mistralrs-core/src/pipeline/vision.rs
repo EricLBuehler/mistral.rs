@@ -2,11 +2,11 @@ use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::ImatrixDataSource;
 use super::isq::UqffFullSer;
 use super::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, AdapterKind, AnyMoePipelineMixin,
-    CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
-    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
-    ModelKind, ModelPaths, Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource,
-    VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
+    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManager,
+    CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader, GeneralMetadata,
+    IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths,
+    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader,
+    VisionModel, VisionModelLoader, VisionPromptPrefixer,
 };
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
@@ -780,12 +780,6 @@ impl CacheManagerMixin for VisionPipeline {
     }
     fn cache(&self) -> &EitherCache {
         self.model.cache()
-    }
-}
-
-impl AdapterActivationMixin for VisionPipeline {
-    fn activate_adapters(&mut self, _adapters: Vec<String>) -> Result<usize> {
-        anyhow::bail!("Vision models do not support adapter activation.");
     }
 }
 

@@ -93,7 +93,7 @@ fn make_adapter(
 }
 
 /// Any layer that is linear-like.
-pub trait LinearLayerLike: Merge + AdapterSwapper {
+pub trait LinearLayerLike: Merge {
     fn quantized_act_type(&self) -> Option<DType>;
     fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod>;
     fn is_lora(&self) -> bool;
@@ -115,34 +115,12 @@ pub trait Merge {
     fn merge_weights(&mut self) -> Result<()>;
 }
 
-pub trait AdapterSwapper {
-    fn activate(&mut self, adapter_names: &[String]) -> Result<usize> {
-        if self.can_load() {
-            self._activate_adapters(adapter_names)?;
-            Ok(1)
-        } else {
-            Ok(0)
-        }
-    }
-    fn _activate_adapters(&mut self, adapters: &[String]) -> Result<()>;
-    fn can_load(&self) -> bool;
-}
-
 impl Merge for Linear {
     fn merge_weights(&mut self) -> Result<()> {
         Ok(())
     }
     fn get_delta_weight(&self, _adapter: usize) -> Result<Tensor> {
         unreachable!()
-    }
-}
-
-impl AdapterSwapper for Linear {
-    fn _activate_adapters(&mut self, _adapter: &[String]) -> Result<()> {
-        unreachable!()
-    }
-    fn can_load(&self) -> bool {
-        false
     }
 }
 

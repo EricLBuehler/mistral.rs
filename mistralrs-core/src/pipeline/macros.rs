@@ -563,7 +563,7 @@ macro_rules! xlora_model_loader {
         $multi_progress:expr,
     ) => {{
         // TODO: remove lora_preload_adapter_info
-        let crate::pipeline::AdapterPaths::XLora {
+        let $crate::pipeline::AdapterPaths::XLora {
             adapter_configs,
             adapter_safetensors,
             classifier_path,
@@ -638,7 +638,7 @@ macro_rules! lora_model_loader {
         $is_moqe:expr,
         $multi_progress:expr,
     ) => {{
-        let crate::pipeline::AdapterPaths::Lora(lora_adapter_paths) = $paths.get_adapter_paths()
+        let $crate::pipeline::AdapterPaths::Lora(lora_adapter_paths) = $paths.get_adapter_paths()
         else {
             unreachable!()
         };
@@ -668,7 +668,7 @@ macro_rules! lora_model_loader {
             get_device_for_tensor.clone(),
         )?;
 
-        for crate::pipeline::LoraAdapterPaths {
+        for $crate::pipeline::LoraAdapterPaths {
             adapter_path,
             lora_config,
         } in lora_adapter_paths

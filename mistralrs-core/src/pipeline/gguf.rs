@@ -6,8 +6,8 @@ use super::{
     TokenSource,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
-    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::device_map::{self, DeviceMapper};
 use crate::gguf::{
@@ -642,25 +642,6 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::XLoraPhi3(ref model) => &model.cache,
             Model::Starcoder2(ref model) => &model.cache,
             Model::Qwen2(ref model) => &model.cache,
-        }
-    }
-}
-
-impl AdapterActivationMixin for GGUFPipeline {
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        let is_lora = self.metadata.kind.is_adapted_and(|a| a.is_lora());
-        if !is_lora {
-            anyhow::bail!("Activating adapters is only supported for models fine-tuned with LoRA.")
-        }
-
-        match self.model {
-            Model::XLoraLlama(ref mut model) => model
-                .activate_adapters(adapter_names)
-                .map_err(anyhow::Error::msg),
-            Model::XLoraPhi3(ref mut model) => model
-                .activate_adapters(adapter_names)
-                .map_err(anyhow::Error::msg),
-            _ => unreachable!(),
         }
     }
 }

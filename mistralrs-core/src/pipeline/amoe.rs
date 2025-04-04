@@ -31,8 +31,8 @@ use crate::{
 };
 
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
-    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, PreProcessingMixin,
+    AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
+    MetadataMixin, PreProcessingMixin,
 };
 
 pub struct AnyMoeLoader {
@@ -177,12 +177,6 @@ impl AnyMoePipeline {
             }
         }
         Ok(this)
-    }
-}
-
-impl AdapterActivationMixin for AnyMoePipeline {
-    fn activate_adapters(&mut self, adapters: Vec<String>) -> anyhow::Result<usize> {
-        get_mut_arcmutex!(self.target).activate_adapters(adapters)
     }
 }
 
@@ -586,7 +580,6 @@ fn new_dummy_seq(
         0,
         0,
         SequenceRecognizer::None,
-        None,
         None,
         None,
         images,

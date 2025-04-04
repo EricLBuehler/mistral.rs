@@ -37,6 +37,7 @@ pub struct LoraAdapterPaths {
     pub adapter_path: PathBuf,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum AdapterPaths {
     XLora {

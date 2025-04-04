@@ -4,7 +4,7 @@ use crate::{
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
-        AdapterInstruction, CacheBackendMetadata, CacheInstruction, NormalCache,
+        CacheBackendMetadata, CacheInstruction, NormalCache,
     },
     prefix_cacher::PrefixCacheManagerV2,
     request::{DetokenizationRequest, NormalRequest, SearchContextSize, TokenizationRequest},
@@ -194,19 +194,9 @@ impl Engine {
                             let pre_op = if !self.no_kv_cache
                                 && last_completion_ids != current_completion_ids
                             {
-                                CacheInstruction::In(
-                                    scheduled.completion[0]
-                                        .get_adapters()
-                                        .map(AdapterInstruction::Activate)
-                                        .unwrap_or(AdapterInstruction::None),
-                                )
+                                CacheInstruction::In
                             } else {
-                                CacheInstruction::Nothing(
-                                    scheduled.completion[0]
-                                        .get_adapters()
-                                        .map(AdapterInstruction::Activate)
-                                        .unwrap_or(AdapterInstruction::None),
-                                )
+                                CacheInstruction::Nothing
                             };
                             let post_op = if !self.no_kv_cache {
                                 CacheInstruction::Out
@@ -214,7 +204,6 @@ impl Engine {
                                 CacheInstruction::Reset {
                                     load_preallocated_cache: false,
                                     reset_non_granular: false,
-                                    adapter_inst: AdapterInstruction::None,
                                 }
                             };
 
@@ -265,13 +254,8 @@ impl Engine {
                                 CacheInstruction::Reset {
                                     load_preallocated_cache: false,
                                     reset_non_granular: false,
-                                    adapter_inst: AdapterInstruction::None,
                                 }
                             };
-                            let adapter_inst = scheduled.prompt[0]
-                                .get_adapters()
-                                .map(AdapterInstruction::Activate)
-                                .unwrap_or(AdapterInstruction::None);
 
                             let return_raw_logits = scheduled.prompt[0].return_raw_logits;
                             assert!(
@@ -285,12 +269,11 @@ impl Engine {
                             // This comes from prefix caching
                             // The invariant where all token offsets are the same is handled by the scheduler
                             let pre_op = if scheduled.prompt[0].token_offset() != 0 {
-                                CacheInstruction::In(adapter_inst)
+                                CacheInstruction::In
                             } else {
                                 CacheInstruction::Reset {
                                     load_preallocated_cache: true,
                                     reset_non_granular: false,
-                                    adapter_inst,
                                 }
                             };
 
@@ -522,12 +505,6 @@ impl Engine {
 
     async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
-            Request::ActivateAdapters(adapters) => {
-                match get_mut_arcmutex!(self.pipeline).activate_adapters(adapters) {
-                    Ok(n) => info!("Swapped adapters in {n} LoRA layers."),
-                    Err(e) => warn!("Adapter activation failed: {e:?}"),
-                }
-            }
             Request::Normal(request) => {
                 if matches!(
                     request.messages,
@@ -1119,7 +1096,6 @@ impl Engine {
                 } else {
                     None
                 },
-                request.adapters.clone(),
                 images.clone(),
                 block_size,
                 Some(matcher.clone()),

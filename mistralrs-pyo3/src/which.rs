@@ -229,8 +229,7 @@ pub enum Which {
     },
 
     #[pyo3(constructor = (
-        adapters_model_id,
-        order,
+        adapter_model_ids,
         arch = None,
         model_id = None,
         tokenizer_json = None,
@@ -242,8 +241,7 @@ pub enum Which {
         hf_cache_path = None,
     ))]
     Lora {
-        adapters_model_id: String,
-        order: String,
+        adapter_model_ids: Vec<String>,
         arch: Option<Architecture>,
         model_id: Option<String>,
         tokenizer_json: Option<String>,

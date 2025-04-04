@@ -58,7 +58,6 @@ class ChatCompletionRequest:
     top_k: int | None = None
     grammar: str | None = None
     grammar_type: str | None = None
-    adapters: list[str] | None = None
     min_p: float | None = None
     min_p: float | None = None
     tool_schemas: list[str] | None = None
@@ -88,7 +87,6 @@ class CompletionRequest:
     suffix: str | None = None
     grammar: str | None = None
     grammar_type: str | None = None
-    adapters: list[str] | None = None
     min_p: float | None = None
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
@@ -204,8 +202,7 @@ class Which(Enum):
 
     @dataclass
     class Lora:
-        adapters_model_id: str
-        order: str
+        adapter_model_id: str
         arch: Architecture | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
@@ -399,11 +396,6 @@ class Runner:
     def send_re_isq(self, dtype: str) -> CompletionResponse:
         """
         Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
-        """
-
-    def activate_adapters(self, adapter_names: list[str]) -> None:
-        """
-        Send a request to make the specified adapters the active adapters for the model.
         """
 
     def tokenize_text(self, text: str, add_special_tokens: bool) -> list[int]:

@@ -10,7 +10,6 @@ To support additional features, we have extended the completion and chat complet
 
 - `top_k`: `int` | `null`. If non null, it is only relevant if positive.
 - `grammar`: `{"type" : "regex" | "lark" | "json_schema" | "llguidance", "value": string}` or `null`. Grammar to use. This is mutually exclusive to the OpenAI-compatible `response_format`.
-- `adapters`: `array of string` | `null`. Adapter names to activate for this request.
 - `min_p`: `float` | `null`. If non null, it is only relevant if 1 >= min_p >= 0.
 
 
@@ -120,13 +119,6 @@ curl http://localhost:8080/v1/completions \
 }'
 ```
 
-## `POST`: `/activate_adapters`
-Make the specified adapters the active adapters. Pass the names as a JSON object with the key `adapter_names` to an array of strings (the adapter names).
-
-Example with `curl`:
-```bash
-curl http://localhost:<port>/activate_adapters -H "Content-Type: application/json" -H "Authorization: Bearer EMPTY" -d '{"adapter_names":["adapter_2"]}'
-```
 
 ## `POST`: `/re_isq`
 Reapply ISQ to the model if possible. Pass the names as a JSON object with the key `ggml_type` to a string (the quantization level).

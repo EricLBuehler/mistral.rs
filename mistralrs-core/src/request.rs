@@ -110,7 +110,6 @@ pub struct WebSearchOptions {
 /// - `id`: Request ID
 /// - `constraint`: Constraint to use during generation
 /// - `suffix`: Suffix to add
-/// - `adapters`: Adapters to use in this request
 /// - `tools`: Tools available in this request
 /// - `tool_choice`: Choice of tools
 /// - `logits_processors`: Custom logits processors. Order of application:
@@ -130,7 +129,6 @@ pub struct NormalRequest {
     pub id: usize,
     pub constraint: Constraint,
     pub suffix: Option<String>,
-    pub adapters: Option<Vec<String>>,
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
     #[serde(skip)]
@@ -159,7 +157,6 @@ impl NormalRequest {
             is_streaming: false,
             constraint: Constraint::None,
             suffix: None,
-            adapters: None,
             logits_processors: None,
             return_raw_logits: false,
             web_search_options: None,
@@ -196,7 +193,6 @@ pub struct DetokenizationRequest {
 pub enum Request {
     Normal(NormalRequest),
     ReIsq(IsqType),
-    ActivateAdapters(Vec<String>),
     Tokenize(TokenizationRequest),
     Detokenize(DetokenizationRequest),
     // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
@@ -212,17 +208,13 @@ impl Debug for Request {
                 messages,
                 sampling_params,
                 is_streaming,
-                adapters,
                 id,
                 ..
             }) => {
                 write!(
                     f,
-                    "Request {id} {{ messages: `{messages:?}`, sampling_params: {sampling_params:?}, is_streaming: {is_streaming}, adapters: {adapters:?}}}",
+                    "Request {id} {{ messages: `{messages:?}`, sampling_params: {sampling_params:?}, is_streaming: {is_streaming}}}",
                 )
-            }
-            Request::ActivateAdapters(adapters) => {
-                write!(f, "Activate Adapters Request {adapters:?}",)
             }
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)

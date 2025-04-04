@@ -8,9 +8,8 @@ use super::{
     TokenSource,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
-    ForwardInputsResult, IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqOrganization,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
     AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
@@ -932,12 +931,6 @@ impl CacheManagerMixin for NormalPipeline {
     }
     fn cache(&self) -> &EitherCache {
         self.model.cache()
-    }
-}
-
-impl AdapterActivationMixin for NormalPipeline {
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        Ok(self.model.activate_adapters(adapter_names)?)
     }
 }
 

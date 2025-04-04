@@ -68,12 +68,6 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin {
     fn cache(&self) -> &EitherCache;
     fn cache_mut(&mut self) -> &mut EitherCache;
     fn max_seq_len(&self) -> usize;
-    fn activate_adapters(&mut self, _: Vec<String>) -> candle_core::Result<usize> {
-        // NOTE: While X-LoRA shares a similar name, it is not equivalent. Its adapter set must remain the same.
-        candle_core::bail!(
-            "Activating adapters is only supported for models fine-tuned with LoRA."
-        );
-    }
     fn config(&self) -> &ModelConfigMetadata;
 }
 

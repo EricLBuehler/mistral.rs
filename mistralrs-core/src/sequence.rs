@@ -182,9 +182,6 @@ pub struct Sequence {
     // Prefix caching
     prefill_prompt_toks: Option<Vec<u32>>,
 
-    // Adapter dynamic config
-    adapters: Option<Vec<String>>,
-
     // Cache
     normal_cache: Vec<Option<KvCache>>,
     normal_draft_cache: Vec<Option<KvCache>>,
@@ -274,7 +271,6 @@ impl Sequence {
         recognizer: SequenceRecognizer,
         suffix: Option<String>,
         prefix: Option<String>,
-        adapters: Option<Vec<String>>,
         input_images: Option<Vec<image::DynamicImage>>,
         // Paged attention
         block_size: Option<usize>,
@@ -342,7 +338,6 @@ impl Sequence {
             last_is_done: None,
             is_tmp: false,
             scheduling_urgency: 0,
-            adapters,
             input_images,
             custom_metadata,
             tools,
@@ -781,10 +776,6 @@ impl Sequence {
 
     pub fn add_streaming_completion_chunk_choice_to_group(&self, chunk: CompletionChunkChoice) {
         get_mut_group!(self).completion_streaming_chunks.push(chunk);
-    }
-
-    pub fn get_adapters(&self) -> Option<Vec<String>> {
-        self.adapters.clone()
     }
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {

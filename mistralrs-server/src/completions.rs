@@ -226,7 +226,6 @@ fn parse_request(
                 Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
                 None => Constraint::None,
             },
-            adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
             logits_processors: None,

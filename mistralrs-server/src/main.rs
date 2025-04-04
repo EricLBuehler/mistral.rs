@@ -207,30 +207,6 @@ async fn health() -> &'static str {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-struct AdapterActivationRequest {
-    #[schema(example = json!(vec!["adapter_1","adapter_2"]))]
-    adapter_names: Vec<String>,
-}
-
-#[utoipa::path(
-    post,
-    tag = "Mistral.rs",
-    path = "/activate_adapters",
-    request_body = AdapterActivationRequest,
-    responses((status = 200, description = "Activate a set of pre-loaded LoRA adapters"))
-)]
-async fn activate_adapters(
-    State(state): State<Arc<MistralRs>>,
-    Json(request): Json<AdapterActivationRequest>,
-) -> String {
-    let repr = format!("Adapter activation: {:?}", request.adapter_names);
-    MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ActivateAdapters(request.adapter_names);
-    state.get_sender().unwrap().send(request).await.unwrap();
-    repr
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 struct ReIsqRequest {
     #[schema(example = "Q4K")]
     ggml_type: String,
@@ -287,7 +263,6 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/v1/models", get(models))
         .route("/health", get(health))
         .route("/", get(health))
-        .route("/activate_adapters", post(activate_adapters))
         .route("/re_isq", post(re_isq))
         .route("/v1/images/generations", post(image_generation))
         .layer(cors_layer)

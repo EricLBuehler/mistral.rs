@@ -134,8 +134,8 @@ pub enum TomlModelSelected {
         /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
         model_id: Option<String>,
 
-        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
-        adapter_model_id: String,
+        /// Model IDs to load LoRA from. This may be a HF hub repo or a local path. Specify multiple with a semicolon.
+        adapter_model_ids: String,
 
         /// The architecture of the model.
         arch: Option<NormalLoaderType>,
@@ -668,7 +668,7 @@ fn loader_from_selected(
         .build(arch)?,
         TomlModelSelected::Lora {
             model_id,
-            adapter_model_id,
+            adapter_model_ids,
             arch,
             dtype: _,
             topology,
@@ -696,7 +696,7 @@ fn loader_from_selected(
             args.jinja_explicit,
         )
         .with_lora(
-            adapter_model_id
+            adapter_model_ids
                 .split(MULTI_LORA_DELIMITER)
                 .map(ToString::to_string)
                 .collect(),
