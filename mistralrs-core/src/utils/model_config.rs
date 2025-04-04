@@ -31,9 +31,9 @@ pub struct Device<'a> {
 pub struct Adapter<'a> {
     pub xlora_config: Option<XLoraConfig>,
     pub lora_config: &'a [((String, String), LoraConfig)],
-    pub vb: ShardedVarBuilder<'a>,
+    pub vb: ShardedVarBuilder,
     pub ordering: &'a Ordering,
-    pub preload_adapters: Option<HashMap<String, (ShardedVarBuilder<'a>, LoraConfig)>>,
+    pub preload_adapters: Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
 }
 
 impl<'a> Adapter<'a> {

@@ -57,7 +57,7 @@ pub(crate) fn prepare_distributed_mapper<
     organization: IsqOrganization,
     model: &T,
     paths: &dyn ModelPaths,
-) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder<'a>)> {
+) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder)> {
     #[cfg(not(feature = "nccl"))]
     tracing::warn!(
         "NCCL support was included in the build, be sure to build with `--features nccl`."
