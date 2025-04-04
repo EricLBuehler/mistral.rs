@@ -6,15 +6,21 @@ use regex::Regex;
 pub use request::*;
 pub use response::*;
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
 use uuid::Uuid;
 
 use crate::Pipeline;
 
+const DEEPSEEK_REGEX: OnceLock<Regex> = OnceLock::new();
+
 fn process_model_specific_message(message: &str) -> Result<String> {
-    let deepseek_regex = Regex::new(
+    let ds_regex = &DEEPSEEK_REGEX;
+    let deepseek_regex = ds_regex.get_or_init(|| Regex::new(
         r"<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n(?P<json>.+?)\n```<｜tool▁call▁end｜>",
-    ).map_err(candle_core::Error::msg)?;
+    ).unwrap());
 
     if let Some(message) = message.strip_prefix("<|python_tag|>") {
         // Llama case
