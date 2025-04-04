@@ -52,8 +52,8 @@ pub(crate) fn merge_lora_weights(
         }
         let weights = weights.set_prefix(format!("base_model.model.{}", vb.prefix()));
 
-        let a = weights.get_with_hints((config.rank, in_dim), &format!("lora_A.weight"), shard)?;
-        let b = weights.get_with_hints((out_dim, config.rank), &format!("lora_B.weight"), shard)?;
+        let a = weights.get_with_hints((config.rank, in_dim), "lora_A.weight", shard)?;
+        let b = weights.get_with_hints((out_dim, config.rank), "lora_B.weight", shard)?;
         let scale = if config.rank > 0 {
             config.alpha / config.rank as f64
         } else {

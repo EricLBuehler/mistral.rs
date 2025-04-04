@@ -63,7 +63,7 @@ pub enum DeviceForLoadTensor {
 /// - If `regexes` is specified, this will be used in `make_dummy_predicate` based on `.any`
 /// - Otherwise, only include keys for which predicate evaluates to true.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn from_mmaped_safetensors<'a>(
+pub(crate) fn from_mmaped_safetensors(
     paths: Vec<PathBuf>,
     xlora_paths: Vec<PathBuf>,
     dtype: Option<DType>,
@@ -179,7 +179,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     ))
 }
 
-pub(crate) fn load_preload_adapters<'a>(
+pub(crate) fn load_preload_adapters(
     paths: &Option<HashMap<String, (PathBuf, LoraConfig)>>,
     dtype: DType,
     device: &Device,

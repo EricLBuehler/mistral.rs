@@ -241,7 +241,7 @@ pub trait DeviceMapper: Debug {
 
     // === DURING LOADING TIME ===
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
-    fn set_device<'a>(
+    fn set_device(
         &self,
         layer: usize,
         varbuilder: ShardedVarBuilder,
@@ -254,11 +254,7 @@ pub trait DeviceMapper: Debug {
     fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor>;
     /// Set non mapped layer device. This is for ISQ + device mapping support
     /// If ISQ layer, then do not change the device. *They will do it later in NormalModel::quantize*
-    fn set_nm_device<'a>(
-        &self,
-        varbuilder: ShardedVarBuilder,
-        loading_isq: bool,
-    ) -> ShardedVarBuilder;
+    fn set_nm_device(&self, varbuilder: ShardedVarBuilder, loading_isq: bool) -> ShardedVarBuilder;
     fn num_device_mapping_layers(&self) -> usize;
     fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<mistralrs_quant::Comm>>;
 
