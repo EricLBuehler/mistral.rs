@@ -6,9 +6,11 @@ import os
 import argparse
 from datasets import load_dataset
 
+
 def get_wikitext2(tokenizer, nsamples, seqlen):
     traindata = load_dataset("wikitext", "wikitext-2-raw-v1", split="train").filter(
-        lambda x: len(x["text"]) >= seqlen)
+        lambda x: len(x["text"]) >= seqlen
+    )
 
     return [tokenizer(example["text"]) for example in traindata.select(range(nsamples))]
 
@@ -32,6 +34,7 @@ def calculate_avg_ppl(model, tokenizer):
     avg = sum(all) / len(all)
 
     return avg
+
 
 def main(args):
     pretrained_model_dir = args.src
@@ -61,10 +64,17 @@ def main(args):
     model = GPTQModel.load(quantized_model_dir, device=device)
 
     # Inference with model.generate
-    print(tokenizer.decode(model.generate(**tokenizer("test is", return_tensors="pt").to(device))[0]))
+    print(
+        tokenizer.decode(
+            model.generate(**tokenizer("test is", return_tensors="pt").to(device))[0]
+        )
+    )
 
-    print(f"Quantized Model {quantized_model_dir} avg PPL is {calculate_avg_ppl(model, tokenizer)}")
+    print(
+        f"Quantized Model {quantized_model_dir} avg PPL is {calculate_avg_ppl(model, tokenizer)}"
+    )
     shutil.copy2(pretrained_model_dir + "/tokenizer.json", quantized_model_dir)
+
 
 if __name__ == "__main__":
     import logging
@@ -75,35 +85,44 @@ if __name__ == "__main__":
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    parser = argparse.ArgumentParser(description="Transform uncompressed safetensors weights to 4-bit marlin-compatible format.")
+    parser = argparse.ArgumentParser(
+        description="Transform uncompressed safetensors weights to 4-bit marlin-compatible format."
+    )
     parser.add_argument(
-        "--bits", 
-        type=int, 
-        default=4, 
+        "--bits",
+        type=int,
+        default=4,
         choices=[2, 3, 4, 8],
-        help="Number of bits to use for quantization."
+        help="Number of bits to use for quantization.",
     )
     parser.add_argument(
-        "--group_size", 
-        type=int, 
-        default=128, 
-        help="Quantization group size. 128 offers good balance between speed/memory usage/quality. Use 32 for higher accuracy, lower speed/quality"
+        "--group_size",
+        type=int,
+        default=128,
+        help="Quantization group size. 128 offers good balance between speed/memory usage/quality. Use 32 for higher accuracy, lower speed/quality",
     )
     parser.add_argument(
-        "--src", 
-        type=str, 
-        required=True, 
-        help="Path to the directory where the safetensors and other configuration files are."
+        "--src",
+        type=str,
+        required=True,
+        help="Path to the directory where the safetensors and other configuration files are.",
     )
     parser.add_argument(
-        "--dst", 
-        type=str, 
-        required=True, 
-        help="Path to save the transformed GPTQ model."
+        "--dst",
+        type=str,
+        required=True,
+        help="Path to save the transformed GPTQ model.",
     )
 
-    parser.add_argument('--samples', default=512, type=int, help="Number of samples for calibration.")
-    parser.add_argument('--seqlen', default=1024, type=int, help="Sample sequence length for calibration.")
+    parser.add_argument(
+        "--samples", default=512, type=int, help="Number of samples for calibration."
+    )
+    parser.add_argument(
+        "--seqlen",
+        default=1024,
+        type=int,
+        help="Sample sequence length for calibration.",
+    )
 
     args = parser.parse_args()
     if os.path.exists(args.src):
