@@ -277,8 +277,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         ModelSelected::Lora {
             model_id,
             tokenizer_json,
-            adapters_model_id,
-            order,
+            adapter_model_id,
             arch,
             dtype: _,
             topology,
@@ -305,13 +304,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.no_kv_cache,
             args.jinja_explicit,
         )
-        .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
-        )
+        .with_lora(adapter_model_id)
         .build(arch)?,
         ModelSelected::GGUF {
             tok_model_id,

@@ -5,7 +5,7 @@ use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
-    TokenSource, XLoraPaths,
+    TokenSource,
 };
 use super::{
     AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
@@ -189,11 +189,21 @@ impl NormalLoaderBuilder {
         )
     }
 
-    pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
+    pub fn with_lora(mut self, lora_model_id: String) -> Self {
         self.kind = ModelKind::Adapter {
             adapter: AdapterKind::Lora,
         };
-        self.with_adapter(lora_model_id, lora_order, false, None)
+        self.xlora_model_id = Some(lora_model_id);
+        self.model_id = if let Some(id) = self.model_id {
+            Some(id)
+        } else {
+            info!(
+                "Using adapter base model ID: `{}`",
+                self.xlora_order.as_ref().unwrap().base_model_id
+            );
+            Some(self.xlora_order.as_ref().unwrap().base_model_id.clone())
+        };
+        self
     }
 
     pub fn hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
@@ -533,7 +543,7 @@ impl Loader for NormalLoader {
                     adapter: AdapterKind::Lora,
                 } => lora_model_loader!(
                     paths,
-                    dtype,
+                    Some(dtype),
                     &load_device,
                     layer_devices.clone(),
                     config,
@@ -542,7 +552,10 @@ impl Loader for NormalLoader {
                     silent,
                     mapper,
                     loading_isq,
+                    self.config.from_uqff.is_some(),
                     device.clone(),
+                    attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
                 ),
                 _ => unreachable!(),
@@ -586,7 +599,7 @@ impl Loader for NormalLoader {
                     adapter: AdapterKind::Lora,
                 } => lora_model_loader!(
                     paths,
-                    dtype,
+                    Some(dtype),
                     &load_device,
                     layer_devices.clone(),
                     config,
@@ -595,7 +608,10 @@ impl Loader for NormalLoader {
                     silent,
                     mapper,
                     loading_isq,
+                    self.config.from_uqff.is_some(),
                     device.clone(),
+                    attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
                 ),
                 _ => unreachable!(),
@@ -743,7 +759,12 @@ impl Loader for NormalLoader {
             )?;
         }
 
-        let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
+        let paged_attn_config = if matches!(
+            self.kind,
+            ModelKind::Adapter {
+                adapter: AdapterKind::XLora
+            }
+        ) {
             warn!(
                 "Adapter parallel_models do not currently support PagedAttention, running without"
             );
@@ -836,10 +857,7 @@ impl Loader for NormalLoader {
     }
 
     fn get_id(&self) -> String {
-        self.xlora_model_id
-            .as_deref()
-            .unwrap_or(&self.model_id)
-            .to_string()
+        self.model_id.clone()
     }
 
     fn get_kind(&self) -> ModelKind {

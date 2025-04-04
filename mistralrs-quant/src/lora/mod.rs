@@ -1,15 +1,19 @@
 mod static_lora;
 
-use std::{collections::HashSet, sync::OnceLock};
+use std::{
+    collections::HashSet,
+    sync::{Arc, LazyLock, Mutex},
+};
 
-use candle_core::{Context, DType, Result, Tensor};
+use candle_core::{DType, Result, Tensor};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 pub use static_lora::linear_no_bias_static_lora;
 
 use crate::{Shard, ShardedVarBuilder};
 
-pub static APPLIED_LORAS: OnceLock<Vec<LoraAdapter>> = OnceLock::new();
+pub static APPLIED_LORAS: LazyLock<Arc<Mutex<Vec<LoraAdapter>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(Vec::new())));
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StaticLoraConfig {
@@ -39,7 +43,7 @@ pub(crate) fn merge_lora_weights(
     out_dim: usize,
     shard: Shard,
 ) -> Result<Tensor> {
-    for LoraAdapter { config, weights } in APPLIED_LORAS.get().context("loras no initialize.")? {
+    for LoraAdapter { config, weights } in &*APPLIED_LORAS.lock().expect("loras no initialize.") {
         let target_modules = config
             .target_modules
             .iter()
@@ -50,7 +54,7 @@ pub(crate) fn merge_lora_weights(
         if !regex.is_match(&vb.prefix()) {
             continue;
         }
-        let weights = weights.set_prefix(format!("base_model.model.{}", vb.prefix()));
+        let weights = weights.set_prefix(vb.prefix());
 
         let a = weights.get_with_hints((config.rank, in_dim), "lora_A.weight", shard)?;
         let b = weights.get_with_hints((out_dim, config.rank), "lora_B.weight", shard)?;
