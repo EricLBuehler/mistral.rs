@@ -4,10 +4,10 @@ use candle_core::{Context, Result, Tensor};
 use candle_nn::Linear;
 
 use crate::{
-    blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear, BnbLinear,
-    DistributedKind, DummyLayer, FP8Linear, GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig,
-    QuantMethodType, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, QuantizedSerdeType, Shard,
-    ShardedVarBuilder, UnquantLinear,
+    blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear,
+    lora::merge_lora_weights, BnbLinear, DistributedKind, DummyLayer, FP8Linear, GgufMatMul,
+    HqqLayer, QuantMethod, QuantMethodConfig, QuantMethodType, QuantizeOntoGuard, QuantizedConfig,
+    QuantizedSerde, QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 use super::{Comm, DistributedOperation, SumAllReduce};
@@ -79,6 +79,7 @@ impl RowParallelLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
+                let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
 
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
@@ -273,6 +274,7 @@ impl ColumnParallelLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
+                let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
 
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
@@ -463,6 +465,7 @@ impl ReplicatedLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+                let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
 
                 let bias = if bias {
                     Some(vb.get_with_hints((out_dim,), "bias", Default::default())?)

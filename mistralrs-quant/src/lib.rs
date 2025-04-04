@@ -31,6 +31,7 @@ mod unquantized;
 mod utils;
 
 use gptq::gptq_linear;
+use lora::merge_lora_weights;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
@@ -534,6 +535,7 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -568,6 +570,7 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
             let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
