@@ -31,12 +31,6 @@ use super::{Engine, TERMINATE_ALL_NEXT_STEP};
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
-            Request::ActivateAdapters(adapters) => {
-                match get_mut_arcmutex!(self.pipeline).activate_adapters(adapters) {
-                    Ok(n) => info!("Swapped adapters in {n} LoRA layers."),
-                    Err(e) => warn!("Adapter activation failed: {e:?}"),
-                }
-            }
             Request::Normal(request) => {
                 if matches!(
                     request.messages,
@@ -628,7 +622,6 @@ impl Engine {
                 } else {
                     None
                 },
-                request.adapters.clone(),
                 images.clone(),
                 block_size,
                 Some(matcher.clone()),
