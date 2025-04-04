@@ -98,6 +98,10 @@ pub(crate) fn prepare_distributed_mapper<
         let mut stream = LocalStream::connect(name)?;
         stream.write_all(b"ready\n")?;
         worker_rank + 1
+    } else if cfg!(feature = "ring") {
+        // Currently handled via env var.
+        id = mistralrs_quant::Id::new();
+        0
     } else {
         id = mistralrs_quant::Id::new();
         let num_workers = mistralrs_quant::distributed::get_global_tp_size_from_devices()? - 1;
