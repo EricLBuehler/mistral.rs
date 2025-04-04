@@ -14,11 +14,9 @@ use uuid::Uuid;
 
 use crate::Pipeline;
 
-const DEEPSEEK_REGEX: OnceLock<Regex> = OnceLock::new();
-
 fn process_model_specific_message(message: &str) -> Result<String> {
-    let ds_regex = &DEEPSEEK_REGEX;
-    let deepseek_regex = ds_regex.get_or_init(|| Regex::new(
+    static DEEPSEEK_REGEX: OnceLock<Regex> = OnceLock::new();
+    let deepseek_regex = DEEPSEEK_REGEX.get_or_init(|| Regex::new(
         r"<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n(?P<json>.+?)\n```<｜tool▁call▁end｜>",
     ).unwrap());
 
