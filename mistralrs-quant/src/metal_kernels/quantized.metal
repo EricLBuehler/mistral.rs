@@ -261,17 +261,13 @@ bfloat_inplace_op_addr_space_helper(/, operator/=);
 
 typedef struct _MLX_BFloat16 bfloat16_t;
 
-
-inline uint16_t bfloat16_to_uint16(const bfloat16_t x) {
-  return x.bits_;
-}
+inline uint16_t bfloat16_to_uint16(const bfloat16_t x) { return x.bits_; }
 
 inline bfloat16_t uint16_to_bfloat16(const uint16_t x) {
   return _MLX_BFloat16(x, _MLX_BFloat16::bits_to_bfloat());
 }
 
 #endif
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Metal math for bfloat16
@@ -373,29 +369,23 @@ functions to accordingly automatically handle the casting
         __metal_fmax(static_cast<ctype>(x), static_cast<ctype>(y), mfast));    \
   }                                                                            \
   METAL_FUNC otype fmax3(itype x, itype y, itype z) {                          \
-    return static_cast<otype>(__metal_fmax3(                                   \
-        static_cast<ctype>(x),                                                 \
-        static_cast<ctype>(y),                                                 \
-        static_cast<ctype>(z),                                                 \
-        mfast));                                                               \
+    return static_cast<otype>(__metal_fmax3(static_cast<ctype>(x),             \
+                                            static_cast<ctype>(y),             \
+                                            static_cast<ctype>(z), mfast));    \
   }                                                                            \
   METAL_FUNC otype fmedian3(itype x, itype y, itype z) {                       \
-    return static_cast<otype>(__metal_fmedian3(                                \
-        static_cast<ctype>(x),                                                 \
-        static_cast<ctype>(y),                                                 \
-        static_cast<ctype>(z),                                                 \
-        mfast));                                                               \
+    return static_cast<otype>(__metal_fmedian3(static_cast<ctype>(x),          \
+                                               static_cast<ctype>(y),          \
+                                               static_cast<ctype>(z), mfast)); \
   }                                                                            \
   METAL_FUNC otype fmin(itype x, itype y) {                                    \
     return static_cast<otype>(                                                 \
         __metal_fmin(static_cast<ctype>(x), static_cast<ctype>(y), mfast));    \
   }                                                                            \
   METAL_FUNC otype fmin3(itype x, itype y, itype z) {                          \
-    return static_cast<otype>(__metal_fmin3(                                   \
-        static_cast<ctype>(x),                                                 \
-        static_cast<ctype>(y),                                                 \
-        static_cast<ctype>(z),                                                 \
-        mfast));                                                               \
+    return static_cast<otype>(__metal_fmin3(static_cast<ctype>(x),             \
+                                            static_cast<ctype>(y),             \
+                                            static_cast<ctype>(z), mfast));    \
   }                                                                            \
   METAL_FUNC otype fmod(itype x, itype y) {                                    \
     return static_cast<otype>(                                                 \
@@ -404,7 +394,7 @@ functions to accordingly automatically handle the casting
   METAL_FUNC otype fract(itype x) {                                            \
     return static_cast<otype>(__metal_fract(static_cast<ctype>(x), mfast));    \
   }                                                                            \
-  METAL_FUNC otype frexp(itype x, thread int& exp) {                           \
+  METAL_FUNC otype frexp(itype x, thread int &exp) {                           \
     return static_cast<otype>(__metal_frexp(static_cast<ctype>(x), &exp));     \
   }                                                                            \
   METAL_FUNC otype ldexp(itype x, int k) {                                     \
@@ -424,29 +414,23 @@ functions to accordingly automatically handle the casting
         __metal_fmax(static_cast<ctype>(x), static_cast<ctype>(y), mfast));    \
   }                                                                            \
   METAL_FUNC otype max3(itype x, itype y, itype z) {                           \
-    return static_cast<otype>(__metal_fmax3(                                   \
-        static_cast<ctype>(x),                                                 \
-        static_cast<ctype>(y),                                                 \
-        static_cast<ctype>(z),                                                 \
-        mfast));                                                               \
+    return static_cast<otype>(__metal_fmax3(static_cast<ctype>(x),             \
+                                            static_cast<ctype>(y),             \
+                                            static_cast<ctype>(z), mfast));    \
   }                                                                            \
   METAL_FUNC otype median3(itype x, itype y, itype z) {                        \
-    return static_cast<otype>(__metal_fmedian3(                                \
-        static_cast<ctype>(x),                                                 \
-        static_cast<ctype>(y),                                                 \
-        static_cast<ctype>(z),                                                 \
-        mfast));                                                               \
+    return static_cast<otype>(__metal_fmedian3(static_cast<ctype>(x),          \
+                                               static_cast<ctype>(y),          \
+                                               static_cast<ctype>(z), mfast)); \
   }                                                                            \
   METAL_FUNC otype min(itype x, itype y) {                                     \
     return static_cast<otype>(                                                 \
         __metal_fmin(static_cast<ctype>(x), static_cast<ctype>(y), mfast));    \
   }                                                                            \
   METAL_FUNC otype min3(itype x, itype y, itype z) {                           \
-    return static_cast<otype>(__metal_fmin3(                                   \
-        static_cast<ctype>(x),                                                 \
-        static_cast<ctype>(y),                                                 \
-        static_cast<ctype>(z),                                                 \
-        mfast));                                                               \
+    return static_cast<otype>(__metal_fmin3(static_cast<ctype>(x),             \
+                                            static_cast<ctype>(y),             \
+                                            static_cast<ctype>(z), mfast));    \
   }                                                                            \
   METAL_FUNC otype nextafter(itype x, itype y) {                               \
     return static_cast<otype>(                                                 \
@@ -496,29 +480,20 @@ functions to accordingly automatically handle the casting
 
 namespace metal {
 
-instantiate_metal_math_funcs(
-    bfloat16_t,
-    bfloat16_t,
-    float,
-    __METAL_MAYBE_FAST_MATH__);
+instantiate_metal_math_funcs(bfloat16_t, bfloat16_t, float,
+                             __METAL_MAYBE_FAST_MATH__);
 
 namespace fast {
 
-instantiate_metal_math_funcs(
-    bfloat16_t,
-    bfloat16_t,
-    float,
-    __METAL_FAST_MATH__);
+instantiate_metal_math_funcs(bfloat16_t, bfloat16_t, float,
+                             __METAL_FAST_MATH__);
 
 } // namespace fast
 
 namespace precise {
 
-instantiate_metal_math_funcs(
-    bfloat16_t,
-    bfloat16_t,
-    float,
-    __METAL_PRECISE_MATH__);
+instantiate_metal_math_funcs(bfloat16_t, bfloat16_t, float,
+                             __METAL_PRECISE_MATH__);
 
 } // namespace precise
 
@@ -528,72 +503,68 @@ instantiate_metal_math_funcs(
 // Metal simd for bfloat16
 ///////////////////////////////////////////////////////////////////////////////
 
-#define instantiate_metal_simd_comm_funcs(                                   \
-    itype, otype, ctype, itype_to_ctype, ctype_to_otype)                     \
-                                                                             \
-  METAL_FUNC otype simd_broadcast(itype data, ushort broadcast_lane_id) {    \
-    return ctype_to_otype(                                                   \
-        __metal_simd_broadcast(itype_to_ctype(data), broadcast_lane_id));    \
-  }                                                                          \
-                                                                             \
-  METAL_FUNC otype simd_shuffle(itype data, ushort simd_lane_id) {           \
-    return ctype_to_otype(                                                   \
-        __metal_simd_shuffle(itype_to_ctype(data), simd_lane_id));           \
-  }                                                                          \
-                                                                             \
-  METAL_FUNC otype simd_shuffle_and_fill_down(                               \
-      itype data, itype filling_data, ushort delta, ushort modulo) {         \
-    return ctype_to_otype(__metal_simd_shuffle_and_fill_down(                \
-        itype_to_ctype(data), itype_to_ctype(filling_data), delta, modulo)); \
-  }                                                                          \
-                                                                             \
-  METAL_FUNC otype simd_shuffle_and_fill_down(                               \
-      itype data, itype filling_data, ushort delta) {                        \
-    return ctype_to_otype(__metal_simd_shuffle_and_fill_down(                \
-        itype_to_ctype(data),                                                \
-        itype_to_ctype(filling_data),                                        \
-        delta,                                                               \
-        __metal_get_simdgroup_size(ushort())));                              \
-  }                                                                          \
-                                                                             \
-  METAL_FUNC otype simd_shuffle_and_fill_up(                                 \
-      itype data, itype filling_data, ushort delta, ushort modulo) {         \
-    return ctype_to_otype(__metal_simd_shuffle_and_fill_up(                  \
-        itype_to_ctype(data), itype_to_ctype(filling_data), delta, modulo)); \
-  }                                                                          \
-                                                                             \
-  METAL_FUNC otype simd_shuffle_and_fill_up(                                 \
-      itype data, itype filling_data, ushort delta) {                        \
-    return ctype_to_otype(__metal_simd_shuffle_and_fill_up(                  \
-        itype_to_ctype(data),                                                \
-        itype_to_ctype(filling_data),                                        \
-        delta,                                                               \
-        __metal_get_simdgroup_size(ushort())));                              \
-  }                                                                          \
-                                                                             \
-  METAL_FUNC otype simd_shuffle_down(itype data, ushort delta) {             \
-    return ctype_to_otype(                                                   \
-        __metal_simd_shuffle_down(itype_to_ctype(data), delta));             \
-  }                                                                          \
-                                                                             \
-  METAL_FUNC otype simd_shuffle_rotate_down(itype data, ushort delta) {      \
-    return ctype_to_otype(                                                   \
-        __metal_simd_shuffle_rotate_down(itype_to_ctype(data), delta));      \
-  }                                                                          \
-                                                                             \
-  METAL_FUNC otype simd_shuffle_rotate_up(itype data, ushort delta) {        \
-    return ctype_to_otype(                                                   \
-        __metal_simd_shuffle_rotate_up(itype_to_ctype(data), delta));        \
-  }                                                                          \
-                                                                             \
-  METAL_FUNC otype simd_shuffle_up(itype data, ushort delta) {               \
-    return ctype_to_otype(                                                   \
-        __metal_simd_shuffle_up(itype_to_ctype(data), delta));               \
-  }                                                                          \
-                                                                             \
-  METAL_FUNC otype simd_shuffle_xor(itype data, ushort mask) {               \
-    return ctype_to_otype(                                                   \
-        __metal_simd_shuffle_xor(itype_to_ctype(data), mask));               \
+#define instantiate_metal_simd_comm_funcs(itype, otype, ctype, itype_to_ctype, \
+                                          ctype_to_otype)                      \
+                                                                               \
+  METAL_FUNC otype simd_broadcast(itype data, ushort broadcast_lane_id) {      \
+    return ctype_to_otype(                                                     \
+        __metal_simd_broadcast(itype_to_ctype(data), broadcast_lane_id));      \
+  }                                                                            \
+                                                                               \
+  METAL_FUNC otype simd_shuffle(itype data, ushort simd_lane_id) {             \
+    return ctype_to_otype(                                                     \
+        __metal_simd_shuffle(itype_to_ctype(data), simd_lane_id));             \
+  }                                                                            \
+                                                                               \
+  METAL_FUNC otype simd_shuffle_and_fill_down(itype data, itype filling_data,  \
+                                              ushort delta, ushort modulo) {   \
+    return ctype_to_otype(__metal_simd_shuffle_and_fill_down(                  \
+        itype_to_ctype(data), itype_to_ctype(filling_data), delta, modulo));   \
+  }                                                                            \
+                                                                               \
+  METAL_FUNC otype simd_shuffle_and_fill_down(itype data, itype filling_data,  \
+                                              ushort delta) {                  \
+    return ctype_to_otype(__metal_simd_shuffle_and_fill_down(                  \
+        itype_to_ctype(data), itype_to_ctype(filling_data), delta,             \
+        __metal_get_simdgroup_size(ushort())));                                \
+  }                                                                            \
+                                                                               \
+  METAL_FUNC otype simd_shuffle_and_fill_up(itype data, itype filling_data,    \
+                                            ushort delta, ushort modulo) {     \
+    return ctype_to_otype(__metal_simd_shuffle_and_fill_up(                    \
+        itype_to_ctype(data), itype_to_ctype(filling_data), delta, modulo));   \
+  }                                                                            \
+                                                                               \
+  METAL_FUNC otype simd_shuffle_and_fill_up(itype data, itype filling_data,    \
+                                            ushort delta) {                    \
+    return ctype_to_otype(__metal_simd_shuffle_and_fill_up(                    \
+        itype_to_ctype(data), itype_to_ctype(filling_data), delta,             \
+        __metal_get_simdgroup_size(ushort())));                                \
+  }                                                                            \
+                                                                               \
+  METAL_FUNC otype simd_shuffle_down(itype data, ushort delta) {               \
+    return ctype_to_otype(                                                     \
+        __metal_simd_shuffle_down(itype_to_ctype(data), delta));               \
+  }                                                                            \
+                                                                               \
+  METAL_FUNC otype simd_shuffle_rotate_down(itype data, ushort delta) {        \
+    return ctype_to_otype(                                                     \
+        __metal_simd_shuffle_rotate_down(itype_to_ctype(data), delta));        \
+  }                                                                            \
+                                                                               \
+  METAL_FUNC otype simd_shuffle_rotate_up(itype data, ushort delta) {          \
+    return ctype_to_otype(                                                     \
+        __metal_simd_shuffle_rotate_up(itype_to_ctype(data), delta));          \
+  }                                                                            \
+                                                                               \
+  METAL_FUNC otype simd_shuffle_up(itype data, ushort delta) {                 \
+    return ctype_to_otype(                                                     \
+        __metal_simd_shuffle_up(itype_to_ctype(data), delta));                 \
+  }                                                                            \
+                                                                               \
+  METAL_FUNC otype simd_shuffle_xor(itype data, ushort mask) {                 \
+    return ctype_to_otype(                                                     \
+        __metal_simd_shuffle_xor(itype_to_ctype(data), mask));                 \
   }
 
 #define instantiate_metal_simd_reduction_funcs(itype, otype, ctype)            \
@@ -640,16 +611,11 @@ instantiate_metal_math_funcs(
 
 namespace metal {
 
-instantiate_metal_simd_comm_funcs(
-    bfloat16_t,
-    bfloat16_t,
-    uint16_t,
-    bfloat16_to_uint16,
-    uint16_to_bfloat16);
+instantiate_metal_simd_comm_funcs(bfloat16_t, bfloat16_t, uint16_t,
+                                  bfloat16_to_uint16, uint16_to_bfloat16);
 instantiate_metal_simd_reduction_funcs(bfloat16_t, bfloat16_t, float);
 
 } // namespace metal
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Transforms and Epilogues
@@ -839,7 +805,8 @@ template <typename T> struct BaseMMAFrag<T, 8, 8> {
     for (short i = 0; i < kElemRows; i++) {
       STEEL_PRAGMA_UNROLL
       for (short j = 0; j < kElemCols; j++) {
-        dst[i * kElemCols + j] = static_cast<T>(src[i * str_x.value + j * str_y.value]);
+        dst[i * kElemCols + j] =
+            static_cast<T>(src[i * str_x.value + j * str_y.value]);
       }
     }
   }
@@ -873,7 +840,8 @@ template <typename T> struct BaseMMAFrag<T, 8, 8> {
     for (short i = 0; i < kElemRows; i++) {
       STEEL_PRAGMA_UNROLL
       for (short j = 0; j < kElemCols; j++) {
-        dst[i * str_x + j * str_y.value] = static_cast<U>(src[i * kElemCols + j]);
+        dst[i * str_x + j * str_y.value] =
+            static_cast<U>(src[i * kElemCols + j]);
       }
     }
   }
