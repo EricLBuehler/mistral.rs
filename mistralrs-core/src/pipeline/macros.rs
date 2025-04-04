@@ -105,6 +105,7 @@ macro_rules! get_paths {
         let adapter_paths = get_xlora_paths(
             $this.model_id.clone(),
             &$this.xlora_model_id,
+            &$this.lora_adapter_ids,
             &$token_source,
             revision.clone(),
             &$this.xlora_order,
@@ -288,6 +289,7 @@ macro_rules! get_paths_gguf {
         let adapter_paths = get_xlora_paths(
             this_model_id.clone(),
             &$this.xlora_model_id,
+            &$this.lora_adapter_ids,
             &$token_source,
             revision.clone(),
             &$this.xlora_order,
@@ -636,10 +638,7 @@ macro_rules! lora_model_loader {
         $is_moqe:expr,
         $multi_progress:expr,
     ) => {{
-        let crate::pipeline::AdapterPaths::Lora {
-            adapter_path,
-            lora_config,
-        } = $paths.get_adapter_paths()
+        let crate::pipeline::AdapterPaths::Lora(lora_adapter_paths) = $paths.get_adapter_paths()
         else {
             unreachable!()
         };
@@ -669,25 +668,31 @@ macro_rules! lora_model_loader {
             get_device_for_tensor.clone(),
         )?;
 
-        let lora_vb = from_mmaped_safetensors(
-            vec![adapter_path.clone()],
-            Vec::new(),
-            $dtype,
-            $device,
-            $layer_devices,
-            $silent,
-            None,
-            |_| true,
-            get_device_for_tensor,
-        )?;
+        for crate::pipeline::LoraAdapterPaths {
+            adapter_path,
+            lora_config,
+        } in lora_adapter_paths
+        {
+            let lora_vb = from_mmaped_safetensors(
+                vec![adapter_path.clone()],
+                Vec::new(),
+                $dtype,
+                $device,
+                $layer_devices,
+                $silent,
+                None,
+                |_| true,
+                get_device_for_tensor.clone(),
+            )?;
 
-        mistralrs_quant::APPLIED_LORAS
-            .lock()
-            .unwrap()
-            .push(mistralrs_quant::LoraAdapter {
-                config: lora_config.clone(),
-                weights: lora_vb,
-            });
+            mistralrs_quant::APPLIED_LORAS
+                .lock()
+                .unwrap()
+                .push(mistralrs_quant::LoraAdapter {
+                    config: lora_config.clone(),
+                    weights: lora_vb,
+                });
+        }
 
         $loader.load(
             &$config,

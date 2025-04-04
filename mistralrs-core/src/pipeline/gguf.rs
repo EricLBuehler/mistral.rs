@@ -93,6 +93,7 @@ pub struct GGUFLoader {
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
     jinja_explicit: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -207,6 +208,7 @@ impl GGUFLoaderBuilder {
             quantized_model_id: self.quantized_model_id,
             config: self.config,
             jinja_explicit: self.jinja_explicit,
+            lora_adapter_ids: None,
         })
     }
 }
@@ -249,6 +251,7 @@ impl GGUFLoader {
             tgt_non_granular_index,
             config,
             jinja_explicit,
+            lora_adapter_ids: None,
         }
     }
 }

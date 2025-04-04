@@ -15,6 +15,8 @@ use crate::{Shard, ShardedVarBuilder};
 pub static APPLIED_LORAS: LazyLock<Arc<Mutex<Vec<LoraAdapter>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(Vec::new())));
 
+pub const MULTI_LORA_DELIMITER: &str = ";";
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StaticLoraConfig {
     pub layer: String,
@@ -43,7 +45,7 @@ pub(crate) fn merge_lora_weights(
     out_dim: usize,
     shard: Shard,
 ) -> Result<Tensor> {
-    for LoraAdapter { config, weights } in &*APPLIED_LORAS.lock().expect("loras no initialize.") {
+    for LoraAdapter { config, weights } in &*APPLIED_LORAS.lock().expect("No loras initialized.") {
         let target_modules = config
             .target_modules
             .iter()

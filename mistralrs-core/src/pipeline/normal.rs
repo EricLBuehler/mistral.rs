@@ -84,6 +84,7 @@ pub struct NormalLoader {
     model_id: String,
     config: NormalSpecificConfig,
     xlora_model_id: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
@@ -103,6 +104,7 @@ pub struct NormalLoaderBuilder {
     model_id: Option<String>,
     config: NormalSpecificConfig,
     xlora_model_id: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
@@ -189,20 +191,11 @@ impl NormalLoaderBuilder {
         )
     }
 
-    pub fn with_lora(mut self, lora_model_id: String) -> Self {
+    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
         self.kind = ModelKind::Adapter {
             adapter: AdapterKind::Lora,
         };
-        self.xlora_model_id = Some(lora_model_id);
-        self.model_id = if let Some(id) = self.model_id {
-            Some(id)
-        } else {
-            info!(
-                "Using adapter base model ID: `{}`",
-                self.xlora_order.as_ref().unwrap().base_model_id
-            );
-            Some(self.xlora_order.as_ref().unwrap().base_model_id.clone())
-        };
+        self.lora_adapter_ids = Some(lora_adapter_ids);
         self
     }
 
@@ -234,6 +227,7 @@ impl NormalLoaderBuilder {
             model_id: self.model_id.unwrap(),
             config: self.config,
             xlora_model_id: self.xlora_model_id,
+            lora_adapter_ids: self.lora_adapter_ids,
             kind: self.kind,
             xlora_order: self.xlora_order,
             no_kv_cache: self.no_kv_cache,

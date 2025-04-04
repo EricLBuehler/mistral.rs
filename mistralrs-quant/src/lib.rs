@@ -51,6 +51,7 @@ pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
 pub use lora::{
     linear_no_bias_static_lora, LoraAdapter, LoraConfig, StaticLoraConfig, APPLIED_LORAS,
+    MULTI_LORA_DELIMITER,
 };
 pub use unquantized::UnquantLinear;
 pub use utils::UQFF_QUANT_TYPE_OFFSET;

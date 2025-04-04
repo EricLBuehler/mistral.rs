@@ -3,6 +3,8 @@ use std::{
     num::NonZeroUsize,
 };
 
+use mistralrs_quant::MULTI_LORA_DELIMITER;
+
 use crate::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
@@ -304,7 +306,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.no_kv_cache,
             args.jinja_explicit,
         )
-        .with_lora(adapter_model_id)
+        .with_lora(
+            adapter_model_id
+                .split(MULTI_LORA_DELIMITER)
+                .map(ToString::to_string)
+                .collect(),
+        )
         .build(arch)?,
         ModelSelected::GGUF {
             tok_model_id,

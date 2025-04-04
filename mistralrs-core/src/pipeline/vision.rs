@@ -2,11 +2,11 @@ use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::ImatrixDataSource;
 use super::isq::UqffFullSer;
 use super::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
-    CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader, GeneralMetadata,
-    IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths,
-    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader,
-    VisionModel, VisionModelLoader, VisionPromptPrefixer,
+    get_model_paths, get_xlora_paths, AdapterActivationMixin, AdapterKind, AnyMoePipelineMixin,
+    CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
+    ModelKind, ModelPaths, Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource,
+    VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
 };
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
@@ -90,6 +90,7 @@ pub struct VisionLoader {
     from_uqff: RwLock<Option<PathBuf>>,
     jinja_explicit: Option<String>,
     hf_cache_path: Option<PathBuf>,
+    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -102,6 +103,7 @@ pub struct VisionLoaderBuilder {
     tokenizer_json: Option<String>,
     jinja_explicit: Option<String>,
     hf_cache_path: Option<PathBuf>,
+    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -134,11 +136,20 @@ impl VisionLoaderBuilder {
             jinja_explicit,
             kind: ModelKind::Normal,
             hf_cache_path: None,
+            ..Default::default()
         }
     }
 
     pub fn hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
         self.hf_cache_path = Some(hf_cache_path);
+        self
+    }
+
+    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
+        self.kind = ModelKind::Adapter {
+            adapter: AdapterKind::Lora,
+        };
+        self.lora_adapter_ids = Some(lora_adapter_ids);
         self
     }
 
@@ -171,6 +182,7 @@ impl VisionLoaderBuilder {
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
+            lora_adapter_ids: self.lora_adapter_ids,
         })
     }
 }

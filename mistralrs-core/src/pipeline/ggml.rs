@@ -74,6 +74,7 @@ pub struct GGMLLoader {
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
     jinja_explicit: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -191,6 +192,7 @@ impl GGMLLoaderBuilder {
             quantized_filename: Some(self.quantized_filename),
             quantized_model_id: Some(self.quantized_model_id),
             jinja_explicit: self.jinja_explicit,
+            lora_adapter_ids: None,
         })
     }
 }
@@ -233,6 +235,7 @@ impl GGMLLoader {
             kind,
             tgt_non_granular_index,
             jinja_explicit,
+            lora_adapter_ids: None,
         }
     }
 }

@@ -32,6 +32,12 @@ const QUANT_SAFETENSOR_MATCH: &str = r"model\.safetensors\b";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 #[derive(Clone, Debug)]
+pub struct LoraAdapterPaths {
+    pub lora_config: mistralrs_quant::LoraConfig,
+    pub adapter_path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
 pub enum AdapterPaths {
     XLora {
         adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
@@ -41,22 +47,20 @@ pub enum AdapterPaths {
         xlora_config: Option<XLoraConfig>,
         lora_preload_adapter_info: Option<HashMap<String, (PathBuf, LoraConfig)>>,
     },
-    Lora {
-        lora_config: mistralrs_quant::LoraConfig,
-        adapter_path: PathBuf,
-    },
+    Lora(Vec<LoraAdapterPaths>),
     None,
 }
 
 pub fn get_xlora_paths(
     base_model_id: String,
     xlora_model_id: &Option<String>,
+    lora_adapter_ids: &Option<Vec<String>>,
     token_source: &TokenSource,
     revision: String,
     xlora_order: &Option<Ordering>,
 ) -> Result<AdapterPaths> {
-    match (xlora_model_id, xlora_order) {
-        (Some(xlora_id), Some(xlora_order)) => {
+    match (lora_adapter_ids, xlora_model_id, xlora_order) {
+        (None, Some(xlora_id), Some(xlora_order)) => {
             let api = {
                 let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
                 let mut api = ApiBuilder::from_cache(cache)
@@ -260,36 +264,44 @@ pub fn get_xlora_paths(
                 lora_preload_adapter_info,
             })
         }
-        (Some(adapter_id), None) => {
-            info!("Loading adapter at `{adapter_id}`");
+        (Some(adapter_ids), None, None) => {
+            let mut lora_adapter_paths = Vec::new();
+            for adapter_id in adapter_ids {
+                info!("Loading adapter at `{adapter_id}`");
 
-            let api = {
-                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-                let mut api = ApiBuilder::from_cache(cache)
-                    .with_progress(true)
-                    .with_token(get_token(token_source)?);
-                if let Ok(x) = std::env::var("HF_HUB_CACHE") {
-                    api = api.with_cache_dir(x.into());
-                }
-                api.build().map_err(candle_core::Error::msg)?
-            };
-            let api = api.repo(Repo::with_revision(
-                adapter_id.clone(),
-                RepoType::Model,
-                revision,
-            ));
+                let api = {
+                    let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                    let mut api = ApiBuilder::from_cache(cache)
+                        .with_progress(true)
+                        .with_token(get_token(token_source)?);
+                    if let Ok(x) = std::env::var("HF_HUB_CACHE") {
+                        api = api.with_cache_dir(x.into());
+                    }
+                    api.build().map_err(candle_core::Error::msg)?
+                };
+                let api = api.repo(Repo::with_revision(
+                    adapter_id.clone(),
+                    RepoType::Model,
+                    revision.clone(),
+                ));
 
-            let config_path = api.get("adapter_config.json")?;
-            let adapter_path = api.get("adapter_model.safetensors")?;
-            let lora_config: mistralrs_quant::LoraConfig =
-                serde_json::from_str(&fs::read_to_string(config_path)?)?;
+                let config_path = api.get("adapter_config.json")?;
+                let adapter_path = api.get("adapter_model.safetensors")?;
+                let lora_config: mistralrs_quant::LoraConfig =
+                    serde_json::from_str(&fs::read_to_string(config_path)?)?;
 
-            Ok(AdapterPaths::Lora {
-                lora_config,
-                adapter_path,
-            })
+                lora_adapter_paths.push(LoraAdapterPaths {
+                    lora_config,
+                    adapter_path,
+                });
+            }
+
+            Ok(AdapterPaths::Lora(lora_adapter_paths))
         }
-        _ => Ok(AdapterPaths::None),
+        (None, None, None) => Ok(AdapterPaths::None),
+        _ => anyhow::bail!(
+            "Incorrect configuration for an adapter model. Lora and XLora are mutually exclusive."
+        ),
     }
 }
 

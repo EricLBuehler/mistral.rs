@@ -1,5 +1,6 @@
 use std::{fs::File, num::NonZeroUsize, path::PathBuf};
 
+use mistralrs_quant::MULTI_LORA_DELIMITER;
 use serde::Deserialize;
 
 use crate::{
@@ -694,7 +695,12 @@ fn loader_from_selected(
             args.no_kv_cache,
             args.jinja_explicit,
         )
-        .with_lora(adapter_model_id)
+        .with_lora(
+            adapter_model_id
+                .split(MULTI_LORA_DELIMITER)
+                .map(ToString::to_string)
+                .collect(),
+        )
         .build(arch)?,
         TomlModelSelected::GGUF {
             tok_model_id,
