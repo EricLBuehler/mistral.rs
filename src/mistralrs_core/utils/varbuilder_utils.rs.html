@@ -63,7 +63,7 @@
 <a href=#63 id=63 data-nosnippet>63</a>/// - If `regexes` is specified, this will be used in `make_dummy_predicate` based on `.any`
 <a href=#64 id=64 data-nosnippet>64</a>/// - Otherwise, only include keys for which predicate evaluates to true.
 <a href=#65 id=65 data-nosnippet>65</a></span><span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#66 id=66 data-nosnippet>66</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>from_mmaped_safetensors&lt;<span class="lifetime">'a</span>&gt;(
+<a href=#66 id=66 data-nosnippet>66</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>from_mmaped_safetensors(
 <a href=#67 id=67 data-nosnippet>67</a>    paths: Vec&lt;PathBuf&gt;,
 <a href=#68 id=68 data-nosnippet>68</a>    xlora_paths: Vec&lt;PathBuf&gt;,
 <a href=#69 id=69 data-nosnippet>69</a>    dtype: <span class="prelude-ty">Option</span>&lt;DType&gt;,
@@ -73,7 +73,7 @@
 <a href=#73 id=73 data-nosnippet>73</a>    make_dummy_regexes: <span class="prelude-ty">Option</span>&lt;Arc&lt;Vec&lt;Regex&gt;&gt;&gt;,
 <a href=#74 id=74 data-nosnippet>74</a>    predicate: <span class="kw">impl </span>Fn(String) -&gt; bool + Send + Sync + Clone + <span class="lifetime">'static</span>,
 <a href=#75 id=75 data-nosnippet>75</a>    get_device_for_tensor: Arc&lt;<span class="kw">dyn </span>Fn(String) -&gt; DeviceForLoadTensor + Send + Sync + <span class="lifetime">'static</span>&gt;,
-<a href=#76 id=76 data-nosnippet>76</a>) -&gt; <span class="prelude-ty">Result</span>&lt;ShardedVarBuilder&lt;<span class="lifetime">'a</span>&gt;&gt; {
+<a href=#76 id=76 data-nosnippet>76</a>) -&gt; <span class="prelude-ty">Result</span>&lt;ShardedVarBuilder&gt; {
 <a href=#77 id=77 data-nosnippet>77</a>    <span class="kw">if </span>base_device.is_cuda() {
 <a href=#78 id=78 data-nosnippet>78</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(<span class="kw">unsafe </span>{
 <a href=#79 id=79 data-nosnippet>79</a>            ShardedSafeTensors::sharded(
@@ -179,12 +179,12 @@
 <a href=#179 id=179 data-nosnippet>179</a>    ))
 <a href=#180 id=180 data-nosnippet>180</a>}
 <a href=#181 id=181 data-nosnippet>181</a>
-<a href=#182 id=182 data-nosnippet>182</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>load_preload_adapters&lt;<span class="lifetime">'a</span>&gt;(
+<a href=#182 id=182 data-nosnippet>182</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>load_preload_adapters(
 <a href=#183 id=183 data-nosnippet>183</a>    paths: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (PathBuf, LoraConfig)&gt;&gt;,
 <a href=#184 id=184 data-nosnippet>184</a>    dtype: DType,
 <a href=#185 id=185 data-nosnippet>185</a>    device: <span class="kw-2">&amp;</span>Device,
 <a href=#186 id=186 data-nosnippet>186</a>    silent: bool,
-<a href=#187 id=187 data-nosnippet>187</a>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (ShardedVarBuilder&lt;<span class="lifetime">'a</span>&gt;, LoraConfig)&gt;&gt;&gt; {
+<a href=#187 id=187 data-nosnippet>187</a>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;HashMap&lt;String, (ShardedVarBuilder, LoraConfig)&gt;&gt;&gt; {
 <a href=#188 id=188 data-nosnippet>188</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(paths) = paths {
 <a href=#189 id=189 data-nosnippet>189</a>        <span class="kw">let </span><span class="kw-2">mut </span>map = HashMap::new();
 <a href=#190 id=190 data-nosnippet>190</a>        <span class="kw">for </span>(name, (path, config)) <span class="kw">in </span>paths {

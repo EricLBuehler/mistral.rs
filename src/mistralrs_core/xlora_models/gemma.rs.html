@@ -839,73 +839,42 @@
 <a href=#839 id=839 data-nosnippet>839</a>    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
 <a href=#840 id=840 data-nosnippet>840</a>        <span class="self">self</span>.max_seq_len
 <a href=#841 id=841 data-nosnippet>841</a>    }
-<a href=#842 id=842 data-nosnippet>842</a>    <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, adapter_names: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#843 id=843 data-nosnippet>843</a>        <span class="kw">if </span><span class="self">self</span>.xlora_classifier.is_some() {
-<a href=#844 id=844 data-nosnippet>844</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"Adapter activation is not supported for X-LoRA models as the adapter set must remain the same."</span>);
-<a href=#845 id=845 data-nosnippet>845</a>        }
-<a href=#846 id=846 data-nosnippet>846</a>        <span class="kw">let </span><span class="kw-2">mut </span>sum = <span class="number">0</span>;
-<a href=#847 id=847 data-nosnippet>847</a>        <span class="kw">for </span>layer <span class="kw">in </span><span class="self">self</span>.layers.iter_mut() {
-<a href=#848 id=848 data-nosnippet>848</a>            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.k_proj)
-<a href=#849 id=849 data-nosnippet>849</a>                .unwrap()
-<a href=#850 id=850 data-nosnippet>850</a>                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
-<a href=#851 id=851 data-nosnippet>851</a>            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.o_proj)
-<a href=#852 id=852 data-nosnippet>852</a>                .unwrap()
-<a href=#853 id=853 data-nosnippet>853</a>                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
-<a href=#854 id=854 data-nosnippet>854</a>            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.q_proj)
-<a href=#855 id=855 data-nosnippet>855</a>                .unwrap()
-<a href=#856 id=856 data-nosnippet>856</a>                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
-<a href=#857 id=857 data-nosnippet>857</a>            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.self_attn.v_proj)
-<a href=#858 id=858 data-nosnippet>858</a>                .unwrap()
-<a href=#859 id=859 data-nosnippet>859</a>                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
-<a href=#860 id=860 data-nosnippet>860</a>
-<a href=#861 id=861 data-nosnippet>861</a>            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.down_proj)
-<a href=#862 id=862 data-nosnippet>862</a>                .unwrap()
-<a href=#863 id=863 data-nosnippet>863</a>                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
-<a href=#864 id=864 data-nosnippet>864</a>            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.gate_proj)
-<a href=#865 id=865 data-nosnippet>865</a>                .unwrap()
-<a href=#866 id=866 data-nosnippet>866</a>                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
-<a href=#867 id=867 data-nosnippet>867</a>            sum += Arc::get_mut(<span class="kw-2">&amp;mut </span>layer.mlp.up_proj)
-<a href=#868 id=868 data-nosnippet>868</a>                .unwrap()
-<a href=#869 id=869 data-nosnippet>869</a>                .activate(<span class="kw-2">&amp;</span>adapter_names)<span class="question-mark">?</span>;
-<a href=#870 id=870 data-nosnippet>870</a>        }
-<a href=#871 id=871 data-nosnippet>871</a>        <span class="prelude-val">Ok</span>(sum)
-<a href=#872 id=872 data-nosnippet>872</a>    }
-<a href=#873 id=873 data-nosnippet>873</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
-<a href=#874 id=874 data-nosnippet>874</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
-<a href=#875 id=875 data-nosnippet>875</a>    }
-<a href=#876 id=876 data-nosnippet>876</a>}
-<a href=#877 id=877 data-nosnippet>877</a>
-<a href=#878 id=878 data-nosnippet>878</a><span class="kw">impl </span>ScalingsMaker <span class="kw">for </span>XLoraModel {
-<a href=#879 id=879 data-nosnippet>879</a>    <span class="kw">fn </span>dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DType {
-<a href=#880 id=880 data-nosnippet>880</a>        <span class="self">self</span>.dtype
-<a href=#881 id=881 data-nosnippet>881</a>    }
-<a href=#882 id=882 data-nosnippet>882</a>    <span class="kw">fn </span>get_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
-<a href=#883 id=883 data-nosnippet>883</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cache
-<a href=#884 id=884 data-nosnippet>884</a>    }
-<a href=#885 id=885 data-nosnippet>885</a>    <span class="kw">fn </span>get_classifier(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>XLoraClassifier {
-<a href=#886 id=886 data-nosnippet>886</a>        <span class="self">self</span>.xlora_classifier.as_ref().unwrap()
-<a href=#887 id=887 data-nosnippet>887</a>    }
-<a href=#888 id=888 data-nosnippet>888</a>    <span class="kw">fn </span>forward(
-<a href=#889 id=889 data-nosnippet>889</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#890 id=890 data-nosnippet>890</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#891 id=891 data-nosnippet>891</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-<a href=#892 id=892 data-nosnippet>892</a>        scalings: Tensor,
-<a href=#893 id=893 data-nosnippet>893</a>        is_full_pass: bool,
-<a href=#894 id=894 data-nosnippet>894</a>        no_kv_cache: bool,
-<a href=#895 id=895 data-nosnippet>895</a>        is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
-<a href=#896 id=896 data-nosnippet>896</a>        _context_lens: <span class="kw-2">&amp;</span>[usize],
-<a href=#897 id=897 data-nosnippet>897</a>        flash_params: <span class="kw-2">&amp;</span>FlashParams,
-<a href=#898 id=898 data-nosnippet>898</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#899 id=899 data-nosnippet>899</a>        <span class="self">self</span>.inner_forward(
-<a href=#900 id=900 data-nosnippet>900</a>            input_ids,
-<a href=#901 id=901 data-nosnippet>901</a>            seqlen_offsets,
-<a href=#902 id=902 data-nosnippet>902</a>            <span class="prelude-val">Some</span>(scalings),
-<a href=#903 id=903 data-nosnippet>903</a>            is_full_pass,
-<a href=#904 id=904 data-nosnippet>904</a>            no_kv_cache,
-<a href=#905 id=905 data-nosnippet>905</a>            is_scaling_pass,
-<a href=#906 id=906 data-nosnippet>906</a>            flash_params,
-<a href=#907 id=907 data-nosnippet>907</a>        )
-<a href=#908 id=908 data-nosnippet>908</a>    }
-<a href=#909 id=909 data-nosnippet>909</a>}
-<a href=#910 id=910 data-nosnippet>910</a>
-<a href=#911 id=911 data-nosnippet>911</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>XLoraModel {}</code></pre></div></section></main></body></html>
+<a href=#842 id=842 data-nosnippet>842</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+<a href=#843 id=843 data-nosnippet>843</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
+<a href=#844 id=844 data-nosnippet>844</a>    }
+<a href=#845 id=845 data-nosnippet>845</a>}
+<a href=#846 id=846 data-nosnippet>846</a>
+<a href=#847 id=847 data-nosnippet>847</a><span class="kw">impl </span>ScalingsMaker <span class="kw">for </span>XLoraModel {
+<a href=#848 id=848 data-nosnippet>848</a>    <span class="kw">fn </span>dtype(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; DType {
+<a href=#849 id=849 data-nosnippet>849</a>        <span class="self">self</span>.dtype
+<a href=#850 id=850 data-nosnippet>850</a>    }
+<a href=#851 id=851 data-nosnippet>851</a>    <span class="kw">fn </span>get_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
+<a href=#852 id=852 data-nosnippet>852</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cache
+<a href=#853 id=853 data-nosnippet>853</a>    }
+<a href=#854 id=854 data-nosnippet>854</a>    <span class="kw">fn </span>get_classifier(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>XLoraClassifier {
+<a href=#855 id=855 data-nosnippet>855</a>        <span class="self">self</span>.xlora_classifier.as_ref().unwrap()
+<a href=#856 id=856 data-nosnippet>856</a>    }
+<a href=#857 id=857 data-nosnippet>857</a>    <span class="kw">fn </span>forward(
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#859 id=859 data-nosnippet>859</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#860 id=860 data-nosnippet>860</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+<a href=#861 id=861 data-nosnippet>861</a>        scalings: Tensor,
+<a href=#862 id=862 data-nosnippet>862</a>        is_full_pass: bool,
+<a href=#863 id=863 data-nosnippet>863</a>        no_kv_cache: bool,
+<a href=#864 id=864 data-nosnippet>864</a>        is_scaling_pass: <span class="prelude-ty">Option</span>&lt;f64&gt;,
+<a href=#865 id=865 data-nosnippet>865</a>        _context_lens: <span class="kw-2">&amp;</span>[usize],
+<a href=#866 id=866 data-nosnippet>866</a>        flash_params: <span class="kw-2">&amp;</span>FlashParams,
+<a href=#867 id=867 data-nosnippet>867</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#868 id=868 data-nosnippet>868</a>        <span class="self">self</span>.inner_forward(
+<a href=#869 id=869 data-nosnippet>869</a>            input_ids,
+<a href=#870 id=870 data-nosnippet>870</a>            seqlen_offsets,
+<a href=#871 id=871 data-nosnippet>871</a>            <span class="prelude-val">Some</span>(scalings),
+<a href=#872 id=872 data-nosnippet>872</a>            is_full_pass,
+<a href=#873 id=873 data-nosnippet>873</a>            no_kv_cache,
+<a href=#874 id=874 data-nosnippet>874</a>            is_scaling_pass,
+<a href=#875 id=875 data-nosnippet>875</a>            flash_params,
+<a href=#876 id=876 data-nosnippet>876</a>        )
+<a href=#877 id=877 data-nosnippet>877</a>    }
+<a href=#878 id=878 data-nosnippet>878</a>}
+<a href=#879 id=879 data-nosnippet>879</a>
+<a href=#880 id=880 data-nosnippet>880</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>XLoraModel {}</code></pre></div></section></main></body></html>

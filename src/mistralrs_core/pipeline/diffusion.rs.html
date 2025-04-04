@@ -1,8 +1,8 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/diffusion.rs`."><title>diffusion.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-6c3ea77c.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.86.0 (05f9846f8 2025-03-31)" data-channel="1.86.0" data-search-js="search-581efc7a.js" data-settings-js="settings-6dad6058.js" ><script src="../../../static.files/storage-3a5871a4.js"></script><script defer src="../../../static.files/src-script-b8d3f215.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-4d63596a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>diffusion.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span><span class="kw">super</span>::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 <a href=#2 id=2 data-nosnippet>2</a><span class="kw">use super</span>::{
-<a href=#3 id=3 data-nosnippet>3</a>    AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
-<a href=#4 id=4 data-nosnippet>4</a>    DiffusionModel, DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult,
-<a href=#5 id=5 data-nosnippet>5</a>    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+<a href=#3 id=3 data-nosnippet>3</a>    AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType, DiffusionModel,
+<a href=#4 id=4 data-nosnippet>4</a>    DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult, GeneralMetadata,
+<a href=#5 id=5 data-nosnippet>5</a>    IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
 <a href=#6 id=6 data-nosnippet>6</a>    PreProcessingMixin, Processor, TokenSource,
 <a href=#7 id=7 data-nosnippet>7</a>};
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
@@ -276,71 +276,65 @@
 <a href=#276 id=276 data-nosnippet>276</a>    }
 <a href=#277 id=277 data-nosnippet>277</a>}
 <a href=#278 id=278 data-nosnippet>278</a>
-<a href=#279 id=279 data-nosnippet>279</a><span class="kw">impl </span>AdapterActivationMixin <span class="kw">for </span>DiffusionPipeline {
-<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">fn </span>activate_adapters(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _adapters: Vec&lt;String&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#281 id=281 data-nosnippet>281</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"Diffusion models do not support adapter activation."</span>);
+<a href=#279 id=279 data-nosnippet>279</a><span class="kw">impl </span>MetadataMixin <span class="kw">for </span>DiffusionPipeline {
+<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
+<a href=#281 id=281 data-nosnippet>281</a>        <span class="self">self</span>.model.device().clone()
 <a href=#282 id=282 data-nosnippet>282</a>    }
-<a href=#283 id=283 data-nosnippet>283</a>}
-<a href=#284 id=284 data-nosnippet>284</a>
-<a href=#285 id=285 data-nosnippet>285</a><span class="kw">impl </span>MetadataMixin <span class="kw">for </span>DiffusionPipeline {
-<a href=#286 id=286 data-nosnippet>286</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
-<a href=#287 id=287 data-nosnippet>287</a>        <span class="self">self</span>.model.device().clone()
+<a href=#283 id=283 data-nosnippet>283</a>    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
+<a href=#284 id=284 data-nosnippet>284</a>        <span class="self">self</span>.metadata.clone()
+<a href=#285 id=285 data-nosnippet>285</a>    }
+<a href=#286 id=286 data-nosnippet>286</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#287 id=287 data-nosnippet>287</a>        <span class="self">self</span>.model_id.clone()
 <a href=#288 id=288 data-nosnippet>288</a>    }
-<a href=#289 id=289 data-nosnippet>289</a>    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
-<a href=#290 id=290 data-nosnippet>290</a>        <span class="self">self</span>.metadata.clone()
-<a href=#291 id=291 data-nosnippet>291</a>    }
-<a href=#292 id=292 data-nosnippet>292</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#293 id=293 data-nosnippet>293</a>        <span class="self">self</span>.model_id.clone()
-<a href=#294 id=294 data-nosnippet>294</a>    }
-<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
-<a href=#296 id=296 data-nosnippet>296</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
-<a href=#297 id=297 data-nosnippet>297</a>        <span class="prelude-val">None
-<a href=#298 id=298 data-nosnippet>298</a>    </span>}
-<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
-<a href=#300 id=300 data-nosnippet>300</a>        <span class="prelude-val">None
-<a href=#301 id=301 data-nosnippet>301</a>    </span>}
-<a href=#302 id=302 data-nosnippet>302</a>}
-<a href=#303 id=303 data-nosnippet>303</a>
-<a href=#304 id=304 data-nosnippet>304</a><span class="attr">#[async_trait::async_trait]
-<a href=#305 id=305 data-nosnippet>305</a></span><span class="kw">impl </span>Pipeline <span class="kw">for </span>DiffusionPipeline {
-<a href=#306 id=306 data-nosnippet>306</a>    <span class="kw">fn </span>forward_inputs(
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#308 id=308 data-nosnippet>308</a>        inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
-<a href=#309 id=309 data-nosnippet>309</a>        return_raw_logits: bool,
-<a href=#310 id=310 data-nosnippet>310</a>    ) -&gt; candle_core::Result&lt;ForwardInputsResult&gt; {
-<a href=#311 id=311 data-nosnippet>311</a>        <span class="macro">assert!</span>(!return_raw_logits);
-<a href=#312 id=312 data-nosnippet>312</a>
-<a href=#313 id=313 data-nosnippet>313</a>        <span class="kw">let </span>ModelInputs { prompts, params } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
-<a href=#314 id=314 data-nosnippet>314</a>        <span class="kw">let </span>img = <span class="self">self</span>.model.forward(prompts, params)<span class="question-mark">?</span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
-<a href=#315 id=315 data-nosnippet>315</a>        <span class="kw">let </span>(_b, c, h, w) = img.dims4()<span class="question-mark">?</span>;
-<a href=#316 id=316 data-nosnippet>316</a>        <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
-<a href=#317 id=317 data-nosnippet>317</a>        <span class="kw">for </span>b_img <span class="kw">in </span>img.chunk(img.dim(<span class="number">0</span>)<span class="question-mark">?</span>, <span class="number">0</span>)<span class="question-mark">? </span>{
-<a href=#318 id=318 data-nosnippet>318</a>            <span class="kw">let </span>flattened = b_img.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>.permute((<span class="number">1</span>, <span class="number">2</span>, <span class="number">0</span>))<span class="question-mark">?</span>.flatten_all()<span class="question-mark">?</span>;
-<a href=#319 id=319 data-nosnippet>319</a>            <span class="kw">if </span>c != <span class="number">3 </span>{
-<a href=#320 id=320 data-nosnippet>320</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"Expected 3 channels in image output"</span>);
-<a href=#321 id=321 data-nosnippet>321</a>            }
-<a href=#322 id=322 data-nosnippet>322</a>            <span class="attr">#[allow(clippy::cast_possible_truncation)]
-<a href=#323 id=323 data-nosnippet>323</a>            </span>images.push(DynamicImage::ImageRgb8(
-<a href=#324 id=324 data-nosnippet>324</a>                RgbImage::from_raw(w <span class="kw">as </span>u32, h <span class="kw">as </span>u32, flattened.to_vec1::&lt;u8&gt;()<span class="question-mark">?</span>).ok_or(
-<a href=#325 id=325 data-nosnippet>325</a>                    candle_core::Error::Msg(<span class="string">"RgbImage has invalid capacity."</span>.to_string()),
-<a href=#326 id=326 data-nosnippet>326</a>                )<span class="question-mark">?</span>,
-<a href=#327 id=327 data-nosnippet>327</a>            ));
-<a href=#328 id=328 data-nosnippet>328</a>        }
-<a href=#329 id=329 data-nosnippet>329</a>        <span class="prelude-val">Ok</span>(ForwardInputsResult::Image { images })
-<a href=#330 id=330 data-nosnippet>330</a>    }
-<a href=#331 id=331 data-nosnippet>331</a>    <span class="kw">async fn </span>sample_causal_gen(
-<a href=#332 id=332 data-nosnippet>332</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#333 id=333 data-nosnippet>333</a>        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#334 id=334 data-nosnippet>334</a>        _logits: Vec&lt;Tensor&gt;,
-<a href=#335 id=335 data-nosnippet>335</a>        _prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
-<a href=#336 id=336 data-nosnippet>336</a>        _disable_eos_stop: bool,
-<a href=#337 id=337 data-nosnippet>337</a>        _srng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
-<a href=#338 id=338 data-nosnippet>338</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
-<a href=#339 id=339 data-nosnippet>339</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`sample_causal_gen` is incompatible with `DiffusionPipeline`"</span>);
-<a href=#340 id=340 data-nosnippet>340</a>    }
-<a href=#341 id=341 data-nosnippet>341</a>    <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
-<a href=#342 id=342 data-nosnippet>342</a>        ModelCategory::Diffusion
-<a href=#343 id=343 data-nosnippet>343</a>    }
-<a href=#344 id=344 data-nosnippet>344</a>}
-<a href=#345 id=345 data-nosnippet>345</a>
-<a href=#346 id=346 data-nosnippet>346</a><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>DiffusionPipeline {}</code></pre></div></section></main></body></html>
+<a href=#289 id=289 data-nosnippet>289</a>    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
+<a href=#290 id=290 data-nosnippet>290</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
+<a href=#291 id=291 data-nosnippet>291</a>        <span class="prelude-val">None
+<a href=#292 id=292 data-nosnippet>292</a>    </span>}
+<a href=#293 id=293 data-nosnippet>293</a>    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
+<a href=#294 id=294 data-nosnippet>294</a>        <span class="prelude-val">None
+<a href=#295 id=295 data-nosnippet>295</a>    </span>}
+<a href=#296 id=296 data-nosnippet>296</a>}
+<a href=#297 id=297 data-nosnippet>297</a>
+<a href=#298 id=298 data-nosnippet>298</a><span class="attr">#[async_trait::async_trait]
+<a href=#299 id=299 data-nosnippet>299</a></span><span class="kw">impl </span>Pipeline <span class="kw">for </span>DiffusionPipeline {
+<a href=#300 id=300 data-nosnippet>300</a>    <span class="kw">fn </span>forward_inputs(
+<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#302 id=302 data-nosnippet>302</a>        inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+<a href=#303 id=303 data-nosnippet>303</a>        return_raw_logits: bool,
+<a href=#304 id=304 data-nosnippet>304</a>    ) -&gt; candle_core::Result&lt;ForwardInputsResult&gt; {
+<a href=#305 id=305 data-nosnippet>305</a>        <span class="macro">assert!</span>(!return_raw_logits);
+<a href=#306 id=306 data-nosnippet>306</a>
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">let </span>ModelInputs { prompts, params } = <span class="kw-2">*</span>inputs.downcast().expect(<span class="string">"Downcast failed."</span>);
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">let </span>img = <span class="self">self</span>.model.forward(prompts, params)<span class="question-mark">?</span>.to_dtype(DType::U8)<span class="question-mark">?</span>;
+<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">let </span>(_b, c, h, w) = img.dims4()<span class="question-mark">?</span>;
+<a href=#310 id=310 data-nosnippet>310</a>        <span class="kw">let </span><span class="kw-2">mut </span>images = Vec::new();
+<a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">for </span>b_img <span class="kw">in </span>img.chunk(img.dim(<span class="number">0</span>)<span class="question-mark">?</span>, <span class="number">0</span>)<span class="question-mark">? </span>{
+<a href=#312 id=312 data-nosnippet>312</a>            <span class="kw">let </span>flattened = b_img.squeeze(<span class="number">0</span>)<span class="question-mark">?</span>.permute((<span class="number">1</span>, <span class="number">2</span>, <span class="number">0</span>))<span class="question-mark">?</span>.flatten_all()<span class="question-mark">?</span>;
+<a href=#313 id=313 data-nosnippet>313</a>            <span class="kw">if </span>c != <span class="number">3 </span>{
+<a href=#314 id=314 data-nosnippet>314</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"Expected 3 channels in image output"</span>);
+<a href=#315 id=315 data-nosnippet>315</a>            }
+<a href=#316 id=316 data-nosnippet>316</a>            <span class="attr">#[allow(clippy::cast_possible_truncation)]
+<a href=#317 id=317 data-nosnippet>317</a>            </span>images.push(DynamicImage::ImageRgb8(
+<a href=#318 id=318 data-nosnippet>318</a>                RgbImage::from_raw(w <span class="kw">as </span>u32, h <span class="kw">as </span>u32, flattened.to_vec1::&lt;u8&gt;()<span class="question-mark">?</span>).ok_or(
+<a href=#319 id=319 data-nosnippet>319</a>                    candle_core::Error::Msg(<span class="string">"RgbImage has invalid capacity."</span>.to_string()),
+<a href=#320 id=320 data-nosnippet>320</a>                )<span class="question-mark">?</span>,
+<a href=#321 id=321 data-nosnippet>321</a>            ));
+<a href=#322 id=322 data-nosnippet>322</a>        }
+<a href=#323 id=323 data-nosnippet>323</a>        <span class="prelude-val">Ok</span>(ForwardInputsResult::Image { images })
+<a href=#324 id=324 data-nosnippet>324</a>    }
+<a href=#325 id=325 data-nosnippet>325</a>    <span class="kw">async fn </span>sample_causal_gen(
+<a href=#326 id=326 data-nosnippet>326</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#327 id=327 data-nosnippet>327</a>        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#328 id=328 data-nosnippet>328</a>        _logits: Vec&lt;Tensor&gt;,
+<a href=#329 id=329 data-nosnippet>329</a>        _prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
+<a href=#330 id=330 data-nosnippet>330</a>        _disable_eos_stop: bool,
+<a href=#331 id=331 data-nosnippet>331</a>        _srng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
+<a href=#332 id=332 data-nosnippet>332</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
+<a href=#333 id=333 data-nosnippet>333</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`sample_causal_gen` is incompatible with `DiffusionPipeline`"</span>);
+<a href=#334 id=334 data-nosnippet>334</a>    }
+<a href=#335 id=335 data-nosnippet>335</a>    <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
+<a href=#336 id=336 data-nosnippet>336</a>        ModelCategory::Diffusion
+<a href=#337 id=337 data-nosnippet>337</a>    }
+<a href=#338 id=338 data-nosnippet>338</a>}
+<a href=#339 id=339 data-nosnippet>339</a>
+<a href=#340 id=340 data-nosnippet>340</a><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>DiffusionPipeline {}</code></pre></div></section></main></body></html>
