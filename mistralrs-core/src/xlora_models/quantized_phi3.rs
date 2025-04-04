@@ -9,7 +9,6 @@ use crate::layers::CausalMasker;
 use crate::layers::RmsNorm;
 use crate::layers::Sdpa;
 use crate::lora::get_lora_cfg;
-use crate::lora::AdapterSwapper;
 use crate::lora::LinearLayerLike;
 use crate::lora::LoraConfig;
 use crate::lora::Merge;
@@ -395,20 +394,6 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
 }
 
 impl ModelWeights {
-    pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
-        if self.xlora_classifier.is_some() {
-            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
-        }
-        let mut sum = 0;
-        for layer in self.layers.iter_mut() {
-            sum += layer.attn_qkv.activate(&adapter_names)?;
-            sum += layer.attn_output.activate(&adapter_names)?;
-            sum += layer.mlp.ffn_down.activate(&adapter_names)?;
-            sum += layer.mlp.ffn_up.activate(&adapter_names)?;
-        }
-        Ok(sum)
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn inner_forward(
         &self,

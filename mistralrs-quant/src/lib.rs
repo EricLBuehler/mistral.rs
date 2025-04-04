@@ -24,13 +24,14 @@ mod gguf;
 mod gptq;
 mod hqq;
 mod imatrix;
+mod lora;
 pub mod rotary;
 pub mod safetensors;
-mod static_lora;
 mod unquantized;
 mod utils;
 
 use gptq::gptq_linear;
+use lora::merge_lora_weights;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
@@ -48,7 +49,10 @@ pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
-pub use static_lora::{linear_no_bias_static_lora, StaticLoraConfig};
+pub use lora::{
+    linear_no_bias_static_lora, LoraAdapter, LoraConfig, StaticLoraConfig, APPLIED_LORAS,
+    MULTI_LORA_DELIMITER,
+};
 pub use unquantized::UnquantLinear;
 pub use utils::UQFF_QUANT_TYPE_OFFSET;
 
@@ -534,6 +538,7 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -568,6 +573,7 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
+            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
             let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(

@@ -397,7 +397,6 @@ async fn parse_request(
             is_streaming,
             suffix: None,
             constraint,
-            adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
             logits_processors: None,

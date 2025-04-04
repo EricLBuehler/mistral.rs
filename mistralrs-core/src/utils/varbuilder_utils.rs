@@ -63,7 +63,7 @@ pub enum DeviceForLoadTensor {
 /// - If `regexes` is specified, this will be used in `make_dummy_predicate` based on `.any`
 /// - Otherwise, only include keys for which predicate evaluates to true.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn from_mmaped_safetensors<'a>(
+pub(crate) fn from_mmaped_safetensors(
     paths: Vec<PathBuf>,
     xlora_paths: Vec<PathBuf>,
     dtype: Option<DType>,
@@ -73,7 +73,7 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     make_dummy_regexes: Option<Arc<Vec<Regex>>>,
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
-) -> Result<ShardedVarBuilder<'a>> {
+) -> Result<ShardedVarBuilder> {
     if base_device.is_cuda() {
         return Ok(unsafe {
             ShardedSafeTensors::sharded(
@@ -179,12 +179,12 @@ pub(crate) fn from_mmaped_safetensors<'a>(
     ))
 }
 
-pub(crate) fn load_preload_adapters<'a>(
+pub(crate) fn load_preload_adapters(
     paths: &Option<HashMap<String, (PathBuf, LoraConfig)>>,
     dtype: DType,
     device: &Device,
     silent: bool,
-) -> Result<Option<HashMap<String, (ShardedVarBuilder<'a>, LoraConfig)>>> {
+) -> Result<Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>> {
     if let Some(paths) = paths {
         let mut map = HashMap::new();
         for (name, (path, config)) in paths {

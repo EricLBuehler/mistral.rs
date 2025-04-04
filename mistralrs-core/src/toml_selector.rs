@@ -1,5 +1,6 @@
 use std::{fs::File, num::NonZeroUsize, path::PathBuf};
 
+use mistralrs_quant::MULTI_LORA_DELIMITER;
 use serde::Deserialize;
 
 use crate::{
@@ -133,11 +134,8 @@ pub enum TomlModelSelected {
         /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
         model_id: Option<String>,
 
-        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
-        adapters_model_id: String,
-
-        /// Ordering JSON file
-        order: String,
+        /// Model IDs to load LoRA from. This may be a HF hub repo or a local path. Specify multiple with a semicolon.
+        adapter_model_ids: String,
 
         /// The architecture of the model.
         arch: Option<NormalLoaderType>,
@@ -670,8 +668,7 @@ fn loader_from_selected(
         .build(arch)?,
         TomlModelSelected::Lora {
             model_id,
-            adapters_model_id,
-            order,
+            adapter_model_ids,
             arch,
             dtype: _,
             topology,
@@ -699,11 +696,10 @@ fn loader_from_selected(
             args.jinja_explicit,
         )
         .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
+            adapter_model_ids
+                .split(MULTI_LORA_DELIMITER)
+                .map(ToString::to_string)
+                .collect(),
         )
         .build(arch)?,
         TomlModelSelected::GGUF {

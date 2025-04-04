@@ -80,7 +80,7 @@ pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
-pub use mistralrs_quant::IsqType;
+pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
     chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline,
@@ -350,7 +350,6 @@ impl MistralRs {
                             let mut req: Request = serde_json::from_str(&buf).unwrap();
 
                             req = match req {
-                                Request::ActivateAdapters(x) => Request::ActivateAdapters(x),
                                 Request::ReIsq(x) => Request::ReIsq(x),
                                 Request::Terminate => Request::Terminate,
                                 Request::Detokenize(mut x) => {
@@ -427,7 +426,6 @@ impl MistralRs {
                     is_streaming: false,
                     constraint: Constraint::None,
                     suffix: None,
-                    adapters: None,
                     tool_choice: None,
                     tools: None,
                     logits_processors: None,

@@ -5,12 +5,11 @@ use super::llg::build_tok_env;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
-    TokenSource, XLoraPaths,
+    TokenSource,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
-    ForwardInputsResult, IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqOrganization,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
     AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
@@ -84,6 +83,7 @@ pub struct NormalLoader {
     model_id: String,
     config: NormalSpecificConfig,
     xlora_model_id: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
@@ -103,6 +103,7 @@ pub struct NormalLoaderBuilder {
     model_id: Option<String>,
     config: NormalSpecificConfig,
     xlora_model_id: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
@@ -189,11 +190,12 @@ impl NormalLoaderBuilder {
         )
     }
 
-    pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
+    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
         self.kind = ModelKind::Adapter {
             adapter: AdapterKind::Lora,
         };
-        self.with_adapter(lora_model_id, lora_order, false, None)
+        self.lora_adapter_ids = Some(lora_adapter_ids);
+        self
     }
 
     pub fn hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
@@ -224,6 +226,7 @@ impl NormalLoaderBuilder {
             model_id: self.model_id.unwrap(),
             config: self.config,
             xlora_model_id: self.xlora_model_id,
+            lora_adapter_ids: self.lora_adapter_ids,
             kind: self.kind,
             xlora_order: self.xlora_order,
             no_kv_cache: self.no_kv_cache,
@@ -533,7 +536,7 @@ impl Loader for NormalLoader {
                     adapter: AdapterKind::Lora,
                 } => lora_model_loader!(
                     paths,
-                    dtype,
+                    Some(dtype),
                     &load_device,
                     layer_devices.clone(),
                     config,
@@ -542,7 +545,10 @@ impl Loader for NormalLoader {
                     silent,
                     mapper,
                     loading_isq,
+                    self.config.from_uqff.is_some(),
                     device.clone(),
+                    attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
                 ),
                 _ => unreachable!(),
@@ -586,7 +592,7 @@ impl Loader for NormalLoader {
                     adapter: AdapterKind::Lora,
                 } => lora_model_loader!(
                     paths,
-                    dtype,
+                    Some(dtype),
                     &load_device,
                     layer_devices.clone(),
                     config,
@@ -595,7 +601,10 @@ impl Loader for NormalLoader {
                     silent,
                     mapper,
                     loading_isq,
+                    self.config.from_uqff.is_some(),
                     device.clone(),
+                    attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
                 ),
                 _ => unreachable!(),
@@ -743,7 +752,12 @@ impl Loader for NormalLoader {
             )?;
         }
 
-        let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
+        let paged_attn_config = if matches!(
+            self.kind,
+            ModelKind::Adapter {
+                adapter: AdapterKind::XLora
+            }
+        ) {
             warn!(
                 "Adapter parallel_models do not currently support PagedAttention, running without"
             );
@@ -836,10 +850,7 @@ impl Loader for NormalLoader {
     }
 
     fn get_id(&self) -> String {
-        self.xlora_model_id
-            .as_deref()
-            .unwrap_or(&self.model_id)
-            .to_string()
+        self.model_id.clone()
     }
 
     fn get_kind(&self) -> ModelKind {
@@ -920,12 +931,6 @@ impl CacheManagerMixin for NormalPipeline {
     }
     fn cache(&self) -> &EitherCache {
         self.model.cache()
-    }
-}
-
-impl AdapterActivationMixin for NormalPipeline {
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        Ok(self.model.activate_adapters(adapter_names)?)
     }
 }
 

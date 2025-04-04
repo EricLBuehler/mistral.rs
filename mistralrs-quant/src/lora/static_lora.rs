@@ -3,16 +3,10 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::{DType, Result};
 use candle_nn::Linear;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 
 use crate::{DummyLayer, QuantMethod, QuantMethodConfig, ShardedVarBuilder, UnquantLinear};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct StaticLoraConfig {
-    pub layer: String,
-    pub lora_alpha: f64,
-    pub r: usize,
-}
+use super::StaticLoraConfig;
 
 /// Static LoRA in the style of Phi-4 multimodal. Only when the layer regex for the specific LoRA matches.
 ///

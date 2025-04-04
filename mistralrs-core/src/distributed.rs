@@ -43,10 +43,7 @@ pub(crate) fn ipc_name() -> anyhow::Result<Name<'static>> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn prepare_distributed_mapper<
-    'a,
-    T: DeviceMappedModelLoader + IsqModelLoader + ?Sized,
->(
+pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLoader + ?Sized>(
     dtype: DType,
     device: &Device,
     load_device: &Device,
@@ -57,7 +54,7 @@ pub(crate) fn prepare_distributed_mapper<
     organization: IsqOrganization,
     model: &T,
     paths: &dyn ModelPaths,
-) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder<'a>)> {
+) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder)> {
     #[cfg(not(feature = "nccl"))]
     tracing::warn!(
         "NCCL support was included in the build, be sure to build with `--features nccl`."

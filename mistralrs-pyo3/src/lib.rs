@@ -161,8 +161,7 @@ fn parse_which(
         Which::Lora {
             model_id,
             tokenizer_json,
-            adapters_model_id,
-            order,
+            adapter_model_ids,
             arch,
             topology,
             write_uqff,
@@ -188,13 +187,7 @@ fn parse_which(
             no_kv_cache,
             jinja_explicit,
         )
-        .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
-        )
+        .with_lora(adapter_model_ids)
         .build(arch.map(Into::into))?,
         Which::GGUF {
             tok_model_id,
@@ -1018,7 +1011,6 @@ impl Runner {
                 is_streaming: request.stream,
                 constraint,
                 suffix: None,
-                adapters: request.adapters.clone(),
                 tool_choice,
                 tools,
                 logits_processors: None,
@@ -1125,7 +1117,6 @@ impl Runner {
                 is_streaming: false,
                 constraint,
                 suffix: request.suffix.clone(),
-                adapters: request.adapters.clone(),
                 tool_choice,
                 tools,
                 logits_processors: None,
@@ -1183,7 +1174,6 @@ impl Runner {
             is_streaming: false,
             suffix: None,
             constraint: Constraint::None,
-            adapters: None,
             tool_choice: None,
             tools: None,
             logits_processors: None,
@@ -1211,16 +1201,6 @@ impl Runner {
         let request = _Request::ReIsq(parse_isq_value(&dtype)?);
         self.runner.get_sender()?.blocking_send(request).unwrap();
         Ok(())
-    }
-
-    /// Send a request to make the specified adapters the active adapters for the model.
-    fn activate_adapters(&self, adapter_names: Vec<String>) {
-        let request = _Request::ActivateAdapters(adapter_names);
-        self.runner
-            .get_sender()
-            .unwrap()
-            .blocking_send(request)
-            .unwrap();
     }
 
     /// Tokenize some text, returning raw tokens.

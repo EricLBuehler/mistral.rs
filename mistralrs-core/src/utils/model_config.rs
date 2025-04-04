@@ -11,7 +11,7 @@ use crate::{
     gguf::Content,
     lora::{LoraConfig, Ordering},
     paged_attention::AttentionImplementation,
-    pipeline::ModelPaths,
+    pipeline::{AdapterPaths, ModelPaths},
     xlora_models::XLoraConfig,
 };
 
@@ -31,9 +31,9 @@ pub struct Device<'a> {
 pub struct Adapter<'a> {
     pub xlora_config: Option<XLoraConfig>,
     pub lora_config: &'a [((String, String), LoraConfig)],
-    pub vb: ShardedVarBuilder<'a>,
+    pub vb: ShardedVarBuilder,
     pub ordering: &'a Ordering,
-    pub preload_adapters: Option<HashMap<String, (ShardedVarBuilder<'a>, LoraConfig)>>,
+    pub preload_adapters: Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
 }
 
 impl<'a> Adapter<'a> {
@@ -48,10 +48,22 @@ impl<'a> Adapter<'a> {
         silent: bool,
         is_xlora: bool,
     ) -> Result<Self> {
-        let lora_config = paths.get_adapter_configs().as_ref().unwrap();
-        let ordering = paths.get_ordering().as_ref().unwrap();
+        let AdapterPaths::XLora {
+            adapter_configs,
+            adapter_safetensors,
+            classifier_path,
+            xlora_order,
+            xlora_config,
+            lora_preload_adapter_info,
+        } = paths.get_adapter_paths()
+        else {
+            todo!()
+        };
+
+        let lora_config = adapter_configs.as_ref().unwrap();
+        let ordering = xlora_order.as_ref().unwrap();
         let preload_adapters = load_preload_adapters(
-            paths.get_lora_preload_adapter_info(),
+            lora_preload_adapter_info,
             candle_core::DType::F32,
             device,
             silent,
@@ -59,18 +71,15 @@ impl<'a> Adapter<'a> {
 
         // X-LoRA support:
         let mut xlora_paths: Vec<PathBuf> = vec![];
-        let mut xlora_config: Option<XLoraConfig> = None;
         if is_xlora {
-            xlora_paths = vec![paths.get_classifier_path().as_ref().unwrap().to_path_buf()];
-            xlora_config = Some(paths.get_classifier_config().as_ref().unwrap().clone());
+            xlora_paths = vec![classifier_path.as_ref().unwrap().to_path_buf()];
         }
 
         // Create VarBuilder:
         // TODO: `from_mmaped_safetensors` has `xlora_paths` as the 2nd param (_valid but params need to be named better_)
         let vb = from_mmaped_safetensors(
             xlora_paths,
-            paths
-                .get_adapter_filenames()
+            adapter_safetensors
                 .as_ref()
                 .unwrap()
                 .iter()
@@ -87,7 +96,7 @@ impl<'a> Adapter<'a> {
 
         Ok(Self {
             lora_config,
-            xlora_config,
+            xlora_config: xlora_config.clone(),
             vb,
             ordering,
             preload_adapters,

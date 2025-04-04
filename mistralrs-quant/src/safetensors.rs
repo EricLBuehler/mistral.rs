@@ -256,17 +256,17 @@ impl SimpleBackend for MmapedSafetensors {
     }
 }
 
-pub enum ShardedSafeTensors<'a> {
+pub enum ShardedSafeTensors {
     Sharded {
         b: MmapedSafetensors,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
     },
-    SimpleBackend(Box<dyn SimpleBackend + 'a>),
+    SimpleBackend(Box<dyn SimpleBackend + 'static>),
 }
 
-pub type ShardedVarBuilder<'a> = VarBuilderArgs<'a, ShardedSafeTensors<'a>>;
+pub type ShardedVarBuilder = VarBuilderArgs<'static, ShardedSafeTensors>;
 
-impl<'a> ShardedSafeTensors<'a> {
+impl ShardedSafeTensors {
     /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
     /// files and make them usable in a sharded way.
     ///
@@ -278,7 +278,7 @@ impl<'a> ShardedSafeTensors<'a> {
         dtype: DType,
         dev: &Device,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
-    ) -> Result<ShardedVarBuilder<'a>> {
+    ) -> Result<ShardedVarBuilder> {
         let tensors = MmapedSafetensors::multi(paths)?;
         let backend = ShardedSafeTensors::Sharded {
             b: tensors,
@@ -286,12 +286,14 @@ impl<'a> ShardedSafeTensors<'a> {
         };
         Ok(VarBuilderArgs::new_with_args(backend, dtype, dev))
     }
+}
 
+impl ShardedSafeTensors {
     pub fn wrap(
-        backend: Box<dyn SimpleBackend + 'a>,
+        backend: Box<dyn SimpleBackend + 'static>,
         dtype: DType,
         dev: Device,
-    ) -> ShardedVarBuilder<'a> {
+    ) -> ShardedVarBuilder {
         VarBuilderArgs::new_with_args(Self::SimpleBackend(backend), dtype, &dev)
     }
 }
@@ -331,7 +333,7 @@ impl Default for Shard {
 /// `get_sharded("tensor", 0, 0, 2)` means `tensor.i((..512))`
 /// `get_sharded("tensor", 0, 1, 2)` means `tensor.i((512..))`
 /// `get_sharded("tensor", 1, 0, 2)` means `tensor.i((.., ..512))`
-impl Backend for ShardedSafeTensors<'_> {
+impl Backend for ShardedSafeTensors {
     type Hints = Shard;
 
     fn get(

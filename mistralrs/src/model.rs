@@ -84,7 +84,6 @@ impl Model {
             id: 0,
             constraint: request.take_constraint(),
             suffix: None,
-            adapters: request.take_adapters(),
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
@@ -120,7 +119,6 @@ impl Model {
             id: 0,
             constraint: request.take_constraint(),
             suffix: None,
-            adapters: request.take_adapters(),
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
@@ -165,7 +163,6 @@ impl Model {
             id: 0,
             constraint: request.take_constraint(),
             suffix: None,
-            adapters: request.take_adapters(),
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
@@ -211,7 +208,6 @@ impl Model {
             is_streaming: false,
             suffix: None,
             constraint: Constraint::None,
-            adapters: None,
             tool_choice: None,
             tools: None,
             logits_processors: None,
@@ -231,18 +227,6 @@ impl Model {
         };
 
         Ok(response)
-    }
-
-    /// Activate certain adapters on the model, they will be used for requests which do not specify unique adapters.
-    pub async fn activate_adapters<A: ToString>(&self, adapters: Vec<A>) -> anyhow::Result<()> {
-        let request = Request::ActivateAdapters(
-            adapters
-                .into_iter()
-                .map(|a| a.to_string())
-                .collect::<Vec<_>>(),
-        );
-
-        Ok(self.runner.get_sender()?.send(request).await?)
     }
 
     /// Reapply ISQ to the model. This will be done on whatever device the model is already on.

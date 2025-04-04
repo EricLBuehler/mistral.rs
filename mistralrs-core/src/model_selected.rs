@@ -158,11 +158,7 @@ pub enum ModelSelected {
 
         /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
         #[arg(short, long)]
-        adapters_model_id: String,
-
-        /// Ordering JSON file
-        #[arg(short, long)]
-        order: String,
+        adapter_model_id: String,
 
         /// The architecture of the model.
         #[arg(long, value_parser = parse_arch)]

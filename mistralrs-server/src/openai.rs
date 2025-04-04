@@ -163,8 +163,6 @@ pub struct ChatCompletionRequest {
     pub top_k: Option<usize>,
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
-    #[schema(example = json!(Option::None::<Vec<String>>))]
-    pub adapters: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
     #[schema(example = json!(Option::None::<f32>))]
@@ -240,8 +238,6 @@ pub struct CompletionRequest {
     pub top_k: Option<usize>,
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
-    #[schema(example = json!(Option::None::<Vec<String>>))]
-    pub adapters: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
     #[schema(example = json!(Option::None::<f32>))]

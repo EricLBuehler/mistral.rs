@@ -5,20 +5,20 @@ use crate::{best_device, Model, TextModelBuilder};
 /// Wrapper of [`TextModelBuilder`] for LoRA models.
 pub struct LoraModelBuilder {
     text_model: TextModelBuilder,
-    lora_model_id: String,
-    ordering: Ordering,
+    lora_adapter_ids: Vec<String>,
 }
 
 impl LoraModelBuilder {
     pub fn from_text_model_builder(
         text_model: TextModelBuilder,
-        lora_model_id: impl ToString,
-        ordering: Ordering,
+        lora_adapter_ids: impl IntoIterator<Item = impl ToString>,
     ) -> Self {
         Self {
             text_model,
-            lora_model_id: lora_model_id.to_string(),
-            ordering,
+            lora_adapter_ids: lora_adapter_ids
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect(),
         }
     }
 
@@ -47,7 +47,7 @@ impl LoraModelBuilder {
             self.text_model.no_kv_cache,
             self.text_model.jinja_explicit,
         )
-        .with_lora(self.lora_model_id, self.ordering)
+        .with_lora(self.lora_adapter_ids)
         .build(self.text_model.loader_type)?;
 
         // Load, into a Pipeline

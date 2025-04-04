@@ -5,9 +5,7 @@ use std::sync::Arc;
 
 use crate::attention::SdpaParams;
 use crate::gguf::Content;
-use crate::lora::{
-    get_lora_cfg, AdapterSwapper, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear,
-};
+use crate::lora::{get_lora_cfg, LinearLayerLike, LoraConfig, Merge, Ordering, QLoraLinear};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::utils::progress::NiceProgressBar;
 use candle_core::quantized::ggml_file;
@@ -769,38 +767,6 @@ impl ModelConfig::FromAdapterGGUF for ModelWeights {
 }
 
 impl ModelWeights {
-    pub fn activate_adapters(&mut self, adapter_names: Vec<String>) -> Result<usize> {
-        if self.xlora_classifier.is_some() {
-            candle_core::bail!("Adapter activation is not supported for X-LoRA models as the adapter set must remain the same.");
-        }
-        let mut sum = 0;
-        for layer in self.layers.iter_mut() {
-            sum += layer.attention_wk.activate(&adapter_names)?;
-            sum += layer.attention_wo.activate(&adapter_names)?;
-            sum += layer.attention_wq.activate(&adapter_names)?;
-            sum += layer.attention_wv.activate(&adapter_names)?;
-            match &mut layer.mlp_or_moe {
-                MlpOrMoe::Mlp(ref mut m) => {
-                    sum += m.feed_forward_w1.activate(&adapter_names)?;
-                    sum += m.feed_forward_w2.activate(&adapter_names)?;
-                    sum += m.feed_forward_w3.activate(&adapter_names)?;
-                }
-                MlpOrMoe::MoE {
-                    n_expert_used: _,
-                    feed_forward_gate_inp: _,
-                    experts,
-                } => {
-                    for expert in experts {
-                        sum += expert.feed_forward_w1.activate(&adapter_names)?;
-                        sum += expert.feed_forward_w2.activate(&adapter_names)?;
-                        sum += expert.feed_forward_w3.activate(&adapter_names)?;
-                    }
-                }
-            }
-        }
-        Ok(sum)
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn inner_forward(
         &self,

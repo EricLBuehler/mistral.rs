@@ -3,6 +3,8 @@ use std::{
     num::NonZeroUsize,
 };
 
+use mistralrs_quant::MULTI_LORA_DELIMITER;
+
 use crate::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
@@ -277,8 +279,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         ModelSelected::Lora {
             model_id,
             tokenizer_json,
-            adapters_model_id,
-            order,
+            adapter_model_id,
             arch,
             dtype: _,
             topology,
@@ -306,11 +307,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.jinja_explicit,
         )
         .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
+            adapter_model_id
+                .split(MULTI_LORA_DELIMITER)
+                .map(ToString::to_string)
+                .collect(),
         )
         .build(arch)?,
         ModelSelected::GGUF {
