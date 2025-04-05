@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use candle_core::{
     backend::BackendStorage, from_storage_no_op, DType, MetalStorage, Result, Storage, Tensor, D,
 };
