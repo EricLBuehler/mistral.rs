@@ -6,16 +6,15 @@ use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
 };
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    amoe::MlpLayer,
+    amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{
-        embedding, linear_no_bias, Activation, CausalMasker, Llama3RopeConfig,
-        Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa,
+        embedding, linear_no_bias, Activation, CausalMasker, Llama3RotaryEmbedding, MatMul,
+        RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{BitWiseOp, TopKLastDimOp, TopKOutput},
@@ -23,55 +22,12 @@ use crate::{
     pipeline::{
         extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, KvCache, NormalCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
-    serde_default_fn,
     utils::progress::NiceProgressBar,
 };
 
-serde_default_fn!(bool, word_emb_default, false);
-serde_default_fn!(bool, use_flash_attn_default, false);
-
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct TextConfig {
-    pub hidden_act: Activation,
-    pub hidden_size: usize,
-    pub intermediate_size: usize,
-    pub vocab_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    #[serde(default = "use_flash_attn_default")]
-    pub use_flash_attn: bool,
-    pub rms_norm_eps: f64,
-    pub rope_theta: f32,
-    pub max_position_embeddings: usize,
-    pub rope_scaling: Option<Llama3RopeConfig>,
-    pub quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "word_emb_default")]
-    pub tie_word_embeddings: bool,
-    pub floor_scale: Option<f32>,
-    pub attn_scale: Option<f32>,
-    pub attn_temperature_tuning: Option<f32>,
-    pub use_qk_norm: bool,
-    pub moe_layers: Option<Vec<usize>>,
-    pub interleave_moe_layer_step: usize,
-    pub intermediate_size_mlp: usize,
-    pub num_local_experts: usize,
-    pub expert_dim: usize,
-    pub num_experts_per_tok: usize,
-    pub attention_chunk_size: usize,
-}
-
-impl TextConfig {
-    fn moe_layers(&self) -> Vec<usize> {
-        self.moe_layers.clone().unwrap_or(
-            (self.interleave_moe_layer_step - 1..self.num_hidden_layers)
-                .step_by(self.interleave_moe_layer_step)
-                .collect(),
-        )
-    }
-}
+use super::config::TextConfig;
 
 struct Llama4L2Norm {
     eps: f64,
@@ -443,8 +399,6 @@ struct TextMoe {
     shared_expert: Mlp,
     router: Linear,
     topk: usize,
-    hidden_dim: usize,
-    num_experts: usize,
 }
 
 impl TextMoe {
@@ -469,8 +423,6 @@ impl TextMoe {
             shared_expert,
             router,
             topk: cfg.num_experts_per_tok,
-            hidden_dim: cfg.hidden_size,
-            num_experts: cfg.num_local_experts,
         })
     }
 
@@ -624,7 +576,7 @@ impl Block {
     }
 }
 
-pub struct Llama {
+pub struct TextModel {
     wte: Embedding,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
@@ -636,7 +588,7 @@ pub struct Llama {
     attention_chunk_size: usize,
 }
 
-impl Llama {
+impl TextModel {
     pub fn new(
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
@@ -882,3 +834,67 @@ impl Llama {
         extract_logits(&xs, context_lens)
     }
 }
+
+impl NormalModel for TextModel {
+    fn forward(
+        &self,
+        _input_ids: &Tensor,
+        _seqlen_offsets: &[usize],
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        _flash_params: &FlashParams,
+    ) -> Result<Tensor> {
+        unreachable!()
+    }
+    fn xlora_forward(
+        &self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
+    fn cache(&self) -> &crate::pipeline::EitherCache {
+        &self.kv_cache
+    }
+    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
+        &mut self.kv_cache
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn max_seq_len(&self) -> usize {
+        self.blocks[0].attn.max_seq_len
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
+    }
+}
+
+impl IsqModel for TextModel {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        todo!()
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        todo!()
+    }
+}
+
+impl AnyMoeBaseModelMixin for TextModel {}
