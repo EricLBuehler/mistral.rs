@@ -396,6 +396,7 @@ pub enum QuantizedSerdeType {
     Unquant = 1,
     Hqq = 2,
     Fp8 = 3,
+    Afq = 4,
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
@@ -406,6 +407,7 @@ impl TryFrom<usize> for QuantizedSerdeType {
             1 => Ok(Self::Unquant),
             2 => Ok(Self::Hqq),
             3 => Ok(Self::Fp8),
+            4 => Ok(Self::Afq),
             other => candle_core::bail!("QuantizedSerdeType {other} is invalid."),
         }
     }

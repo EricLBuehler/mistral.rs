@@ -7,10 +7,11 @@ use half::{bf16, f16};
 // v0.1.0: initial release
 // v0.1.1: add i16 dtype
 // v0.1.2: add F8E4M3
+// v0.1.3: add AFQ
 
 const UQFF_VERSION_MAJOR: u32 = 0;
 const UQFF_VERSION_MINOR: u32 = 1;
-const UQFF_VERSION_PATCH: u32 = 2;
+const UQFF_VERSION_PATCH: u32 = 3;
 
 /// Format 4 bytes, little endian: [ UNSPECIFIED ] [ MAJOR ] [ MINOR ] [ PATCH ]
 pub(crate) const UQFF_VERSION: u32 =

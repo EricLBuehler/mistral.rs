@@ -1,14 +1,24 @@
 use std::{
     borrow::Cow,
+    io::Cursor,
     sync::{atomic::AtomicUsize, Arc},
 };
 
+use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{DType, Device, Result, Tensor};
 
-use crate::{Comm, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde};
+use crate::{
+    utils::{
+        deserialize_tensor, fake_deserialize_tensor, serialize_tensor, version_is_compatible,
+        UQFF_VERSION,
+    },
+    Comm, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
+    QuantizedSerdeType,
+};
 
 mod ops;
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum AfqBits {
     Two = 2,
@@ -18,12 +28,39 @@ pub enum AfqBits {
     Eight = 8,
 }
 
+impl TryFrom<u8> for AfqBits {
+    type Error = candle_core::Error;
+    fn try_from(value: u8) -> Result<Self> {
+        match value {
+            2 => Ok(Self::Two),
+            3 => Ok(Self::Three),
+            4 => Ok(Self::Four),
+            6 => Ok(Self::Six),
+            8 => Ok(Self::Eight),
+            x => candle_core::bail!("Invalid AFQ bits {x}."),
+        }
+    }
+}
+
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, Default)]
 pub enum AfqGroupSize {
     Low = 32,
     #[default]
     Med = 64,
     High = 128,
+}
+
+impl TryFrom<u8> for AfqGroupSize {
+    type Error = candle_core::Error;
+    fn try_from(value: u8) -> Result<Self> {
+        match value {
+            32 => Ok(Self::Low),
+            64 => Ok(Self::Med),
+            128 => Ok(Self::High),
+            x => candle_core::bail!("Invalid AFQ group size {x}."),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -122,6 +159,48 @@ impl QuantMethod for AfqLayer {
     }
 }
 
+impl AfqLayer {
+    pub fn get_isq_type_from_uqff(data: Cow<[u8]>) -> Result<IsqType> {
+        let mut buffer = Cursor::new(data.to_vec());
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Afq as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Afq as usize
+            );
+        }
+
+        let has_bias = buffer.read_u8()? != 0;
+
+        // Weight, scales, biases
+        fake_deserialize_tensor(&mut buffer)?;
+        fake_deserialize_tensor(&mut buffer)?;
+        fake_deserialize_tensor(&mut buffer)?;
+
+        // Bits and group size
+        let bits: AfqBits = buffer.read_u8()?.try_into()?;
+        let _group_size: AfqGroupSize = buffer.read_u8()?.try_into()?;
+
+        if has_bias {
+            fake_deserialize_tensor(&mut buffer)?
+        }
+
+        match bits {
+            AfqBits::Two => Ok(IsqType::AFQ2),
+            AfqBits::Three => Ok(IsqType::AFQ3),
+            AfqBits::Four => Ok(IsqType::AFQ4),
+            AfqBits::Six => Ok(IsqType::AFQ6),
+            AfqBits::Eight => Ok(IsqType::AFQ8),
+        }
+    }
+}
+
 impl QuantizedSerde for AfqLayer {
     fn name(&self) -> &'static str {
         "afq-layer"
@@ -129,28 +208,136 @@ impl QuantizedSerde for AfqLayer {
     fn isq_serde_supported(&self) -> bool {
         true
     }
-    fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<[u8]>> {
-        todo!()
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
+        let mut buffer = Vec::new();
+
+        // Version is always first!
+        buffer.extend(&UQFF_VERSION.to_le_bytes());
+
+        // ISQ type for afq is 4
+        buffer.push(QuantizedSerdeType::Afq as u8);
+
+        // Has bias
+        buffer.push(bias.is_some() as u8);
+
+        // Weight, scales, biases
+        serialize_tensor(&mut buffer, &self.w_q)?;
+        serialize_tensor(&mut buffer, &self.scales)?;
+        serialize_tensor(&mut buffer, &self.biases)?;
+
+        // Bits and group size
+        buffer.push(self.bits as u8);
+        buffer.push(self.group_size as u8);
+
+        if let Some(bias) = &bias {
+            // Bias
+            serialize_tensor(&mut buffer, bias)?;
+        }
+
+        Ok(Cow::from(buffer))
     }
     fn deserialize(
-        _data: Cow<[u8]>,
-        _device: &Device,
+        data: Cow<[u8]>,
+        device: &Device,
         _comm: &Arc<Comm>,
-        _guard: QuantizeOntoGuard,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
-        todo!()
+        let mut buffer = Cursor::new(data.to_vec());
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Afq as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Afq as usize
+            );
+        }
+
+        let has_bias = buffer.read_u8()? != 0;
+
+        let _acquired_load_guard = guard.acquire();
+        // Weight, scales, biases
+        let w_q = deserialize_tensor(&mut buffer, device)?;
+        let scales = deserialize_tensor(&mut buffer, device)?;
+        let biases = deserialize_tensor(&mut buffer, device)?;
+
+        // Bits and group size
+        let bits: AfqBits = buffer.read_u8()?.try_into()?;
+        let group_size: AfqGroupSize = buffer.read_u8()?.try_into()?;
+
+        let b = if has_bias {
+            Some(deserialize_tensor(&mut buffer, device)?)
+        } else {
+            None
+        };
+
+        Ok(Arc::new(Self {
+            w_q,
+            scales,
+            bias: b,
+            biases,
+            bits,
+            group_size,
+        }))
     }
     fn deserialize_ext_bias(
-        _data: Cow<[u8]>,
-        _device: &Device,
-        _guard: QuantizeOntoGuard,
+        data: Cow<[u8]>,
+        device: &Device,
+        guard: QuantizeOntoGuard,
     ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
     where
         Self: Sized,
     {
-        todo!()
+        let mut buffer = Cursor::new(data.to_vec());
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Afq as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Afq as usize
+            );
+        }
+
+        let has_bias = buffer.read_u8()? != 0;
+
+        let _acquired_load_guard = guard.acquire();
+        // Weight, scales, biases
+        let w_q = deserialize_tensor(&mut buffer, device)?;
+        let scales = deserialize_tensor(&mut buffer, device)?;
+        let biases = deserialize_tensor(&mut buffer, device)?;
+
+        // Bits and group size
+        let bits: AfqBits = buffer.read_u8()?.try_into()?;
+        let group_size: AfqGroupSize = buffer.read_u8()?.try_into()?;
+
+        let b = if has_bias {
+            Some(deserialize_tensor(&mut buffer, device)?)
+        } else {
+            None
+        };
+
+        Ok((
+            Arc::new(Self {
+                w_q,
+                scales,
+                bias: None,
+                biases,
+                bits,
+                group_size,
+            }),
+            b,
+        ))
     }
 }
