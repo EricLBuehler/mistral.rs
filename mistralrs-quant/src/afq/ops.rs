@@ -46,6 +46,7 @@ pub(crate) fn afq_quantize_op(
         let biases =
             device.new_buffer(s_shape.iter().product(), w.dtype(), "afq-quantize-biases")?;
 
+        assert_eq!(w.layout().start_offset(), 0);
         crate::metal_kernels::call_affine_quantize(
             device.device(),
             &command_buffer,
@@ -155,6 +156,9 @@ pub(crate) fn afq_dequantize_op(
             "afq-dequantize-output",
         )?;
 
+        assert_eq!(w_q.layout().start_offset(), 0);
+        assert_eq!(scales.layout().start_offset(), 0);
+        assert_eq!(biases.layout().start_offset(), 0);
         crate::metal_kernels::call_affine_quantize(
             device.device(),
             &command_buffer,
@@ -181,6 +185,130 @@ pub(crate) fn afq_dequantize_op(
                 scales.dtype(),
             )),
             w_shape,
+            false,
+        );
+
+        Ok(output)
+    }
+    #[cfg(not(feature = "metal"))]
+    {
+        candle_core::bail!("`afq_quantize_op` only works on Metal.")
+    }
+}
+
+pub(crate) fn afq_mm_op(
+    x: &Tensor,
+    w: &Tensor,
+    scales: &Tensor,
+    biases: &Tensor,
+    group_size: AfqGroupSize,
+    bits: AfqBits,
+    transpose: bool,
+) -> Result<Tensor> {
+    let group_size = group_size as usize;
+    let bits = bits as usize;
+
+    let w_outer_dims = {
+        if w.dtype() != DType::U32 {
+            candle_core::bail!("AFQ weight matrix must be u32");
+        }
+        if scales.dims() != biases.dims() {
+            candle_core::bail!("Scales and biases should have the same shapes");
+        }
+        if w.dim(D::Minus1)? * 32 / bits != scales.dim(D::Minus1)? * group_size {
+            candle_core::bail!("Last dims of w and scales must be compatible.");
+        }
+
+        let x_inner_dims = x.dim(D::Minus1)?;
+
+        // Calculate transpose w dims
+        let w_inner_dims = if transpose {
+            w.dim(D::Minus1)? * 32 / bits
+        } else {
+            w.dim(D::Minus2)?
+        };
+        let w_outer_dims = if transpose {
+            w.dim(D::Minus2)?
+        } else {
+            w.dim(D::Minus1)? * 32 / bits
+        };
+
+        if w_inner_dims != x_inner_dims {
+            candle_core::bail!(
+                "w inner dims ({:?}) must match x inner dims ({:?}). transpose={transpose}",
+                w.dims(),
+                x.dims()
+            );
+        }
+
+        w_outer_dims
+    };
+
+    #[cfg(feature = "metal")]
+    {
+        let x_s = x.storage_and_layout().0;
+        let Storage::Metal(x_s) = &*x_s else {
+            candle_core::bail!("expected metal")
+        };
+        let w_s = w.storage_and_layout().0;
+        let Storage::Metal(w_s) = &*w_s else {
+            candle_core::bail!("expected metal")
+        };
+        let s_s = scales.storage_and_layout().0;
+        let Storage::Metal(s_s) = &*s_s else {
+            candle_core::bail!("expected metal")
+        };
+        let b_s = biases.storage_and_layout().0;
+        let Storage::Metal(b_s) = &*b_s else {
+            candle_core::bail!("expected metal")
+        };
+
+        let device = w_s.device();
+
+        let command_buffer = device.command_buffer()?;
+        command_buffer.set_label("afq-dequantize");
+
+        let mut out_shape = x.dims().to_vec();
+        *out_shape.last_mut().unwrap() = w_outer_dims;
+
+        let output =
+            device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-qmm-output")?;
+
+        assert_eq!(x.layout().start_offset(), 0);
+        assert_eq!(w.layout().start_offset(), 0);
+        assert_eq!(scales.layout().start_offset(), 0);
+        assert_eq!(biases.layout().start_offset(), 0);
+        crate::metal_kernels::call_afq_qmm(
+            device.device(),
+            &command_buffer,
+            &crate::metal_kernels::Kernels::new(),
+            scales.dtype(),
+            x_s.buffer(),
+            x.dims(),
+            x.stride(),
+            w_s.buffer(),
+            w.dims(),
+            w.stride(),
+            s_s.buffer(),
+            scales.stride(),
+            b_s.buffer(),
+            biases.stride(),
+            &output,
+            &out_shape,
+            transpose,
+            bits,
+            group_size,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let output = from_storage_no_op(
+            Storage::Metal(MetalStorage::new(
+                output,
+                device.clone(),
+                out_shape.iter().product(),
+                scales.dtype(),
+            )),
+            out_shape,
             false,
         );
 

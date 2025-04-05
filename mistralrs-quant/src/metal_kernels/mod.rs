@@ -3,11 +3,11 @@ use metal::{
     Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
     FunctionConstantValues, Library, MTLSize,
 };
-use std::collections::HashMap;
 use std::sync::RwLock;
+use std::{collections::HashMap, ops::Div};
 
 pub mod utils;
-use utils::{get_2d_grid_dims, linear_split, EncoderProvider};
+use utils::{get_2d_grid_dims, linear_split, EncoderParam, EncoderProvider};
 
 use crate::set_params;
 
@@ -619,5 +619,259 @@ pub fn call_affine_quantize(
     }
 
     encoder.dispatch_threads(grid_dims, group_dims);
+    Ok(())
+}
+
+pub fn call_afq_qmm(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_shape: &[usize],
+    x_stride: &[usize],
+    w: &Buffer,
+    w_shape: &[usize],
+    w_stride: &[usize],
+    scales: &Buffer,
+    s_stride: &[usize],
+    biases: &Buffer,
+    b_stride: &[usize],
+    out: &Buffer,
+    out_shape: &[usize],
+    transpose: bool,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    // TODO: add gather support?
+    let gather = false;
+
+    let batched = !gather && w_shape.len() > 2;
+
+    let d = x_shape[x_shape.len() - 1];
+    let o = out_shape[out_shape.len() - 1];
+    // For the unbatched W case, avoid `adjust_matrix_offsets`
+    // for a small performance gain.
+    let b = if batched || gather {
+        x_shape[x_shape.len() - 2]
+    } else {
+        x_shape.iter().product::<usize>() / d
+    };
+    let n = if batched || gather {
+        out_shape.iter().product::<usize>() / b / o
+    } else {
+        1
+    };
+
+    let mut name = if gather {
+        "bs_".to_string()
+    } else {
+        "".to_string()
+    };
+    let mut matrix = false;
+    let mut aligned = false;
+    let mut quad = false;
+
+    let (group_dims, grid_dims) = if transpose {
+        if b < 6 && (d == 128 || d == 64) && bits.is_power_of_two() {
+            name.push_str("qmv_quad");
+            let quads_per_simd = 8;
+            let results_per_simdgroup = 8;
+            let bo = quads_per_simd * results_per_simdgroup;
+            let simdgroup_size = 32;
+            quad = true;
+            let group_dims = MTLSize {
+                width: simdgroup_size as u64,
+                height: 1,
+                depth: 1,
+            };
+            let grid_dims = MTLSize {
+                width: o.div_ceil(bo) as u64,
+                height: b as u64,
+                depth: n as u64,
+            };
+            (group_dims, grid_dims)
+        } else if b < 6 && o % 8 == 0 && d % 512 == 0 && d >= 512 {
+            name.push_str("qmv_fast");
+            let bo = 8;
+            let bd = 32;
+            let group_dims = MTLSize {
+                width: bd,
+                height: 2,
+                depth: 1,
+            };
+            let grid_dims = MTLSize {
+                width: (o / bo) as u64,
+                height: b as u64,
+                depth: n as u64,
+            };
+            (group_dims, grid_dims)
+        } else if b < 6 {
+            name.push_str("qmv");
+            let bo = 8;
+            let bd = 32;
+            let group_dims = MTLSize {
+                width: bd,
+                height: 2,
+                depth: 1,
+            };
+            let grid_dims = MTLSize {
+                width: o.div_ceil(bo) as u64,
+                height: b as u64,
+                depth: n as u64,
+            };
+            (group_dims, grid_dims)
+        } else {
+            name.push_str("qmm_t");
+            let wn = 2;
+            let wm = 2;
+            let bm = 32;
+            let bn = 32;
+            let group_dims = MTLSize {
+                width: 32,
+                height: wn as u64,
+                depth: wm as u64,
+            };
+            let grid_dims = MTLSize {
+                width: o.div_ceil(bn) as u64,
+                height: b.div(bm) as u64,
+                depth: n as u64,
+            };
+            matrix = true;
+            aligned = true;
+            (group_dims, grid_dims)
+        }
+    } else {
+        /*if b < 4 && d >= 1024 {
+            todo!("qvm_split_k");
+        } else */
+        if b < 4 {
+            name.push_str("qvm");
+            let bo = 64;
+            let bd = 32;
+            let group_dims = MTLSize {
+                width: bd,
+                height: 2,
+                depth: 1,
+            };
+            let grid_dims = MTLSize {
+                width: (o / bo) as u64,
+                height: b as u64,
+                depth: n as u64,
+            };
+            (group_dims, grid_dims)
+        } else {
+            name.push_str("qmm_n");
+            let wn = 2;
+            let wm = 2;
+            let bm = 32;
+            let bn = 32;
+            let group_dims = MTLSize {
+                width: 32,
+                height: wn as u64,
+                depth: wm as u64,
+            };
+            let grid_dims = MTLSize {
+                width: (o / bn) as u64,
+                height: b.div(bm) as u64,
+                depth: n as u64,
+            };
+            matrix = true;
+            if o % bn != 0 {
+                panic!("output size should be divisible by {bn} but received {o}.");
+            }
+            (group_dims, grid_dims)
+        }
+    };
+
+    let aligned_n = if o % 32 == 0 { "true" } else { "false" };
+
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+
+    name = format!("{name}_{type_string}_gs_{group_size}_b_{bits}");
+    if quad {
+        name.push_str(&format!("_d_{d}"));
+    }
+    if aligned {
+        name.push_str(&format!("_alN_{aligned_n}"));
+    }
+    if !gather {
+        name.push_str(&format!("_batch_{}", batched as usize));
+    }
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, (w, scales, biases, x, out, d as i32, o as i32));
+
+    encoder.set_buffer(0, Some(w), 0);
+    encoder.set_buffer(1, Some(scales), 0);
+    encoder.set_buffer(2, Some(biases), 0);
+    encoder.set_buffer(3, Some(x), 0);
+    encoder.set_buffer(4, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, d as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, o as i32);
+
+    let mut offset = 7;
+    if matrix {
+        <i32 as EncoderParam>::set_param(encoder, 7, b as i32);
+        offset += 1;
+    }
+
+    let x_batch_ndims = x_shape.len() - 2;
+    let w_batch_ndims = w_shape.len() - 2;
+
+    if batched || gather {
+        <i32 as EncoderParam>::set_param(encoder, offset, x_batch_ndims as i32);
+        <&[i32] as EncoderParam>::set_param(
+            encoder,
+            offset + 1,
+            &x_shape.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+        );
+        <&[i32] as EncoderParam>::set_param(
+            encoder,
+            offset + 2,
+            &x_stride.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+        );
+        <i32 as EncoderParam>::set_param(encoder, offset + 3, w_batch_ndims as i32);
+        <&[i32] as EncoderParam>::set_param(
+            encoder,
+            offset + 4,
+            &w_shape.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+        );
+        <&[i32] as EncoderParam>::set_param(
+            encoder,
+            offset + 5,
+            &w_stride.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+        );
+        <&[i32] as EncoderParam>::set_param(
+            encoder,
+            offset + 6,
+            &s_stride.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+        );
+        <&[i32] as EncoderParam>::set_param(
+            encoder,
+            offset + 7,
+            &b_stride.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+        );
+    }
+    if gather {
+        unreachable!("TODO implementing gather");
+    }
+
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
     Ok(())
 }

@@ -84,6 +84,16 @@ impl QuantMethod for AfqLayer {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        return ops::afq_mm_op(
+            x,
+            &self.w_q,
+            &self.scales,
+            &self.biases,
+            self.group_size,
+            self.bits,
+            true,
+        );
+
         // Dequantize matmul always.
         // TODO: add a specific kernel?
         let weight = self.dequantize_w()?;
