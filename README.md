@@ -31,7 +31,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
-- 🔥 Try out AFQ for blazingly fast Metal performance!
+- 🔥 Try out AFQ (2, 3, 4, 6, 8 bit) for blazingly fast Metal performance!
 
     ```
     ./mistralrs-server -i --isq afq8 plain -m meta-llama/Llama-3.2-3B-Instruct
