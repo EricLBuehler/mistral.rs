@@ -3,8 +3,9 @@ use metal::{
     Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
     FunctionConstantValues, Library, MTLSize,
 };
-use std::collections::HashMap;
-use std::sync::RwLock;
+use std::ops::Deref;
+use std::sync::{Arc, RwLock};
+use std::{collections::HashMap, sync::OnceLock};
 
 pub mod utils;
 use utils::{get_2d_grid_dims, linear_split, EncoderParam, EncoderProvider};
@@ -47,20 +48,22 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
 type Libraries = HashMap<Source, Library>;
 type Pipelines = HashMap<String, ComputePipelineState>;
 
+static KERNELS: OnceLock<Arc<Kernels_>> = OnceLock::new();
+
 #[derive(Debug)]
-pub struct Kernels {
+pub struct Kernels_ {
     libraries: RwLock<Libraries>,
     pipelines: RwLock<Pipelines>,
 }
 
-impl Default for Kernels {
+impl Default for Kernels_ {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Kernels {
-    pub fn new() -> Self {
+impl Kernels_ {
+    fn new() -> Self {
         let libraries = RwLock::new(Libraries::new());
         let pipelines = RwLock::new(Pipelines::new());
         Self {
@@ -137,6 +140,23 @@ impl Kernels {
 
             Ok(pipeline)
         }
+    }
+}
+
+pub struct Kernels(Arc<Kernels_>);
+
+impl Kernels {
+    pub fn new() -> Self {
+        let kernels = KERNELS.get_or_init(|| Arc::new(Kernels_::new()));
+        Self(kernels.clone())
+    }
+}
+
+impl Deref for Kernels {
+    type Target = Kernels_;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
     }
 }
 

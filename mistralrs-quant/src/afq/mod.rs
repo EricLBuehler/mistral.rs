@@ -20,8 +20,8 @@ pub enum AfqBits {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum AfqGroupSize {
-    #[default]
     Low = 32,
+    #[default]
     Med = 64,
     High = 128,
 }
