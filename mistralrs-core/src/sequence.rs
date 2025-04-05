@@ -721,11 +721,11 @@ impl Sequence {
             .as_millis();
 
         if let Some(ts) = self.prompt_timestamp {
-            get_mut_group!(self).total_completion_time += now - ts;
-            get_mut_group!(self).total_prompt_time += ts - self.timestamp;
+            get_mut_group!(self).total_completion_time = now - ts;
+            get_mut_group!(self).total_prompt_time = ts - self.timestamp;
         }
 
-        get_mut_group!(self).total_time += now - self.timestamp;
+        get_mut_group!(self).total_time = now - self.timestamp;
 
         get_mut_group!(self).total_prompt_toks = self.prompt_len;
         get_mut_group!(self).total_toks = self.len();
@@ -776,6 +776,7 @@ impl Sequence {
 
     pub fn add_streaming_completion_chunk_choice_to_group(&self, chunk: CompletionChunkChoice) {
         get_mut_group!(self).completion_streaming_chunks.push(chunk);
+        self.update_time_info();
     }
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {

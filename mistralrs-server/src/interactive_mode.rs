@@ -185,11 +185,11 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_s
 
         let mut assistant_output = String::new();
 
-        let start = Instant::now();
-        let mut toks = 0;
+        let mut last_usage = None;
         while let Some(resp) = rx.recv().await {
             match resp {
                 Response::Chunk(chunk) => {
+                    last_usage = chunk.usage.clone();
                     if let ChunkChoice {
                         delta:
                             Delta {
@@ -202,7 +202,6 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_s
                     {
                         assistant_output.push_str(content);
                         print!("{}", content);
-                        toks += 1usize; // NOTE: we send toks every 3.
                         io::stdout().flush().unwrap();
                         if finish_reason.is_some() {
                             if matches!(finish_reason.as_ref().unwrap().as_str(), "length") {
@@ -232,10 +231,12 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_s
                 Response::Raw { .. } => unreachable!(),
             }
         }
-        if throughput {
-            let time = Instant::now().duration_since(start).as_secs_f64();
+        if throughput && last_usage.is_some() {
             println!();
-            info!("Average T/s: {}", toks as f64 / time);
+            info!(
+                "Completion T/s: {}",
+                last_usage.unwrap().avg_compl_tok_per_sec
+            );
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
@@ -416,11 +417,11 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do
 
         let mut assistant_output = String::new();
 
-        let start = Instant::now();
-        let mut toks = 0;
+        let mut last_usage = None;
         while let Some(resp) = rx.recv().await {
             match resp {
                 Response::Chunk(chunk) => {
+                    last_usage = chunk.usage.clone();
                     if let ChunkChoice {
                         delta:
                             Delta {
@@ -433,7 +434,6 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do
                     {
                         assistant_output.push_str(content);
                         print!("{}", content);
-                        toks += 1usize; // NOTE: we send toks every 3.
                         io::stdout().flush().unwrap();
                         if finish_reason.is_some() {
                             if matches!(finish_reason.as_ref().unwrap().as_str(), "length") {
@@ -464,9 +464,11 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do
             }
         }
         if throughput {
-            let time = Instant::now().duration_since(start).as_secs_f64();
             println!();
-            info!("Average T/s: {}", toks as f64 / time);
+            info!(
+                "Completion T/s: {}",
+                last_usage.unwrap().avg_compl_tok_per_sec
+            );
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
             IndexMap::new();
