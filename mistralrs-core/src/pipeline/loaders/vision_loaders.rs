@@ -34,7 +34,7 @@ use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
 use crate::vision_models::inputs_processor::Phi4MMProcessor;
-use crate::vision_models::llama4::{Llama4Config, Llama4Model};
+use crate::vision_models::llama4::{Llama4Config, Llama4Model, Llama4Processor};
 use crate::vision_models::llava::config::Config as LLaVAConfig;
 use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::{self, LLaVAProcessor};
@@ -3772,7 +3772,7 @@ impl VisionModelLoader for Llama4Loader {
         _preprocessor_config: PreProcessorConfig,
         _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
-        Arc::new(BasicProcessor)
+        Arc::new(Llama4Processor::new(processor_config.unwrap()))
     }
     fn supports_paged_attention(&self) -> bool {
         true

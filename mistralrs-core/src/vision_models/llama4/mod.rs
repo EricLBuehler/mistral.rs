@@ -17,8 +17,10 @@ use crate::{
 };
 
 mod config;
+mod inputs_processor;
 
 pub use config::{Llama4Config, TextConfig};
+pub use inputs_processor::Llama4Processor;
 
 pub struct Llama4Model {
     language_model: TextModel,

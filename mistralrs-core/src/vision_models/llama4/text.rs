@@ -367,16 +367,17 @@ impl TextExperts {
         let expert_offset = experts_per_gpu * comm.rank();
         let gate_up_shard = Shard::Offset {
             dim: 0,
-            offset: expert_offset * cfg.hidden_size * cfg.intermediate_size * 2,
-            len: experts_per_gpu * cfg.hidden_size * cfg.intermediate_size * 2,
+            offset: expert_offset,
+            len: experts_per_gpu,
         };
         let down_shard = Shard::Offset {
             dim: 0,
-            offset: expert_offset * cfg.intermediate_size * cfg.hidden_size,
-            len: experts_per_gpu * cfg.intermediate_size * cfg.hidden_size,
+            offset: expert_offset,
+            len: experts_per_gpu,
         };
+        dbg!(expert_offset);
         Ok(Self {
-            gate_up_proj: vb.get_with_hints(
+            gate_up_proj: dbg!(vb.get_with_hints(
                 (
                     cfg.num_local_experts,
                     cfg.hidden_size,
@@ -384,7 +385,7 @@ impl TextExperts {
                 ),
                 "gate_up_proj",
                 gate_up_shard,
-            )?,
+            )?),
             down_proj: vb.get_with_hints(
                 (
                     cfg.num_local_experts,
