@@ -28,7 +28,12 @@ use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
 
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 
-/// Parse ISQ value: one of
+/// Parse ISQ value.
+///
+/// If the provided value is a valid integer (one of 2,3,4,5,6,8), the best quantization type will be chosen.
+/// Note that the fallback is always a Q/K quantization but on Metal 2,3,4,6,8 uses the fast AFQ.
+///
+/// One of:
 /// - `Q4_0`
 /// - `Q4_1`
 /// - `Q5_0`
@@ -46,8 +51,24 @@ pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 /// - `HQQ3`
 /// - `HQQ4`
 /// - `HQQ8`
+/// - `AFQ2`
+/// - `AFQ3`
+/// - `AFQ4`
+/// - `AFQ6`
+/// - `AFQ8`
 pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
     let tp = match s.to_lowercase().as_str() {
+        "2" if cfg!(feature = "metal") => IsqType::AFQ2,
+        "2" if !cfg!(feature = "metal") => IsqType::Q2K,
+        "3" if cfg!(feature = "metal") => IsqType::AFQ3,
+        "3" if !cfg!(feature = "metal") => IsqType::Q3K,
+        "4" if cfg!(feature = "metal") => IsqType::AFQ4,
+        "4" if !cfg!(feature = "metal") => IsqType::Q4K,
+        "5" => IsqType::Q5K,
+        "6" if cfg!(feature = "metal") => IsqType::AFQ6,
+        "6" if !cfg!(feature = "metal") => IsqType::Q6K,
+        "8" if cfg!(feature = "metal") => IsqType::AFQ8,
+        "8" if !cfg!(feature = "metal") => IsqType::Q8_0,
         "q4_0" => IsqType::Q4_0,
         "q4_1" => IsqType::Q4_1,
         "q5_0" => IsqType::Q5_0,
@@ -71,7 +92,7 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
         // "hqq3" => IsqType::HQQ3,
         // "hqq2" => IsqType::HQQ2,
         // "hqq1" => IsqType::HQQ1,
-        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`.")),
+        _ => return Err(format!("ISQ type {s} unknown, choose one of `2`, `3`, `4`, `6`, `8`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`.")),
     };
     #[cfg(feature = "cuda")]
     {
