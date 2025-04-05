@@ -919,7 +919,7 @@ template <typename T> struct BaseMMAFrag<T, 8, 8> {
 template <typename T, int kTileRows_, int kTileCols_,
           class MMAFrag_ = BaseMMAFrag<T, 8, 8>>
 struct MMATile {
-  using MMAFrag_t = MMAFrag_t;
+  using MMAFrag_t = MMAFrag_;
   using elem_type = T;
   STEEL_CONST int kFragRows = MMAFrag_t::kFragRows;
   STEEL_CONST int kFragCols = MMAFrag_t::kFragCols;

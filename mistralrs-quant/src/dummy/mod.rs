@@ -37,9 +37,6 @@ impl QuantMethod for DummyLayer {
     fn forward(&self, _a: &candle_core::Tensor) -> candle_core::Result<candle_core::Tensor> {
         candle_core::bail!("DummyLayer should not ever be present in forward pass!")
     }
-    fn get_max_isq_cpu_threads(&self, _dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        None
-    }
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         None
     }

@@ -14,6 +14,7 @@ use candle_core::{
 #[cfg(feature = "metal")]
 mod metal_kernels;
 
+mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
 pub mod cublaslt;
@@ -34,6 +35,7 @@ use gptq::gptq_linear;
 use lora::merge_lora_weights;
 pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
 
+pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParmas, BnbQuantType};
 pub use distributed::{
     layers::{
@@ -159,6 +161,12 @@ pub enum QuantMethodConfig {
         dequant_dtype: DType,
         weight_block_size: Vec<usize>,
     },
+    Afq {
+        weight: Tensor,
+        bias: Option<Tensor>,
+        bits: AfqBits,
+        group_size: AfqGroupSize,
+    },
 }
 
 /// Device/configurable intelligent matrix multiplication
@@ -233,6 +241,11 @@ pub enum IsqType {
     // HQQ2,
     // HQQ1,
     F8E4M3,
+    AFQ8,
+    AFQ6,
+    AFQ4,
+    AFQ3,
+    AFQ2,
 }
 
 impl IsqType {
@@ -240,7 +253,7 @@ impl IsqType {
     /// original size / pack factor = quantized size
     pub fn pack_factor(&self, dtype: DType) -> usize {
         match self {
-            Self::Q4_0 => {
+            Self::Q4_0 | Self::AFQ4 => {
                 (dtype.size_in_bytes() * GgmlDType::Q4_0.block_size()) / GgmlDType::Q4_0.type_size()
             }
             Self::Q4_1 => {
@@ -252,16 +265,16 @@ impl IsqType {
             Self::Q5_1 => {
                 (dtype.size_in_bytes() * GgmlDType::Q5_1.block_size()) / GgmlDType::Q5_1.type_size()
             }
-            Self::Q8_0 => {
+            Self::Q8_0 | Self::AFQ8 => {
                 (dtype.size_in_bytes() * GgmlDType::Q8_0.block_size()) / GgmlDType::Q8_0.type_size()
             }
             Self::Q8_1 => {
                 (dtype.size_in_bytes() * GgmlDType::Q8_1.block_size()) / GgmlDType::Q8_1.type_size()
             }
-            Self::Q2K => {
+            Self::Q2K | Self::AFQ2 => {
                 (dtype.size_in_bytes() * GgmlDType::Q2K.block_size()) / GgmlDType::Q2K.type_size()
             }
-            Self::Q3K => {
+            Self::Q3K | Self::AFQ3 => {
                 (dtype.size_in_bytes() * GgmlDType::Q3K.block_size()) / GgmlDType::Q3K.type_size()
             }
             Self::Q4K => {
@@ -270,7 +283,7 @@ impl IsqType {
             Self::Q5K => {
                 (dtype.size_in_bytes() * GgmlDType::Q5K.block_size()) / GgmlDType::Q5K.type_size()
             }
-            Self::Q6K => {
+            Self::Q6K | Self::AFQ6 => {
                 (dtype.size_in_bytes() * GgmlDType::Q6K.block_size()) / GgmlDType::Q6K.type_size()
             }
             Self::Q8K => {
@@ -280,6 +293,35 @@ impl IsqType {
             Self::HQQ4 => 4,
             Self::HQQ8 => 2,
             Self::F8E4M3 => 2,
+        }
+    }
+
+    pub fn get_max_isq_cpu_threads(&self) -> Option<NonZeroUsize> {
+        match self {
+            /*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
+            IsqType::HQQ4
+            | IsqType::HQQ8
+            | IsqType::AFQ2
+            | IsqType::AFQ3
+            | IsqType::AFQ4
+            | IsqType::AFQ6
+            | IsqType::AFQ8 => {
+                // Use 1 because our HQQ quantizes on the GPU
+                Some(1.try_into().unwrap())
+            }
+            IsqType::F8E4M3 => None,
+            IsqType::Q2K
+            | IsqType::Q3K
+            | IsqType::Q4K
+            | IsqType::Q4_0
+            | IsqType::Q4_1
+            | IsqType::Q5K
+            | IsqType::Q5_0
+            | IsqType::Q5_1
+            | IsqType::Q6K
+            | IsqType::Q8K
+            | IsqType::Q8_0
+            | IsqType::Q8_1 => None,
         }
     }
 }
@@ -486,8 +528,6 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>>;
-
-    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize>;
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         None

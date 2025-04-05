@@ -154,10 +154,6 @@ impl QuantMethod for RowParallelLayer {
         self.weight.unquant_weight_bias()
     }
 
-    fn get_max_isq_cpu_threads(&self, dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        self.weight.get_max_isq_cpu_threads(dtype)
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
@@ -359,10 +355,6 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.unquant_weight_bias()
     }
 
-    fn get_max_isq_cpu_threads(&self, dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        self.weight.get_max_isq_cpu_threads(dtype)
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
@@ -523,10 +515,6 @@ impl QuantMethod for ReplicatedLayer {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.0.unquant_weight_bias()
-    }
-
-    fn get_max_isq_cpu_threads(&self, dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        self.0.get_max_isq_cpu_threads(dtype)
     }
 
     fn apply_isq(

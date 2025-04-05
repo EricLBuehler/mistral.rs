@@ -527,7 +527,8 @@ impl QuantMethod for HqqLayer {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => {
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => {
                 unreachable!()
             }
             QuantMethodConfig::Hqq {
@@ -626,11 +627,6 @@ impl QuantMethod for HqqLayer {
         } else {
             Ok(Arc::new(res))
         }
-    }
-
-    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
-        // Use 1 because we quantize on the GPU
-        Some(1.try_into().unwrap())
     }
 }
 

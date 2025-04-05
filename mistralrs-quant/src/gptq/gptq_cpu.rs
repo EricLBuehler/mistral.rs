@@ -3,10 +3,7 @@ use crate::{
     QuantizedSerde, ShardedVarBuilder,
 };
 use candle_core::{DType, Device, Result, Tensor};
-use std::{
-    num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
 #[derive(Debug)]
 pub struct GptqLayer;
@@ -24,7 +21,8 @@ impl QuantMethod for GptqLayer {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => {
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => {
                 unreachable!()
             }
         }
@@ -58,10 +56,6 @@ impl QuantMethod for GptqLayer {
         _imatrix_weight: Option<Vec<f32>>,
         _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
-    }
-
-    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         todo!()
     }
 }

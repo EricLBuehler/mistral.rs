@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     io::Cursor,
-    num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
@@ -14,8 +13,8 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
-    FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul, QuantMethod, QuantMethodConfig,
-    QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    AfqBits, AfqGroupSize, AfqLayer, FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul,
+    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
@@ -37,7 +36,8 @@ impl QuantMethod for UnquantLinear {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self {
                 w: l.weight().clone(),
                 b: l.bias().cloned(),
@@ -188,6 +188,30 @@ impl QuantMethod for UnquantLinear {
                     Ok(Arc::new(res))
                 }
             }
+            Some(IsqType::AFQ2 | IsqType::AFQ3 | IsqType::AFQ4 | IsqType::AFQ6 | IsqType::AFQ8) => {
+                let _acquired_quantize_guard = guard.acquire();
+                if imatrix_weight.is_some() {
+                    // TODO just warn?
+                    candle_core::bail!("AFQ does not support imatrix.");
+                }
+
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let bits = match dtype.unwrap() {
+                    IsqType::AFQ8 => AfqBits::Eight,
+                    IsqType::AFQ6 => AfqBits::Six,
+                    IsqType::AFQ4 => AfqBits::Four,
+                    IsqType::AFQ3 => AfqBits::Three,
+                    IsqType::AFQ2 => AfqBits::Two,
+                    _ => unreachable!(),
+                };
+
+                Ok(Arc::new(AfqLayer::new(QuantMethodConfig::Afq {
+                    weight: self.w.to_device(&device)?,
+                    bias: self.b.as_ref().map(|b| b.to_device(&device).unwrap()),
+                    bits,
+                    group_size: AfqGroupSize::default(),
+                })?))
+            }
             Some(
                 IsqType::Q2K
                 | IsqType::Q3K
@@ -248,29 +272,6 @@ impl QuantMethod for UnquantLinear {
                     QuantMethodConfig::Unquantized(Linear::new(w, b)),
                 )?))
             }
-        }
-    }
-
-    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
-        match dtype {
-            /*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
-            IsqType::HQQ4 | IsqType::HQQ8 => {
-                // Use 1 because our HQQ quantizes on the GPU
-                Some(1.try_into().unwrap())
-            }
-            IsqType::F8E4M3 => None,
-            IsqType::Q2K
-            | IsqType::Q3K
-            | IsqType::Q4K
-            | IsqType::Q4_0
-            | IsqType::Q4_1
-            | IsqType::Q5K
-            | IsqType::Q5_0
-            | IsqType::Q5_1
-            | IsqType::Q6K
-            | IsqType::Q8K
-            | IsqType::Q8_0
-            | IsqType::Q8_1 => None,
         }
     }
 
