@@ -18,7 +18,7 @@ use crate::{
         Llama3RotaryEmbedding, MatMul, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
-    ops::{TopKLastDimOp, TopKOutput},
+    ops::{BitWiseOp, TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -60,6 +60,7 @@ pub struct TextConfig {
     pub num_local_experts: usize,
     pub expert_dim: usize,
     pub num_experts_per_tok: usize,
+    pub attention_chunk_size: usize,
 }
 
 impl TextConfig {
@@ -531,6 +532,7 @@ struct Block {
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
     ff: MoeOrMlp,
+    use_chunked_attention: bool,
 }
 
 impl Block {
@@ -584,6 +586,7 @@ impl Block {
             attn,
             rms_2,
             ff,
+            use_chunked_attention,
         })
     }
 
@@ -593,6 +596,7 @@ impl Block {
         x: &Tensor,
         position_ids: &Tensor,
         attention_mask: &Option<Tensor>,
+        chunked_mask: &Option<Tensor>,
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
@@ -600,10 +604,15 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
+        let mask = if self.use_chunked_attention {
+            chunked_mask
+        } else {
+            attention_mask
+        };
         let x = (self.attn.forward(
             &x,
             position_ids,
-            attention_mask,
+            mask,
             seqlen_offsets,
             kv_cache,
             metadata,
@@ -624,6 +633,7 @@ pub struct Llama {
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
+    attention_chunk_size: usize,
 }
 
 impl Llama {
@@ -762,6 +772,7 @@ impl Llama {
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             },
             mapper,
+            attention_chunk_size: cfg.attention_chunk_size,
         })
     }
 
@@ -802,15 +813,42 @@ impl Llama {
     ) -> Result<Tensor> {
         let mut x = input_embeds;
         let cache = &mut self.kv_cache.normal().0;
+        let cache_for_mask = metadata
+            .as_ref()
+            .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
+            .unwrap_or(cache as &dyn PastKvLenCache);
         let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
+            cache_for_mask,
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;
+        // https://github.com/huggingface/transformers/blob/25b7f272347a93d6fb73cad126f6f6dc88e8ce89/src/transformers/models/llama4/modeling_llama4.py#L801
+        let chunked_mask = if input_ids.dim(1)? > self.attention_chunk_size && mask.is_some() {
+            let start = cache_for_mask.get_past_kv_len()?;
+            let key_length = if start >= self.attention_chunk_size {
+                self.attention_chunk_size + input_ids.dim(1)? - 1
+            } else if start < self.attention_chunk_size
+                && start + input_ids.dim(1)? > self.attention_chunk_size
+            {
+                start + input_ids.dim(1)?
+            } else {
+                self.attention_chunk_size
+            };
+            let end = start + key_length;
+
+            let arange = Tensor::arange(start as i32, end as i32, input_ids.device())?;
+            let block_pos = Tensor::abs(
+                &(arange.unsqueeze(0)? / self.attention_chunk_size as f64)?
+                    .broadcast_sub(&(arange.unsqueeze(1)? / self.attention_chunk_size as f64)?)?,
+            )?;
+            let token_pos = arange.unsqueeze(0)?.broadcast_sub(&arange.unsqueeze(1)?)?;
+            let chunked_mask = block_pos.eq(0.)?.bitwise_and(&token_pos.le(0.)?)?;
+
+            Some(chunked_mask.bitwise_and(&mask.as_ref().unwrap())?)
+        } else {
+            None
+        };
         // PagedAttention prompt chunking
         let mask = mask.filter(|_| {
             metadata
@@ -824,6 +862,9 @@ impl Llama {
                 &x,
                 position_ids,
                 &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
+                &chunked_mask
+                    .clone()
+                    .map(|m| m.to_device(x.device()).unwrap()),
                 seqlen_offsets,
                 &mut cache[block_idx],
                 metadata
