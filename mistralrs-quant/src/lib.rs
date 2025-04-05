@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    fmt::{Debug, Display},
+    fmt::Debug,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
@@ -61,56 +61,41 @@ pub use utils::UQFF_QUANT_TYPE_OFFSET;
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub enum QuantMethodType {
-    #[serde(rename = "fp8")]
-    Fp8,
-    #[serde(rename = "gptq")]
-    Gptq,
-    #[serde(rename = "unreachable")]
-    Unreachable,
-    #[default]
-    #[serde(rename = "bitsandbytes")]
-    Bitsandbytes,
-}
-
-impl Display for QuantMethodType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Gptq => write!(f, "gptq"),
-            Self::Fp8 => write!(f, "fp8"),
-            Self::Bitsandbytes => write!(f, "bnb"),
-            Self::Unreachable => write!(f, "unreachable",),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct QuantizedConfig {
-    // GPTQ
-    pub bits: Option<usize>,
-    pub group_size: Option<usize>,
-    pub checkpoint_format: Option<String>,
-
-    // BNB
-    pub bnb_4bit_quant_type: Option<String>,
-
-    // FP8
-    pub weight_block_size: Option<Vec<usize>>,
-
-    pub quant_method: QuantMethodType,
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "quant_method", rename_all = "lowercase")]
+pub enum QuantizedConfig {
+    Gptq {
+        bits: usize,
+        group_size: usize,
+        checkpoint_format: Option<String>,
+    },
+    Fp8 {
+        weight_block_size: Vec<usize>,
+    },
+    Bitsandbytes {
+        bnb_4bit_quant_type: Option<String>,
+    },
 }
 
 impl QuantizedConfig {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Gptq { .. } => "gptq",
+            Self::Fp8 { .. } => "fp8",
+            Self::Bitsandbytes { .. } => "bitsandbytes",
+        }
+    }
+
     pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
-        match self.bits {
-            Some(bits) => format!("{bits} bits"),
-            None => {
-                // Assume bnb
-                self.bnb_4bit_quant_type
-                    .clone()
-                    .unwrap_or("int8".to_string())
-            }
+        match self {
+            Self::Gptq { bits, .. } => bits.to_string(),
+            Self::Fp8 { .. } => 8.to_string(),
+            Self::Bitsandbytes {
+                bnb_4bit_quant_type: Some(_),
+            } => 4.to_string(),
+            Self::Bitsandbytes {
+                bnb_4bit_quant_type: None,
+            } => 8.to_string(),
         }
     }
 }
@@ -563,15 +548,14 @@ pub fn linear_no_bias(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let layer = if let Some(quant_conf) = &config {
-        match quant_conf.quant_method {
-            QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantMethodType::Fp8 => {
+        match quant_conf {
+            QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantizedConfig::Fp8 { .. } => {
                 blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
             }
-            QuantMethodType::Bitsandbytes => {
+            QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
-            QuantMethodType::Unreachable => unreachable!(),
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
@@ -598,15 +582,14 @@ pub fn linear(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let layer = if let Some(quant_conf) = &config {
-        match quant_conf.quant_method {
-            QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantMethodType::Fp8 => {
+        match quant_conf {
+            QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantizedConfig::Fp8 { .. } => {
                 blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
             }
-            QuantMethodType::Bitsandbytes => {
+            QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
             }
-            QuantMethodType::Unreachable => unreachable!(),
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
