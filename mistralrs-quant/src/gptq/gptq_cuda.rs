@@ -380,7 +380,7 @@ pub fn gptq_linear(
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
 
-    let marlin_compatible = bits == 4 || bits == 8;
+    let marlin_compatible = *bits == 4 || *bits == 8;
     let marlin_format = checkpoint_format
         .as_ref()
         .is_some_and(|fmt| fmt == "marlin")
