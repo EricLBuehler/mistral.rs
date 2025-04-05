@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use candle_core::{
     backend::BackendStorage, from_storage_no_op, DType, MetalStorage, Result, Storage, Tensor, D,
 };
@@ -278,10 +280,13 @@ pub(crate) fn afq_mm_op(
         assert_eq!(w.layout().start_offset(), 0);
         assert_eq!(scales.layout().start_offset(), 0);
         assert_eq!(biases.layout().start_offset(), 0);
+
+        static KERNELS: OnceLock<crate::metal_kernels::Kernels> = OnceLock::new();
+        let kernels = KERNELS.get_or_init(|| crate::metal_kernels::Kernels::new());
         crate::metal_kernels::call_afq_qmm(
             device.device(),
             &command_buffer,
-            &crate::metal_kernels::Kernels::new(),
+            kernels,
             scales.dtype(),
             x_s.buffer(),
             x.dims(),
