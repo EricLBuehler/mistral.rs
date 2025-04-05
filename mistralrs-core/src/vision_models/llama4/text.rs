@@ -3,8 +3,8 @@
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    distributed::AllGather, ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, Shard, ShardedVarBuilder, SumAllReduce,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -351,6 +351,9 @@ struct TextExperts {
     num_experts: usize,
     hidden_size: usize,
     expert_dim: usize,
+    all_gather: AllGather,
+    experts_per_gpu: usize,
+    expert_offset: usize,
 }
 
 impl TextExperts {
@@ -360,36 +363,57 @@ impl TextExperts {
         quantization_config: &Option<QuantizedConfig>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
+        let experts_per_gpu = cfg.num_local_experts / comm.world_size();
+        let expert_offset = experts_per_gpu * comm.rank();
+        let gate_up_shard = Shard::Offset {
+            dim: 0,
+            offset: expert_offset * cfg.hidden_size * cfg.intermediate_size * 2,
+            len: experts_per_gpu * cfg.hidden_size * cfg.intermediate_size * 2,
+        };
+        let down_shard = Shard::Offset {
+            dim: 0,
+            offset: expert_offset * cfg.intermediate_size * cfg.hidden_size,
+            len: experts_per_gpu * cfg.intermediate_size * cfg.hidden_size,
+        };
         Ok(Self {
-            gate_up_proj: vb.get(
+            gate_up_proj: vb.get_with_hints(
                 (
                     cfg.num_local_experts,
                     cfg.hidden_size,
                     cfg.intermediate_size * 2,
                 ),
                 "gate_up_proj",
+                gate_up_shard,
             )?,
-            down_proj: vb.get(
+            down_proj: vb.get_with_hints(
                 (
                     cfg.num_local_experts,
                     cfg.intermediate_size,
                     cfg.hidden_size,
                 ),
                 "down_proj",
+                down_shard,
             )?,
             act: cfg.hidden_act,
             num_experts: cfg.num_local_experts,
             hidden_size: cfg.hidden_size,
             expert_dim: cfg.intermediate_size,
+            all_gather: AllGather::new(comm, 0),
+            experts_per_gpu,
+            expert_offset,
         })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs.reshape((self.num_experts, (), self.hidden_size))?;
+        // prep for EP
+        let xs = xs.narrow(0, self.expert_offset, self.experts_per_gpu)?;
         let gate_up = xs.broadcast_matmul(&self.gate_up_proj)?;
         let gate = gate_up.narrow(D::Minus1, 0, self.expert_dim)?;
         let up = gate_up.narrow(D::Minus1, self.expert_dim, self.expert_dim)?;
         let next_states = (up * gate.apply(&self.act)?)?.broadcast_matmul(&self.down_proj)?;
+        let all_gather = self.all_gather.all_gather(&next_states)?;
+        assert_eq!(all_gather.dim(0)?, self.num_experts);
         next_states.reshape(((), self.hidden_size))
     }
 }

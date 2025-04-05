@@ -35,7 +35,6 @@ pub struct TextConfig {
     pub interleave_moe_layer_step: usize,
     pub intermediate_size_mlp: usize,
     pub num_local_experts: usize,
-    pub expert_dim: usize,
     pub num_experts_per_tok: usize,
     pub attention_chunk_size: usize,
 }

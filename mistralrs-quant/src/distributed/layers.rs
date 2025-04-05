@@ -10,7 +10,7 @@ use crate::{
     QuantizedSerde, QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
-use super::{Comm, DistributedOperation, SumAllReduce};
+use super::{Comm, SumAllReduce};
 
 fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {
