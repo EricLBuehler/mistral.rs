@@ -1,25 +1,27 @@
 use candle_core::DType;
 use metal::{
     Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
-    FunctionConstantValues, Library,
+    FunctionConstantValues, Library, MTLSize,
 };
 use std::collections::HashMap;
 use std::sync::RwLock;
 
 pub mod utils;
-use utils::{linear_split, EncoderProvider};
+use utils::{get_2d_grid_dims, linear_split, EncoderProvider};
 
 use crate::set_params;
 
 const HQQ_DEQUANTIZE: &str = include_str!("hqq_dequantize.metal");
 const BNB_DEQUANTIZE: &str = include_str!("bnb_dequantize.metal");
 const BITWISE: &str = include_str!("bitwise.metal");
+const QUANTIZED: &str = include_str!("quantized.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     HqqDequant,
     BnbDequant,
     Bitwise,
+    Quantized,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -43,7 +45,7 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
 }
 
 type Libraries = HashMap<Source, Library>;
-type Pipelines = HashMap<&'static str, ComputePipelineState>;
+type Pipelines = HashMap<String, ComputePipelineState>;
 
 #[derive(Debug)]
 pub struct Kernels {
@@ -72,6 +74,7 @@ impl Kernels {
             Source::HqqDequant => HQQ_DEQUANTIZE,
             Source::BnbDequant => BNB_DEQUANTIZE,
             Source::Bitwise => BITWISE,
+            Source::Quantized => QUANTIZED,
         }
     }
 
@@ -101,12 +104,12 @@ impl Kernels {
         &self,
         device: &Device,
         source: Source,
-        name: &'static str,
+        name: impl ToString,
         constants: Option<FunctionConstantValues>,
     ) -> Result<Function, MetalKernelError> {
         let func = self
             .load_library(device, source)?
-            .get_function(name, constants)
+            .get_function(&name.to_string(), constants)
             .map_err(|e| MetalKernelError::LoadFunctionError(e.to_string()))?;
         Ok(func)
     }
@@ -118,15 +121,15 @@ impl Kernels {
         &self,
         device: &Device,
         source: Source,
-        name: &'static str,
+        name: impl ToString,
     ) -> Result<ComputePipelineState, MetalKernelError> {
         let mut pipelines = self.pipelines.write()?;
-        let key = name;
+        let key = name.to_string();
         if let Some(pipeline) = pipelines.get(&key) {
             Ok(pipeline.clone())
         } else {
             let name = key;
-            let func = self.load_function(device, source, name, None)?;
+            let func = self.load_function(device, source, &name, None)?;
             let pipeline = device
                 .new_compute_pipeline_state_with_function(&func)
                 .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
@@ -524,5 +527,97 @@ pub fn call_dequant_bnb_int8(
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+pub fn call_affine_quantize(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    full_ty: DType,
+    input: &Buffer,
+    input_dims: &[usize],
+    input_strides: &[usize],
+    output: &Buffer,
+    output_dims: &[usize],
+    scales: &Buffer,
+    biases: &Buffer,
+    dequantize: bool,
+    group_size: usize,
+    bits: usize,
+) -> Result<(), MetalKernelError> {
+    let type_string = match full_ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let kernel_func = if dequantize {
+        "affine_dequantize"
+    } else {
+        "affine_quantize"
+    };
+    let name = format!("{kernel_func}_{type_string}_gs_{group_size}_b_{bits}");
+
+    let pipeline = kernels.load_pipeline(device, Source::Quantized, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    // Treat uint32 as uint8 in kernel
+    let uint8_per_uint32 = 4;
+    let simd_size = 32;
+    let packs_per_int = match bits {
+        3 => 8,
+        6 => 4,
+        _ => 8 / bits,
+    };
+    let per_thread = if dequantize {
+        packs_per_int
+    } else {
+        group_size / simd_size
+    };
+    let nthreads = if dequantize {
+        output_dims.iter().product::<usize>() / packs_per_int
+    } else {
+        input_dims.iter().product::<usize>() / per_thread
+    };
+
+    let thread_group_size = (pipeline.max_total_threads_per_threadgroup() as usize).min(nthreads);
+    let group_dims = MTLSize {
+        width: thread_group_size as u64,
+        height: 1,
+        depth: 1,
+    };
+    let use_2d = nthreads > u32::MAX as usize;
+    let mut grid_shape = input_dims.to_vec();
+    if dequantize {
+        *grid_shape.last_mut().unwrap() *= uint8_per_uint32;
+    } else {
+        *grid_shape.last_mut().unwrap() /= per_thread;
+    }
+    let grid_dims = if use_2d {
+        get_2d_grid_dims(&grid_shape, input_strides)
+    } else {
+        MTLSize {
+            width: nthreads as u64,
+            height: 1,
+            depth: 1,
+        }
+    };
+
+    if dequantize {
+        set_params!(encoder, (input, scales, biases, output));
+    } else {
+        set_params!(encoder, (input, output, scales, biases));
+    }
+
+    encoder.dispatch_threads(grid_dims, group_dims);
     Ok(())
 }
