@@ -264,16 +264,16 @@
 <a href=#264 id=264 data-nosnippet>264</a>    hints: Shard,
 <a href=#265 id=265 data-nosnippet>265</a>    vb: ShardedVarBuilder,
 <a href=#266 id=266 data-nosnippet>266</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#267 id=267 data-nosnippet>267</a>    <span class="comment">// Handle the case where the layer is dummy (no tensors)
-<a href=#268 id=268 data-nosnippet>268</a>    </span><span class="kw">if </span>!(vb.contains_tensor(<span class="string">"weight"</span>) &amp;&amp; vb.contains_tensor(<span class="string">"weight_scale_inv"</span>)) {
-<a href=#269 id=269 data-nosnippet>269</a>        <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
-<a href=#270 id=270 data-nosnippet>270</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;);
-<a href=#271 id=271 data-nosnippet>271</a>    }
-<a href=#272 id=272 data-nosnippet>272</a>
-<a href=#273 id=273 data-nosnippet>273</a>    <span class="kw">let </span>weight_block_size = config
-<a href=#274 id=274 data-nosnippet>274</a>        .weight_block_size
-<a href=#275 id=275 data-nosnippet>275</a>        .as_ref()
-<a href=#276 id=276 data-nosnippet>276</a>        .expect(<span class="string">"Blockwise FP8 requires weight_block_size in config"</span>);
+<a href=#267 id=267 data-nosnippet>267</a>    <span class="kw">let </span>QuantizedConfig::Fp8 { weight_block_size } = config <span class="kw">else </span>{
+<a href=#268 id=268 data-nosnippet>268</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"Unexpected quantization config."</span>)
+<a href=#269 id=269 data-nosnippet>269</a>    };
+<a href=#270 id=270 data-nosnippet>270</a>
+<a href=#271 id=271 data-nosnippet>271</a>    <span class="comment">// Handle the case where the layer is dummy (no tensors)
+<a href=#272 id=272 data-nosnippet>272</a>    </span><span class="kw">if </span>!(vb.contains_tensor(<span class="string">"weight"</span>) &amp;&amp; vb.contains_tensor(<span class="string">"weight_scale_inv"</span>)) {
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
+<a href=#274 id=274 data-nosnippet>274</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;);
+<a href=#275 id=275 data-nosnippet>275</a>    }
+<a href=#276 id=276 data-nosnippet>276</a>
 <a href=#277 id=277 data-nosnippet>277</a>    <span class="kw">if </span>weight_block_size.len() != <span class="number">2 </span>{
 <a href=#278 id=278 data-nosnippet>278</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"Expected weight_block_size to have length 2, got {weight_block_size:?}"</span>)
 <a href=#279 id=279 data-nosnippet>279</a>    }

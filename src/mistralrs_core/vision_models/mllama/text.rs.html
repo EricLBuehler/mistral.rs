@@ -556,265 +556,273 @@
 <a href=#556 id=556 data-nosnippet>556</a>        normal_loading_metadata: NormalLoadingMetadata,
 <a href=#557 id=557 data-nosnippet>557</a>        attention_mechanism: AttentionImplementation,
 <a href=#558 id=558 data-nosnippet>558</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
-<a href=#559 id=559 data-nosnippet>559</a>        <span class="kw">if </span>!<span class="macro">matches!</span>(attention_mechanism, AttentionImplementation::Eager) {
-<a href=#560 id=560 data-nosnippet>560</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"Expected eager attention implementation"</span>);
-<a href=#561 id=561 data-nosnippet>561</a>        }
-<a href=#562 id=562 data-nosnippet>562</a>        <span class="kw">let </span>mapper = normal_loading_metadata.mapper;
-<a href=#563 id=563 data-nosnippet>563</a>
-<a href=#564 id=564 data-nosnippet>564</a>        <span class="kw">let </span>embed_tokens = embedding(
-<a href=#565 id=565 data-nosnippet>565</a>            cfg.vocab_size + <span class="number">8</span>,
-<a href=#566 id=566 data-nosnippet>566</a>            cfg.hidden_size,
-<a href=#567 id=567 data-nosnippet>567</a>            mapper.set_nm_device(vb.pp(<span class="string">"model.embed_tokens"</span>), <span class="bool-val">false</span>),
-<a href=#568 id=568 data-nosnippet>568</a>        )<span class="question-mark">?</span>;
-<a href=#569 id=569 data-nosnippet>569</a>
-<a href=#570 id=570 data-nosnippet>570</a>        <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
-<a href=#571 id=571 data-nosnippet>571</a>            ReplicatedLayer::new(
-<a href=#572 id=572 data-nosnippet>572</a>                cfg.hidden_size,
-<a href=#573 id=573 data-nosnippet>573</a>                cfg.vocab_size,
-<a href=#574 id=574 data-nosnippet>574</a>                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
-<a href=#575 id=575 data-nosnippet>575</a>                <span class="bool-val">false</span>,
-<a href=#576 id=576 data-nosnippet>576</a>                mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), <span class="bool-val">false</span>),
-<a href=#577 id=577 data-nosnippet>577</a>            )<span class="question-mark">?
-<a href=#578 id=578 data-nosnippet>578</a>        </span>} <span class="kw">else </span>{
-<a href=#579 id=579 data-nosnippet>579</a>            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-<a href=#580 id=580 data-nosnippet>580</a>                mapper.cast_nm_device(embed_tokens.embeddings(), <span class="bool-val">false</span>)<span class="question-mark">?</span>,
-<a href=#581 id=581 data-nosnippet>581</a>                <span class="prelude-val">None</span>,
-<a href=#582 id=582 data-nosnippet>582</a>            ))<span class="question-mark">?
-<a href=#583 id=583 data-nosnippet>583</a>        </span>};
-<a href=#584 id=584 data-nosnippet>584</a>
-<a href=#585 id=585 data-nosnippet>585</a>        <span class="kw">let </span>vb = vb.pp(<span class="string">"model"</span>);
-<a href=#586 id=586 data-nosnippet>586</a>
-<a href=#587 id=587 data-nosnippet>587</a>        <span class="kw">let </span>norm = RmsNorm::new(
-<a href=#588 id=588 data-nosnippet>588</a>            cfg.hidden_size,
-<a href=#589 id=589 data-nosnippet>589</a>            cfg.rms_norm_eps,
-<a href=#590 id=590 data-nosnippet>590</a>            mapper.set_nm_device(vb.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),
-<a href=#591 id=591 data-nosnippet>591</a>        )<span class="question-mark">?</span>;
+<a href=#559 id=559 data-nosnippet>559</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>quant_cfg) = <span class="kw-2">&amp;</span>cfg.quantization_config {
+<a href=#560 id=560 data-nosnippet>560</a>            <span class="macro">tracing::info!</span>(
+<a href=#561 id=561 data-nosnippet>561</a>                <span class="string">"Using {} quantization: {}."</span>,
+<a href=#562 id=562 data-nosnippet>562</a>                quant_cfg.name(),
+<a href=#563 id=563 data-nosnippet>563</a>                quant_cfg.get_bits_name(<span class="kw-2">&amp;</span>vb)
+<a href=#564 id=564 data-nosnippet>564</a>            );
+<a href=#565 id=565 data-nosnippet>565</a>        }
+<a href=#566 id=566 data-nosnippet>566</a>        <span class="kw">if </span>!<span class="macro">matches!</span>(attention_mechanism, AttentionImplementation::Eager) {
+<a href=#567 id=567 data-nosnippet>567</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"Expected eager attention implementation"</span>);
+<a href=#568 id=568 data-nosnippet>568</a>        }
+<a href=#569 id=569 data-nosnippet>569</a>        <span class="kw">let </span>mapper = normal_loading_metadata.mapper;
+<a href=#570 id=570 data-nosnippet>570</a>
+<a href=#571 id=571 data-nosnippet>571</a>        <span class="kw">let </span>embed_tokens = embedding(
+<a href=#572 id=572 data-nosnippet>572</a>            cfg.vocab_size + <span class="number">8</span>,
+<a href=#573 id=573 data-nosnippet>573</a>            cfg.hidden_size,
+<a href=#574 id=574 data-nosnippet>574</a>            mapper.set_nm_device(vb.pp(<span class="string">"model.embed_tokens"</span>), <span class="bool-val">false</span>),
+<a href=#575 id=575 data-nosnippet>575</a>            <span class="kw-2">&amp;</span>cfg.quantization_config,
+<a href=#576 id=576 data-nosnippet>576</a>        )<span class="question-mark">?</span>;
+<a href=#577 id=577 data-nosnippet>577</a>
+<a href=#578 id=578 data-nosnippet>578</a>        <span class="kw">let </span>lm_head = <span class="kw">if </span>!cfg.tie_word_embeddings {
+<a href=#579 id=579 data-nosnippet>579</a>            ReplicatedLayer::new(
+<a href=#580 id=580 data-nosnippet>580</a>                cfg.hidden_size,
+<a href=#581 id=581 data-nosnippet>581</a>                cfg.vocab_size,
+<a href=#582 id=582 data-nosnippet>582</a>                <span class="kw-2">&amp;</span><span class="prelude-val">None</span>,
+<a href=#583 id=583 data-nosnippet>583</a>                <span class="bool-val">false</span>,
+<a href=#584 id=584 data-nosnippet>584</a>                mapper.set_nm_device(vb.pp(<span class="string">"lm_head"</span>), <span class="bool-val">false</span>),
+<a href=#585 id=585 data-nosnippet>585</a>            )<span class="question-mark">?
+<a href=#586 id=586 data-nosnippet>586</a>        </span>} <span class="kw">else </span>{
+<a href=#587 id=587 data-nosnippet>587</a>            ReplicatedLayer::from_linear(candle_nn::Linear::new(
+<a href=#588 id=588 data-nosnippet>588</a>                mapper.cast_nm_device(embed_tokens.embeddings(), <span class="bool-val">false</span>)<span class="question-mark">?</span>,
+<a href=#589 id=589 data-nosnippet>589</a>                <span class="prelude-val">None</span>,
+<a href=#590 id=590 data-nosnippet>590</a>            ))<span class="question-mark">?
+<a href=#591 id=591 data-nosnippet>591</a>        </span>};
 <a href=#592 id=592 data-nosnippet>592</a>
-<a href=#593 id=593 data-nosnippet>593</a>        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
-<a href=#594 id=594 data-nosnippet>594</a>        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
-<a href=#595 id=595 data-nosnippet>595</a>            <span class="kw">let </span>device = mapper
-<a href=#596 id=596 data-nosnippet>596</a>                .device_for(layer_idx, <span class="bool-val">false</span>)
-<a href=#597 id=597 data-nosnippet>597</a>                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
-<a href=#598 id=598 data-nosnippet>598</a>            ropes.insert(
-<a href=#599 id=599 data-nosnippet>599</a>                device.location(),
-<a href=#600 id=600 data-nosnippet>600</a>                Arc::new(Llama3RotaryEmbedding::new_mllama3(
-<a href=#601 id=601 data-nosnippet>601</a>                    vb.dtype(),
-<a href=#602 id=602 data-nosnippet>602</a>                    cfg,
-<a href=#603 id=603 data-nosnippet>603</a>                    device,
-<a href=#604 id=604 data-nosnippet>604</a>                    is_gptx,
-<a href=#605 id=605 data-nosnippet>605</a>                )<span class="question-mark">?</span>),
-<a href=#606 id=606 data-nosnippet>606</a>            );
-<a href=#607 id=607 data-nosnippet>607</a>        }
-<a href=#608 id=608 data-nosnippet>608</a>
-<a href=#609 id=609 data-nosnippet>609</a>        <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
-<a href=#610 id=610 data-nosnippet>610</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
-<a href=#611 id=611 data-nosnippet>611</a>            <span class="kw">let </span>comm = mapper.get_comm_for(i)<span class="question-mark">?</span>;
-<a href=#612 id=612 data-nosnippet>612</a>            <span class="kw">if </span>cfg.cross_attention_layers.contains(<span class="kw-2">&amp;</span>i) {
-<a href=#613 id=613 data-nosnippet>613</a>                layers.push(MLlamaDecoderLayer::CrossAttn(
-<a href=#614 id=614 data-nosnippet>614</a>                    MLlamaCrossAttentionDecoderLayer::new(
-<a href=#615 id=615 data-nosnippet>615</a>                        cfg,
-<a href=#616 id=616 data-nosnippet>616</a>                        vb.pp(<span class="macro">format!</span>(<span class="string">"layers.{i}"</span>)),
-<a href=#617 id=617 data-nosnippet>617</a>                        <span class="kw-2">&amp;*</span>mapper,
-<a href=#618 id=618 data-nosnippet>618</a>                        i,
-<a href=#619 id=619 data-nosnippet>619</a>                        <span class="bool-val">false</span>,
-<a href=#620 id=620 data-nosnippet>620</a>                        <span class="kw-2">&amp;</span>comm,
-<a href=#621 id=621 data-nosnippet>621</a>                    )<span class="question-mark">?</span>,
-<a href=#622 id=622 data-nosnippet>622</a>                ))
-<a href=#623 id=623 data-nosnippet>623</a>            } <span class="kw">else </span>{
-<a href=#624 id=624 data-nosnippet>624</a>                <span class="kw">let </span>device = mapper
-<a href=#625 id=625 data-nosnippet>625</a>                    .device_for(i, <span class="bool-val">false</span>)
-<a href=#626 id=626 data-nosnippet>626</a>                    .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
-<a href=#627 id=627 data-nosnippet>627</a>                layers.push(MLlamaDecoderLayer::SelfAttn(
-<a href=#628 id=628 data-nosnippet>628</a>                    MLlamaSelfAttentionDecoderLayer::new(
-<a href=#629 id=629 data-nosnippet>629</a>                        cfg,
-<a href=#630 id=630 data-nosnippet>630</a>                        vb.pp(<span class="macro">format!</span>(<span class="string">"layers.{i}"</span>)),
-<a href=#631 id=631 data-nosnippet>631</a>                        ropes
-<a href=#632 id=632 data-nosnippet>632</a>                            .get(<span class="kw-2">&amp;</span>device.location())
-<a href=#633 id=633 data-nosnippet>633</a>                            .expect(<span class="string">"No RoPE for device location!"</span>)
-<a href=#634 id=634 data-nosnippet>634</a>                            .clone(),
-<a href=#635 id=635 data-nosnippet>635</a>                        <span class="kw-2">&amp;*</span>mapper,
-<a href=#636 id=636 data-nosnippet>636</a>                        i,
-<a href=#637 id=637 data-nosnippet>637</a>                        normal_loading_metadata.loading_isq,
-<a href=#638 id=638 data-nosnippet>638</a>                        <span class="kw-2">&amp;</span>comm,
-<a href=#639 id=639 data-nosnippet>639</a>                    )<span class="question-mark">?</span>,
-<a href=#640 id=640 data-nosnippet>640</a>                ))
-<a href=#641 id=641 data-nosnippet>641</a>            }
-<a href=#642 id=642 data-nosnippet>642</a>        }
-<a href=#643 id=643 data-nosnippet>643</a>
-<a href=#644 id=644 data-nosnippet>644</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
-<a href=#645 id=645 data-nosnippet>645</a>            embed_tokens,
-<a href=#646 id=646 data-nosnippet>646</a>            layers,
-<a href=#647 id=647 data-nosnippet>647</a>            norm,
-<a href=#648 id=648 data-nosnippet>648</a>            lm_head,
-<a href=#649 id=649 data-nosnippet>649</a>            cfg: ModelConfigMetadata {
-<a href=#650 id=650 data-nosnippet>650</a>                max_seq_len: cfg.max_position_embeddings,
-<a href=#651 id=651 data-nosnippet>651</a>                num_layers: cfg.num_hidden_layers,
-<a href=#652 id=652 data-nosnippet>652</a>                hidden_size: cfg.hidden_size,
-<a href=#653 id=653 data-nosnippet>653</a>                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>.world_size(),
-<a href=#654 id=654 data-nosnippet>654</a>                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>.world_size())
-<a href=#655 id=655 data-nosnippet>655</a>                    .max(<span class="number">1</span>),
-<a href=#656 id=656 data-nosnippet>656</a>                sliding_window: <span class="prelude-val">None</span>,
-<a href=#657 id=657 data-nosnippet>657</a>                k_head_dim: cfg.head_dim(),
-<a href=#658 id=658 data-nosnippet>658</a>                v_head_dim: cfg.head_dim(),
-<a href=#659 id=659 data-nosnippet>659</a>            },
-<a href=#660 id=660 data-nosnippet>660</a>            cache: EitherCache::Normal(NormalCache::new(
-<a href=#661 id=661 data-nosnippet>661</a>                cfg.num_hidden_layers,
-<a href=#662 id=662 data-nosnippet>662</a>                cfg.max_position_embeddings,
-<a href=#663 id=663 data-nosnippet>663</a>            )),
-<a href=#664 id=664 data-nosnippet>664</a>            device: normal_loading_metadata.real_device,
-<a href=#665 id=665 data-nosnippet>665</a>            max_position_embeddings: cfg.max_position_embeddings,
-<a href=#666 id=666 data-nosnippet>666</a>            mapper,
-<a href=#667 id=667 data-nosnippet>667</a>        })
-<a href=#668 id=668 data-nosnippet>668</a>    }
-<a href=#669 id=669 data-nosnippet>669</a>
-<a href=#670 id=670 data-nosnippet>670</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#671 id=671 data-nosnippet>671</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>forward(
-<a href=#672 id=672 data-nosnippet>672</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#673 id=673 data-nosnippet>673</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
-<a href=#674 id=674 data-nosnippet>674</a>        cross_attn_states: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
-<a href=#675 id=675 data-nosnippet>675</a>        cross_attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
-<a href=#676 id=676 data-nosnippet>676</a>        full_text_row_masked_out_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
-<a href=#677 id=677 data-nosnippet>677</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
-<a href=#678 id=678 data-nosnippet>678</a>        context_lens: Vec&lt;(usize, usize)&gt;,
-<a href=#679 id=679 data-nosnippet>679</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#680 id=680 data-nosnippet>680</a>        <span class="kw">let </span><span class="kw-2">mut </span>hidden_states = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
-<a href=#681 id=681 data-nosnippet>681</a>
-<a href=#682 id=682 data-nosnippet>682</a>        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
-<a href=#683 id=683 data-nosnippet>683</a>        <span class="kw">let </span>self_mask = CausalMasker.make_causal_mask_matrix(
-<a href=#684 id=684 data-nosnippet>684</a>            input_ids,
-<a href=#685 id=685 data-nosnippet>685</a>            cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
-<a href=#686 id=686 data-nosnippet>686</a>            hidden_states.dtype(),
-<a href=#687 id=687 data-nosnippet>687</a>            <span class="self">self</span>.cfg.num_attn_heads,
-<a href=#688 id=688 data-nosnippet>688</a>        )<span class="question-mark">?</span>;
+<a href=#593 id=593 data-nosnippet>593</a>        <span class="kw">let </span>vb = vb.pp(<span class="string">"model"</span>);
+<a href=#594 id=594 data-nosnippet>594</a>
+<a href=#595 id=595 data-nosnippet>595</a>        <span class="kw">let </span>norm = RmsNorm::new(
+<a href=#596 id=596 data-nosnippet>596</a>            cfg.hidden_size,
+<a href=#597 id=597 data-nosnippet>597</a>            cfg.rms_norm_eps,
+<a href=#598 id=598 data-nosnippet>598</a>            mapper.set_nm_device(vb.pp(<span class="string">"norm"</span>), <span class="bool-val">false</span>),
+<a href=#599 id=599 data-nosnippet>599</a>        )<span class="question-mark">?</span>;
+<a href=#600 id=600 data-nosnippet>600</a>
+<a href=#601 id=601 data-nosnippet>601</a>        <span class="kw">let </span><span class="kw-2">mut </span>ropes = HashMap::new();
+<a href=#602 id=602 data-nosnippet>602</a>        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+<a href=#603 id=603 data-nosnippet>603</a>            <span class="kw">let </span>device = mapper
+<a href=#604 id=604 data-nosnippet>604</a>                .device_for(layer_idx, <span class="bool-val">false</span>)
+<a href=#605 id=605 data-nosnippet>605</a>                .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+<a href=#606 id=606 data-nosnippet>606</a>            ropes.insert(
+<a href=#607 id=607 data-nosnippet>607</a>                device.location(),
+<a href=#608 id=608 data-nosnippet>608</a>                Arc::new(Llama3RotaryEmbedding::new_mllama3(
+<a href=#609 id=609 data-nosnippet>609</a>                    vb.dtype(),
+<a href=#610 id=610 data-nosnippet>610</a>                    cfg,
+<a href=#611 id=611 data-nosnippet>611</a>                    device,
+<a href=#612 id=612 data-nosnippet>612</a>                    is_gptx,
+<a href=#613 id=613 data-nosnippet>613</a>                )<span class="question-mark">?</span>),
+<a href=#614 id=614 data-nosnippet>614</a>            );
+<a href=#615 id=615 data-nosnippet>615</a>        }
+<a href=#616 id=616 data-nosnippet>616</a>
+<a href=#617 id=617 data-nosnippet>617</a>        <span class="kw">let </span><span class="kw-2">mut </span>layers = Vec::with_capacity(cfg.num_hidden_layers);
+<a href=#618 id=618 data-nosnippet>618</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..cfg.num_hidden_layers {
+<a href=#619 id=619 data-nosnippet>619</a>            <span class="kw">let </span>comm = mapper.get_comm_for(i)<span class="question-mark">?</span>;
+<a href=#620 id=620 data-nosnippet>620</a>            <span class="kw">if </span>cfg.cross_attention_layers.contains(<span class="kw-2">&amp;</span>i) {
+<a href=#621 id=621 data-nosnippet>621</a>                layers.push(MLlamaDecoderLayer::CrossAttn(
+<a href=#622 id=622 data-nosnippet>622</a>                    MLlamaCrossAttentionDecoderLayer::new(
+<a href=#623 id=623 data-nosnippet>623</a>                        cfg,
+<a href=#624 id=624 data-nosnippet>624</a>                        vb.pp(<span class="macro">format!</span>(<span class="string">"layers.{i}"</span>)),
+<a href=#625 id=625 data-nosnippet>625</a>                        <span class="kw-2">&amp;*</span>mapper,
+<a href=#626 id=626 data-nosnippet>626</a>                        i,
+<a href=#627 id=627 data-nosnippet>627</a>                        <span class="bool-val">false</span>,
+<a href=#628 id=628 data-nosnippet>628</a>                        <span class="kw-2">&amp;</span>comm,
+<a href=#629 id=629 data-nosnippet>629</a>                    )<span class="question-mark">?</span>,
+<a href=#630 id=630 data-nosnippet>630</a>                ))
+<a href=#631 id=631 data-nosnippet>631</a>            } <span class="kw">else </span>{
+<a href=#632 id=632 data-nosnippet>632</a>                <span class="kw">let </span>device = mapper
+<a href=#633 id=633 data-nosnippet>633</a>                    .device_for(i, <span class="bool-val">false</span>)
+<a href=#634 id=634 data-nosnippet>634</a>                    .unwrap_or(<span class="kw-2">&amp;</span>normal_loading_metadata.real_device);
+<a href=#635 id=635 data-nosnippet>635</a>                layers.push(MLlamaDecoderLayer::SelfAttn(
+<a href=#636 id=636 data-nosnippet>636</a>                    MLlamaSelfAttentionDecoderLayer::new(
+<a href=#637 id=637 data-nosnippet>637</a>                        cfg,
+<a href=#638 id=638 data-nosnippet>638</a>                        vb.pp(<span class="macro">format!</span>(<span class="string">"layers.{i}"</span>)),
+<a href=#639 id=639 data-nosnippet>639</a>                        ropes
+<a href=#640 id=640 data-nosnippet>640</a>                            .get(<span class="kw-2">&amp;</span>device.location())
+<a href=#641 id=641 data-nosnippet>641</a>                            .expect(<span class="string">"No RoPE for device location!"</span>)
+<a href=#642 id=642 data-nosnippet>642</a>                            .clone(),
+<a href=#643 id=643 data-nosnippet>643</a>                        <span class="kw-2">&amp;*</span>mapper,
+<a href=#644 id=644 data-nosnippet>644</a>                        i,
+<a href=#645 id=645 data-nosnippet>645</a>                        normal_loading_metadata.loading_isq,
+<a href=#646 id=646 data-nosnippet>646</a>                        <span class="kw-2">&amp;</span>comm,
+<a href=#647 id=647 data-nosnippet>647</a>                    )<span class="question-mark">?</span>,
+<a href=#648 id=648 data-nosnippet>648</a>                ))
+<a href=#649 id=649 data-nosnippet>649</a>            }
+<a href=#650 id=650 data-nosnippet>650</a>        }
+<a href=#651 id=651 data-nosnippet>651</a>
+<a href=#652 id=652 data-nosnippet>652</a>        <span class="prelude-val">Ok</span>(<span class="self">Self </span>{
+<a href=#653 id=653 data-nosnippet>653</a>            embed_tokens,
+<a href=#654 id=654 data-nosnippet>654</a>            layers,
+<a href=#655 id=655 data-nosnippet>655</a>            norm,
+<a href=#656 id=656 data-nosnippet>656</a>            lm_head,
+<a href=#657 id=657 data-nosnippet>657</a>            cfg: ModelConfigMetadata {
+<a href=#658 id=658 data-nosnippet>658</a>                max_seq_len: cfg.max_position_embeddings,
+<a href=#659 id=659 data-nosnippet>659</a>                num_layers: cfg.num_hidden_layers,
+<a href=#660 id=660 data-nosnippet>660</a>                hidden_size: cfg.hidden_size,
+<a href=#661 id=661 data-nosnippet>661</a>                num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>.world_size(),
+<a href=#662 id=662 data-nosnippet>662</a>                num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(<span class="number">0</span>)<span class="question-mark">?</span>.world_size())
+<a href=#663 id=663 data-nosnippet>663</a>                    .max(<span class="number">1</span>),
+<a href=#664 id=664 data-nosnippet>664</a>                sliding_window: <span class="prelude-val">None</span>,
+<a href=#665 id=665 data-nosnippet>665</a>                k_head_dim: cfg.head_dim(),
+<a href=#666 id=666 data-nosnippet>666</a>                v_head_dim: cfg.head_dim(),
+<a href=#667 id=667 data-nosnippet>667</a>            },
+<a href=#668 id=668 data-nosnippet>668</a>            cache: EitherCache::Normal(NormalCache::new(
+<a href=#669 id=669 data-nosnippet>669</a>                cfg.num_hidden_layers,
+<a href=#670 id=670 data-nosnippet>670</a>                cfg.max_position_embeddings,
+<a href=#671 id=671 data-nosnippet>671</a>            )),
+<a href=#672 id=672 data-nosnippet>672</a>            device: normal_loading_metadata.real_device,
+<a href=#673 id=673 data-nosnippet>673</a>            max_position_embeddings: cfg.max_position_embeddings,
+<a href=#674 id=674 data-nosnippet>674</a>            mapper,
+<a href=#675 id=675 data-nosnippet>675</a>        })
+<a href=#676 id=676 data-nosnippet>676</a>    }
+<a href=#677 id=677 data-nosnippet>677</a>
+<a href=#678 id=678 data-nosnippet>678</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#679 id=679 data-nosnippet>679</a>    </span><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>forward(
+<a href=#680 id=680 data-nosnippet>680</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#681 id=681 data-nosnippet>681</a>        input_ids: <span class="kw-2">&amp;</span>Tensor,
+<a href=#682 id=682 data-nosnippet>682</a>        cross_attn_states: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+<a href=#683 id=683 data-nosnippet>683</a>        cross_attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+<a href=#684 id=684 data-nosnippet>684</a>        full_text_row_masked_out_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+<a href=#685 id=685 data-nosnippet>685</a>        seqlen_offsets: <span class="kw-2">&amp;</span>[usize],
+<a href=#686 id=686 data-nosnippet>686</a>        context_lens: Vec&lt;(usize, usize)&gt;,
+<a href=#687 id=687 data-nosnippet>687</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#688 id=688 data-nosnippet>688</a>        <span class="kw">let </span><span class="kw-2">mut </span>hidden_states = <span class="self">self</span>.embed_tokens.forward(input_ids)<span class="question-mark">?</span>;
 <a href=#689 id=689 data-nosnippet>689</a>
-<a href=#690 id=690 data-nosnippet>690</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
-<a href=#691 id=691 data-nosnippet>691</a>            hidden_states = <span class="self">self</span>.mapper.map(hidden_states, i)<span class="question-mark">?</span>;
-<a href=#692 id=692 data-nosnippet>692</a>            <span class="kw">match </span>layer {
-<a href=#693 id=693 data-nosnippet>693</a>                MLlamaDecoderLayer::SelfAttn(attn) =&gt; {
-<a href=#694 id=694 data-nosnippet>694</a>                    hidden_states = attn.forward(
-<a href=#695 id=695 data-nosnippet>695</a>                        <span class="kw-2">&amp;</span>hidden_states,
-<a href=#696 id=696 data-nosnippet>696</a>                        self_mask
-<a href=#697 id=697 data-nosnippet>697</a>                            .as_ref()
-<a href=#698 id=698 data-nosnippet>698</a>                            .map(|m| m.to_device(hidden_states.device()).unwrap())
-<a href=#699 id=699 data-nosnippet>699</a>                            .as_ref(),
-<a href=#700 id=700 data-nosnippet>700</a>                        seqlen_offsets,
-<a href=#701 id=701 data-nosnippet>701</a>                        <span class="kw-2">&amp;mut </span>cache[i],
-<a href=#702 id=702 data-nosnippet>702</a>                    )<span class="question-mark">?</span>;
-<a href=#703 id=703 data-nosnippet>703</a>                }
-<a href=#704 id=704 data-nosnippet>704</a>                MLlamaDecoderLayer::CrossAttn(attn) =&gt; {
-<a href=#705 id=705 data-nosnippet>705</a>                    <span class="comment">// For text-only path we should skip cross attention layers.
-<a href=#706 id=706 data-nosnippet>706</a>                    // Let's check if the layer is cross attention layer and if we have cross attention states
-<a href=#707 id=707 data-nosnippet>707</a>                    // or cached cross attention states.
-<a href=#708 id=708 data-nosnippet>708</a>                    </span><span class="kw">if </span>cross_attn_states.is_none() {
-<a href=#709 id=709 data-nosnippet>709</a>                        <span class="kw">continue</span>;
-<a href=#710 id=710 data-nosnippet>710</a>                    }
-<a href=#711 id=711 data-nosnippet>711</a>                    hidden_states = attn.forward(
-<a href=#712 id=712 data-nosnippet>712</a>                        <span class="kw-2">&amp;</span>hidden_states,
-<a href=#713 id=713 data-nosnippet>713</a>                        cross_attn_states
-<a href=#714 id=714 data-nosnippet>714</a>                            .as_ref()
-<a href=#715 id=715 data-nosnippet>715</a>                            .map(|x| x.to_device(hidden_states.device()).unwrap())
-<a href=#716 id=716 data-nosnippet>716</a>                            .as_ref(),
-<a href=#717 id=717 data-nosnippet>717</a>                        cross_attention_mask
-<a href=#718 id=718 data-nosnippet>718</a>                            .as_ref()
-<a href=#719 id=719 data-nosnippet>719</a>                            .map(|m| m.to_device(hidden_states.device()).unwrap())
-<a href=#720 id=720 data-nosnippet>720</a>                            .as_ref(),
-<a href=#721 id=721 data-nosnippet>721</a>                        full_text_row_masked_out_mask
+<a href=#690 id=690 data-nosnippet>690</a>        <span class="kw">let </span>cache = <span class="kw-2">&amp;mut </span><span class="self">self</span>.cache.normal().<span class="number">0</span>;
+<a href=#691 id=691 data-nosnippet>691</a>        <span class="kw">let </span>self_mask = CausalMasker.make_causal_mask_matrix(
+<a href=#692 id=692 data-nosnippet>692</a>            input_ids,
+<a href=#693 id=693 data-nosnippet>693</a>            cache <span class="kw">as </span><span class="kw-2">&amp;</span><span class="kw">dyn </span>PastKvLenCache,
+<a href=#694 id=694 data-nosnippet>694</a>            hidden_states.dtype(),
+<a href=#695 id=695 data-nosnippet>695</a>            <span class="self">self</span>.cfg.num_attn_heads,
+<a href=#696 id=696 data-nosnippet>696</a>        )<span class="question-mark">?</span>;
+<a href=#697 id=697 data-nosnippet>697</a>
+<a href=#698 id=698 data-nosnippet>698</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+<a href=#699 id=699 data-nosnippet>699</a>            hidden_states = <span class="self">self</span>.mapper.map(hidden_states, i)<span class="question-mark">?</span>;
+<a href=#700 id=700 data-nosnippet>700</a>            <span class="kw">match </span>layer {
+<a href=#701 id=701 data-nosnippet>701</a>                MLlamaDecoderLayer::SelfAttn(attn) =&gt; {
+<a href=#702 id=702 data-nosnippet>702</a>                    hidden_states = attn.forward(
+<a href=#703 id=703 data-nosnippet>703</a>                        <span class="kw-2">&amp;</span>hidden_states,
+<a href=#704 id=704 data-nosnippet>704</a>                        self_mask
+<a href=#705 id=705 data-nosnippet>705</a>                            .as_ref()
+<a href=#706 id=706 data-nosnippet>706</a>                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+<a href=#707 id=707 data-nosnippet>707</a>                            .as_ref(),
+<a href=#708 id=708 data-nosnippet>708</a>                        seqlen_offsets,
+<a href=#709 id=709 data-nosnippet>709</a>                        <span class="kw-2">&amp;mut </span>cache[i],
+<a href=#710 id=710 data-nosnippet>710</a>                    )<span class="question-mark">?</span>;
+<a href=#711 id=711 data-nosnippet>711</a>                }
+<a href=#712 id=712 data-nosnippet>712</a>                MLlamaDecoderLayer::CrossAttn(attn) =&gt; {
+<a href=#713 id=713 data-nosnippet>713</a>                    <span class="comment">// For text-only path we should skip cross attention layers.
+<a href=#714 id=714 data-nosnippet>714</a>                    // Let's check if the layer is cross attention layer and if we have cross attention states
+<a href=#715 id=715 data-nosnippet>715</a>                    // or cached cross attention states.
+<a href=#716 id=716 data-nosnippet>716</a>                    </span><span class="kw">if </span>cross_attn_states.is_none() {
+<a href=#717 id=717 data-nosnippet>717</a>                        <span class="kw">continue</span>;
+<a href=#718 id=718 data-nosnippet>718</a>                    }
+<a href=#719 id=719 data-nosnippet>719</a>                    hidden_states = attn.forward(
+<a href=#720 id=720 data-nosnippet>720</a>                        <span class="kw-2">&amp;</span>hidden_states,
+<a href=#721 id=721 data-nosnippet>721</a>                        cross_attn_states
 <a href=#722 id=722 data-nosnippet>722</a>                            .as_ref()
-<a href=#723 id=723 data-nosnippet>723</a>                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+<a href=#723 id=723 data-nosnippet>723</a>                            .map(|x| x.to_device(hidden_states.device()).unwrap())
 <a href=#724 id=724 data-nosnippet>724</a>                            .as_ref(),
-<a href=#725 id=725 data-nosnippet>725</a>                    )<span class="question-mark">?</span>;
-<a href=#726 id=726 data-nosnippet>726</a>                }
-<a href=#727 id=727 data-nosnippet>727</a>            }
-<a href=#728 id=728 data-nosnippet>728</a>        }
-<a href=#729 id=729 data-nosnippet>729</a>
-<a href=#730 id=730 data-nosnippet>730</a>        hidden_states = hidden_states.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
-<a href=#731 id=731 data-nosnippet>731</a>        hidden_states = <span class="self">self</span>.norm.forward(<span class="kw-2">&amp;</span>hidden_states)<span class="question-mark">?</span>;
-<a href=#732 id=732 data-nosnippet>732</a>
-<a href=#733 id=733 data-nosnippet>733</a>        hidden_states = <span class="self">self
-<a href=#734 id=734 data-nosnippet>734</a>            </span>.lm_head
-<a href=#735 id=735 data-nosnippet>735</a>            .forward(<span class="kw-2">&amp;</span>extract_logits(<span class="kw-2">&amp;</span>hidden_states, context_lens)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
-<a href=#736 id=736 data-nosnippet>736</a>
-<a href=#737 id=737 data-nosnippet>737</a>        <span class="prelude-val">Ok</span>(hidden_states)
-<a href=#738 id=738 data-nosnippet>738</a>    }
-<a href=#739 id=739 data-nosnippet>739</a>}
+<a href=#725 id=725 data-nosnippet>725</a>                        cross_attention_mask
+<a href=#726 id=726 data-nosnippet>726</a>                            .as_ref()
+<a href=#727 id=727 data-nosnippet>727</a>                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+<a href=#728 id=728 data-nosnippet>728</a>                            .as_ref(),
+<a href=#729 id=729 data-nosnippet>729</a>                        full_text_row_masked_out_mask
+<a href=#730 id=730 data-nosnippet>730</a>                            .as_ref()
+<a href=#731 id=731 data-nosnippet>731</a>                            .map(|m| m.to_device(hidden_states.device()).unwrap())
+<a href=#732 id=732 data-nosnippet>732</a>                            .as_ref(),
+<a href=#733 id=733 data-nosnippet>733</a>                    )<span class="question-mark">?</span>;
+<a href=#734 id=734 data-nosnippet>734</a>                }
+<a href=#735 id=735 data-nosnippet>735</a>            }
+<a href=#736 id=736 data-nosnippet>736</a>        }
+<a href=#737 id=737 data-nosnippet>737</a>
+<a href=#738 id=738 data-nosnippet>738</a>        hidden_states = hidden_states.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
+<a href=#739 id=739 data-nosnippet>739</a>        hidden_states = <span class="self">self</span>.norm.forward(<span class="kw-2">&amp;</span>hidden_states)<span class="question-mark">?</span>;
 <a href=#740 id=740 data-nosnippet>740</a>
-<a href=#741 id=741 data-nosnippet>741</a><span class="kw">impl </span>IsqModel <span class="kw">for </span>MLlamaTextModel {
-<a href=#742 id=742 data-nosnippet>742</a>    <span class="kw">fn </span>get_layers(
-<a href=#743 id=743 data-nosnippet>743</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#744 id=744 data-nosnippet>744</a>    ) -&gt; (
-<a href=#745 id=745 data-nosnippet>745</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
-<a href=#746 id=746 data-nosnippet>746</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
-<a href=#747 id=747 data-nosnippet>747</a>    ) {
-<a href=#748 id=748 data-nosnippet>748</a>        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
-<a href=#749 id=749 data-nosnippet>749</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
-<a href=#750 id=750 data-nosnippet>750</a>            <span class="kw">match </span>layer {
-<a href=#751 id=751 data-nosnippet>751</a>                MLlamaDecoderLayer::CrossAttn(_cross) =&gt; {
-<a href=#752 id=752 data-nosnippet>752</a>                    <span class="comment">// tensors.push((&amp;mut cross.attn.q_proj, Some(i)));
-<a href=#753 id=753 data-nosnippet>753</a>                    // tensors.push((&amp;mut cross.attn.k_proj, Some(i)));
-<a href=#754 id=754 data-nosnippet>754</a>                    // tensors.push((&amp;mut cross.attn.v_proj, Some(i)));
-<a href=#755 id=755 data-nosnippet>755</a>                    // tensors.push((&amp;mut cross.attn.o_proj, Some(i)));
-<a href=#756 id=756 data-nosnippet>756</a>                    // tensors.push((&amp;mut cross.mlp.gate_proj, Some(i)));
-<a href=#757 id=757 data-nosnippet>757</a>                    // tensors.push((&amp;mut cross.mlp.up_proj, Some(i)));
-<a href=#758 id=758 data-nosnippet>758</a>                    // tensors.push((&amp;mut cross.mlp.down_proj, Some(i)));
-<a href=#759 id=759 data-nosnippet>759</a>                </span>}
-<a href=#760 id=760 data-nosnippet>760</a>                MLlamaDecoderLayer::SelfAttn(self_attn) =&gt; {
-<a href=#761 id=761 data-nosnippet>761</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.attn.q_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#762 id=762 data-nosnippet>762</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.attn.k_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#763 id=763 data-nosnippet>763</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.attn.v_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#764 id=764 data-nosnippet>764</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.attn.o_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#765 id=765 data-nosnippet>765</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.mlp.gate_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#766 id=766 data-nosnippet>766</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.mlp.up_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#767 id=767 data-nosnippet>767</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.mlp.down_proj, <span class="prelude-val">Some</span>(i)));
-<a href=#768 id=768 data-nosnippet>768</a>                }
-<a href=#769 id=769 data-nosnippet>769</a>            }
-<a href=#770 id=770 data-nosnippet>770</a>        }
-<a href=#771 id=771 data-nosnippet>771</a>        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
-<a href=#772 id=772 data-nosnippet>772</a>    }
-<a href=#773 id=773 data-nosnippet>773</a>
-<a href=#774 id=774 data-nosnippet>774</a>    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
-<a href=#775 id=775 data-nosnippet>775</a>        <span class="kw">let </span>uvb = UnVarBuilder::new();
-<a href=#776 id=776 data-nosnippet>776</a>
-<a href=#777 id=777 data-nosnippet>777</a>        uvb.pp(<span class="string">"model.embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
-<a href=#778 id=778 data-nosnippet>778</a>        uvb.pp(<span class="string">"lm_head"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head);
-<a href=#779 id=779 data-nosnippet>779</a>
-<a href=#780 id=780 data-nosnippet>780</a>        <span class="kw">let </span>uvb = uvb.pp(<span class="string">"model"</span>);
+<a href=#741 id=741 data-nosnippet>741</a>        hidden_states = <span class="self">self
+<a href=#742 id=742 data-nosnippet>742</a>            </span>.lm_head
+<a href=#743 id=743 data-nosnippet>743</a>            .forward(<span class="kw-2">&amp;</span>extract_logits(<span class="kw-2">&amp;</span>hidden_states, context_lens)<span class="question-mark">?</span>)<span class="question-mark">?</span>;
+<a href=#744 id=744 data-nosnippet>744</a>
+<a href=#745 id=745 data-nosnippet>745</a>        <span class="prelude-val">Ok</span>(hidden_states)
+<a href=#746 id=746 data-nosnippet>746</a>    }
+<a href=#747 id=747 data-nosnippet>747</a>}
+<a href=#748 id=748 data-nosnippet>748</a>
+<a href=#749 id=749 data-nosnippet>749</a><span class="kw">impl </span>IsqModel <span class="kw">for </span>MLlamaTextModel {
+<a href=#750 id=750 data-nosnippet>750</a>    <span class="kw">fn </span>get_layers(
+<a href=#751 id=751 data-nosnippet>751</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#752 id=752 data-nosnippet>752</a>    ) -&gt; (
+<a href=#753 id=753 data-nosnippet>753</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
+<a href=#754 id=754 data-nosnippet>754</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+<a href=#755 id=755 data-nosnippet>755</a>    ) {
+<a href=#756 id=756 data-nosnippet>756</a>        <span class="kw">let </span><span class="kw-2">mut </span>tensors = Vec::new();
+<a href=#757 id=757 data-nosnippet>757</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter_mut().enumerate() {
+<a href=#758 id=758 data-nosnippet>758</a>            <span class="kw">match </span>layer {
+<a href=#759 id=759 data-nosnippet>759</a>                MLlamaDecoderLayer::CrossAttn(_cross) =&gt; {
+<a href=#760 id=760 data-nosnippet>760</a>                    <span class="comment">// tensors.push((&amp;mut cross.attn.q_proj, Some(i)));
+<a href=#761 id=761 data-nosnippet>761</a>                    // tensors.push((&amp;mut cross.attn.k_proj, Some(i)));
+<a href=#762 id=762 data-nosnippet>762</a>                    // tensors.push((&amp;mut cross.attn.v_proj, Some(i)));
+<a href=#763 id=763 data-nosnippet>763</a>                    // tensors.push((&amp;mut cross.attn.o_proj, Some(i)));
+<a href=#764 id=764 data-nosnippet>764</a>                    // tensors.push((&amp;mut cross.mlp.gate_proj, Some(i)));
+<a href=#765 id=765 data-nosnippet>765</a>                    // tensors.push((&amp;mut cross.mlp.up_proj, Some(i)));
+<a href=#766 id=766 data-nosnippet>766</a>                    // tensors.push((&amp;mut cross.mlp.down_proj, Some(i)));
+<a href=#767 id=767 data-nosnippet>767</a>                </span>}
+<a href=#768 id=768 data-nosnippet>768</a>                MLlamaDecoderLayer::SelfAttn(self_attn) =&gt; {
+<a href=#769 id=769 data-nosnippet>769</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.attn.q_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#770 id=770 data-nosnippet>770</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.attn.k_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#771 id=771 data-nosnippet>771</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.attn.v_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#772 id=772 data-nosnippet>772</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.attn.o_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#773 id=773 data-nosnippet>773</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.mlp.gate_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#774 id=774 data-nosnippet>774</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.mlp.up_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#775 id=775 data-nosnippet>775</a>                    tensors.push((<span class="kw-2">&amp;mut </span>self_attn.mlp.down_proj, <span class="prelude-val">Some</span>(i)));
+<a href=#776 id=776 data-nosnippet>776</a>                }
+<a href=#777 id=777 data-nosnippet>777</a>            }
+<a href=#778 id=778 data-nosnippet>778</a>        }
+<a href=#779 id=779 data-nosnippet>779</a>        (tensors, <span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
+<a href=#780 id=780 data-nosnippet>780</a>    }
 <a href=#781 id=781 data-nosnippet>781</a>
-<a href=#782 id=782 data-nosnippet>782</a>        uvb.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
-<a href=#783 id=783 data-nosnippet>783</a>
-<a href=#784 id=784 data-nosnippet>784</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
-<a href=#785 id=785 data-nosnippet>785</a>            <span class="kw">let </span>uvb_l = uvb.pp(<span class="string">"layers"</span>).pp(i);
-<a href=#786 id=786 data-nosnippet>786</a>            <span class="kw">match </span>layer {
-<a href=#787 id=787 data-nosnippet>787</a>                MLlamaDecoderLayer::CrossAttn(crossattn) =&gt; {
-<a href=#788 id=788 data-nosnippet>788</a>                    <span class="comment">// Cross attention layers are not quantized
-<a href=#789 id=789 data-nosnippet>789</a>                    </span>uvb_l
-<a href=#790 id=790 data-nosnippet>790</a>                        .pp(<span class="string">"post_attention_layernorm"</span>)
-<a href=#791 id=791 data-nosnippet>791</a>                        .add(<span class="kw-2">&amp;</span>crossattn.post_attention_layernorm);
-<a href=#792 id=792 data-nosnippet>792</a>                    uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>crossattn.input_layernorm);
-<a href=#793 id=793 data-nosnippet>793</a>                    uvb_l.add_tensor(<span class="string">"cross_attn_attn_gate"</span>, crossattn.attn_gate.clone());
-<a href=#794 id=794 data-nosnippet>794</a>                    uvb_l.add_tensor(<span class="string">"cross_attn_mlp_gate"</span>, crossattn.mlp_gate.clone());
-<a href=#795 id=795 data-nosnippet>795</a>
-<a href=#796 id=796 data-nosnippet>796</a>                    <span class="kw">let </span>uvb_attn = uvb_l.pp(<span class="string">"cross_attn"</span>);
-<a href=#797 id=797 data-nosnippet>797</a>                    uvb_attn.pp(<span class="string">"q_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.q_proj);
-<a href=#798 id=798 data-nosnippet>798</a>                    uvb_attn.pp(<span class="string">"k_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.k_proj);
-<a href=#799 id=799 data-nosnippet>799</a>                    uvb_attn.pp(<span class="string">"v_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.v_proj);
-<a href=#800 id=800 data-nosnippet>800</a>                    uvb_attn.pp(<span class="string">"o_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.o_proj);
-<a href=#801 id=801 data-nosnippet>801</a>                    uvb_attn.pp(<span class="string">"q_norm"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.q_norm);
-<a href=#802 id=802 data-nosnippet>802</a>                    uvb_attn.pp(<span class="string">"k_norm"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.k_norm);
+<a href=#782 id=782 data-nosnippet>782</a>    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+<a href=#783 id=783 data-nosnippet>783</a>        <span class="kw">let </span>uvb = UnVarBuilder::new();
+<a href=#784 id=784 data-nosnippet>784</a>
+<a href=#785 id=785 data-nosnippet>785</a>        uvb.pp(<span class="string">"model.embed_tokens"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.embed_tokens);
+<a href=#786 id=786 data-nosnippet>786</a>        uvb.pp(<span class="string">"lm_head"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head);
+<a href=#787 id=787 data-nosnippet>787</a>
+<a href=#788 id=788 data-nosnippet>788</a>        <span class="kw">let </span>uvb = uvb.pp(<span class="string">"model"</span>);
+<a href=#789 id=789 data-nosnippet>789</a>
+<a href=#790 id=790 data-nosnippet>790</a>        uvb.pp(<span class="string">"norm"</span>).add(<span class="kw-2">&amp;</span><span class="self">self</span>.norm);
+<a href=#791 id=791 data-nosnippet>791</a>
+<a href=#792 id=792 data-nosnippet>792</a>        <span class="kw">for </span>(i, layer) <span class="kw">in </span><span class="self">self</span>.layers.iter().enumerate() {
+<a href=#793 id=793 data-nosnippet>793</a>            <span class="kw">let </span>uvb_l = uvb.pp(<span class="string">"layers"</span>).pp(i);
+<a href=#794 id=794 data-nosnippet>794</a>            <span class="kw">match </span>layer {
+<a href=#795 id=795 data-nosnippet>795</a>                MLlamaDecoderLayer::CrossAttn(crossattn) =&gt; {
+<a href=#796 id=796 data-nosnippet>796</a>                    <span class="comment">// Cross attention layers are not quantized
+<a href=#797 id=797 data-nosnippet>797</a>                    </span>uvb_l
+<a href=#798 id=798 data-nosnippet>798</a>                        .pp(<span class="string">"post_attention_layernorm"</span>)
+<a href=#799 id=799 data-nosnippet>799</a>                        .add(<span class="kw-2">&amp;</span>crossattn.post_attention_layernorm);
+<a href=#800 id=800 data-nosnippet>800</a>                    uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>crossattn.input_layernorm);
+<a href=#801 id=801 data-nosnippet>801</a>                    uvb_l.add_tensor(<span class="string">"cross_attn_attn_gate"</span>, crossattn.attn_gate.clone());
+<a href=#802 id=802 data-nosnippet>802</a>                    uvb_l.add_tensor(<span class="string">"cross_attn_mlp_gate"</span>, crossattn.mlp_gate.clone());
 <a href=#803 id=803 data-nosnippet>803</a>
-<a href=#804 id=804 data-nosnippet>804</a>                    <span class="kw">let </span>uvb_mlp = uvb_l.pp(<span class="string">"mlp"</span>);
-<a href=#805 id=805 data-nosnippet>805</a>                    uvb_mlp.pp(<span class="string">"gate_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.mlp.gate_proj);
-<a href=#806 id=806 data-nosnippet>806</a>                    uvb_mlp.pp(<span class="string">"up_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.mlp.up_proj);
-<a href=#807 id=807 data-nosnippet>807</a>                    uvb_mlp.pp(<span class="string">"down_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.mlp.down_proj);
-<a href=#808 id=808 data-nosnippet>808</a>                }
-<a href=#809 id=809 data-nosnippet>809</a>                MLlamaDecoderLayer::SelfAttn(selfattn) =&gt; {
-<a href=#810 id=810 data-nosnippet>810</a>                    uvb_l
-<a href=#811 id=811 data-nosnippet>811</a>                        .pp(<span class="string">"post_attention_layernorm"</span>)
-<a href=#812 id=812 data-nosnippet>812</a>                        .add(<span class="kw-2">&amp;</span>selfattn.post_attention_layernorm);
-<a href=#813 id=813 data-nosnippet>813</a>                    uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>selfattn.input_layernorm);
-<a href=#814 id=814 data-nosnippet>814</a>                }
-<a href=#815 id=815 data-nosnippet>815</a>            }
-<a href=#816 id=816 data-nosnippet>816</a>        }
-<a href=#817 id=817 data-nosnippet>817</a>
-<a href=#818 id=818 data-nosnippet>818</a>        uvb.to_safetensors()
-<a href=#819 id=819 data-nosnippet>819</a>    }
-<a href=#820 id=820 data-nosnippet>820</a>}</code></pre></div></section></main></body></html>
+<a href=#804 id=804 data-nosnippet>804</a>                    <span class="kw">let </span>uvb_attn = uvb_l.pp(<span class="string">"cross_attn"</span>);
+<a href=#805 id=805 data-nosnippet>805</a>                    uvb_attn.pp(<span class="string">"q_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.q_proj);
+<a href=#806 id=806 data-nosnippet>806</a>                    uvb_attn.pp(<span class="string">"k_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.k_proj);
+<a href=#807 id=807 data-nosnippet>807</a>                    uvb_attn.pp(<span class="string">"v_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.v_proj);
+<a href=#808 id=808 data-nosnippet>808</a>                    uvb_attn.pp(<span class="string">"o_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.o_proj);
+<a href=#809 id=809 data-nosnippet>809</a>                    uvb_attn.pp(<span class="string">"q_norm"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.q_norm);
+<a href=#810 id=810 data-nosnippet>810</a>                    uvb_attn.pp(<span class="string">"k_norm"</span>).add(<span class="kw-2">&amp;</span>crossattn.attn.k_norm);
+<a href=#811 id=811 data-nosnippet>811</a>
+<a href=#812 id=812 data-nosnippet>812</a>                    <span class="kw">let </span>uvb_mlp = uvb_l.pp(<span class="string">"mlp"</span>);
+<a href=#813 id=813 data-nosnippet>813</a>                    uvb_mlp.pp(<span class="string">"gate_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.mlp.gate_proj);
+<a href=#814 id=814 data-nosnippet>814</a>                    uvb_mlp.pp(<span class="string">"up_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.mlp.up_proj);
+<a href=#815 id=815 data-nosnippet>815</a>                    uvb_mlp.pp(<span class="string">"down_proj"</span>).add(<span class="kw-2">&amp;</span>crossattn.mlp.down_proj);
+<a href=#816 id=816 data-nosnippet>816</a>                }
+<a href=#817 id=817 data-nosnippet>817</a>                MLlamaDecoderLayer::SelfAttn(selfattn) =&gt; {
+<a href=#818 id=818 data-nosnippet>818</a>                    uvb_l
+<a href=#819 id=819 data-nosnippet>819</a>                        .pp(<span class="string">"post_attention_layernorm"</span>)
+<a href=#820 id=820 data-nosnippet>820</a>                        .add(<span class="kw-2">&amp;</span>selfattn.post_attention_layernorm);
+<a href=#821 id=821 data-nosnippet>821</a>                    uvb_l.pp(<span class="string">"input_layernorm"</span>).add(<span class="kw-2">&amp;</span>selfattn.input_layernorm);
+<a href=#822 id=822 data-nosnippet>822</a>                }
+<a href=#823 id=823 data-nosnippet>823</a>            }
+<a href=#824 id=824 data-nosnippet>824</a>        }
+<a href=#825 id=825 data-nosnippet>825</a>
+<a href=#826 id=826 data-nosnippet>826</a>        uvb.to_safetensors()
+<a href=#827 id=827 data-nosnippet>827</a>    }
+<a href=#828 id=828 data-nosnippet>828</a>}</code></pre></div></section></main></body></html>
