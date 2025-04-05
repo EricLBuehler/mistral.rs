@@ -25,6 +25,7 @@ pub(crate) use phi4::inputs_processor;
 pub(crate) mod gemma3;
 pub(crate) mod mistral3;
 pub(crate) mod siglip;
+pub(crate) mod llama4;
 
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 
