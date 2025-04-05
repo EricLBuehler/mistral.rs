@@ -100,11 +100,17 @@ impl QuantMethod for AfqLayer {
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+        let dequant = self.dequantize_w()?;
+        Ok(Arc::new(Self::new(QuantMethodConfig::Afq {
+            weight: (dequant + delta)?,
+            bias: self.bias.clone(),
+            bits: self.bits,
+            group_size: self.group_size,
+        })?))
     }
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
-        todo!()
+        (self.scales.dtype(), self.scales.device().clone())
     }
 
     fn apply_isq(
