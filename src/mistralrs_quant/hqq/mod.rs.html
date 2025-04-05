@@ -527,392 +527,388 @@
 <a href=#527 id=527 data-nosnippet>527</a>            | QuantMethodConfig::Dummy
 <a href=#528 id=528 data-nosnippet>528</a>            | QuantMethodConfig::FP8 { .. }
 <a href=#529 id=529 data-nosnippet>529</a>            | QuantMethodConfig::Bnb { .. }
-<a href=#530 id=530 data-nosnippet>530</a>            | QuantMethodConfig::BlockwiseFP8 { .. } =&gt; {
-<a href=#531 id=531 data-nosnippet>531</a>                <span class="macro">unreachable!</span>()
-<a href=#532 id=532 data-nosnippet>532</a>            }
-<a href=#533 id=533 data-nosnippet>533</a>            QuantMethodConfig::Hqq {
-<a href=#534 id=534 data-nosnippet>534</a>                tensor,
-<a href=#535 id=535 data-nosnippet>535</a>                bits,
-<a href=#536 id=536 data-nosnippet>536</a>                group_size,
-<a href=#537 id=537 data-nosnippet>537</a>                axis,
-<a href=#538 id=538 data-nosnippet>538</a>                optimization_steps,
-<a href=#539 id=539 data-nosnippet>539</a>                round_zeros,
-<a href=#540 id=540 data-nosnippet>540</a>                channel_wise,
-<a href=#541 id=541 data-nosnippet>541</a>                bias,
-<a href=#542 id=542 data-nosnippet>542</a>            } =&gt; {
-<a href=#543 id=543 data-nosnippet>543</a>                <span class="kw">let </span>cfg = HqqConfig {
-<a href=#544 id=544 data-nosnippet>544</a>                    bits,
-<a href=#545 id=545 data-nosnippet>545</a>                    group_size,
-<a href=#546 id=546 data-nosnippet>546</a>                    axis,
-<a href=#547 id=547 data-nosnippet>547</a>                    optimization_steps,
-<a href=#548 id=548 data-nosnippet>548</a>                    round_zeros: round_zeros.unwrap_or(<span class="bool-val">false</span>),
-<a href=#549 id=549 data-nosnippet>549</a>                    channel_wise: channel_wise.unwrap_or(<span class="bool-val">true</span>),
-<a href=#550 id=550 data-nosnippet>550</a>                };
-<a href=#551 id=551 data-nosnippet>551</a>
-<a href=#552 id=552 data-nosnippet>552</a>                <span class="kw">let </span>this = <span class="self">Self</span>::quantize(<span class="kw-2">&amp;</span>tensor, tensor.device(), cfg)<span class="question-mark">?</span>;
-<a href=#553 id=553 data-nosnippet>553</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = bias {
-<a href=#554 id=554 data-nosnippet>554</a>                    <span class="prelude-val">Ok</span>(this.with_bias(bias))
-<a href=#555 id=555 data-nosnippet>555</a>                } <span class="kw">else </span>{
-<a href=#556 id=556 data-nosnippet>556</a>                    <span class="prelude-val">Ok</span>(this)
-<a href=#557 id=557 data-nosnippet>557</a>                }
-<a href=#558 id=558 data-nosnippet>558</a>            }
-<a href=#559 id=559 data-nosnippet>559</a>        }
-<a href=#560 id=560 data-nosnippet>560</a>    }
-<a href=#561 id=561 data-nosnippet>561</a>
-<a href=#562 id=562 data-nosnippet>562</a>    <span class="kw">fn </span>dequantize_w(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#563 id=563 data-nosnippet>563</a>        <span class="self">self</span>.dequantize()
-<a href=#564 id=564 data-nosnippet>564</a>    }
-<a href=#565 id=565 data-nosnippet>565</a>
-<a href=#566 id=566 data-nosnippet>566</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#567 id=567 data-nosnippet>567</a>        <span class="comment">/*
-<a href=#568 id=568 data-nosnippet>568</a>        if self.cfg.force_dequantize {
-<a href=#569 id=569 data-nosnippet>569</a>            self.dequantize_matmul(a)
-<a href=#570 id=570 data-nosnippet>570</a>        } else {
-<a href=#571 id=571 data-nosnippet>571</a>            todo!()
-<a href=#572 id=572 data-nosnippet>572</a>        } */
-<a href=#573 id=573 data-nosnippet>573</a>        </span><span class="self">self</span>.dequantize_matmul(a)
-<a href=#574 id=574 data-nosnippet>574</a>    }
-<a href=#575 id=575 data-nosnippet>575</a>
-<a href=#576 id=576 data-nosnippet>576</a>    <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DType&gt; {
-<a href=#577 id=577 data-nosnippet>577</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.scales.dtype())
-<a href=#578 id=578 data-nosnippet>578</a>    }
-<a href=#579 id=579 data-nosnippet>579</a>
-<a href=#580 id=580 data-nosnippet>580</a>    <span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, _delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#581 id=581 data-nosnippet>581</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"HQQ quantization does not support adding weight delta."</span>)
-<a href=#582 id=582 data-nosnippet>582</a>    }
-<a href=#583 id=583 data-nosnippet>583</a>
-<a href=#584 id=584 data-nosnippet>584</a>    <span class="kw">fn </span>dtype_and_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (DType, Device) {
-<a href=#585 id=585 data-nosnippet>585</a>        (<span class="self">self</span>.scales.dtype(), <span class="self">self</span>.scales.device().clone())
-<a href=#586 id=586 data-nosnippet>586</a>    }
-<a href=#587 id=587 data-nosnippet>587</a>
-<a href=#588 id=588 data-nosnippet>588</a>    <span class="kw">fn </span>apply_isq(
-<a href=#589 id=589 data-nosnippet>589</a>        <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
-<a href=#590 id=590 data-nosnippet>590</a>        dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
-<a href=#591 id=591 data-nosnippet>591</a>        device: Device,
-<a href=#592 id=592 data-nosnippet>592</a>        n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
-<a href=#593 id=593 data-nosnippet>593</a>        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
-<a href=#594 id=594 data-nosnippet>594</a>        guard: QuantizeOntoGuard,
-<a href=#595 id=595 data-nosnippet>595</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#596 id=596 data-nosnippet>596</a>        <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
-<a href=#597 id=597 data-nosnippet>597</a>        <span class="kw">if </span>imatrix_weight.is_some() {
-<a href=#598 id=598 data-nosnippet>598</a>            <span class="comment">// TODO just warn?
-<a href=#599 id=599 data-nosnippet>599</a>            </span><span class="macro">candle_core::bail!</span>(<span class="string">"HQQ does not support imatrix."</span>);
-<a href=#600 id=600 data-nosnippet>600</a>        }
-<a href=#601 id=601 data-nosnippet>601</a>
-<a href=#602 id=602 data-nosnippet>602</a>        n_quantized.fetch_add(<span class="number">1</span>, std::sync::atomic::Ordering::Relaxed);
-<a href=#603 id=603 data-nosnippet>603</a>        <span class="kw">let </span>bits = <span class="kw">match </span>dtype {
-<a href=#604 id=604 data-nosnippet>604</a>            <span class="prelude-val">Some</span>(IsqType::HQQ8) =&gt; HqqBits::Eight,
-<a href=#605 id=605 data-nosnippet>605</a>            <span class="prelude-val">Some</span>(IsqType::HQQ4) =&gt; HqqBits::Four,
-<a href=#606 id=606 data-nosnippet>606</a>            <span class="comment">// Some(IsqType::HQQ3) =&gt; HqqBits::Three,
-<a href=#607 id=607 data-nosnippet>607</a>            // Some(IsqType::HQQ2) =&gt; HqqBits::Two,
-<a href=#608 id=608 data-nosnippet>608</a>            // Some(IsqType::HQQ1) =&gt; HqqBits::One,
-<a href=#609 id=609 data-nosnippet>609</a>            </span><span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected a HQQ ISQ type."</span>),
-<a href=#610 id=610 data-nosnippet>610</a>        };
-<a href=#611 id=611 data-nosnippet>611</a>        <span class="kw">let </span>cfg = HqqConfig {
-<a href=#612 id=612 data-nosnippet>612</a>            bits,
-<a href=#613 id=613 data-nosnippet>613</a>            group_size: ISQ_HQQ_GROUP_SIZE.try_into()<span class="question-mark">?</span>,
-<a href=#614 id=614 data-nosnippet>614</a>            axis: HqqAxis::Zero,
-<a href=#615 id=615 data-nosnippet>615</a>            optimization_steps: ISQ_HQQ_DEFAULT_OPT_STEPS,
-<a href=#616 id=616 data-nosnippet>616</a>            round_zeros: <span class="bool-val">false</span>,
-<a href=#617 id=617 data-nosnippet>617</a>            channel_wise: <span class="bool-val">true</span>,
-<a href=#618 id=618 data-nosnippet>618</a>        };
-<a href=#619 id=619 data-nosnippet>619</a>        <span class="kw">let </span>dequant = <span class="self">self</span>.dequantize()<span class="question-mark">?</span>;
-<a href=#620 id=620 data-nosnippet>620</a>        <span class="kw">let </span>res = <span class="self">Self</span>::quantize(<span class="kw-2">&amp;</span>dequant, <span class="kw-2">&amp;</span>device, cfg)<span class="question-mark">?</span>;
-<a href=#621 id=621 data-nosnippet>621</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bias) = <span class="self">self</span>.bias {
-<a href=#622 id=622 data-nosnippet>622</a>            <span class="kw">let </span>bias = bias
-<a href=#623 id=623 data-nosnippet>623</a>                .to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?
-<a href=#624 id=624 data-nosnippet>624</a>                </span>.to_dtype(res.dtype_and_device().<span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#625 id=625 data-nosnippet>625</a>            <span class="prelude-val">Ok</span>(Arc::new(res.with_bias(bias)))
-<a href=#626 id=626 data-nosnippet>626</a>        } <span class="kw">else </span>{
-<a href=#627 id=627 data-nosnippet>627</a>            <span class="prelude-val">Ok</span>(Arc::new(res))
-<a href=#628 id=628 data-nosnippet>628</a>        }
-<a href=#629 id=629 data-nosnippet>629</a>    }
-<a href=#630 id=630 data-nosnippet>630</a>
-<a href=#631 id=631 data-nosnippet>631</a>    <span class="kw">fn </span>get_max_isq_cpu_threads(<span class="kw-2">&amp;</span><span class="self">self</span>, _dtype: IsqType) -&gt; <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt; {
-<a href=#632 id=632 data-nosnippet>632</a>        <span class="comment">// Use 1 because we quantize on the GPU
-<a href=#633 id=633 data-nosnippet>633</a>        </span><span class="prelude-val">Some</span>(<span class="number">1</span>.try_into().unwrap())
-<a href=#634 id=634 data-nosnippet>634</a>    }
-<a href=#635 id=635 data-nosnippet>635</a>}
-<a href=#636 id=636 data-nosnippet>636</a>
-<a href=#637 id=637 data-nosnippet>637</a><span class="comment">// Serialization structure:
-<a href=#638 id=638 data-nosnippet>638</a>//
+<a href=#530 id=530 data-nosnippet>530</a>            | QuantMethodConfig::BlockwiseFP8 { .. }
+<a href=#531 id=531 data-nosnippet>531</a>            | QuantMethodConfig::Afq { .. } =&gt; {
+<a href=#532 id=532 data-nosnippet>532</a>                <span class="macro">unreachable!</span>()
+<a href=#533 id=533 data-nosnippet>533</a>            }
+<a href=#534 id=534 data-nosnippet>534</a>            QuantMethodConfig::Hqq {
+<a href=#535 id=535 data-nosnippet>535</a>                tensor,
+<a href=#536 id=536 data-nosnippet>536</a>                bits,
+<a href=#537 id=537 data-nosnippet>537</a>                group_size,
+<a href=#538 id=538 data-nosnippet>538</a>                axis,
+<a href=#539 id=539 data-nosnippet>539</a>                optimization_steps,
+<a href=#540 id=540 data-nosnippet>540</a>                round_zeros,
+<a href=#541 id=541 data-nosnippet>541</a>                channel_wise,
+<a href=#542 id=542 data-nosnippet>542</a>                bias,
+<a href=#543 id=543 data-nosnippet>543</a>            } =&gt; {
+<a href=#544 id=544 data-nosnippet>544</a>                <span class="kw">let </span>cfg = HqqConfig {
+<a href=#545 id=545 data-nosnippet>545</a>                    bits,
+<a href=#546 id=546 data-nosnippet>546</a>                    group_size,
+<a href=#547 id=547 data-nosnippet>547</a>                    axis,
+<a href=#548 id=548 data-nosnippet>548</a>                    optimization_steps,
+<a href=#549 id=549 data-nosnippet>549</a>                    round_zeros: round_zeros.unwrap_or(<span class="bool-val">false</span>),
+<a href=#550 id=550 data-nosnippet>550</a>                    channel_wise: channel_wise.unwrap_or(<span class="bool-val">true</span>),
+<a href=#551 id=551 data-nosnippet>551</a>                };
+<a href=#552 id=552 data-nosnippet>552</a>
+<a href=#553 id=553 data-nosnippet>553</a>                <span class="kw">let </span>this = <span class="self">Self</span>::quantize(<span class="kw-2">&amp;</span>tensor, tensor.device(), cfg)<span class="question-mark">?</span>;
+<a href=#554 id=554 data-nosnippet>554</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = bias {
+<a href=#555 id=555 data-nosnippet>555</a>                    <span class="prelude-val">Ok</span>(this.with_bias(bias))
+<a href=#556 id=556 data-nosnippet>556</a>                } <span class="kw">else </span>{
+<a href=#557 id=557 data-nosnippet>557</a>                    <span class="prelude-val">Ok</span>(this)
+<a href=#558 id=558 data-nosnippet>558</a>                }
+<a href=#559 id=559 data-nosnippet>559</a>            }
+<a href=#560 id=560 data-nosnippet>560</a>        }
+<a href=#561 id=561 data-nosnippet>561</a>    }
+<a href=#562 id=562 data-nosnippet>562</a>
+<a href=#563 id=563 data-nosnippet>563</a>    <span class="kw">fn </span>dequantize_w(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#564 id=564 data-nosnippet>564</a>        <span class="self">self</span>.dequantize()
+<a href=#565 id=565 data-nosnippet>565</a>    }
+<a href=#566 id=566 data-nosnippet>566</a>
+<a href=#567 id=567 data-nosnippet>567</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#568 id=568 data-nosnippet>568</a>        <span class="comment">/*
+<a href=#569 id=569 data-nosnippet>569</a>        if self.cfg.force_dequantize {
+<a href=#570 id=570 data-nosnippet>570</a>            self.dequantize_matmul(a)
+<a href=#571 id=571 data-nosnippet>571</a>        } else {
+<a href=#572 id=572 data-nosnippet>572</a>            todo!()
+<a href=#573 id=573 data-nosnippet>573</a>        } */
+<a href=#574 id=574 data-nosnippet>574</a>        </span><span class="self">self</span>.dequantize_matmul(a)
+<a href=#575 id=575 data-nosnippet>575</a>    }
+<a href=#576 id=576 data-nosnippet>576</a>
+<a href=#577 id=577 data-nosnippet>577</a>    <span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DType&gt; {
+<a href=#578 id=578 data-nosnippet>578</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.scales.dtype())
+<a href=#579 id=579 data-nosnippet>579</a>    }
+<a href=#580 id=580 data-nosnippet>580</a>
+<a href=#581 id=581 data-nosnippet>581</a>    <span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, _delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#582 id=582 data-nosnippet>582</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"HQQ quantization does not support adding weight delta."</span>)
+<a href=#583 id=583 data-nosnippet>583</a>    }
+<a href=#584 id=584 data-nosnippet>584</a>
+<a href=#585 id=585 data-nosnippet>585</a>    <span class="kw">fn </span>dtype_and_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (DType, Device) {
+<a href=#586 id=586 data-nosnippet>586</a>        (<span class="self">self</span>.scales.dtype(), <span class="self">self</span>.scales.device().clone())
+<a href=#587 id=587 data-nosnippet>587</a>    }
+<a href=#588 id=588 data-nosnippet>588</a>
+<a href=#589 id=589 data-nosnippet>589</a>    <span class="kw">fn </span>apply_isq(
+<a href=#590 id=590 data-nosnippet>590</a>        <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
+<a href=#591 id=591 data-nosnippet>591</a>        dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
+<a href=#592 id=592 data-nosnippet>592</a>        device: Device,
+<a href=#593 id=593 data-nosnippet>593</a>        n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
+<a href=#594 id=594 data-nosnippet>594</a>        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
+<a href=#595 id=595 data-nosnippet>595</a>        guard: QuantizeOntoGuard,
+<a href=#596 id=596 data-nosnippet>596</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#597 id=597 data-nosnippet>597</a>        <span class="kw">let </span>_acquired_quantize_guard = guard.acquire();
+<a href=#598 id=598 data-nosnippet>598</a>        <span class="kw">if </span>imatrix_weight.is_some() {
+<a href=#599 id=599 data-nosnippet>599</a>            <span class="comment">// TODO just warn?
+<a href=#600 id=600 data-nosnippet>600</a>            </span><span class="macro">candle_core::bail!</span>(<span class="string">"HQQ does not support imatrix."</span>);
+<a href=#601 id=601 data-nosnippet>601</a>        }
+<a href=#602 id=602 data-nosnippet>602</a>
+<a href=#603 id=603 data-nosnippet>603</a>        n_quantized.fetch_add(<span class="number">1</span>, std::sync::atomic::Ordering::Relaxed);
+<a href=#604 id=604 data-nosnippet>604</a>        <span class="kw">let </span>bits = <span class="kw">match </span>dtype {
+<a href=#605 id=605 data-nosnippet>605</a>            <span class="prelude-val">Some</span>(IsqType::HQQ8) =&gt; HqqBits::Eight,
+<a href=#606 id=606 data-nosnippet>606</a>            <span class="prelude-val">Some</span>(IsqType::HQQ4) =&gt; HqqBits::Four,
+<a href=#607 id=607 data-nosnippet>607</a>            <span class="comment">// Some(IsqType::HQQ3) =&gt; HqqBits::Three,
+<a href=#608 id=608 data-nosnippet>608</a>            // Some(IsqType::HQQ2) =&gt; HqqBits::Two,
+<a href=#609 id=609 data-nosnippet>609</a>            // Some(IsqType::HQQ1) =&gt; HqqBits::One,
+<a href=#610 id=610 data-nosnippet>610</a>            </span><span class="kw">_ </span>=&gt; <span class="macro">candle_core::bail!</span>(<span class="string">"Expected a HQQ ISQ type."</span>),
+<a href=#611 id=611 data-nosnippet>611</a>        };
+<a href=#612 id=612 data-nosnippet>612</a>        <span class="kw">let </span>cfg = HqqConfig {
+<a href=#613 id=613 data-nosnippet>613</a>            bits,
+<a href=#614 id=614 data-nosnippet>614</a>            group_size: ISQ_HQQ_GROUP_SIZE.try_into()<span class="question-mark">?</span>,
+<a href=#615 id=615 data-nosnippet>615</a>            axis: HqqAxis::Zero,
+<a href=#616 id=616 data-nosnippet>616</a>            optimization_steps: ISQ_HQQ_DEFAULT_OPT_STEPS,
+<a href=#617 id=617 data-nosnippet>617</a>            round_zeros: <span class="bool-val">false</span>,
+<a href=#618 id=618 data-nosnippet>618</a>            channel_wise: <span class="bool-val">true</span>,
+<a href=#619 id=619 data-nosnippet>619</a>        };
+<a href=#620 id=620 data-nosnippet>620</a>        <span class="kw">let </span>dequant = <span class="self">self</span>.dequantize()<span class="question-mark">?</span>;
+<a href=#621 id=621 data-nosnippet>621</a>        <span class="kw">let </span>res = <span class="self">Self</span>::quantize(<span class="kw-2">&amp;</span>dequant, <span class="kw-2">&amp;</span>device, cfg)<span class="question-mark">?</span>;
+<a href=#622 id=622 data-nosnippet>622</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>bias) = <span class="self">self</span>.bias {
+<a href=#623 id=623 data-nosnippet>623</a>            <span class="kw">let </span>bias = bias
+<a href=#624 id=624 data-nosnippet>624</a>                .to_device(<span class="kw-2">&amp;</span>device)<span class="question-mark">?
+<a href=#625 id=625 data-nosnippet>625</a>                </span>.to_dtype(res.dtype_and_device().<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#626 id=626 data-nosnippet>626</a>            <span class="prelude-val">Ok</span>(Arc::new(res.with_bias(bias)))
+<a href=#627 id=627 data-nosnippet>627</a>        } <span class="kw">else </span>{
+<a href=#628 id=628 data-nosnippet>628</a>            <span class="prelude-val">Ok</span>(Arc::new(res))
+<a href=#629 id=629 data-nosnippet>629</a>        }
+<a href=#630 id=630 data-nosnippet>630</a>    }
+<a href=#631 id=631 data-nosnippet>631</a>}
+<a href=#632 id=632 data-nosnippet>632</a>
+<a href=#633 id=633 data-nosnippet>633</a><span class="comment">// Serialization structure:
+<a href=#634 id=634 data-nosnippet>634</a>//
+<a href=#635 id=635 data-nosnippet>635</a>// -----------------------
+<a href=#636 id=636 data-nosnippet>636</a>// UQFF version, u32, little endian
+<a href=#637 id=637 data-nosnippet>637</a>// -----------------------
+<a href=#638 id=638 data-nosnippet>638</a>// ISQ type (2 for hqq), u8, little endian
 <a href=#639 id=639 data-nosnippet>639</a>// -----------------------
-<a href=#640 id=640 data-nosnippet>640</a>// UQFF version, u32, little endian
+<a href=#640 id=640 data-nosnippet>640</a>// Whether bias data is included, u8 boolean
 <a href=#641 id=641 data-nosnippet>641</a>// -----------------------
-<a href=#642 id=642 data-nosnippet>642</a>// ISQ type (2 for hqq), u8, little endian
+<a href=#642 id=642 data-nosnippet>642</a>// Quantized weight tensor data generated by `serialize_tensor`. Refer to its docs for layout.
 <a href=#643 id=643 data-nosnippet>643</a>// -----------------------
-<a href=#644 id=644 data-nosnippet>644</a>// Whether bias data is included, u8 boolean
+<a href=#644 id=644 data-nosnippet>644</a>// Quantized scale tensor data generated by `serialize_tensor`. Refer to its docs for layout.
 <a href=#645 id=645 data-nosnippet>645</a>// -----------------------
-<a href=#646 id=646 data-nosnippet>646</a>// Quantized weight tensor data generated by `serialize_tensor`. Refer to its docs for layout.
+<a href=#646 id=646 data-nosnippet>646</a>// Quantized zeroes tensor data generated by `serialize_tensor`. Refer to its docs for layout.
 <a href=#647 id=647 data-nosnippet>647</a>// -----------------------
-<a href=#648 id=648 data-nosnippet>648</a>// Quantized scale tensor data generated by `serialize_tensor`. Refer to its docs for layout.
+<a href=#648 id=648 data-nosnippet>648</a>// Weight (after dequant) shape dims, u32, little endian
 <a href=#649 id=649 data-nosnippet>649</a>// -----------------------
-<a href=#650 id=650 data-nosnippet>650</a>// Quantized zeroes tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-<a href=#651 id=651 data-nosnippet>651</a>// -----------------------
-<a href=#652 id=652 data-nosnippet>652</a>// Weight (after dequant) shape dims, u32, little endian
+<a href=#650 id=650 data-nosnippet>650</a>// ...
+<a href=#651 id=651 data-nosnippet>651</a>// Array (in original order): Weight (after dequant) shape dims, u32, little endian
+<a href=#652 id=652 data-nosnippet>652</a>// ...
 <a href=#653 id=653 data-nosnippet>653</a>// -----------------------
-<a href=#654 id=654 data-nosnippet>654</a>// ...
-<a href=#655 id=655 data-nosnippet>655</a>// Array (in original order): Weight (after dequant) shape dims, u32, little endian
-<a href=#656 id=656 data-nosnippet>656</a>// ...
+<a href=#654 id=654 data-nosnippet>654</a>// Cfg bits, u8, little endian
+<a href=#655 id=655 data-nosnippet>655</a>// -----------------------
+<a href=#656 id=656 data-nosnippet>656</a>// Cfg group size, u32, little endian
 <a href=#657 id=657 data-nosnippet>657</a>// -----------------------
-<a href=#658 id=658 data-nosnippet>658</a>// Cfg bits, u8, little endian
+<a href=#658 id=658 data-nosnippet>658</a>// Cfg axis, u8, little endian
 <a href=#659 id=659 data-nosnippet>659</a>// -----------------------
-<a href=#660 id=660 data-nosnippet>660</a>// Cfg group size, u32, little endian
+<a href=#660 id=660 data-nosnippet>660</a>// Cfg optimization steps, u32, little endian
 <a href=#661 id=661 data-nosnippet>661</a>// -----------------------
-<a href=#662 id=662 data-nosnippet>662</a>// Cfg axis, u8, little endian
+<a href=#662 id=662 data-nosnippet>662</a>// Cfg round_zeros, boolean u8, little endian
 <a href=#663 id=663 data-nosnippet>663</a>// -----------------------
-<a href=#664 id=664 data-nosnippet>664</a>// Cfg optimization steps, u32, little endian
+<a href=#664 id=664 data-nosnippet>664</a>// Cfg channel_wise, boolean u8, little endian
 <a href=#665 id=665 data-nosnippet>665</a>// -----------------------
-<a href=#666 id=666 data-nosnippet>666</a>// Cfg round_zeros, boolean u8, little endian
+<a href=#666 id=666 data-nosnippet>666</a>// [OPTIONAL] Bias tensor data generated by `serialize_tensor`. Refer to its docs for layout.
 <a href=#667 id=667 data-nosnippet>667</a>// -----------------------
-<a href=#668 id=668 data-nosnippet>668</a>// Cfg channel_wise, boolean u8, little endian
-<a href=#669 id=669 data-nosnippet>669</a>// -----------------------
-<a href=#670 id=670 data-nosnippet>670</a>// [OPTIONAL] Bias tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-<a href=#671 id=671 data-nosnippet>671</a>// -----------------------
-<a href=#672 id=672 data-nosnippet>672</a>
-<a href=#673 id=673 data-nosnippet>673</a></span><span class="kw">impl </span>QuantizedSerde <span class="kw">for </span>HqqLayer {
-<a href=#674 id=674 data-nosnippet>674</a>    <span class="kw">fn </span>isq_serde_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#675 id=675 data-nosnippet>675</a>        <span class="bool-val">true
-<a href=#676 id=676 data-nosnippet>676</a>    </span>}
-<a href=#677 id=677 data-nosnippet>677</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
-<a href=#678 id=678 data-nosnippet>678</a>        <span class="string">"hqq"
-<a href=#679 id=679 data-nosnippet>679</a>    </span>}
-<a href=#680 id=680 data-nosnippet>680</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
-<a href=#681 id=681 data-nosnippet>681</a>        <span class="self">self</span>.serialize_with_bias(<span class="self">self</span>.bias.clone())
-<a href=#682 id=682 data-nosnippet>682</a>    }
-<a href=#683 id=683 data-nosnippet>683</a>    <span class="kw">fn </span>serialize_with_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
-<a href=#684 id=684 data-nosnippet>684</a>        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
-<a href=#685 id=685 data-nosnippet>685</a>
-<a href=#686 id=686 data-nosnippet>686</a>        <span class="comment">// Version is always first!
-<a href=#687 id=687 data-nosnippet>687</a>        </span>buffer.extend(<span class="kw-2">&amp;</span>UQFF_VERSION.to_le_bytes());
-<a href=#688 id=688 data-nosnippet>688</a>
-<a href=#689 id=689 data-nosnippet>689</a>        <span class="comment">// ISQ type for hqq is 2
-<a href=#690 id=690 data-nosnippet>690</a>        </span>buffer.push(QuantizedSerdeType::Hqq <span class="kw">as </span>u8);
-<a href=#691 id=691 data-nosnippet>691</a>
-<a href=#692 id=692 data-nosnippet>692</a>        <span class="comment">// Has bias
-<a href=#693 id=693 data-nosnippet>693</a>        </span>buffer.push(bias.is_some() <span class="kw">as </span>u8);
+<a href=#668 id=668 data-nosnippet>668</a>
+<a href=#669 id=669 data-nosnippet>669</a></span><span class="kw">impl </span>QuantizedSerde <span class="kw">for </span>HqqLayer {
+<a href=#670 id=670 data-nosnippet>670</a>    <span class="kw">fn </span>isq_serde_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#671 id=671 data-nosnippet>671</a>        <span class="bool-val">true
+<a href=#672 id=672 data-nosnippet>672</a>    </span>}
+<a href=#673 id=673 data-nosnippet>673</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str {
+<a href=#674 id=674 data-nosnippet>674</a>        <span class="string">"hqq"
+<a href=#675 id=675 data-nosnippet>675</a>    </span>}
+<a href=#676 id=676 data-nosnippet>676</a>    <span class="kw">fn </span>serialize(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
+<a href=#677 id=677 data-nosnippet>677</a>        <span class="self">self</span>.serialize_with_bias(<span class="self">self</span>.bias.clone())
+<a href=#678 id=678 data-nosnippet>678</a>    }
+<a href=#679 id=679 data-nosnippet>679</a>    <span class="kw">fn </span>serialize_with_bias(<span class="kw-2">&amp;</span><span class="self">self</span>, bias: <span class="prelude-ty">Option</span>&lt;Tensor&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;Cow&lt;[u8]&gt;&gt; {
+<a href=#680 id=680 data-nosnippet>680</a>        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Vec::new();
+<a href=#681 id=681 data-nosnippet>681</a>
+<a href=#682 id=682 data-nosnippet>682</a>        <span class="comment">// Version is always first!
+<a href=#683 id=683 data-nosnippet>683</a>        </span>buffer.extend(<span class="kw-2">&amp;</span>UQFF_VERSION.to_le_bytes());
+<a href=#684 id=684 data-nosnippet>684</a>
+<a href=#685 id=685 data-nosnippet>685</a>        <span class="comment">// ISQ type for hqq is 2
+<a href=#686 id=686 data-nosnippet>686</a>        </span>buffer.push(QuantizedSerdeType::Hqq <span class="kw">as </span>u8);
+<a href=#687 id=687 data-nosnippet>687</a>
+<a href=#688 id=688 data-nosnippet>688</a>        <span class="comment">// Has bias
+<a href=#689 id=689 data-nosnippet>689</a>        </span>buffer.push(bias.is_some() <span class="kw">as </span>u8);
+<a href=#690 id=690 data-nosnippet>690</a>
+<a href=#691 id=691 data-nosnippet>691</a>        serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, <span class="kw-2">&amp;</span><span class="self">self</span>.w_q)<span class="question-mark">?</span>;
+<a href=#692 id=692 data-nosnippet>692</a>        serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, <span class="kw-2">&amp;</span><span class="self">self</span>.scales)<span class="question-mark">?</span>;
+<a href=#693 id=693 data-nosnippet>693</a>        serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, <span class="kw-2">&amp;</span><span class="self">self</span>.zeros)<span class="question-mark">?</span>;
 <a href=#694 id=694 data-nosnippet>694</a>
-<a href=#695 id=695 data-nosnippet>695</a>        serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, <span class="kw-2">&amp;</span><span class="self">self</span>.w_q)<span class="question-mark">?</span>;
-<a href=#696 id=696 data-nosnippet>696</a>        serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, <span class="kw-2">&amp;</span><span class="self">self</span>.scales)<span class="question-mark">?</span>;
-<a href=#697 id=697 data-nosnippet>697</a>        serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, <span class="kw-2">&amp;</span><span class="self">self</span>.zeros)<span class="question-mark">?</span>;
-<a href=#698 id=698 data-nosnippet>698</a>
-<a href=#699 id=699 data-nosnippet>699</a>        <span class="kw">let </span>w_shape = <span class="self">self</span>.w_shape.dims();
-<a href=#700 id=700 data-nosnippet>700</a>        buffer.extend((w_shape.len() <span class="kw">as </span>u32).to_le_bytes());
-<a href=#701 id=701 data-nosnippet>701</a>        <span class="kw">for </span>dim <span class="kw">in </span>w_shape {
-<a href=#702 id=702 data-nosnippet>702</a>            buffer.extend((<span class="kw-2">*</span>dim <span class="kw">as </span>u32).to_le_bytes());
-<a href=#703 id=703 data-nosnippet>703</a>        }
-<a href=#704 id=704 data-nosnippet>704</a>
-<a href=#705 id=705 data-nosnippet>705</a>        <span class="comment">// Config
-<a href=#706 id=706 data-nosnippet>706</a>        </span>buffer.push(<span class="self">self</span>.cfg.bits <span class="kw">as </span>u8);
-<a href=#707 id=707 data-nosnippet>707</a>        buffer.extend(
-<a href=#708 id=708 data-nosnippet>708</a>            <span class="kw-2">&amp;</span>(&lt;NonZeroUsize <span class="kw">as </span>Into&lt;usize&gt;&gt;::into(<span class="self">self</span>.cfg.group_size) <span class="kw">as </span>u32).to_le_bytes(),
-<a href=#709 id=709 data-nosnippet>709</a>        );
-<a href=#710 id=710 data-nosnippet>710</a>        buffer.push(<span class="self">self</span>.cfg.axis <span class="kw">as </span>u8);
-<a href=#711 id=711 data-nosnippet>711</a>        <span class="comment">// FIXME: using 0 as a sentinel for None is OK because it really should be.
-<a href=#712 id=712 data-nosnippet>712</a>        </span>buffer.extend(<span class="kw-2">&amp;</span>(<span class="self">self</span>.cfg.optimization_steps.unwrap_or(<span class="number">0</span>) <span class="kw">as </span>u32).to_le_bytes());
-<a href=#713 id=713 data-nosnippet>713</a>        buffer.push(<span class="self">self</span>.cfg.round_zeros <span class="kw">as </span>u8);
-<a href=#714 id=714 data-nosnippet>714</a>        buffer.push(<span class="self">self</span>.cfg.channel_wise <span class="kw">as </span>u8);
-<a href=#715 id=715 data-nosnippet>715</a>
-<a href=#716 id=716 data-nosnippet>716</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="kw-2">&amp;</span>bias {
-<a href=#717 id=717 data-nosnippet>717</a>            <span class="comment">// Bias
-<a href=#718 id=718 data-nosnippet>718</a>            </span>serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, bias)<span class="question-mark">?</span>;
-<a href=#719 id=719 data-nosnippet>719</a>        }
-<a href=#720 id=720 data-nosnippet>720</a>
-<a href=#721 id=721 data-nosnippet>721</a>        <span class="prelude-val">Ok</span>(Cow::from(buffer))
-<a href=#722 id=722 data-nosnippet>722</a>    }
-<a href=#723 id=723 data-nosnippet>723</a>
-<a href=#724 id=724 data-nosnippet>724</a>    <span class="kw">fn </span>deserialize(
-<a href=#725 id=725 data-nosnippet>725</a>        data: Cow&lt;[u8]&gt;,
-<a href=#726 id=726 data-nosnippet>726</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#727 id=727 data-nosnippet>727</a>        _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
-<a href=#728 id=728 data-nosnippet>728</a>        guard: QuantizeOntoGuard,
-<a href=#729 id=729 data-nosnippet>729</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
-<a href=#730 id=730 data-nosnippet>730</a>    <span class="kw">where
-<a href=#731 id=731 data-nosnippet>731</a>        </span><span class="self">Self</span>: Sized,
-<a href=#732 id=732 data-nosnippet>732</a>    {
-<a href=#733 id=733 data-nosnippet>733</a>        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
-<a href=#734 id=734 data-nosnippet>734</a>
-<a href=#735 id=735 data-nosnippet>735</a>        <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
-<a href=#736 id=736 data-nosnippet>736</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
-<a href=#737 id=737 data-nosnippet>737</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(candle_core::Error::wrap(e));
-<a href=#738 id=738 data-nosnippet>738</a>        }
-<a href=#739 id=739 data-nosnippet>739</a>
-<a href=#740 id=740 data-nosnippet>740</a>        <span class="kw">let </span>isq_type = buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize;
-<a href=#741 id=741 data-nosnippet>741</a>        <span class="kw">if </span>isq_type != QuantizedSerdeType::Hqq <span class="kw">as </span>usize {
-<a href=#742 id=742 data-nosnippet>742</a>            <span class="macro">candle_core::bail!</span>(
-<a href=#743 id=743 data-nosnippet>743</a>                <span class="string">"ISQ type ({isq_type}) doesn't match expected type {}"</span>,
-<a href=#744 id=744 data-nosnippet>744</a>                QuantizedSerdeType::Hqq <span class="kw">as </span>usize
-<a href=#745 id=745 data-nosnippet>745</a>            );
-<a href=#746 id=746 data-nosnippet>746</a>        }
-<a href=#747 id=747 data-nosnippet>747</a>
-<a href=#748 id=748 data-nosnippet>748</a>        <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
-<a href=#749 id=749 data-nosnippet>749</a>
-<a href=#750 id=750 data-nosnippet>750</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
-<a href=#751 id=751 data-nosnippet>751</a>        <span class="kw">let </span>w_q = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
-<a href=#752 id=752 data-nosnippet>752</a>        <span class="kw">let </span>scales = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
-<a href=#753 id=753 data-nosnippet>753</a>        <span class="kw">let </span>zeros = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
-<a href=#754 id=754 data-nosnippet>754</a>
-<a href=#755 id=755 data-nosnippet>755</a>        <span class="kw">let </span>n_dims = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
-<a href=#756 id=756 data-nosnippet>756</a>
-<a href=#757 id=757 data-nosnippet>757</a>        <span class="kw">let </span><span class="kw-2">mut </span>dims = Vec::with_capacity(n_dims);
-<a href=#758 id=758 data-nosnippet>758</a>        <span class="kw">for _ in </span><span class="number">0</span>..n_dims {
-<a href=#759 id=759 data-nosnippet>759</a>            dims.push(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)
-<a href=#760 id=760 data-nosnippet>760</a>        }
-<a href=#761 id=761 data-nosnippet>761</a>        <span class="kw">let </span>w_shape = Shape::from_dims(<span class="kw-2">&amp;</span>dims);
-<a href=#762 id=762 data-nosnippet>762</a>
-<a href=#763 id=763 data-nosnippet>763</a>        <span class="comment">// TODO: keep this in sync with get_isq_type_from_uqff!
-<a href=#764 id=764 data-nosnippet>764</a>        </span><span class="kw">let </span>bits = HqqBits::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
-<a href=#765 id=765 data-nosnippet>765</a>        <span class="kw">let </span>group_size = NonZeroUsize::try_from(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
-<a href=#766 id=766 data-nosnippet>766</a>        <span class="kw">let </span>axis = HqqAxis::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
-<a href=#767 id=767 data-nosnippet>767</a>        <span class="kw">let </span>optimization_steps = <span class="kw">match </span>buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize {
-<a href=#768 id=768 data-nosnippet>768</a>            <span class="number">0 </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#769 id=769 data-nosnippet>769</a>            other =&gt; <span class="prelude-val">Some</span>(other),
-<a href=#770 id=770 data-nosnippet>770</a>        };
-<a href=#771 id=771 data-nosnippet>771</a>        <span class="kw">let </span>round_zeros = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
-<a href=#772 id=772 data-nosnippet>772</a>        <span class="kw">let </span>channel_wise = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
-<a href=#773 id=773 data-nosnippet>773</a>
-<a href=#774 id=774 data-nosnippet>774</a>        <span class="kw">let </span>cfg = HqqConfig {
-<a href=#775 id=775 data-nosnippet>775</a>            bits,
-<a href=#776 id=776 data-nosnippet>776</a>            group_size,
-<a href=#777 id=777 data-nosnippet>777</a>            axis,
-<a href=#778 id=778 data-nosnippet>778</a>            optimization_steps,
-<a href=#779 id=779 data-nosnippet>779</a>            round_zeros,
-<a href=#780 id=780 data-nosnippet>780</a>            channel_wise,
-<a href=#781 id=781 data-nosnippet>781</a>        };
-<a href=#782 id=782 data-nosnippet>782</a>
-<a href=#783 id=783 data-nosnippet>783</a>        <span class="kw">let </span>b = <span class="kw">if </span>has_bias {
-<a href=#784 id=784 data-nosnippet>784</a>            <span class="prelude-val">Some</span>(deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>)
-<a href=#785 id=785 data-nosnippet>785</a>        } <span class="kw">else </span>{
-<a href=#786 id=786 data-nosnippet>786</a>            <span class="prelude-val">None
-<a href=#787 id=787 data-nosnippet>787</a>        </span>};
-<a href=#788 id=788 data-nosnippet>788</a>
-<a href=#789 id=789 data-nosnippet>789</a>        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{
-<a href=#790 id=790 data-nosnippet>790</a>            w_q,
-<a href=#791 id=791 data-nosnippet>791</a>            zeros,
-<a href=#792 id=792 data-nosnippet>792</a>            scales,
-<a href=#793 id=793 data-nosnippet>793</a>            bias: b,
-<a href=#794 id=794 data-nosnippet>794</a>            w_shape,
-<a href=#795 id=795 data-nosnippet>795</a>            cfg,
-<a href=#796 id=796 data-nosnippet>796</a>        }))
-<a href=#797 id=797 data-nosnippet>797</a>    }
-<a href=#798 id=798 data-nosnippet>798</a>    <span class="kw">fn </span>deserialize_ext_bias(
-<a href=#799 id=799 data-nosnippet>799</a>        data: Cow&lt;[u8]&gt;,
-<a href=#800 id=800 data-nosnippet>800</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#801 id=801 data-nosnippet>801</a>        guard: QuantizeOntoGuard,
-<a href=#802 id=802 data-nosnippet>802</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt;
-<a href=#803 id=803 data-nosnippet>803</a>    <span class="kw">where
-<a href=#804 id=804 data-nosnippet>804</a>        </span><span class="self">Self</span>: Sized,
-<a href=#805 id=805 data-nosnippet>805</a>    {
-<a href=#806 id=806 data-nosnippet>806</a>        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
-<a href=#807 id=807 data-nosnippet>807</a>
-<a href=#808 id=808 data-nosnippet>808</a>        <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
-<a href=#809 id=809 data-nosnippet>809</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
-<a href=#810 id=810 data-nosnippet>810</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(candle_core::Error::wrap(e));
-<a href=#811 id=811 data-nosnippet>811</a>        }
-<a href=#812 id=812 data-nosnippet>812</a>
-<a href=#813 id=813 data-nosnippet>813</a>        <span class="kw">let </span>isq_type = buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize;
-<a href=#814 id=814 data-nosnippet>814</a>        <span class="kw">if </span>isq_type != QuantizedSerdeType::Hqq <span class="kw">as </span>usize {
-<a href=#815 id=815 data-nosnippet>815</a>            <span class="macro">candle_core::bail!</span>(
-<a href=#816 id=816 data-nosnippet>816</a>                <span class="string">"ISQ type ({isq_type}) doesn't match expected type {}"</span>,
-<a href=#817 id=817 data-nosnippet>817</a>                QuantizedSerdeType::Hqq <span class="kw">as </span>usize
-<a href=#818 id=818 data-nosnippet>818</a>            );
-<a href=#819 id=819 data-nosnippet>819</a>        }
-<a href=#820 id=820 data-nosnippet>820</a>
-<a href=#821 id=821 data-nosnippet>821</a>        <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
-<a href=#822 id=822 data-nosnippet>822</a>
-<a href=#823 id=823 data-nosnippet>823</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
-<a href=#824 id=824 data-nosnippet>824</a>        <span class="kw">let </span>w_q = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
-<a href=#825 id=825 data-nosnippet>825</a>        <span class="kw">let </span>scales = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
-<a href=#826 id=826 data-nosnippet>826</a>        <span class="kw">let </span>zeros = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
-<a href=#827 id=827 data-nosnippet>827</a>
-<a href=#828 id=828 data-nosnippet>828</a>        <span class="kw">let </span>n_dims = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
-<a href=#829 id=829 data-nosnippet>829</a>
-<a href=#830 id=830 data-nosnippet>830</a>        <span class="kw">let </span><span class="kw-2">mut </span>dims = Vec::with_capacity(n_dims);
-<a href=#831 id=831 data-nosnippet>831</a>        <span class="kw">for _ in </span><span class="number">0</span>..n_dims {
-<a href=#832 id=832 data-nosnippet>832</a>            dims.push(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)
-<a href=#833 id=833 data-nosnippet>833</a>        }
-<a href=#834 id=834 data-nosnippet>834</a>        <span class="kw">let </span>w_shape = Shape::from_dims(<span class="kw-2">&amp;</span>dims);
-<a href=#835 id=835 data-nosnippet>835</a>
-<a href=#836 id=836 data-nosnippet>836</a>        <span class="comment">// TODO: keep this in sync with get_isq_type_from_uqff!
-<a href=#837 id=837 data-nosnippet>837</a>        </span><span class="kw">let </span>bits = HqqBits::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
-<a href=#838 id=838 data-nosnippet>838</a>        <span class="kw">let </span>group_size = NonZeroUsize::try_from(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
-<a href=#839 id=839 data-nosnippet>839</a>        <span class="kw">let </span>axis = HqqAxis::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
-<a href=#840 id=840 data-nosnippet>840</a>        <span class="kw">let </span>optimization_steps = <span class="kw">match </span>buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize {
-<a href=#841 id=841 data-nosnippet>841</a>            <span class="number">0 </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#842 id=842 data-nosnippet>842</a>            other =&gt; <span class="prelude-val">Some</span>(other),
-<a href=#843 id=843 data-nosnippet>843</a>        };
-<a href=#844 id=844 data-nosnippet>844</a>        <span class="kw">let </span>round_zeros = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
-<a href=#845 id=845 data-nosnippet>845</a>        <span class="kw">let </span>channel_wise = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
-<a href=#846 id=846 data-nosnippet>846</a>
-<a href=#847 id=847 data-nosnippet>847</a>        <span class="kw">let </span>cfg = HqqConfig {
-<a href=#848 id=848 data-nosnippet>848</a>            bits,
-<a href=#849 id=849 data-nosnippet>849</a>            group_size,
-<a href=#850 id=850 data-nosnippet>850</a>            axis,
-<a href=#851 id=851 data-nosnippet>851</a>            optimization_steps,
-<a href=#852 id=852 data-nosnippet>852</a>            round_zeros,
-<a href=#853 id=853 data-nosnippet>853</a>            channel_wise,
-<a href=#854 id=854 data-nosnippet>854</a>        };
-<a href=#855 id=855 data-nosnippet>855</a>
-<a href=#856 id=856 data-nosnippet>856</a>        <span class="kw">let </span>b = <span class="kw">if </span>has_bias {
-<a href=#857 id=857 data-nosnippet>857</a>            <span class="prelude-val">Some</span>(deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>)
-<a href=#858 id=858 data-nosnippet>858</a>        } <span class="kw">else </span>{
-<a href=#859 id=859 data-nosnippet>859</a>            <span class="prelude-val">None
-<a href=#860 id=860 data-nosnippet>860</a>        </span>};
-<a href=#861 id=861 data-nosnippet>861</a>
-<a href=#862 id=862 data-nosnippet>862</a>        <span class="prelude-val">Ok</span>((
-<a href=#863 id=863 data-nosnippet>863</a>            Arc::new(<span class="self">Self </span>{
-<a href=#864 id=864 data-nosnippet>864</a>                w_q,
-<a href=#865 id=865 data-nosnippet>865</a>                zeros,
-<a href=#866 id=866 data-nosnippet>866</a>                scales,
-<a href=#867 id=867 data-nosnippet>867</a>                bias: <span class="prelude-val">None</span>,
-<a href=#868 id=868 data-nosnippet>868</a>                w_shape,
-<a href=#869 id=869 data-nosnippet>869</a>                cfg,
-<a href=#870 id=870 data-nosnippet>870</a>            }),
-<a href=#871 id=871 data-nosnippet>871</a>            b,
-<a href=#872 id=872 data-nosnippet>872</a>        ))
-<a href=#873 id=873 data-nosnippet>873</a>    }
-<a href=#874 id=874 data-nosnippet>874</a>}
+<a href=#695 id=695 data-nosnippet>695</a>        <span class="kw">let </span>w_shape = <span class="self">self</span>.w_shape.dims();
+<a href=#696 id=696 data-nosnippet>696</a>        buffer.extend((w_shape.len() <span class="kw">as </span>u32).to_le_bytes());
+<a href=#697 id=697 data-nosnippet>697</a>        <span class="kw">for </span>dim <span class="kw">in </span>w_shape {
+<a href=#698 id=698 data-nosnippet>698</a>            buffer.extend((<span class="kw-2">*</span>dim <span class="kw">as </span>u32).to_le_bytes());
+<a href=#699 id=699 data-nosnippet>699</a>        }
+<a href=#700 id=700 data-nosnippet>700</a>
+<a href=#701 id=701 data-nosnippet>701</a>        <span class="comment">// Config
+<a href=#702 id=702 data-nosnippet>702</a>        </span>buffer.push(<span class="self">self</span>.cfg.bits <span class="kw">as </span>u8);
+<a href=#703 id=703 data-nosnippet>703</a>        buffer.extend(
+<a href=#704 id=704 data-nosnippet>704</a>            <span class="kw-2">&amp;</span>(&lt;NonZeroUsize <span class="kw">as </span>Into&lt;usize&gt;&gt;::into(<span class="self">self</span>.cfg.group_size) <span class="kw">as </span>u32).to_le_bytes(),
+<a href=#705 id=705 data-nosnippet>705</a>        );
+<a href=#706 id=706 data-nosnippet>706</a>        buffer.push(<span class="self">self</span>.cfg.axis <span class="kw">as </span>u8);
+<a href=#707 id=707 data-nosnippet>707</a>        <span class="comment">// FIXME: using 0 as a sentinel for None is OK because it really should be.
+<a href=#708 id=708 data-nosnippet>708</a>        </span>buffer.extend(<span class="kw-2">&amp;</span>(<span class="self">self</span>.cfg.optimization_steps.unwrap_or(<span class="number">0</span>) <span class="kw">as </span>u32).to_le_bytes());
+<a href=#709 id=709 data-nosnippet>709</a>        buffer.push(<span class="self">self</span>.cfg.round_zeros <span class="kw">as </span>u8);
+<a href=#710 id=710 data-nosnippet>710</a>        buffer.push(<span class="self">self</span>.cfg.channel_wise <span class="kw">as </span>u8);
+<a href=#711 id=711 data-nosnippet>711</a>
+<a href=#712 id=712 data-nosnippet>712</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(bias) = <span class="kw-2">&amp;</span>bias {
+<a href=#713 id=713 data-nosnippet>713</a>            <span class="comment">// Bias
+<a href=#714 id=714 data-nosnippet>714</a>            </span>serialize_tensor(<span class="kw-2">&amp;mut </span>buffer, bias)<span class="question-mark">?</span>;
+<a href=#715 id=715 data-nosnippet>715</a>        }
+<a href=#716 id=716 data-nosnippet>716</a>
+<a href=#717 id=717 data-nosnippet>717</a>        <span class="prelude-val">Ok</span>(Cow::from(buffer))
+<a href=#718 id=718 data-nosnippet>718</a>    }
+<a href=#719 id=719 data-nosnippet>719</a>
+<a href=#720 id=720 data-nosnippet>720</a>    <span class="kw">fn </span>deserialize(
+<a href=#721 id=721 data-nosnippet>721</a>        data: Cow&lt;[u8]&gt;,
+<a href=#722 id=722 data-nosnippet>722</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#723 id=723 data-nosnippet>723</a>        _comm: <span class="kw-2">&amp;</span>Arc&lt;<span class="kw">crate</span>::Comm&gt;,
+<a href=#724 id=724 data-nosnippet>724</a>        guard: QuantizeOntoGuard,
+<a href=#725 id=725 data-nosnippet>725</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;
+<a href=#726 id=726 data-nosnippet>726</a>    <span class="kw">where
+<a href=#727 id=727 data-nosnippet>727</a>        </span><span class="self">Self</span>: Sized,
+<a href=#728 id=728 data-nosnippet>728</a>    {
+<a href=#729 id=729 data-nosnippet>729</a>        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
+<a href=#730 id=730 data-nosnippet>730</a>
+<a href=#731 id=731 data-nosnippet>731</a>        <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
+<a href=#732 id=732 data-nosnippet>732</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
+<a href=#733 id=733 data-nosnippet>733</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(candle_core::Error::wrap(e));
+<a href=#734 id=734 data-nosnippet>734</a>        }
+<a href=#735 id=735 data-nosnippet>735</a>
+<a href=#736 id=736 data-nosnippet>736</a>        <span class="kw">let </span>isq_type = buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize;
+<a href=#737 id=737 data-nosnippet>737</a>        <span class="kw">if </span>isq_type != QuantizedSerdeType::Hqq <span class="kw">as </span>usize {
+<a href=#738 id=738 data-nosnippet>738</a>            <span class="macro">candle_core::bail!</span>(
+<a href=#739 id=739 data-nosnippet>739</a>                <span class="string">"ISQ type ({isq_type}) doesn't match expected type {}"</span>,
+<a href=#740 id=740 data-nosnippet>740</a>                QuantizedSerdeType::Hqq <span class="kw">as </span>usize
+<a href=#741 id=741 data-nosnippet>741</a>            );
+<a href=#742 id=742 data-nosnippet>742</a>        }
+<a href=#743 id=743 data-nosnippet>743</a>
+<a href=#744 id=744 data-nosnippet>744</a>        <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+<a href=#745 id=745 data-nosnippet>745</a>
+<a href=#746 id=746 data-nosnippet>746</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
+<a href=#747 id=747 data-nosnippet>747</a>        <span class="kw">let </span>w_q = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
+<a href=#748 id=748 data-nosnippet>748</a>        <span class="kw">let </span>scales = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
+<a href=#749 id=749 data-nosnippet>749</a>        <span class="kw">let </span>zeros = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
+<a href=#750 id=750 data-nosnippet>750</a>
+<a href=#751 id=751 data-nosnippet>751</a>        <span class="kw">let </span>n_dims = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
+<a href=#752 id=752 data-nosnippet>752</a>
+<a href=#753 id=753 data-nosnippet>753</a>        <span class="kw">let </span><span class="kw-2">mut </span>dims = Vec::with_capacity(n_dims);
+<a href=#754 id=754 data-nosnippet>754</a>        <span class="kw">for _ in </span><span class="number">0</span>..n_dims {
+<a href=#755 id=755 data-nosnippet>755</a>            dims.push(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)
+<a href=#756 id=756 data-nosnippet>756</a>        }
+<a href=#757 id=757 data-nosnippet>757</a>        <span class="kw">let </span>w_shape = Shape::from_dims(<span class="kw-2">&amp;</span>dims);
+<a href=#758 id=758 data-nosnippet>758</a>
+<a href=#759 id=759 data-nosnippet>759</a>        <span class="comment">// TODO: keep this in sync with get_isq_type_from_uqff!
+<a href=#760 id=760 data-nosnippet>760</a>        </span><span class="kw">let </span>bits = HqqBits::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
+<a href=#761 id=761 data-nosnippet>761</a>        <span class="kw">let </span>group_size = NonZeroUsize::try_from(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
+<a href=#762 id=762 data-nosnippet>762</a>        <span class="kw">let </span>axis = HqqAxis::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
+<a href=#763 id=763 data-nosnippet>763</a>        <span class="kw">let </span>optimization_steps = <span class="kw">match </span>buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize {
+<a href=#764 id=764 data-nosnippet>764</a>            <span class="number">0 </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#765 id=765 data-nosnippet>765</a>            other =&gt; <span class="prelude-val">Some</span>(other),
+<a href=#766 id=766 data-nosnippet>766</a>        };
+<a href=#767 id=767 data-nosnippet>767</a>        <span class="kw">let </span>round_zeros = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+<a href=#768 id=768 data-nosnippet>768</a>        <span class="kw">let </span>channel_wise = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+<a href=#769 id=769 data-nosnippet>769</a>
+<a href=#770 id=770 data-nosnippet>770</a>        <span class="kw">let </span>cfg = HqqConfig {
+<a href=#771 id=771 data-nosnippet>771</a>            bits,
+<a href=#772 id=772 data-nosnippet>772</a>            group_size,
+<a href=#773 id=773 data-nosnippet>773</a>            axis,
+<a href=#774 id=774 data-nosnippet>774</a>            optimization_steps,
+<a href=#775 id=775 data-nosnippet>775</a>            round_zeros,
+<a href=#776 id=776 data-nosnippet>776</a>            channel_wise,
+<a href=#777 id=777 data-nosnippet>777</a>        };
+<a href=#778 id=778 data-nosnippet>778</a>
+<a href=#779 id=779 data-nosnippet>779</a>        <span class="kw">let </span>b = <span class="kw">if </span>has_bias {
+<a href=#780 id=780 data-nosnippet>780</a>            <span class="prelude-val">Some</span>(deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>)
+<a href=#781 id=781 data-nosnippet>781</a>        } <span class="kw">else </span>{
+<a href=#782 id=782 data-nosnippet>782</a>            <span class="prelude-val">None
+<a href=#783 id=783 data-nosnippet>783</a>        </span>};
+<a href=#784 id=784 data-nosnippet>784</a>
+<a href=#785 id=785 data-nosnippet>785</a>        <span class="prelude-val">Ok</span>(Arc::new(<span class="self">Self </span>{
+<a href=#786 id=786 data-nosnippet>786</a>            w_q,
+<a href=#787 id=787 data-nosnippet>787</a>            zeros,
+<a href=#788 id=788 data-nosnippet>788</a>            scales,
+<a href=#789 id=789 data-nosnippet>789</a>            bias: b,
+<a href=#790 id=790 data-nosnippet>790</a>            w_shape,
+<a href=#791 id=791 data-nosnippet>791</a>            cfg,
+<a href=#792 id=792 data-nosnippet>792</a>        }))
+<a href=#793 id=793 data-nosnippet>793</a>    }
+<a href=#794 id=794 data-nosnippet>794</a>    <span class="kw">fn </span>deserialize_ext_bias(
+<a href=#795 id=795 data-nosnippet>795</a>        data: Cow&lt;[u8]&gt;,
+<a href=#796 id=796 data-nosnippet>796</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#797 id=797 data-nosnippet>797</a>        guard: QuantizeOntoGuard,
+<a href=#798 id=798 data-nosnippet>798</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt;
+<a href=#799 id=799 data-nosnippet>799</a>    <span class="kw">where
+<a href=#800 id=800 data-nosnippet>800</a>        </span><span class="self">Self</span>: Sized,
+<a href=#801 id=801 data-nosnippet>801</a>    {
+<a href=#802 id=802 data-nosnippet>802</a>        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
+<a href=#803 id=803 data-nosnippet>803</a>
+<a href=#804 id=804 data-nosnippet>804</a>        <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
+<a href=#805 id=805 data-nosnippet>805</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
+<a href=#806 id=806 data-nosnippet>806</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(candle_core::Error::wrap(e));
+<a href=#807 id=807 data-nosnippet>807</a>        }
+<a href=#808 id=808 data-nosnippet>808</a>
+<a href=#809 id=809 data-nosnippet>809</a>        <span class="kw">let </span>isq_type = buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize;
+<a href=#810 id=810 data-nosnippet>810</a>        <span class="kw">if </span>isq_type != QuantizedSerdeType::Hqq <span class="kw">as </span>usize {
+<a href=#811 id=811 data-nosnippet>811</a>            <span class="macro">candle_core::bail!</span>(
+<a href=#812 id=812 data-nosnippet>812</a>                <span class="string">"ISQ type ({isq_type}) doesn't match expected type {}"</span>,
+<a href=#813 id=813 data-nosnippet>813</a>                QuantizedSerdeType::Hqq <span class="kw">as </span>usize
+<a href=#814 id=814 data-nosnippet>814</a>            );
+<a href=#815 id=815 data-nosnippet>815</a>        }
+<a href=#816 id=816 data-nosnippet>816</a>
+<a href=#817 id=817 data-nosnippet>817</a>        <span class="kw">let </span>has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+<a href=#818 id=818 data-nosnippet>818</a>
+<a href=#819 id=819 data-nosnippet>819</a>        <span class="kw">let </span>_acquired_load_guard = guard.acquire();
+<a href=#820 id=820 data-nosnippet>820</a>        <span class="kw">let </span>w_q = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
+<a href=#821 id=821 data-nosnippet>821</a>        <span class="kw">let </span>scales = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
+<a href=#822 id=822 data-nosnippet>822</a>        <span class="kw">let </span>zeros = deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>;
+<a href=#823 id=823 data-nosnippet>823</a>
+<a href=#824 id=824 data-nosnippet>824</a>        <span class="kw">let </span>n_dims = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
+<a href=#825 id=825 data-nosnippet>825</a>
+<a href=#826 id=826 data-nosnippet>826</a>        <span class="kw">let </span><span class="kw-2">mut </span>dims = Vec::with_capacity(n_dims);
+<a href=#827 id=827 data-nosnippet>827</a>        <span class="kw">for _ in </span><span class="number">0</span>..n_dims {
+<a href=#828 id=828 data-nosnippet>828</a>            dims.push(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)
+<a href=#829 id=829 data-nosnippet>829</a>        }
+<a href=#830 id=830 data-nosnippet>830</a>        <span class="kw">let </span>w_shape = Shape::from_dims(<span class="kw-2">&amp;</span>dims);
+<a href=#831 id=831 data-nosnippet>831</a>
+<a href=#832 id=832 data-nosnippet>832</a>        <span class="comment">// TODO: keep this in sync with get_isq_type_from_uqff!
+<a href=#833 id=833 data-nosnippet>833</a>        </span><span class="kw">let </span>bits = HqqBits::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
+<a href=#834 id=834 data-nosnippet>834</a>        <span class="kw">let </span>group_size = NonZeroUsize::try_from(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
+<a href=#835 id=835 data-nosnippet>835</a>        <span class="kw">let </span>axis = HqqAxis::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
+<a href=#836 id=836 data-nosnippet>836</a>        <span class="kw">let </span>optimization_steps = <span class="kw">match </span>buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize {
+<a href=#837 id=837 data-nosnippet>837</a>            <span class="number">0 </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#838 id=838 data-nosnippet>838</a>            other =&gt; <span class="prelude-val">Some</span>(other),
+<a href=#839 id=839 data-nosnippet>839</a>        };
+<a href=#840 id=840 data-nosnippet>840</a>        <span class="kw">let </span>round_zeros = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+<a href=#841 id=841 data-nosnippet>841</a>        <span class="kw">let </span>channel_wise = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+<a href=#842 id=842 data-nosnippet>842</a>
+<a href=#843 id=843 data-nosnippet>843</a>        <span class="kw">let </span>cfg = HqqConfig {
+<a href=#844 id=844 data-nosnippet>844</a>            bits,
+<a href=#845 id=845 data-nosnippet>845</a>            group_size,
+<a href=#846 id=846 data-nosnippet>846</a>            axis,
+<a href=#847 id=847 data-nosnippet>847</a>            optimization_steps,
+<a href=#848 id=848 data-nosnippet>848</a>            round_zeros,
+<a href=#849 id=849 data-nosnippet>849</a>            channel_wise,
+<a href=#850 id=850 data-nosnippet>850</a>        };
+<a href=#851 id=851 data-nosnippet>851</a>
+<a href=#852 id=852 data-nosnippet>852</a>        <span class="kw">let </span>b = <span class="kw">if </span>has_bias {
+<a href=#853 id=853 data-nosnippet>853</a>            <span class="prelude-val">Some</span>(deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer, device)<span class="question-mark">?</span>)
+<a href=#854 id=854 data-nosnippet>854</a>        } <span class="kw">else </span>{
+<a href=#855 id=855 data-nosnippet>855</a>            <span class="prelude-val">None
+<a href=#856 id=856 data-nosnippet>856</a>        </span>};
+<a href=#857 id=857 data-nosnippet>857</a>
+<a href=#858 id=858 data-nosnippet>858</a>        <span class="prelude-val">Ok</span>((
+<a href=#859 id=859 data-nosnippet>859</a>            Arc::new(<span class="self">Self </span>{
+<a href=#860 id=860 data-nosnippet>860</a>                w_q,
+<a href=#861 id=861 data-nosnippet>861</a>                zeros,
+<a href=#862 id=862 data-nosnippet>862</a>                scales,
+<a href=#863 id=863 data-nosnippet>863</a>                bias: <span class="prelude-val">None</span>,
+<a href=#864 id=864 data-nosnippet>864</a>                w_shape,
+<a href=#865 id=865 data-nosnippet>865</a>                cfg,
+<a href=#866 id=866 data-nosnippet>866</a>            }),
+<a href=#867 id=867 data-nosnippet>867</a>            b,
+<a href=#868 id=868 data-nosnippet>868</a>        ))
+<a href=#869 id=869 data-nosnippet>869</a>    }
+<a href=#870 id=870 data-nosnippet>870</a>}
+<a href=#871 id=871 data-nosnippet>871</a>
+<a href=#872 id=872 data-nosnippet>872</a><span class="kw">impl </span>HqqLayer {
+<a href=#873 id=873 data-nosnippet>873</a>    <span class="kw">pub fn </span>get_isq_type_from_uqff(data: Cow&lt;[u8]&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;IsqType&gt; {
+<a href=#874 id=874 data-nosnippet>874</a>        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
 <a href=#875 id=875 data-nosnippet>875</a>
-<a href=#876 id=876 data-nosnippet>876</a><span class="kw">impl </span>HqqLayer {
-<a href=#877 id=877 data-nosnippet>877</a>    <span class="kw">pub fn </span>get_isq_type_from_uqff(data: Cow&lt;[u8]&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;IsqType&gt; {
-<a href=#878 id=878 data-nosnippet>878</a>        <span class="kw">let </span><span class="kw-2">mut </span>buffer = Cursor::new(data);
-<a href=#879 id=879 data-nosnippet>879</a>
-<a href=#880 id=880 data-nosnippet>880</a>        <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
-<a href=#881 id=881 data-nosnippet>881</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
-<a href=#882 id=882 data-nosnippet>882</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(candle_core::Error::wrap(e));
-<a href=#883 id=883 data-nosnippet>883</a>        }
-<a href=#884 id=884 data-nosnippet>884</a>
-<a href=#885 id=885 data-nosnippet>885</a>        <span class="kw">let </span>isq_type = buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize;
-<a href=#886 id=886 data-nosnippet>886</a>        <span class="kw">if </span>isq_type != QuantizedSerdeType::Hqq <span class="kw">as </span>usize {
-<a href=#887 id=887 data-nosnippet>887</a>            <span class="macro">candle_core::bail!</span>(
-<a href=#888 id=888 data-nosnippet>888</a>                <span class="string">"ISQ type ({isq_type}) doesn't match expected type {}"</span>,
-<a href=#889 id=889 data-nosnippet>889</a>                QuantizedSerdeType::Hqq <span class="kw">as </span>usize
-<a href=#890 id=890 data-nosnippet>890</a>            );
-<a href=#891 id=891 data-nosnippet>891</a>        }
-<a href=#892 id=892 data-nosnippet>892</a>
-<a href=#893 id=893 data-nosnippet>893</a>        <span class="kw">let </span>_has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+<a href=#876 id=876 data-nosnippet>876</a>        <span class="kw">let </span>version = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">?</span>;
+<a href=#877 id=877 data-nosnippet>877</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = version_is_compatible(version) {
+<a href=#878 id=878 data-nosnippet>878</a>            <span class="kw">return </span><span class="prelude-val">Err</span>(candle_core::Error::wrap(e));
+<a href=#879 id=879 data-nosnippet>879</a>        }
+<a href=#880 id=880 data-nosnippet>880</a>
+<a href=#881 id=881 data-nosnippet>881</a>        <span class="kw">let </span>isq_type = buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize;
+<a href=#882 id=882 data-nosnippet>882</a>        <span class="kw">if </span>isq_type != QuantizedSerdeType::Hqq <span class="kw">as </span>usize {
+<a href=#883 id=883 data-nosnippet>883</a>            <span class="macro">candle_core::bail!</span>(
+<a href=#884 id=884 data-nosnippet>884</a>                <span class="string">"ISQ type ({isq_type}) doesn't match expected type {}"</span>,
+<a href=#885 id=885 data-nosnippet>885</a>                QuantizedSerdeType::Hqq <span class="kw">as </span>usize
+<a href=#886 id=886 data-nosnippet>886</a>            );
+<a href=#887 id=887 data-nosnippet>887</a>        }
+<a href=#888 id=888 data-nosnippet>888</a>
+<a href=#889 id=889 data-nosnippet>889</a>        <span class="kw">let </span>_has_bias = buffer.read_u8()<span class="question-mark">? </span>!= <span class="number">0</span>;
+<a href=#890 id=890 data-nosnippet>890</a>
+<a href=#891 id=891 data-nosnippet>891</a>        fake_deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
+<a href=#892 id=892 data-nosnippet>892</a>        fake_deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
+<a href=#893 id=893 data-nosnippet>893</a>        fake_deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
 <a href=#894 id=894 data-nosnippet>894</a>
-<a href=#895 id=895 data-nosnippet>895</a>        fake_deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
-<a href=#896 id=896 data-nosnippet>896</a>        fake_deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
-<a href=#897 id=897 data-nosnippet>897</a>        fake_deserialize_tensor(<span class="kw-2">&amp;mut </span>buffer)<span class="question-mark">?</span>;
-<a href=#898 id=898 data-nosnippet>898</a>
-<a href=#899 id=899 data-nosnippet>899</a>        <span class="kw">let </span>n_dims = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
-<a href=#900 id=900 data-nosnippet>900</a>
-<a href=#901 id=901 data-nosnippet>901</a>        <span class="kw">let </span><span class="kw-2">mut </span>dims = Vec::with_capacity(n_dims);
-<a href=#902 id=902 data-nosnippet>902</a>        <span class="kw">for _ in </span><span class="number">0</span>..n_dims {
-<a href=#903 id=903 data-nosnippet>903</a>            dims.push(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)
-<a href=#904 id=904 data-nosnippet>904</a>        }
-<a href=#905 id=905 data-nosnippet>905</a>        <span class="kw">let </span>_w_shape = Shape::from_dims(<span class="kw-2">&amp;</span>dims);
-<a href=#906 id=906 data-nosnippet>906</a>
-<a href=#907 id=907 data-nosnippet>907</a>        <span class="comment">// TODO: keep this in sync with get_isq_type_from_uqff!
-<a href=#908 id=908 data-nosnippet>908</a>        </span><span class="kw">let </span>bits = HqqBits::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
-<a href=#909 id=909 data-nosnippet>909</a>
-<a href=#910 id=910 data-nosnippet>910</a>        <span class="kw">match </span>bits {
-<a href=#911 id=911 data-nosnippet>911</a>            HqqBits::Eight =&gt; <span class="prelude-val">Ok</span>(IsqType::HQQ8),
-<a href=#912 id=912 data-nosnippet>912</a>            HqqBits::Four =&gt; <span class="prelude-val">Ok</span>(IsqType::HQQ4),
-<a href=#913 id=913 data-nosnippet>913</a>            HqqBits::One | HqqBits::Two | HqqBits::Three =&gt; {
-<a href=#914 id=914 data-nosnippet>914</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"cannot convert hqq bits to isq type"</span>)
-<a href=#915 id=915 data-nosnippet>915</a>            }
-<a href=#916 id=916 data-nosnippet>916</a>        }
-<a href=#917 id=917 data-nosnippet>917</a>    }
-<a href=#918 id=918 data-nosnippet>918</a>}</code></pre></div></section></main></body></html>
+<a href=#895 id=895 data-nosnippet>895</a>        <span class="kw">let </span>n_dims = buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize;
+<a href=#896 id=896 data-nosnippet>896</a>
+<a href=#897 id=897 data-nosnippet>897</a>        <span class="kw">let </span><span class="kw-2">mut </span>dims = Vec::with_capacity(n_dims);
+<a href=#898 id=898 data-nosnippet>898</a>        <span class="kw">for _ in </span><span class="number">0</span>..n_dims {
+<a href=#899 id=899 data-nosnippet>899</a>            dims.push(buffer.read_u32::&lt;LittleEndian&gt;()<span class="question-mark">? </span><span class="kw">as </span>usize)
+<a href=#900 id=900 data-nosnippet>900</a>        }
+<a href=#901 id=901 data-nosnippet>901</a>        <span class="kw">let </span>_w_shape = Shape::from_dims(<span class="kw-2">&amp;</span>dims);
+<a href=#902 id=902 data-nosnippet>902</a>
+<a href=#903 id=903 data-nosnippet>903</a>        <span class="comment">// TODO: keep this in sync with get_isq_type_from_uqff!
+<a href=#904 id=904 data-nosnippet>904</a>        </span><span class="kw">let </span>bits = HqqBits::try_from(buffer.read_u8()<span class="question-mark">? </span><span class="kw">as </span>usize)<span class="question-mark">?</span>;
+<a href=#905 id=905 data-nosnippet>905</a>
+<a href=#906 id=906 data-nosnippet>906</a>        <span class="kw">match </span>bits {
+<a href=#907 id=907 data-nosnippet>907</a>            HqqBits::Eight =&gt; <span class="prelude-val">Ok</span>(IsqType::HQQ8),
+<a href=#908 id=908 data-nosnippet>908</a>            HqqBits::Four =&gt; <span class="prelude-val">Ok</span>(IsqType::HQQ4),
+<a href=#909 id=909 data-nosnippet>909</a>            HqqBits::One | HqqBits::Two | HqqBits::Three =&gt; {
+<a href=#910 id=910 data-nosnippet>910</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"cannot convert hqq bits to isq type"</span>)
+<a href=#911 id=911 data-nosnippet>911</a>            }
+<a href=#912 id=912 data-nosnippet>912</a>        }
+<a href=#913 id=913 data-nosnippet>913</a>    }
+<a href=#914 id=914 data-nosnippet>914</a>}</code></pre></div></section></main></body></html>
