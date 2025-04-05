@@ -4,32 +4,39 @@ Mistral.rs supports the following quantization:
 - GGUF/GGML
     - Q, K type
     - Supported in GGUF/GGML and GGUF/GGML adapter models
-    - Supported in all plain and adapter models
+    - Supported in all plain/vision and adapter models
     - Imatrix quantization is supported
     - I quants coming!
     - CPU, CUDA, Metal (all supported devices)
     - 2, 3, 4, 5, 6, 8 bit
 - GPTQ
-    - Supported in all plain and adapter models
+    - Supported in all plain/vision and adapter models
     - CUDA only
     - 2, 3, 4, 8 bit
     - [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
 - HQQ
-    - Supported in all plain and adapter models via ISQ
+    - Supported in all plain/vision and adapter models via ISQ
     - 4, 8 bit
     - CPU, CUDA, Metal (all supported devices)
 - FP8
-    - Supported in all plain and adapter models
+    - Supported in all plain/vision and adapter models
     - CPU, CUDA, Metal (all supported devices)
 - BNB
-    - Supported in all plai models
+    - Supported in all plain/vision and adapter models
     - bitsandbytes int8, fp4, nf4 support
+- AFQ
+    - 2, 3, 4, 6, 8 bit
+    - 🔥 Designed to be fast on **Metal**!
 - ISQ
-    - Q, K type GGUF quants
-    - Supported in all plain and adapter models
-    - HQQ quants
-    - FP8
-    - CPU, CUDA, Metal (all supported devices)
+    - Supported in all plain/vision and adapter models
+    - Works on all supported devices
+    - Supports:
+      - Q, K type GGUF quants
+      - AFQ
+      - HQQ
+      - FP8
+- MLX prequantized
+    - Supported in all plain/vision and adapter models
 
 ## Using a GGUF quantized model
 - Use the `gguf` (cli) / `GGUF` (Python) model selector
@@ -52,7 +59,7 @@ cargo run --features cuda -- -i --isq Q4K plain -m microsoft/Phi-3-mini-4k-instr
 - The [Marlin](https://github.com/IST-DASLab/marlin) kernel will automatically be used for 4-bit and 8-bit.
 
 ```
-cargo run --features cuda -- -i plain -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit -a phi3
+cargo run --features cuda --release -- -i plain -m kaitchup/Phi-3-mini-4k-instruct-gptq-4bit
 ```
 
 You can create your own GPTQ model using [`scripts/convert_to_gptq.py`][../scripts/convert_to_gptq.py]:
@@ -60,4 +67,13 @@ You can create your own GPTQ model using [`scripts/convert_to_gptq.py`][../scrip
 pip install gptqmodel transformers datasets
 
 python3 scripts/convert_to_gptq.py --src path/to/model --dst output/model/path --bits 4
+```
+
+## Using a MLX prequantized model (on Metal)
+- Provide the model ID for the MLX prequantized model
+- Mistral.rs will automatically detect and use quantization for plain and vision models!
+- Specialized kernels will be used to accelerate inference!
+
+```
+cargo run --features ... --release -- -i plain -m mlx-community/Llama-3.8-1B-8bit
 ```
