@@ -27,9 +27,11 @@ Mistral.rs supports the following quantization:
 - AFQ
     - 2, 3, 4, 6, 8 bit
     - 🔥 Designed to be fast on **Metal**!
+    - Only supported on Metal.
 - ISQ
     - Supported in all plain/vision and adapter models
     - Works on all supported devices
+    - Automatic selection to use the fastest and most accurate method
     - Supports:
       - Q, K type GGUF quants
       - AFQ
