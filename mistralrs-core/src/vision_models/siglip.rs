@@ -121,6 +121,7 @@ impl VisionEmbeddings {
                 num_patches,
                 config.hidden_size,
                 vb.pp("position_embedding"),
+                &None,
             )?,
         })
     }

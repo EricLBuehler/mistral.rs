@@ -59,9 +59,9 @@ pub use unquantized::UnquantLinear;
 pub use utils::UQFF_QUANT_TYPE_OFFSET;
 
 use candle_nn::{Linear, Module};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "quant_method", rename_all = "lowercase")]
 pub enum QuantizedConfig {
     Gptq {
@@ -75,6 +75,80 @@ pub enum QuantizedConfig {
     Bitsandbytes {
         bnb_4bit_quant_type: Option<String>,
     },
+    Afq {
+        bits: usize,
+        group_size: usize,
+    },
+}
+
+// Common fields for all variants
+#[derive(Deserialize)]
+struct RawConfig {
+    quant_method: Option<String>,
+    bits: Option<usize>,
+    group_size: Option<usize>,
+    checkpoint_format: Option<String>,
+    weight_block_size: Option<Vec<usize>>,
+    bnb_4bit_quant_type: Option<String>,
+}
+
+// Custom deserializer implementation
+impl<'de> Deserialize<'de> for QuantizedConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawConfig::deserialize(deserializer)?;
+
+        match &raw.quant_method {
+            Some(m) if m == "gptq" => {
+                let bits = raw
+                    .bits
+                    .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
+                let group_size = raw
+                    .group_size
+                    .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                Ok(QuantizedConfig::Gptq {
+                    bits,
+                    group_size,
+                    checkpoint_format: raw.checkpoint_format,
+                })
+            }
+            Some(m) if m == "fp8" => {
+                let weight_block_size = raw
+                    .weight_block_size
+                    .ok_or_else(|| serde::de::Error::missing_field("weight_block_size"))?;
+                Ok(QuantizedConfig::Fp8 { weight_block_size })
+            }
+            Some(m) if m == "bitsandbytes" => Ok(QuantizedConfig::Bitsandbytes {
+                bnb_4bit_quant_type: raw.bnb_4bit_quant_type,
+            }),
+            Some(m) if m == "afq" => {
+                let bits = raw
+                    .bits
+                    .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
+                let group_size = raw
+                    .group_size
+                    .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                Ok(QuantizedConfig::Afq { bits, group_size })
+            }
+            None => {
+                let bits = raw
+                    .bits
+                    .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
+                let group_size = raw
+                    .group_size
+                    .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                Ok(QuantizedConfig::Afq { bits, group_size })
+            }
+            Some(unknown_method) => {
+                Err(serde::de::Error::custom(format!(
+                    "Unknown quantization method: {}. Expected one of: gptq, fp8, bitsandbytes, afq, or not specified", 
+                    unknown_method
+                )))
+            },
+        }
+    }
 }
 
 impl QuantizedConfig {
@@ -83,19 +157,21 @@ impl QuantizedConfig {
             Self::Gptq { .. } => "gptq",
             Self::Fp8 { .. } => "fp8",
             Self::Bitsandbytes { .. } => "bitsandbytes",
+            Self::Afq { .. } => "afq",
         }
     }
 
     pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
         match self {
-            Self::Gptq { bits, .. } => bits.to_string(),
-            Self::Fp8 { .. } => 8.to_string(),
+            Self::Gptq { bits, .. } => format!("{bits} bits"),
+            Self::Fp8 { .. } => "8 bits".to_string(),
             Self::Bitsandbytes {
                 bnb_4bit_quant_type: Some(_),
-            } => 4.to_string(),
+            } => "4 bits".to_string(),
             Self::Bitsandbytes {
                 bnb_4bit_quant_type: None,
-            } => 8.to_string(),
+            } => "8 bits".to_string(),
+            Self::Afq { bits, .. } => format!("{bits} bits"),
         }
     }
 }
@@ -556,6 +632,9 @@ pub fn linear_no_bias(
             QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
+            QuantizedConfig::Afq { .. } => {
+                AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, false, vb)?
+            }
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
@@ -589,6 +668,9 @@ pub fn linear(
             }
             QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
+            }
+            QuantizedConfig::Afq { .. } => {
+                AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, true, vb)?
             }
         }
     } else {

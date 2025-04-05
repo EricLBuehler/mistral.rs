@@ -972,6 +972,7 @@ impl Model {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let vision_embed_tokens = ImageEmbedding::new(
             cfg,

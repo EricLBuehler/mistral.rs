@@ -585,6 +585,7 @@ impl XLoraLlama {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let lm_head = linear(
             cfg.hidden_size,

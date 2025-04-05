@@ -326,6 +326,7 @@ impl T5Attention {
                 cfg.relative_attention_num_buckets,
                 cfg.num_heads,
                 vb.pp("relative_attention_bias"),
+                &None,
             )?;
             Some(emb)
         } else {
@@ -769,6 +770,7 @@ impl T5EncoderModel {
             cfg.vocab_size,
             cfg.d_model,
             shared_vb.set_device(device.clone()),
+            &None,
         )?;
         let shared = Arc::new(shared);
         let encoder = T5Stack::load(false, vb.pp("encoder"), &shared, cfg, device, offloaded)?;

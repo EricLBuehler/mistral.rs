@@ -47,11 +47,13 @@ impl RowParallelLayer {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
                 quant_conf,
-                QuantizedConfig::Gptq { .. } | QuantizedConfig::Bitsandbytes { .. }
+                QuantizedConfig::Gptq { .. }
+                    | QuantizedConfig::Bitsandbytes { .. }
+                    | QuantizedConfig::Afq { .. }
             ) && comm.world_size() != 1
             {
                 candle_core::bail!(
-                    "GPTQ and BNB quantization types to not support tensor parallelism, but got a world size of {}",
+                    "GPTQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
             }
@@ -66,6 +68,9 @@ impl RowParallelLayer {
                 }
                 QuantizedConfig::Bitsandbytes { .. } => {
                     Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
+                }
+                QuantizedConfig::Afq { .. } => {
+                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
             }
         } else {
@@ -235,11 +240,13 @@ impl ColumnParallelLayer {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
                 quant_conf,
-                QuantizedConfig::Gptq { .. } | QuantizedConfig::Bitsandbytes { .. }
+                QuantizedConfig::Gptq { .. }
+                    | QuantizedConfig::Bitsandbytes { .. }
+                    | QuantizedConfig::Afq { .. }
             ) && comm.world_size() != 1
             {
                 candle_core::bail!(
-                    "GPTQ and BNB quantization types to not support tensor parallelism, but got a world size of {}",
+                    "GPTQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
             }
@@ -254,6 +261,9 @@ impl ColumnParallelLayer {
                 }
                 QuantizedConfig::Bitsandbytes { .. } => {
                     Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
+                }
+                QuantizedConfig::Afq { .. } => {
+                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
             }
         } else {
@@ -441,6 +451,9 @@ impl ReplicatedLayer {
                 )?,
                 QuantizedConfig::Bitsandbytes { .. } => {
                     Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb)?) as Arc<_>
+                }
+                QuantizedConfig::Afq { .. } => {
+                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
                 }
             }
         } else {

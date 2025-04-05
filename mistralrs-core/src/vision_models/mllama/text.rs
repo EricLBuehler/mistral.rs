@@ -556,6 +556,13 @@ impl MLlamaTextModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization: {}.",
+                quant_cfg.name(),
+                quant_cfg.get_bits_name(&vb)
+            );
+        }
         if !matches!(attention_mechanism, AttentionImplementation::Eager) {
             candle_core::bail!("Expected eager attention implementation");
         }
@@ -565,6 +572,7 @@ impl MLlamaTextModel {
             cfg.vocab_size + 8,
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
 
         let lm_head = if !cfg.tie_word_embeddings {
