@@ -31,6 +31,7 @@ Mistral.rs supports the following quantization:
 - ISQ
     - Supported in all plain/vision and adapter models
     - Works on all supported devices
+    - Automatic selection to use the fastest and most accurate method
     - Supports:
       - Q, K type GGUF quants
       - AFQ
