@@ -4,11 +4,8 @@ use std::{
 };
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::Linear;
 
-use crate::{
-    Comm, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, UnquantLinear,
-};
+use crate::{Comm, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde};
 
 mod ops;
 
@@ -84,7 +81,7 @@ impl QuantMethod for AfqLayer {
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        return ops::afq_mm_op(
+        ops::afq_mm_op(
             x,
             &self.w_q,
             &self.scales,
@@ -92,17 +89,7 @@ impl QuantMethod for AfqLayer {
             self.group_size,
             self.bits,
             true,
-        );
-
-        // Dequantize matmul always.
-        // TODO: add a specific kernel?
-        let weight = self.dequantize_w()?;
-        // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
-        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
-            weight,
-            self.bias.clone(),
-        )))?;
-        unquant.forward(x)
+        )
     }
 
     fn quantized_act_type(&self) -> Option<DType> {

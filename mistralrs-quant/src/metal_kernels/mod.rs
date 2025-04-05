@@ -3,8 +3,8 @@ use metal::{
     Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
     FunctionConstantValues, Library, MTLSize,
 };
+use std::collections::HashMap;
 use std::sync::RwLock;
-use std::{collections::HashMap, ops::Div};
 
 pub mod utils;
 use utils::{get_2d_grid_dims, linear_split, EncoderParam, EncoderProvider};
@@ -530,6 +530,7 @@ pub fn call_dequant_bnb_int8(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn call_affine_quantize(
     device: &Device,
     ep: impl EncoderProvider,
@@ -622,6 +623,7 @@ pub fn call_affine_quantize(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn call_afq_qmm(
     device: &Device,
     ep: impl EncoderProvider,
@@ -734,7 +736,7 @@ pub fn call_afq_qmm(
             };
             let grid_dims = MTLSize {
                 width: o.div_ceil(bn) as u64,
-                height: b.div(bm) as u64,
+                height: b.div_ceil(bm) as u64,
                 depth: n as u64,
             };
             matrix = true;
@@ -773,7 +775,7 @@ pub fn call_afq_qmm(
             };
             let grid_dims = MTLSize {
                 width: (o / bn) as u64,
-                height: b.div(bm) as u64,
+                height: b.div_ceil(bm) as u64,
                 depth: n as u64,
             };
             matrix = true;

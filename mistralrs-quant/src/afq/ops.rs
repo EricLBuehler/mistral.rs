@@ -192,7 +192,7 @@ pub(crate) fn afq_dequantize_op(
     }
     #[cfg(not(feature = "metal"))]
     {
-        candle_core::bail!("`afq_quantize_op` only works on Metal.")
+        candle_core::bail!("`afq_dequantize_op` only works on Metal.")
     }
 }
 
@@ -316,7 +316,7 @@ pub(crate) fn afq_mm_op(
     }
     #[cfg(not(feature = "metal"))]
     {
-        candle_core::bail!("`afq_quantize_op` only works on Metal.")
+        candle_core::bail!("`afq_mm_op` only works on Metal.")
     }
 }
 
