@@ -6,7 +6,14 @@ An API is exposed on the Python and Rust APIs which provide the ability to dynam
 
 To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md).
 
+> Note: 🔥 AFQ (affine) quantization is fast on **Metal**
+
 ## ISQ quantization types
+- AFQ2
+- AFQ3
+- AFQ4
+- AFQ6
+- AFQ8
 - Q4_0
 - Q4_1
 - Q5_0
