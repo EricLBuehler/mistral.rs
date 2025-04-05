@@ -131,7 +131,7 @@ Mistral.rs supports several model categories:
 - [Details](docs/QUANTS.md)
 - GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with imatrix support
 - GPTQ: 2-bit, 3-bit, 4-bit and 8-bit, with [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
-- AFQ: 🔥 2-bit, 3-bit, 4-bi, 6-bit and 8-bit, designed to be fast on Metal!
+- AFQ: 🔥 2-bit, 3-bit, 4-bit, 6-bit and 8-bit, designed to be fast on Metal!
 - HQQ: 4-bit and 8 bit, with ISQ support
 - FP8
 - BNB: bitsandbytes int8, fp4, nf4 support
