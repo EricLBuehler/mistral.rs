@@ -6,8 +6,8 @@ use candle_nn::Linear;
 use crate::{
     blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear,
     lora::merge_lora_weights, AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear,
-    GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig, QuantMethodType, QuantizeOntoGuard,
-    QuantizedConfig, QuantizedSerde, QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
+    GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
+    QuantizedSerde, QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 use super::{Comm, DistributedOperation, SumAllReduce};
@@ -46,31 +46,32 @@ impl RowParallelLayer {
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
-                quant_conf.quant_method,
-                QuantMethodType::Bitsandbytes | QuantMethodType::Gptq
+                quant_conf,
+                QuantizedConfig::Gptq { .. }
+                    | QuantizedConfig::Bitsandbytes { .. }
+                    | QuantizedConfig::Afq { .. }
             ) && comm.world_size() != 1
             {
                 candle_core::bail!(
-                    "GPTQ and BNB quantization types to not support tensor parallelism, but got a world size of {}",
+                    "GPTQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
             }
 
-            match quant_conf.quant_method {
-                QuantMethodType::Gptq => {
-                    let gpt_layer = gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?;
-                    return Ok(gpt_layer);
+            match quant_conf {
+                QuantizedConfig::Gptq { .. } => {
+                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantMethodType::Bitsandbytes => {
-                    let bnb_layer =
-                        Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>;
-                    return Ok(bnb_layer);
-                }
-                QuantMethodType::Fp8 => {
+                QuantizedConfig::Fp8 { .. } => {
                     // NOTE: no bias for fp8 as it might be parallelized
                     blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, shard, vb.clone())?
                 }
-                QuantMethodType::Unreachable => unreachable!(),
+                QuantizedConfig::Bitsandbytes { .. } => {
+                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
+                }
+                QuantizedConfig::Afq { .. } => {
+                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
             }
         } else {
             // Handle the case where the layer is dummy (no tensors)
@@ -238,31 +239,32 @@ impl ColumnParallelLayer {
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
-                quant_conf.quant_method,
-                QuantMethodType::Bitsandbytes | QuantMethodType::Gptq
+                quant_conf,
+                QuantizedConfig::Gptq { .. }
+                    | QuantizedConfig::Bitsandbytes { .. }
+                    | QuantizedConfig::Afq { .. }
             ) && comm.world_size() != 1
             {
                 candle_core::bail!(
-                    "GPTQ and BNB quantization types to not support tensor parallelism, but got a world size of {}",
+                    "GPTQ and BNB and AFQ quantization types to not support tensor parallelism, but got a world size of {}",
                     comm.world_size()
                 );
             }
 
-            match quant_conf.quant_method {
-                QuantMethodType::Gptq => {
-                    let gpt_layer = gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?;
-                    return Ok(gpt_layer);
+            match quant_conf {
+                QuantizedConfig::Gptq { .. } => {
+                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantMethodType::Bitsandbytes => {
-                    let bnb_layer =
-                        Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>;
-                    return Ok(bnb_layer);
-                }
-                QuantMethodType::Fp8 => {
+                QuantizedConfig::Fp8 { .. } => {
                     // NOTE: no bias for fp8 as it might be parallelized
                     blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, shard, vb.clone())?
                 }
-                QuantMethodType::Unreachable => unreachable!(),
+                QuantizedConfig::Bitsandbytes { .. } => {
+                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
+                }
+                QuantizedConfig::Afq { .. } => {
+                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
             }
         } else {
             // Handle the case where the layer is dummy (no tensors)
@@ -437,20 +439,22 @@ impl ReplicatedLayer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         let layer = if let Some(quant_conf) = &config {
-            match quant_conf.quant_method {
-                QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?,
-                QuantMethodType::Bitsandbytes => {
-                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
-                }
-                QuantMethodType::Fp8 => blockwise_fp8_linear_b(
+            match quant_conf {
+                QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+                QuantizedConfig::Fp8 { .. } => blockwise_fp8_linear_b(
                     in_dim,
                     out_dim,
                     quant_conf,
                     bias,
                     Default::default(),
-                    vb.clone(),
+                    vb,
                 )?,
-                QuantMethodType::Unreachable => unreachable!(),
+                QuantizedConfig::Bitsandbytes { .. } => {
+                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb)?) as Arc<_>
+                }
+                QuantizedConfig::Afq { .. } => {
+                    AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
+                }
             }
         } else {
             // Handle the case where the layer is dummy (no tensors)

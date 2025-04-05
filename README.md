@@ -31,7 +31,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
-- 🔥 Try out AFQ for blazingly fast Metal performance!
+- 🔥 Try out AFQ (2, 3, 4, 6, 8 bit) for blazingly fast Metal performance!
 
     ```
     ./mistralrs-server -i --isq afq8 plain -m meta-llama/Llama-3.2-3B-Instruct
@@ -131,9 +131,11 @@ Mistral.rs supports several model categories:
 - [Details](docs/QUANTS.md)
 - GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with imatrix support
 - GPTQ: 2-bit, 3-bit, 4-bit and 8-bit, with [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
+- AFQ: 🔥 2-bit, 3-bit, 4-bi, 6-bit and 8-bit, designed to be fast on **Metal**!
 - HQQ: 4-bit and 8 bit, with ISQ support
 - FP8
 - BNB: bitsandbytes int8, fp4, nf4 support
+- Easily run MLX prequantized models
 
 **Powerful**:
 - LoRA support with weight merging

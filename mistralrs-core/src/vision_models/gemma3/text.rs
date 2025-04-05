@@ -394,7 +394,7 @@ impl TextModel {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
-                quant_cfg.quant_method.to_string(),
+                quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
         }
@@ -407,6 +407,7 @@ impl TextModel {
                 cfg.vocab_size,
                 cfg.hidden_size,
                 mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+                &cfg.quantization_config,
             )?,
         );
 

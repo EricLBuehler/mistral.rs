@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    fmt::{Debug, Display},
+    fmt::Debug,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
@@ -59,58 +59,119 @@ pub use unquantized::UnquantLinear;
 pub use utils::UQFF_QUANT_TYPE_OFFSET;
 
 use candle_nn::{Linear, Module};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub enum QuantMethodType {
-    #[serde(rename = "fp8")]
-    Fp8,
-    #[serde(rename = "gptq")]
-    Gptq,
-    #[serde(rename = "unreachable")]
-    Unreachable,
-    #[default]
-    #[serde(rename = "bitsandbytes")]
-    Bitsandbytes,
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "quant_method", rename_all = "lowercase")]
+pub enum QuantizedConfig {
+    Gptq {
+        bits: usize,
+        group_size: usize,
+        checkpoint_format: Option<String>,
+    },
+    Fp8 {
+        weight_block_size: Vec<usize>,
+    },
+    Bitsandbytes {
+        bnb_4bit_quant_type: Option<String>,
+    },
+    Afq {
+        bits: usize,
+        group_size: usize,
+    },
 }
 
-impl Display for QuantMethodType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Gptq => write!(f, "gptq"),
-            Self::Fp8 => write!(f, "fp8"),
-            Self::Bitsandbytes => write!(f, "bnb"),
-            Self::Unreachable => write!(f, "unreachable",),
+// Common fields for all variants
+#[derive(Deserialize)]
+struct RawConfig {
+    quant_method: Option<String>,
+    bits: Option<usize>,
+    group_size: Option<usize>,
+    checkpoint_format: Option<String>,
+    weight_block_size: Option<Vec<usize>>,
+    bnb_4bit_quant_type: Option<String>,
+}
+
+// Custom deserializer implementation
+impl<'de> Deserialize<'de> for QuantizedConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawConfig::deserialize(deserializer)?;
+
+        match &raw.quant_method {
+            Some(m) if m == "gptq" => {
+                let bits = raw
+                    .bits
+                    .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
+                let group_size = raw
+                    .group_size
+                    .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                Ok(QuantizedConfig::Gptq {
+                    bits,
+                    group_size,
+                    checkpoint_format: raw.checkpoint_format,
+                })
+            }
+            Some(m) if m == "fp8" => {
+                let weight_block_size = raw
+                    .weight_block_size
+                    .ok_or_else(|| serde::de::Error::missing_field("weight_block_size"))?;
+                Ok(QuantizedConfig::Fp8 { weight_block_size })
+            }
+            Some(m) if m == "bitsandbytes" => Ok(QuantizedConfig::Bitsandbytes {
+                bnb_4bit_quant_type: raw.bnb_4bit_quant_type,
+            }),
+            Some(m) if m == "afq" => {
+                let bits = raw
+                    .bits
+                    .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
+                let group_size = raw
+                    .group_size
+                    .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                Ok(QuantizedConfig::Afq { bits, group_size })
+            }
+            None => {
+                let bits = raw
+                    .bits
+                    .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
+                let group_size = raw
+                    .group_size
+                    .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+                Ok(QuantizedConfig::Afq { bits, group_size })
+            }
+            Some(unknown_method) => {
+                Err(serde::de::Error::custom(format!(
+                    "Unknown quantization method: {}. Expected one of: gptq, fp8, bitsandbytes, afq, or not specified", 
+                    unknown_method
+                )))
+            },
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct QuantizedConfig {
-    // GPTQ
-    pub bits: Option<usize>,
-    pub group_size: Option<usize>,
-    pub checkpoint_format: Option<String>,
-
-    // BNB
-    pub bnb_4bit_quant_type: Option<String>,
-
-    // FP8
-    pub weight_block_size: Option<Vec<usize>>,
-
-    pub quant_method: QuantMethodType,
-}
-
 impl QuantizedConfig {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Gptq { .. } => "gptq",
+            Self::Fp8 { .. } => "fp8",
+            Self::Bitsandbytes { .. } => "bitsandbytes",
+            Self::Afq { .. } => "afq",
+        }
+    }
+
     pub fn get_bits_name(&self, _vb: &ShardedVarBuilder) -> String {
-        match self.bits {
-            Some(bits) => format!("{bits} bits"),
-            None => {
-                // Assume bnb
-                self.bnb_4bit_quant_type
-                    .clone()
-                    .unwrap_or("int8".to_string())
-            }
+        match self {
+            Self::Gptq { bits, .. } => format!("{bits} bits"),
+            Self::Fp8 { .. } => "8 bits".to_string(),
+            Self::Bitsandbytes {
+                bnb_4bit_quant_type: Some(_),
+            } => "4 bits".to_string(),
+            Self::Bitsandbytes {
+                bnb_4bit_quant_type: None,
+            } => "8 bits".to_string(),
+            Self::Afq { bits, .. } => format!("{bits} bits"),
         }
     }
 }
@@ -563,15 +624,17 @@ pub fn linear_no_bias(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let layer = if let Some(quant_conf) = &config {
-        match quant_conf.quant_method {
-            QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantMethodType::Fp8 => {
+        match quant_conf {
+            QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantizedConfig::Fp8 { .. } => {
                 blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, false, Default::default(), vb)?
             }
-            QuantMethodType::Bitsandbytes => {
+            QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, false, vb)?) as Arc<_>
             }
-            QuantMethodType::Unreachable => unreachable!(),
+            QuantizedConfig::Afq { .. } => {
+                AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, false, vb)?
+            }
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)
@@ -598,15 +661,17 @@ pub fn linear(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let layer = if let Some(quant_conf) = &config {
-        match quant_conf.quant_method {
-            QuantMethodType::Gptq => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
-            QuantMethodType::Fp8 => {
+        match quant_conf {
+            QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+            QuantizedConfig::Fp8 { .. } => {
                 blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, true, Default::default(), vb)?
             }
-            QuantMethodType::Bitsandbytes => {
+            QuantizedConfig::Bitsandbytes { .. } => {
                 Arc::new(BnbLinear::linear_b(in_dim, out_dim, true, vb)?) as Arc<_>
             }
-            QuantMethodType::Unreachable => unreachable!(),
+            QuantizedConfig::Afq { .. } => {
+                AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, true, vb)?
+            }
         }
     } else {
         // Handle the case where the layer is dummy (no tensors)

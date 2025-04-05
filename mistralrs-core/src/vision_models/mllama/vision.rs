@@ -34,6 +34,7 @@ impl MLlamaPrecomputedPositionEmbedding {
                 cfg.max_aspect_ratio_id() + 1,
                 cfg.max_num_tiles * num_patches * cfg.hidden_size,
                 vb.pp("tile_embedding"),
+                &None,
             )?,
             num_patches,
             hidden_size: cfg.hidden_size,
@@ -91,6 +92,7 @@ impl MLlamaPrecomputedAspectRatioEmbedding {
                 cfg.max_aspect_ratio_id() + 1,
                 cfg.max_num_tiles * cfg.hidden_size,
                 vb.pp("embedding"),
+                &None,
             )?,
             gate: if GATED {
                 Some(vb.get((1,), "gate")?)

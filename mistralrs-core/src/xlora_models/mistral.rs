@@ -446,7 +446,7 @@ impl XLoraModel {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
-                quant_cfg.quant_method.to_string(),
+                quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
         }
@@ -457,6 +457,7 @@ impl XLoraModel {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let head_dim = cfg.head_dim();
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);

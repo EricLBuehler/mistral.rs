@@ -12,8 +12,8 @@ use crate::{
         deserialize_tensor, fake_deserialize_tensor, serialize_tensor, version_is_compatible,
         UQFF_VERSION,
     },
-    Comm, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde,
-    QuantizedSerdeType,
+    Comm, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
+    QuantizedSerde, QuantizedSerdeType, ShardedVarBuilder,
 };
 
 mod ops;
@@ -28,9 +28,9 @@ pub enum AfqBits {
     Eight = 8,
 }
 
-impl TryFrom<u8> for AfqBits {
+impl TryFrom<usize> for AfqBits {
     type Error = candle_core::Error;
-    fn try_from(value: u8) -> Result<Self> {
+    fn try_from(value: usize) -> Result<Self> {
         match value {
             2 => Ok(Self::Two),
             3 => Ok(Self::Three),
@@ -39,6 +39,13 @@ impl TryFrom<u8> for AfqBits {
             8 => Ok(Self::Eight),
             x => candle_core::bail!("Invalid AFQ bits {x}."),
         }
+    }
+}
+
+impl TryFrom<u8> for AfqBits {
+    type Error = candle_core::Error;
+    fn try_from(value: u8) -> Result<Self> {
+        Self::try_from(value as usize)
     }
 }
 
@@ -51,15 +58,22 @@ pub enum AfqGroupSize {
     High = 128,
 }
 
-impl TryFrom<u8> for AfqGroupSize {
+impl TryFrom<usize> for AfqGroupSize {
     type Error = candle_core::Error;
-    fn try_from(value: u8) -> Result<Self> {
+    fn try_from(value: usize) -> Result<Self> {
         match value {
             32 => Ok(Self::Low),
             64 => Ok(Self::Med),
             128 => Ok(Self::High),
             x => candle_core::bail!("Invalid AFQ group size {x}."),
         }
+    }
+}
+
+impl TryFrom<u8> for AfqGroupSize {
+    type Error = candle_core::Error;
+    fn try_from(value: u8) -> Result<Self> {
+        Self::try_from(value as usize)
     }
 }
 
@@ -198,6 +212,44 @@ impl AfqLayer {
             AfqBits::Six => Ok(IsqType::AFQ6),
             AfqBits::Eight => Ok(IsqType::AFQ8),
         }
+    }
+
+    pub fn afq_linear_b(
+        in_dim: usize,
+        out_dim: usize,
+        config: &QuantizedConfig,
+        bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let QuantizedConfig::Afq { bits, group_size } = config else {
+            candle_core::bail!("Unexpected quantization config.")
+        };
+
+        let w_q = vb.get_with_hints_dtype(
+            (out_dim, in_dim * bits / 32),
+            "weight",
+            Default::default(),
+            DType::U32,
+        )?;
+        let scales =
+            vb.get_with_hints((out_dim, in_dim / group_size), "scales", Default::default())?;
+        let biases =
+            vb.get_with_hints((out_dim, in_dim / group_size), "biases", Default::default())?;
+
+        let bias = if bias {
+            Some(vb.get((out_dim,), "bias")?)
+        } else {
+            None
+        };
+
+        Ok(Arc::new(Self {
+            w_q,
+            scales,
+            bias,
+            biases,
+            bits: AfqBits::try_from(*bits)?,
+            group_size: AfqGroupSize::try_from(*group_size)?,
+        }))
     }
 }
 

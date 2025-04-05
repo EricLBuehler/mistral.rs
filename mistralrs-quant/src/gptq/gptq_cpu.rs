@@ -78,6 +78,15 @@ pub fn gptq_linear(
     config: &QuantizedConfig,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let QuantizedConfig::Gptq {
+        bits,
+        group_size,
+        checkpoint_format: _,
+    } = config
+    else {
+        candle_core::bail!("Unexpected quantization config.")
+    };
+
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("qweight")
         && vb.contains_tensor("qzeros")
@@ -88,17 +97,13 @@ pub fn gptq_linear(
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
 
-    let bits = config.bits.expect("GPTQ requires bits in config");
     let qweight = vb.get_with_hints_dtype(
         (in_dim / pack_factor!(bits), out_dim),
         "qweight",
         Default::default(),
         DType::I32,
     )?;
-    let scale_and_zero_size = in_dim
-        / config
-            .group_size
-            .expect("GPTQ requires group size in config");
+    let scale_and_zero_size = in_dim / group_size;
     let qzeros = vb.get_with_hints_dtype(
         (scale_and_zero_size, out_dim / pack_factor!(bits)),
         "qzeros",
@@ -119,7 +124,7 @@ pub fn gptq_linear(
     };
 
     let config = QuantMethodConfig::Gptq {
-        bits: bits as i32,
+        bits: *bits as i32,
         use_exllama: false,
         q_weight: qweight,
         gptq_qzeros: Some(qzeros),

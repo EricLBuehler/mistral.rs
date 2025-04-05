@@ -361,6 +361,15 @@ pub fn gptq_linear(
     config: &QuantizedConfig,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let QuantizedConfig::Gptq {
+        bits,
+        group_size,
+        checkpoint_format,
+    } = config
+    else {
+        candle_core::bail!("Unexpected quantization config.")
+    };
+
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("qweight")
         && vb.contains_tensor("qzeros")
@@ -371,10 +380,8 @@ pub fn gptq_linear(
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
 
-    let bits = config.bits.expect("GPTQ requires bits in config");
     let marlin_compatible = bits == 4 || bits == 8;
-    let marlin_format = config
-        .checkpoint_format
+    let marlin_format = checkpoint_format
         .as_ref()
         .is_some_and(|fmt| fmt == "marlin")
         && HAVE_MARLIN_KERNELS;
@@ -390,10 +397,7 @@ pub fn gptq_linear(
         Default::default(),
         DType::I32,
     )?;
-    let scale_and_zero_size = in_dim
-        / config
-            .group_size
-            .expect("GPTQ requires group size in config");
+    let scale_and_zero_size = in_dim / group_size;
     let scales = vb.get_with_hints_dtype(
         (scale_and_zero_size, out_dim),
         if marlin_format { "s" } else { "scales" },
@@ -409,7 +413,7 @@ pub fn gptq_linear(
 
     let config = if marlin_format {
         QuantMethodConfig::Gptq {
-            bits: bits as i32,
+            bits: *bits as i32,
             use_exllama: false,
             q_weight: qweight,
             gptq_qzeros: None,
@@ -471,7 +475,7 @@ pub fn gptq_linear(
 
         // Repack to marlin format
         let qweight = if marlin_compatible {
-            gptq_weight_repack(&qweight, &perm, in_dim, bits as i32)?
+            gptq_weight_repack(&qweight, &perm, in_dim, *bits as i32)?
         } else {
             qweight
         };
@@ -481,10 +485,8 @@ pub fn gptq_linear(
                 &scales,
                 in_dim / pack_factor!(bits),
                 out_dim,
-                config
-                    .group_size
-                    .expect("GPTQ requires group size in config.") as i32,
-                bits as u32,
+                *group_size as i32,
+                *bits as u32,
             )?
         } else {
             scales
@@ -496,7 +498,7 @@ pub fn gptq_linear(
         };
 
         QuantMethodConfig::Gptq {
-            bits: bits as i32,
+            bits: *bits as i32,
             use_exllama: false,
             q_weight: qweight,
             gptq_qzeros: Some(qzeros),

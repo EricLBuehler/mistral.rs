@@ -839,6 +839,7 @@ impl DeepSeekV3 {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
             ReplicatedLayer::new(

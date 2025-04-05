@@ -264,16 +264,16 @@ pub fn blockwise_fp8_linear_b(
     hints: Shard,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let QuantizedConfig::Fp8 { weight_block_size } = config else {
+        candle_core::bail!("Unexpected quantization config.")
+    };
+
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
         let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
 
-    let weight_block_size = config
-        .weight_block_size
-        .as_ref()
-        .expect("Blockwise FP8 requires weight_block_size in config");
     if weight_block_size.len() != 2 {
         candle_core::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
     }
