@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     io::{Cursor, Read},
-    num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
@@ -40,7 +39,8 @@ impl QuantMethod for GgufMatMul {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => unreachable!(),
         }
     }
 
@@ -136,10 +136,6 @@ impl QuantMethod for GgufMatMul {
             };
             Ok(Arc::new(GgufMatMul { w, b }))
         }
-    }
-
-    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
-        None
     }
 }
 

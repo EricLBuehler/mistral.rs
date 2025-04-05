@@ -6,7 +6,10 @@ extend-ignore-identifiers-re = [
     "Nd",
     "nin",
     "cudaDevAttrMaxSharedMemoryPerBlockOptin",
-    "_thw"
+    "_thw",
+    "thr",
+    "nd",
+    "uneeded"
 ]
 
 [files]

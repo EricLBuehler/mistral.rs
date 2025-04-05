@@ -14,9 +14,9 @@ use candle_core::{quantized, Context, Device, Tensor};
 use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use mistralrs_quant::{
-    CollectedImatrixData, ColumnParallelLayer, DistributedKind, FP8Linear, GgufMatMul, HqqLayer,
-    IsqType, QuantMethod, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType, ReplicatedLayer,
-    RowParallelLayer, UnquantLinear,
+    AfqLayer, CollectedImatrixData, ColumnParallelLayer, DistributedKind, FP8Linear, GgufMatMul,
+    HqqLayer, IsqType, QuantMethod, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    ReplicatedLayer, RowParallelLayer, UnquantLinear,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
@@ -63,10 +63,15 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
         "hqq8" => IsqType::HQQ8,
         "hqq4" => IsqType::HQQ4,
         "fp8" => IsqType::F8E4M3,
+        "afq8" => IsqType::AFQ8,
+        "afq6" => IsqType::AFQ6,
+        "afq4" => IsqType::AFQ4,
+        "afq3" => IsqType::AFQ3,
+        "afq2" => IsqType::AFQ2,
         // "hqq3" => IsqType::HQQ3,
         // "hqq2" => IsqType::HQQ2,
         // "hqq1" => IsqType::HQQ1,
-        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`.")),
+        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`.")),
     };
     #[cfg(feature = "cuda")]
     {
@@ -442,19 +447,14 @@ pub trait IsqModel {
             // Get the MINIMUM of the max isq threads the quant method
             let mut minimum_max_threads = {
                 let current_rayon_threads = rayon::current_num_threads();
-                tensors
-                    .iter()
-                    .map(|(q, _)| {
-                        if let Some(dtype) = dtype {
-                            q.get_max_isq_cpu_threads(dtype)
-                                .map(usize::from)
-                                .unwrap_or(current_rayon_threads)
-                        } else {
-                            current_rayon_threads
-                        }
-                    })
-                    .min()
-                    .unwrap_or(current_rayon_threads)
+                if let Some(dtype) = dtype {
+                    dtype
+                        .get_max_isq_cpu_threads()
+                        .map(usize::from)
+                        .unwrap_or(current_rayon_threads)
+                } else {
+                    current_rayon_threads
+                }
             };
             if env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
                 minimum_max_threads = 1;
@@ -807,6 +807,12 @@ pub trait IsqModel {
                                         &comm,
                                         guard.clone(),
                                     )?,
+                                    QuantizedSerdeType::Afq => AfqLayer::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
                                 }
                             }
                         };
@@ -869,6 +875,12 @@ pub trait IsqModel {
                                         guard.clone(),
                                     )?,
                                     QuantizedSerdeType::Fp8 => FP8Linear::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                    QuantizedSerdeType::Afq => AfqLayer::deserialize(
                                         Cow::from(artifact),
                                         &devices[i],
                                         &comm,

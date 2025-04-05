@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     io::Cursor,
-    num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
@@ -43,7 +42,8 @@ impl QuantMethod for FP8Linear {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => unreachable!(),
             QuantMethodConfig::FP8 { lin, dtype } => {
                 let QuantizationResult {
                     qw,
@@ -156,26 +156,6 @@ impl QuantMethod for FP8Linear {
         _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
-    }
-
-    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
-        match dtype {
-            IsqType::F8E4M3 => None,
-            IsqType::Q2K
-            | IsqType::Q3K
-            | IsqType::Q4K
-            | IsqType::Q4_0
-            | IsqType::Q4_1
-            | IsqType::Q5K
-            | IsqType::Q5_0
-            | IsqType::Q5_1
-            | IsqType::Q6K
-            | IsqType::Q8K
-            | IsqType::Q8_0
-            | IsqType::Q8_1
-            | IsqType::HQQ4
-            | IsqType::HQQ8 => None,
-        }
     }
 }
 

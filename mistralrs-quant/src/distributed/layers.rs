@@ -5,9 +5,9 @@ use candle_nn::Linear;
 
 use crate::{
     blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear,
-    lora::merge_lora_weights, BnbLinear, DistributedKind, DummyLayer, FP8Linear, GgufMatMul,
-    HqqLayer, QuantMethod, QuantMethodConfig, QuantMethodType, QuantizeOntoGuard, QuantizedConfig,
-    QuantizedSerde, QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
+    lora::merge_lora_weights, AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear,
+    GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig, QuantMethodType, QuantizeOntoGuard,
+    QuantizedConfig, QuantizedSerde, QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 use super::{Comm, DistributedOperation, SumAllReduce};
@@ -154,10 +154,6 @@ impl QuantMethod for RowParallelLayer {
         self.weight.unquant_weight_bias()
     }
 
-    fn get_max_isq_cpu_threads(&self, dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        self.weight.get_max_isq_cpu_threads(dtype)
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
@@ -210,6 +206,7 @@ impl QuantizedSerde for RowParallelLayer {
             }
             QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device, guard)?,
             QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Afq => AfqLayer::deserialize_ext_bias(data, device, guard)?,
         };
         Ok(Arc::new(Self {
             weight,
@@ -359,10 +356,6 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.unquant_weight_bias()
     }
 
-    fn get_max_isq_cpu_threads(&self, dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        self.weight.get_max_isq_cpu_threads(dtype)
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
@@ -418,6 +411,7 @@ impl QuantizedSerde for ColumnParallelLayer {
             }
             QuantizedSerdeType::Hqq => HqqLayer::deserialize_ext_bias(data, device, guard)?,
             QuantizedSerdeType::Fp8 => FP8Linear::deserialize_ext_bias(data, device, guard)?,
+            QuantizedSerdeType::Afq => AfqLayer::deserialize_ext_bias(data, device, guard)?,
         };
         Ok(Arc::new(Self { weight, bias }))
     }
@@ -525,10 +519,6 @@ impl QuantMethod for ReplicatedLayer {
         self.0.unquant_weight_bias()
     }
 
-    fn get_max_isq_cpu_threads(&self, dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        self.0.get_max_isq_cpu_threads(dtype)
-    }
-
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<crate::IsqType>,
@@ -573,6 +563,7 @@ impl QuantizedSerde for ReplicatedLayer {
             QuantizedSerdeType::Unquant => UnquantLinear::deserialize(data, device, comm, guard)?,
             QuantizedSerdeType::Hqq => HqqLayer::deserialize(data, device, comm, guard)?,
             QuantizedSerdeType::Fp8 => FP8Linear::deserialize(data, device, comm, guard)?,
+            QuantizedSerdeType::Afq => AfqLayer::deserialize(data, device, comm, guard)?,
         };
         Ok(Arc::new(Self(deserialized)))
     }
