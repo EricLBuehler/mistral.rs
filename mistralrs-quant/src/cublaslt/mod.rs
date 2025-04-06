@@ -29,6 +29,7 @@ pub static CUBLASLT_HANDLE: Lazy<Mutex<Option<&'static CublasLtWrapper>>> =
     Lazy::new(|| Mutex::new(None));
 
 pub fn maybe_init_cublas_lt_wrapper(device: Device) {
+    return;
     unsafe {
         INIT.call_once(|| {
             #[cfg(not(feature = "cuda"))]

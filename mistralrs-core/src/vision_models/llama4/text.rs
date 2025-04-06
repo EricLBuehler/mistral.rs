@@ -211,7 +211,7 @@ impl CausalSelfAttention {
                 + 1.0)?;
 
             let attn_scales = attn_scales.reshape((b_sz, seq_len, 1, 1))?;
-            q = (q * attn_scales)?;
+            q = q.broadcast_mul(&attn_scales)?;
         }
 
         q = q.transpose(1, 2)?;
@@ -253,9 +253,9 @@ impl CausalSelfAttention {
                 let (k, v) = kv_cache.append(&k, &v)?;
 
                 Sdpa.run_attention(
-                    &q,
-                    &k,
-                    &v,
+                    &q.contiguous()?,
+                    &k.contiguous()?,
+                    &v.contiguous()?,
                     attention_mask.clone().as_ref(),
                     Some(flash_params),
                     &self.sdpa_params,
@@ -375,9 +375,8 @@ impl TextExperts {
             offset: expert_offset,
             len: experts_per_gpu,
         };
-        dbg!(expert_offset);
         Ok(Self {
-            gate_up_proj: dbg!(vb.get_with_hints(
+            gate_up_proj: vb.get_with_hints(
                 (
                     cfg.num_local_experts,
                     cfg.hidden_size,
@@ -385,7 +384,7 @@ impl TextExperts {
                 ),
                 "gate_up_proj",
                 gate_up_shard,
-            )?),
+            )?,
             down_proj: vb.get_with_hints(
                 (
                     cfg.num_local_experts,
@@ -409,13 +408,15 @@ impl TextExperts {
         let xs = xs.reshape((self.num_experts, (), self.hidden_size))?;
         // prep for EP
         let xs = xs.narrow(0, self.expert_offset, self.experts_per_gpu)?;
-        let gate_up = xs.broadcast_matmul(&self.gate_up_proj)?;
+        let gate_up = xs.contiguous()?.broadcast_matmul(&self.gate_up_proj)?;
         let gate = gate_up.narrow(D::Minus1, 0, self.expert_dim)?;
         let up = gate_up.narrow(D::Minus1, self.expert_dim, self.expert_dim)?;
-        let next_states = (up * gate.apply(&self.act)?)?.broadcast_matmul(&self.down_proj)?;
-        let all_gather = self.all_gather.all_gather(&next_states)?;
+        let next_states = (up * gate.apply(&self.act)?)?
+            .contiguous()?
+            .broadcast_matmul(&self.down_proj)?;
+        let all_gather = self.all_gather.all_gather(&next_states.contiguous()?)?;
         assert_eq!(all_gather.dim(0)?, self.num_experts);
-        next_states.reshape(((), self.hidden_size))
+        all_gather.reshape(((), self.hidden_size))
     }
 }
 
@@ -469,24 +470,26 @@ impl TextMoe {
         // Here we are just creating a tensor to index each and every single one of the hidden states.
         // This is an arange.
         let router_indices =
-            (Tensor::ones(tokens_per_expert, DType::U32, xs.device())?.cumsum(0)? - 1.)?
-                .reshape((router_scores.dim(0)?, ()))?;
+            (Tensor::ones(tokens_per_expert, DType::F32, xs.device())?.cumsum(0)? - 1.)?
+                .reshape((1, ()))?
+                .repeat((router_scores.dim(0)?, 1))?
+                .to_dtype(DType::U32)?;
         router_scores = candle_nn::ops::sigmoid(&router_scores.to_dtype(DType::F32)?)?
             .to_dtype(router_scores.dtype())?;
 
         let router_indices = router_indices.reshape(((), 1))?.repeat((1, hidden_dim))?;
         let mut routed_in = xs.gather(&router_indices, 0)?;
         // we gather inputs corresponding to each expert based on the router indices
-        routed_in = (routed_in * router_scores.reshape(((), 1))?)?;
+        routed_in = routed_in.broadcast_mul(&router_scores.reshape(((), 1))?)?;
         let routed_out = self.experts.forward(&routed_in)?;
-        let mut out = self.shared_expert.forward(&routed_out)?;
+        let mut out = self.shared_expert.forward(&xs)?;
 
         // TODO TODO TODO DO EP!!!
         // now that we finished expert computation -> we scatter add because we gathered previously
         // we have to do this because we used all experts on all tokens. This is faster than the for loop, tho you are compute bound
         // this scales a lot better if you do EP!
         out = out.scatter_add(&router_indices, &routed_out.reshape(((), hidden_dim))?, 0)?;
-        Ok(out)
+        out.reshape((bs, seq_len, hidden_dim))
     }
 }
 

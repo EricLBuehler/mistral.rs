@@ -27,7 +27,6 @@ use crate::{
 
 use super::Llama4ModelSpecificArgs;
 
-
 struct Llama4ImageProcessor;
 
 pub struct Llama4Processor;
