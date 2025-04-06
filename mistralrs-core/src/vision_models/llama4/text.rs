@@ -4,7 +4,7 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
     distributed::AllGather, ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, Shard, ShardedVarBuilder, SumAllReduce,
+    RowParallelLayer, Shard, ShardedVarBuilder,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -382,7 +382,7 @@ impl TextExperts {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs
             .reshape((self.num_experts, (), self.hidden_size))?
-            .i((self.expert_start..self.expert_end))?;
+            .i(self.expert_start..self.expert_end)?;
         let gate_up = xs.contiguous()?.broadcast_matmul(&self.gate_up_proj)?;
         let gate = gate_up.narrow(D::Minus1, 0, self.expert_dim)?;
         let up = gate_up.narrow(D::Minus1, self.expert_dim, self.expert_dim)?;
@@ -565,12 +565,11 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        // let mask = if self.use_chunked_attention {
-        //     chunked_mask
-        // } else {
-        //     attention_mask
-        // };
-        let mask = attention_mask;
+        let mask = if self.use_chunked_attention {
+            chunked_mask
+        } else {
+            attention_mask
+        };
         let x = (self.attn.forward(
             &x,
             position_ids,

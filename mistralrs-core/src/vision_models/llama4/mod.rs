@@ -89,7 +89,7 @@ impl VisionModel for Llama4Model {
         pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
+        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
@@ -112,7 +112,7 @@ impl VisionModel for Llama4Model {
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
     }
-    fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(Llama4ModelSpecificArgs)
     }
     fn device(&self) -> &Device {
