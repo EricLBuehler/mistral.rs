@@ -2,9 +2,8 @@
 
 use std::{any::Any, num::NonZeroUsize, sync::Arc};
 
-use candle_core::{Device, Result, Tensor};
-use image::{imageops::FilterType, DynamicImage, GenericImageView};
-use mistralrs_vision::{ApplyTransforms, Normalize, Rescale, ToTensorNoNorm, Transforms};
+use candle_core::{Device, Result};
+use image::DynamicImage;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
@@ -19,7 +18,7 @@ use crate::{
     sequence::Sequence,
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
-        preprocessor_config::{PreProcessorConfig, ToFilter},
+        preprocessor_config::PreProcessorConfig,
         processor_config::ProcessorConfig,
         ModelInputs,
     },
@@ -84,16 +83,6 @@ impl InputsProcessor for Llama4ImageProcessor {
         if prompt_chunksize.is_some() {
             warn!("`prompt_chunksize` is set. Llama4 does not support prompt batching.");
         }
-        let Some(tokenizer) = tokenizer else {
-            return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                "Idefics3ImageProcessor requires a specified tokenizer.",
-            ))));
-        };
-
-        let config = other_config.expect("Need a PreProcessorConfig config.");
-        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let text_models_inputs_processor::InnerInputProcessorOutput {
             inputs:

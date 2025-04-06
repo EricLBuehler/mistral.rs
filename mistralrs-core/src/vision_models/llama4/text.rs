@@ -323,14 +323,15 @@ impl Mlp {
 }
 
 struct TextExperts {
-    gate_proj: Tensor,
-    up_proj: Tensor,
+    gate_up_proj: Tensor,
     down_proj: Tensor,
     act: Activation,
     num_experts: usize,
     hidden_size: usize,
     expert_dim: usize,
-    all_reduce: SumAllReduce,
+    all_gather: AllGather,
+    expert_start: usize,
+    expert_end: usize,
 }
 
 impl TextExperts {
@@ -340,45 +341,25 @@ impl TextExperts {
         quantization_config: &Option<QuantizedConfig>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let shard_gu = Shard::Offset {
-            dim: 2,
-            offset: (cfg.intermediate_size * 2) / comm.world_size() * comm.rank(),
-            len: (cfg.intermediate_size * 2) / comm.world_size(),
-        };
-        let shard_d = Shard::Offset {
-            dim: 1,
-            offset: cfg.intermediate_size / comm.world_size() * comm.rank(),
-            len: cfg.intermediate_size / comm.world_size(),
-        };
-        let gate_up_proj = vb.get_with_hints(
-            (
-                cfg.num_local_experts,
-                cfg.hidden_size,
-                cfg.intermediate_size * 2,
-            ),
-            "gate_up_proj",
-            Default::default(),
-        )?;
+        let experts_per_gpu = cfg.num_local_experts / comm.world_size();
+        let expert_start = experts_per_gpu * comm.rank();
+        let expert_end = expert_start + experts_per_gpu;
 
-        let gate = gate_up_proj.narrow(D::Minus1, 0, cfg.intermediate_size)?;
-        let up = gate_up_proj.narrow(D::Minus1, cfg.intermediate_size, cfg.intermediate_size)?;
+        let shard = Shard::Offset {
+            dim: 0,
+            offset: expert_start,
+            len: experts_per_gpu,
+        };
         Ok(Self {
-            gate_proj: gate
-                .i((
-                    ..,
-                    ..,
-                    cfg.intermediate_size / comm.world_size() * comm.rank()
-                        ..cfg.intermediate_size / comm.world_size() * (comm.rank() + 1),
-                ))?
-                .contiguous()?,
-            up_proj: up
-                .i((
-                    ..,
-                    ..,
-                    cfg.intermediate_size / comm.world_size() * comm.rank()
-                        ..cfg.intermediate_size / comm.world_size() * (comm.rank() + 1),
-                ))?
-                .contiguous()?,
+            gate_up_proj: vb.get_with_hints(
+                (
+                    cfg.num_local_experts,
+                    cfg.hidden_size,
+                    cfg.intermediate_size * 2,
+                ),
+                "gate_up_proj",
+                shard,
+            )?,
             down_proj: vb.get_with_hints(
                 (
                     cfg.num_local_experts,
@@ -386,30 +367,30 @@ impl TextExperts {
                     cfg.hidden_size,
                 ),
                 "down_proj",
-                shard_d,
+                shard,
             )?,
             act: cfg.hidden_act,
             num_experts: cfg.num_local_experts,
             hidden_size: cfg.hidden_size,
             expert_dim: cfg.intermediate_size,
-            all_reduce: SumAllReduce::new(comm),
+            all_gather: AllGather::new(comm, 0),
+            expert_start,
+            expert_end,
         })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let xs = xs.reshape((self.num_experts, (), self.hidden_size))?;
-        let gate = self
-            .all_reduce
-            .sum_all_reduce(&xs.contiguous()?.broadcast_matmul(&self.gate_proj)?)?;
-        let up = self
-            .all_reduce
-            .sum_all_reduce(&xs.contiguous()?.broadcast_matmul(&self.up_proj)?)?;
-        let next_states = self.all_reduce.sum_all_reduce(
-            &(up * gate.apply(&self.act)?)?
-                .contiguous()?
-                .broadcast_matmul(&self.down_proj)?,
-        )?;
-        next_states.reshape(((), self.hidden_size))
+        let xs = xs
+            .reshape((self.num_experts, (), self.hidden_size))?
+            .i((self.expert_start..self.expert_end))?;
+        let gate_up = xs.contiguous()?.broadcast_matmul(&self.gate_up_proj)?;
+        let gate = gate_up.narrow(D::Minus1, 0, self.expert_dim)?;
+        let up = gate_up.narrow(D::Minus1, self.expert_dim, self.expert_dim)?;
+        let next_states = (up * gate.apply(&self.act)?)?
+            .contiguous()?
+            .broadcast_matmul(&self.down_proj)?;
+        let all_gather = self.all_gather.all_gather(&next_states)?;
+        all_gather.reshape(((), self.hidden_size))
     }
 }
 
@@ -455,17 +436,13 @@ impl TextMoe {
             values: router_top_value,
             indices: router_indices,
         } = router_logits.transpose(0, 1)?.topk(self.topk)?;
-        // println!("{router_indices}");
         let mut router_scores = {
             let mut values_tensor = router_logits.transpose(0, 1)?.zeros_like()?;
             values_tensor = values_tensor.scatter_add(&router_indices, &router_top_value, 1)?;
 
-            let mut mask_tensor = router_logits.transpose(0, 1)?.ones_like()?;
-            mask_tensor = mask_tensor.scatter_add(
-                &router_indices,
-                &router_top_value.ones_like()?.neg()?,
-                1,
-            )?;
+            let mut mask_tensor = router_logits.transpose(0, 1)?.zeros_like()?;
+            mask_tensor =
+                mask_tensor.scatter_add(&router_indices, &router_top_value.ones_like()?, 1)?;
 
             // Use log to get -inf where mask_tensor is 0
             // Since log(0) = -inf and log(1) = 0, this gives us what we want
@@ -473,9 +450,6 @@ impl TextMoe {
 
             result.transpose(0, 1)?
         };
-        // let mut router_scores = (router_logits.transpose(0, 1)?.ones_like()? * f64::NEG_INFINITY)?
-        //     .scatter_add(&router_indices, &router_top_value, 1)?
-        //     .transpose(0, 1)?;
 
         // We do this to make sure we have -inf for non topK tokens before going through the !
         // Here we are just creating a tensor to index each and every single one of the hidden states.
