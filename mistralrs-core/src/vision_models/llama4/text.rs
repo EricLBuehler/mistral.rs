@@ -813,11 +813,18 @@ impl TextModel {
                 .map(|(_, meta)| meta.is_first_prompt_chunk)
                 .unwrap_or(true)
         });
+        // PagedAttention prompt chunking
+        let chunked_mask = chunked_mask.filter(|_| {
+            metadata
+                .as_ref()
+                .map(|(_, meta)| meta.is_first_prompt_chunk)
+                .unwrap_or(true)
+        });
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
-                &position_ids,
+                &position_ids.to_device(x.device())?,
                 &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
                 &chunked_mask
                     .clone()
