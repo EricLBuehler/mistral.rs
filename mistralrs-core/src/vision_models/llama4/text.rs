@@ -1,10 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
     distributed::AllGather, ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, Shard, ShardedVarBuilder,
+    RowParallelLayer, Shard, ShardedVarBuilder, SumAllReduce,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -323,15 +323,14 @@ impl Mlp {
 }
 
 struct TextExperts {
-    gate_up_proj: Tensor,
+    gate_proj: Tensor,
+    up_proj: Tensor,
     down_proj: Tensor,
     act: Activation,
     num_experts: usize,
     hidden_size: usize,
     expert_dim: usize,
-    all_gather: AllGather,
-    experts_per_gpu: usize,
-    expert_offset: usize,
+    all_reduce: SumAllReduce,
 }
 
 impl TextExperts {
@@ -341,23 +340,45 @@ impl TextExperts {
         quantization_config: &Option<QuantizedConfig>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let experts_per_gpu = cfg.num_local_experts / comm.world_size();
-        let expert_offset = experts_per_gpu * comm.rank();
-        let shard = Shard::Offset {
-            dim: 0,
-            offset: expert_offset,
-            len: experts_per_gpu,
+        let shard_gu = Shard::Offset {
+            dim: 2,
+            offset: (cfg.intermediate_size * 2) / comm.world_size() * comm.rank(),
+            len: (cfg.intermediate_size * 2) / comm.world_size(),
         };
+        let shard_d = Shard::Offset {
+            dim: 1,
+            offset: cfg.intermediate_size / comm.world_size() * comm.rank(),
+            len: cfg.intermediate_size / comm.world_size(),
+        };
+        let gate_up_proj = vb.get_with_hints(
+            (
+                cfg.num_local_experts,
+                cfg.hidden_size,
+                cfg.intermediate_size * 2,
+            ),
+            "gate_up_proj",
+            Default::default(),
+        )?;
+
+        let gate = gate_up_proj.narrow(D::Minus1, 0, cfg.intermediate_size)?;
+        let up = gate_up_proj.narrow(D::Minus1, cfg.intermediate_size, cfg.intermediate_size)?;
         Ok(Self {
-            gate_up_proj: vb.get_with_hints(
-                (
-                    cfg.num_local_experts,
-                    cfg.hidden_size,
-                    cfg.intermediate_size * 2,
-                ),
-                "gate_up_proj",
-                shard,
-            )?,
+            gate_proj: gate
+                .i((
+                    ..,
+                    ..,
+                    cfg.intermediate_size / comm.world_size() * comm.rank()
+                        ..cfg.intermediate_size / comm.world_size() * (comm.rank() + 1),
+                ))?
+                .contiguous()?,
+            up_proj: up
+                .i((
+                    ..,
+                    ..,
+                    cfg.intermediate_size / comm.world_size() * comm.rank()
+                        ..cfg.intermediate_size / comm.world_size() * (comm.rank() + 1),
+                ))?
+                .contiguous()?,
             down_proj: vb.get_with_hints(
                 (
                     cfg.num_local_experts,
@@ -365,31 +386,30 @@ impl TextExperts {
                     cfg.hidden_size,
                 ),
                 "down_proj",
-                shard,
+                shard_d,
             )?,
             act: cfg.hidden_act,
             num_experts: cfg.num_local_experts,
             hidden_size: cfg.hidden_size,
             expert_dim: cfg.intermediate_size,
-            all_gather: AllGather::new(comm, 0),
-            experts_per_gpu,
-            expert_offset,
+            all_reduce: SumAllReduce::new(comm),
         })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let xs = xs.reshape((self.num_experts, (), self.hidden_size))?;
-        // prep for EP
-        let xs = xs.narrow(0, self.expert_offset, self.experts_per_gpu)?;
-        let gate_up = xs.contiguous()?.broadcast_matmul(&self.gate_up_proj)?;
-        let gate = gate_up.narrow(D::Minus1, 0, self.expert_dim)?;
-        let up = gate_up.narrow(D::Minus1, self.expert_dim, self.expert_dim)?;
-        let next_states = (up * gate.apply(&self.act)?)?
-            .contiguous()?
-            .broadcast_matmul(&self.down_proj)?;
-        let all_gather = self.all_gather.all_gather(&next_states.contiguous()?)?;
-        assert_eq!(all_gather.dim(0)?, self.num_experts);
-        all_gather.reshape(((), self.hidden_size))
+        let gate = self
+            .all_reduce
+            .sum_all_reduce(&xs.contiguous()?.broadcast_matmul(&self.gate_proj)?)?;
+        let up = self
+            .all_reduce
+            .sum_all_reduce(&xs.contiguous()?.broadcast_matmul(&self.up_proj)?)?;
+        let next_states = self.all_reduce.sum_all_reduce(
+            &(up * gate.apply(&self.act)?)?
+                .contiguous()?
+                .broadcast_matmul(&self.down_proj)?,
+        )?;
+        next_states.reshape(((), self.hidden_size))
     }
 }
 
@@ -435,7 +455,7 @@ impl TextMoe {
             values: router_top_value,
             indices: router_indices,
         } = router_logits.transpose(0, 1)?.topk(self.topk)?;
-        // println!("{router_indices}");git
+        // println!("{router_indices}");
         let mut router_scores = {
             let mut values_tensor = router_logits.transpose(0, 1)?.zeros_like()?;
             values_tensor = values_tensor.scatter_add(&router_indices, &router_top_value, 1)?;
