@@ -50,7 +50,6 @@ impl Llama4Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        position_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
@@ -58,7 +57,6 @@ impl Llama4Model {
     ) -> Result<Tensor> {
         self.language_model.forward(
             input_ids,
-            position_ids,
             seqlen_offsets,
             context_lens,
             metadata,
@@ -96,17 +94,8 @@ impl VisionModel for Llama4Model {
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
-        let position_ids = Tensor::new(
-            position_ids
-                .into_iter()
-                .map(|x| x as u32)
-                .collect::<Vec<_>>(),
-            input_ids.device(),
-        )?;
-
         self.forward(
             input_ids,
-            &position_ids,
             seqlen_offsets,
             context_lens,
             metadata,

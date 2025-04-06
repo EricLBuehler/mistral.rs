@@ -4,7 +4,7 @@ use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
     distributed::AllGather, ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, Shard, ShardedVarBuilder, SumAllReduce,
+    RowParallelLayer, Shard, ShardedVarBuilder,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -29,28 +29,6 @@ use crate::{
 
 use super::config::TextConfig;
 
-struct Llama4L2Norm {
-    eps: f64,
-}
-
-impl Llama4L2Norm {
-    fn new(eps: f64) -> Self {
-        Self { eps }
-    }
-
-    fn norm(&self, x: &Tensor) -> Result<Tensor> {
-        x.broadcast_mul(
-            &(x.sqr()?.mean_keepdim(D::Minus1)? + self.eps as f64)?
-                .sqrt()?
-                .recip()?,
-        )
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        self.norm(&x.to_dtype(DType::F32)?)?.to_dtype(x.dtype())
-    }
-}
-
 struct CausalSelfAttention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
@@ -63,7 +41,7 @@ struct CausalSelfAttention {
     max_seq_len: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
-    norm: Option<Llama4L2Norm>,
+    norm: Option<RmsNorm>,
     use_rope: bool,
     floor_scale: Option<f32>,
     attn_scale: Option<f32>,
@@ -122,8 +100,12 @@ impl CausalSelfAttention {
             vb.pp("o_proj"),
         )?;
         let use_rope = (layer_idx + 1) % 4 != 0;
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let norm = if cfg.use_qk_norm && use_rope {
-            Some(Llama4L2Norm::new(1e-6))
+            Some(RmsNorm::from_w(
+                Tensor::ones(head_dim, vb.dtype(), vb.device())?,
+                1e-6,
+            )?)
         } else {
             None
         };
@@ -135,7 +117,7 @@ impl CausalSelfAttention {
             o_proj,
             num_attention_heads: cfg.num_attention_heads / comm.world_size(),
             num_key_value_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
-            head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            head_dim,
             rotary_emb: rope,
             max_seq_len: cfg.max_position_embeddings,
             paged_attn,
@@ -147,7 +129,7 @@ impl CausalSelfAttention {
                 ),
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
-                softmax_scale: 1.0 / ((cfg.hidden_size / cfg.num_attention_heads) as f32).sqrt(),
+                softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
             },
             norm,
@@ -185,37 +167,33 @@ impl CausalSelfAttention {
             v = v.to_dtype(original_dtype)?;
         }
 
-        q = q.reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?;
-        k = k.reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?;
+        q = q
+            .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        k = k
+            .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
+            .transpose(1, 2)?;
         v = v
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        (q, k) = if self.use_rope {
-            self.rotary_emb.forward(&q, &k, seqlen_offsets)?
-        } else {
-            (q, k)
-        };
+        if self.use_rope {
+            (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        }
 
         if let Some(qk_norm) = &self.norm {
             q = qk_norm.forward(&q)?;
             k = qk_norm.forward(&k)?;
         }
 
-        if self.attn_temperature_tuning.is_some() && self.use_rope {
-            let attn_scales = (((((position_ids.to_dtype(DType::F32)? + 1.)?
-                / self.floor_scale.unwrap() as f64)?
-                .floor()?
-                + 1.0)?
-                * self.attn_scale.unwrap() as f64)?
-                + 1.0)?;
+        if self.attn_temperature_tuning.is_some() && !self.use_rope {
+            let floor_scale = self.floor_scale.unwrap() as f64;
+            let attn_scale = self.attn_scale.unwrap() as f64;
+            let floor = ((position_ids.to_dtype(DType::F32)? + 1.)? / floor_scale)?.floor()?;
+            let attn_scales = (((floor + 1.0)?.log()? * attn_scale)? + 1.0)?;
 
-            let attn_scales = attn_scales.reshape((b_sz, seq_len, 1, 1))?;
-            q = q.broadcast_mul(&attn_scales)?;
+            q = q.broadcast_mul(&attn_scales.unsqueeze(D::Minus1)?.to_dtype(q.dtype())?)?;
         }
-
-        q = q.transpose(1, 2)?;
-        k = k.transpose(1, 2)?;
 
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -365,12 +343,7 @@ impl TextExperts {
     ) -> Result<Self> {
         let experts_per_gpu = cfg.num_local_experts / comm.world_size();
         let expert_offset = experts_per_gpu * comm.rank();
-        let gate_up_shard = Shard::Offset {
-            dim: 0,
-            offset: expert_offset,
-            len: experts_per_gpu,
-        };
-        let down_shard = Shard::Offset {
+        let shard = Shard::Offset {
             dim: 0,
             offset: expert_offset,
             len: experts_per_gpu,
@@ -383,7 +356,7 @@ impl TextExperts {
                     cfg.intermediate_size * 2,
                 ),
                 "gate_up_proj",
-                gate_up_shard,
+                shard,
             )?,
             down_proj: vb.get_with_hints(
                 (
@@ -392,7 +365,7 @@ impl TextExperts {
                     cfg.hidden_size,
                 ),
                 "down_proj",
-                down_shard,
+                shard,
             )?,
             act: cfg.hidden_act,
             num_experts: cfg.num_local_experts,
@@ -462,9 +435,27 @@ impl TextMoe {
             values: router_top_value,
             indices: router_indices,
         } = router_logits.transpose(0, 1)?.topk(self.topk)?;
-        let mut router_scores = (router_logits.transpose(0, 1)?.ones_like()? * f64::NEG_INFINITY)?
-            .scatter_add(&router_indices, &router_top_value, 1)?
-            .transpose(0, 1)?;
+        // println!("{router_indices}");git
+        let mut router_scores = {
+            let mut values_tensor = router_logits.transpose(0, 1)?.zeros_like()?;
+            values_tensor = values_tensor.scatter_add(&router_indices, &router_top_value, 1)?;
+
+            let mut mask_tensor = router_logits.transpose(0, 1)?.ones_like()?;
+            mask_tensor = mask_tensor.scatter_add(
+                &router_indices,
+                &router_top_value.ones_like()?.neg()?,
+                1,
+            )?;
+
+            // Use log to get -inf where mask_tensor is 0
+            // Since log(0) = -inf and log(1) = 0, this gives us what we want
+            let result = (values_tensor + mask_tensor.log()?)?;
+
+            result.transpose(0, 1)?
+        };
+        // let mut router_scores = (router_logits.transpose(0, 1)?.ones_like()? * f64::NEG_INFINITY)?
+        //     .scatter_add(&router_indices, &router_top_value, 1)?
+        //     .transpose(0, 1)?;
 
         // We do this to make sure we have -inf for non topK tokens before going through the !
         // Here we are just creating a tensor to index each and every single one of the hidden states.
@@ -484,10 +475,6 @@ impl TextMoe {
         let routed_out = self.experts.forward(&routed_in)?;
         let mut out = self.shared_expert.forward(&xs)?;
 
-        // TODO TODO TODO DO EP!!!
-        // now that we finished expert computation -> we scatter add because we gathered previously
-        // we have to do this because we used all experts on all tokens. This is faster than the for loop, tho you are compute bound
-        // this scales a lot better if you do EP!
         out = out.scatter_add(&router_indices, &routed_out.reshape(((), hidden_dim))?, 0)?;
         out.reshape((bs, seq_len, hidden_dim))
     }
@@ -584,11 +571,12 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let mask = if self.use_chunked_attention {
-            chunked_mask
-        } else {
-            attention_mask
-        };
+        // let mask = if self.use_chunked_attention {
+        //     chunked_mask
+        // } else {
+        //     attention_mask
+        // };
+        let mask = attention_mask;
         let x = (self.attn.forward(
             &x,
             position_ids,
@@ -756,14 +744,9 @@ impl TextModel {
         })
     }
 
-    pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.wte.forward(input_ids)
-    }
-
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        position_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
@@ -772,7 +755,6 @@ impl TextModel {
         self.forward_embeds(
             input_ids,
             self.wte.forward(input_ids)?,
-            position_ids,
             seqlen_offsets,
             context_lens,
             metadata,
@@ -785,7 +767,6 @@ impl TextModel {
         &self,
         input_ids: &Tensor,
         input_embeds: Tensor,
-        position_ids: &Tensor,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
@@ -797,6 +778,13 @@ impl TextModel {
             .as_ref()
             .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
             .unwrap_or(cache as &dyn PastKvLenCache);
+
+        let position_ids = Tensor::arange(
+            cache_for_mask.get_past_kv_len()? as u32,
+            cache_for_mask.get_past_kv_len()? as u32 + input_ids.dim(1)? as u32,
+            input_ids.device(),
+        )?;
+
         let mask = CausalMasker.make_causal_mask_matrix(
             input_ids,
             cache_for_mask,
@@ -840,7 +828,7 @@ impl TextModel {
             x = self.mapper.map(x, block_idx)?;
             x = block.forward(
                 &x,
-                position_ids,
+                &position_ids,
                 &mask.clone().map(|m| m.to_device(x.device()).unwrap()),
                 &chunked_mask
                     .clone()
