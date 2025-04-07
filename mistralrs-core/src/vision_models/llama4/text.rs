@@ -464,10 +464,13 @@ impl TextMoe {
         let routed_in = xs.broadcast_mul(&router_scores)?;
         let routed_out = self
             .experts
-            .forward(&routed_in, &router_indices.squeeze(D::Minus1)?)?;
-        let mut out = self.shared_expert.forward(&xs)?;
-        out = (out + routed_out)?;
-        out.reshape((bs, seq_len, hidden_dim))
+            .forward(&routed_in, &router_indices.squeeze(D::Minus1)?)?
+            .reshape((bs, seq_len, hidden_dim))?;
+        let out = self
+            .shared_expert
+            .forward(&xs.reshape((bs, seq_len, hidden_dim))?)?;
+
+        out + routed_out
     }
 }
 
