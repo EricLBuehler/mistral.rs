@@ -1,10 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    distributed::AllGather, ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, Shard, ShardedVarBuilder, SumAllReduce,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer, Shard,
+    ShardedVarBuilder, SumAllReduce,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -17,7 +17,7 @@ use crate::{
         RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
-    ops::{BitWiseOp, TopKLastDimOp, TopKOutput},
+    ops::{TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,

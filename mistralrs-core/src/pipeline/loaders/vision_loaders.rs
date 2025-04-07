@@ -23,9 +23,7 @@ use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConf
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::{
-    BasicProcessor, EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer,
-};
+use crate::pipeline::{EitherCache, IsqModel, Processor, ProcessorCreator, VisionPromptPrefixer};
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
 use crate::vision_models::gemma3::config::Gemma3Config;

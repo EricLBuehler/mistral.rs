@@ -1666,7 +1666,7 @@ impl RotaryEmbedding {
             candle_nn::rotary_emb::rope_i
         };
 
-        if cfg!(feature = "cuda") && false {
+        if cfg!(feature = "cuda") && qh == kh {
             let (cos, sin) = if seqlen_offsets.len() == 1 {
                 (
                     self.cos.narrow(0, seqlen_offsets[0], seq_len)?,
