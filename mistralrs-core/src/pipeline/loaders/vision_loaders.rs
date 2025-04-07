@@ -3759,7 +3759,7 @@ impl VisionModelLoader for Llama4Loader {
         )?))
     }
     fn is_gptx(&self) -> bool {
-        true
+        false
     }
     fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         let config: Llama4Config = serde_json::from_str(config)?;
