@@ -192,7 +192,10 @@ impl CausalSelfAttention {
             let floor = ((position_ids.to_dtype(DType::F32)? + 1.)? / floor_scale)?.floor()?;
             let attn_scales = (((floor + 1.0)?.log()? * attn_scale)? + 1.0)?;
 
-            q = q.broadcast_mul(&attn_scales.unsqueeze(D::Minus1)?.to_dtype(q.dtype())?)?;
+            q = q
+                .to_dtype(DType::F32)?
+                .broadcast_mul(&attn_scales.unsqueeze(D::Minus1)?)?
+                .to_dtype(q.dtype())?;
         }
 
         let mut y = match &self.paged_attn {
@@ -766,9 +769,8 @@ impl TextModel {
             .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
             .unwrap_or(cache as &dyn PastKvLenCache);
 
-        let position_ids = Tensor::arange(
-            cache_for_mask.get_past_kv_len()? as u32,
-            cache_for_mask.get_past_kv_len()? as u32 + input_ids.dim(1)? as u32,
+        let position_ids = Tensor::new(
+            seqlen_offsets.iter().map(|o| *o as i32).collect::<Vec<_>>(),
             input_ids.device(),
         )?;
 
@@ -778,34 +780,13 @@ impl TextModel {
             x.dtype(),
             self.blocks[0].attn.num_attention_heads,
         )?;
-        // https://github.com/huggingface/transformers/blob/25b7f272347a93d6fb73cad126f6f6dc88e8ce89/src/transformers/models/llama4/modeling_llama4.py#L801
-        let chunked_mask = if input_ids.dim(1)? > self.attention_chunk_size && mask.is_some() {
-            let start = cache_for_mask.get_past_kv_len()?;
-            let key_length = if start >= self.attention_chunk_size {
-                self.attention_chunk_size + input_ids.dim(1)? - 1
-            } else if start < self.attention_chunk_size
-                && start + input_ids.dim(1)? > self.attention_chunk_size
-            {
-                start + input_ids.dim(1)?
-            } else {
-                self.attention_chunk_size
-            };
-            let end = start + key_length;
-
-            let arange = Tensor::arange(start as i32, end as i32, input_ids.device())?;
-            let block_pos = Tensor::abs(
-                &(arange.unsqueeze(0)? / self.attention_chunk_size as f64)?
-                    .broadcast_sub(&(arange.unsqueeze(1)? / self.attention_chunk_size as f64)?)?,
-            )?;
-            let token_pos = arange.unsqueeze(0)?.broadcast_sub(&arange.unsqueeze(1)?)?;
-            let chunked_mask = block_pos.eq(0.)?.bitwise_and(&token_pos.le(0.)?)?;
-
-            Some(chunked_mask.bitwise_and(&mask.as_ref().unwrap())?)
-        } else if mask.is_some() {
-            mask.clone()
-        } else {
-            None
-        };
+        let chunked_mask = CausalMasker.make_chunked_mask_matrix(
+            input_ids,
+            self.attention_chunk_size,
+            cache_for_mask,
+            x.dtype(),
+            self.blocks[0].attn.num_attention_heads,
+        )?;
         // PagedAttention prompt chunking
         let mask = mask.filter(|_| {
             metadata
