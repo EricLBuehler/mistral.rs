@@ -128,6 +128,13 @@ impl QuantMethod for UnquantLinear {
         }
     }
 
+    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        // Assume only one expert used.
+        let w = self.w.index_select(indices, 0)?;
+
+        a.broadcast_matmul(&w.t()?)
+    }
+
     fn quantized_act_type(&self) -> Option<DType> {
         None
     }

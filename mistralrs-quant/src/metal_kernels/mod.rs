@@ -661,12 +661,14 @@ pub fn call_afq_qmm(
     b_stride: &[usize],
     out: &Buffer,
     out_shape: &[usize],
+    gather_lhs_rhs_indices: Option<(&Buffer, &Buffer)>,
+    gather_lhs_shape: Option<&[usize]>,
+    gather_lhs_rhs_strides: Option<(&[usize], &[usize])>,
     transpose: bool,
     bits: usize,
     group_size: usize,
 ) -> Result<(), MetalKernelError> {
-    // TODO: add gather support?
-    let gather = false;
+    let gather = gather_lhs_rhs_indices.is_some();
 
     let batched = !gather && w_shape.len() > 2;
 
@@ -891,7 +893,29 @@ pub fn call_afq_qmm(
         );
     }
     if gather {
-        unreachable!("TODO implementing gather");
+        let (lhs_indices, rhs_indices) = gather_lhs_rhs_indices.unwrap();
+        let batch_shape = gather_lhs_shape.unwrap();
+        let batch_ndims = batch_shape.len();
+        let (lhs_strides, rhs_strides) = gather_lhs_rhs_strides.unwrap();
+
+        <i32 as EncoderParam>::set_param(encoder, offset + 8, batch_ndims as i32);
+        <&[i32] as EncoderParam>::set_param(
+            encoder,
+            offset + 9,
+            &batch_shape.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+        );
+        encoder.set_buffer(offset + 10, Some(lhs_indices), 0);
+        encoder.set_buffer(offset + 11, Some(rhs_indices), 0);
+        <&[i32] as EncoderParam>::set_param(
+            encoder,
+            offset + 12,
+            &lhs_strides.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+        );
+        <&[i32] as EncoderParam>::set_param(
+            encoder,
+            offset + 13,
+            &rhs_strides.iter().map(|x| *x as i32).collect::<Vec<_>>(),
+        );
     }
 
     encoder.dispatch_thread_groups(grid_dims, group_dims);
