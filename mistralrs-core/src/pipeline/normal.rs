@@ -305,7 +305,7 @@ impl Loader for NormalLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
-        if !self.inner.supports_paged_attention() {
+        if !self.inner.supports_paged_attention(&config)? {
             paged_attn_config = None;
         }
 

@@ -106,8 +106,8 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self, config: &str) -> Result<bool>;
-    fn supports_paged_attention(&self) -> bool {
-        true
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        Ok(true)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
     fn get_device_for_tensor(
@@ -187,6 +187,7 @@ impl NormalLoaderType {
             "Starcoder2ForCausalLM" => Ok(Self::Starcoder2),
             "PhiMoEForCausalLM" => Ok(Self::Phi3_5MoE),
             "DeepseekV2ForCausalLM" => Ok(Self::DeepSeekV2),
+            "DeepseekV3ForCausalLM" => Ok(Self::DeepSeekV3),
             "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
             other => anyhow::bail!(
                 "Unsupported Huggging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
@@ -327,6 +328,9 @@ impl NormalModelLoader for AutoLoader {
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Self::get_loader(config)?.get_config_repr(config, use_flash_attn)
+    }
+    fn supports_paged_attention(&self, config: &str) -> Result<bool> {
+        Self::get_loader(config)?.supports_paged_attention(config)
     }
     fn is_gptx(&self, config: &str) -> Result<bool> {
         Self::get_loader(config)?.is_gptx(config)
@@ -3359,6 +3363,9 @@ impl NormalModelLoader for Llama4Loader {
             attention_mechanism,
         )?))
     }
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        Ok(false)
+    }
     fn load_xlora(
         &self,
         _config: &str,
@@ -3373,7 +3380,7 @@ impl NormalModelLoader for Llama4Loader {
         todo!()
     }
     fn is_gptx(&self, _: &str) -> Result<bool> {
-        Ok(true)
+        Ok(false)
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         let mut config: Llama4Config = serde_json::from_str(config)?;
@@ -3383,118 +3390,17 @@ impl NormalModelLoader for Llama4Loader {
 }
 
 impl IsqModelLoader for Llama4Loader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut data = vec![
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
-            Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.kv_b_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-        ];
-        let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
-        if cfg.q_lora_rank.is_some() {
-            data.extend(vec![
-                Regex::new(r"layers\.(\d+)\.self_attn\.q_a_proj\.(weight|bias)$")?,
-                Regex::new(r"layers\.(\d+)\.self_attn\.q_b_proj\.(weight|bias)$")?,
-            ]);
-        } else {
-            data.push(Regex::new(
-                r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
-            )?);
-        }
-        for layer_idx in 0..cfg.num_hidden_layers {
-            if cfg.n_routed_experts.is_some()
-                && layer_idx >= cfg.first_k_dense_replace
-                && layer_idx % cfg.moe_layer_freq == 0
-            {
-                for i in 0..cfg.n_routed_experts.unwrap() {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-                if cfg.n_shared_experts.is_some() {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-            } else {
-                data.extend(vec![
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
-                    ))?,
-                    Regex::new(&format!(r"layers.{layer_idx}.mlp\.up_proj\.(weight|bias)$"))?,
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
-                    ))?,
-                ]);
-            };
-        }
-        Ok(data)
-    }
-
-    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
-        let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
-        for layer_idx in 0..cfg.num_hidden_layers {
-            if cfg.n_routed_experts.is_some()
-                && layer_idx >= cfg.first_k_dense_replace
-                && layer_idx % cfg.moe_layer_freq == 0
-            {
-                for i in 0..cfg.n_routed_experts.unwrap() {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-                if cfg.n_shared_experts.is_some() {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-            } else {
-                data.extend(vec![
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
-                    ))?,
-                    Regex::new(&format!(r"layers.{layer_idx}.mlp\.up_proj\.(weight|bias)$"))?,
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
-                    ))?,
-                ]);
-            };
-        }
-        Ok(data)
+            // MLP
+            Regex::new(r"layers\.(\d+)\.feed_forward\.*$")?,
+        ])
     }
 }
 

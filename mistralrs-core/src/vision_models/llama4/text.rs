@@ -291,8 +291,8 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = self.gate.forward_autocast(&xs)?;
-        let rhs = self.up.forward_autocast(&xs)?;
+        let lhs = self.gate.forward_autocast(xs)?;
+        let rhs = self.up.forward_autocast(xs)?;
 
         self.down.forward_autocast(&candle_nn::ops::mul_and_act(
             &lhs,
@@ -326,7 +326,7 @@ impl TextExperts {
             cfg.num_local_experts,
             cfg.hidden_size,
             cfg.intermediate_size,
-            &quantization_config,
+            quantization_config,
             false,
             comm,
             vb,
