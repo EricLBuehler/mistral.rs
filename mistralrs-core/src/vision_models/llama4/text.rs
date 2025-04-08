@@ -345,11 +345,11 @@ impl TextExperts {
     // expert indices: (bs * seq_len)
     fn forward(&self, xs: &Tensor, indices: &Tensor) -> Result<Tensor> {
         let xs = xs.unsqueeze(1)?;
-        let gate = self.gate_proj.forward_indexed_autocast(&xs, indices)?;
-        let up = self.up_proj.forward_indexed_autocast(&xs, indices)?;
+        let gate = self.gate_proj.gather_forward_autocast(&xs, indices)?;
+        let up = self.up_proj.gather_forward_autocast(&xs, indices)?;
         let mut xs = self
             .down_proj
-            .forward_indexed_autocast(&(up * gate.apply(&self.act)?)?, indices)?;
+            .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, indices)?;
         xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
         xs.reshape(((), self.hidden_size))
     }

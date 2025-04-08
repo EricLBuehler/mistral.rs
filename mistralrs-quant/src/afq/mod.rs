@@ -159,18 +159,6 @@ impl QuantMethod for AfqLayer {
         )
     }
 
-    fn forward_indexed(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        ops::afq_mm_op(
-            x,
-            &self.w_q.index_select(indices, 0)?,
-            &self.scales.index_select(indices, 0)?,
-            &self.biases.index_select(indices, 0)?,
-            self.group_size,
-            self.bits,
-            true,
-        )
-    }
-
     fn quantized_act_type(&self) -> Option<DType> {
         None
     }
