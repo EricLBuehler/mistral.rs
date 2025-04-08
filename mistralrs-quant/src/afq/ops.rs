@@ -1,7 +1,8 @@
 #![allow(unused)]
 
 use candle_core::{
-    backend::BackendStorage, from_storage_no_op, DType, MetalStorage, Result, Storage, Tensor, D,
+    backend::BackendStorage, from_storage_no_op, DType, MetalStorage, Result, Shape, Storage,
+    Tensor, D,
 };
 
 use super::{AfqBits, AfqGroupSize};
@@ -294,19 +295,25 @@ pub(crate) fn afq_mm_op(
         assert_eq!(biases.layout().start_offset(), 0);
 
         let (output, out_shape) = if lhs_indices.is_some() || rhs_indices.is_some() {
-            let lhs_indices = match lhs_indices {
+            let mut lhs_indices = match lhs_indices {
                 Some(lhs_indices) => lhs_indices.clone(),
                 None => make_dummy_indices(x)?,
             };
-            let rhs_indices = match rhs_indices {
+            let mut rhs_indices = match rhs_indices {
                 Some(rhs_indices) => rhs_indices.clone(),
                 None => make_dummy_indices(w)?,
             };
             if lhs_indices.dtype() != DType::U32 || rhs_indices.dtype() != DType::U32 {
                 candle_core::bail!("lhs and rhs indices must be u32.")
             }
-            if lhs_indices.rank() != 1 || rhs_indices.rank() != 1 {
-                candle_core::bail!("lhs and rhs indices must be rank 1.")
+            // Broadcase the indices if applicable.
+            {
+                let mut shape = lhs_indices.shape().clone();
+                shape = rhs_indices
+                    .shape()
+                    .broadcast_shape_binary_op(rhs_indices.shape(), "afq-qmm")?;
+                lhs_indices = lhs_indices.broadcast_as(shape.clone())?;
+                rhs_indices = rhs_indices.broadcast_as(shape)?;
             }
 
             let li_s = lhs_indices.storage_and_layout().0;

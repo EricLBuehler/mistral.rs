@@ -573,6 +573,32 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     fn forward(&self, a: &Tensor) -> Result<Tensor>;
 
+    /// Compute matmul of `self` and `a`. `self` should contain the weights.
+    /// Automatically cast to required quantization activation type and back.
+    ///
+    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
+    /// then the indices are (n_tokens, n_experts).
+    fn gather_forward_autocast(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let original_ty = a.dtype();
+        let a = if let Some(t) = self.quantized_act_type() {
+            a.to_dtype(t)?
+        } else {
+            a.clone()
+        };
+        self.gather_forward(&a, indices)?.to_dtype(original_ty)
+    }
+
+    /// Compute matmul of `self` and `a`. `self` should contain the weights.
+    ///
+    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
+    /// then the indices are (n_tokens, n_experts).
+    fn gather_forward(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
+        candle_core::bail!(
+            "{} does not support `gather_forward`. Please raise an issue.",
+            self.name()
+        )
+    }
+
     /// If a quantized method, return the activation dtype.
     fn quantized_act_type(&self) -> Option<DType>;
 

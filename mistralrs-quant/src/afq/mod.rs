@@ -145,6 +145,20 @@ impl QuantMethod for AfqLayer {
         )
     }
 
+    fn gather_forward(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        ops::afq_mm_op(
+            x,
+            &self.w_q,
+            &self.scales,
+            &self.biases,
+            None,
+            Some(indices),
+            self.group_size,
+            self.bits,
+            true,
+        )
+    }
+
     fn quantized_act_type(&self) -> Option<DType> {
         None
     }
