@@ -137,6 +137,8 @@ impl QuantMethod for AfqLayer {
             &self.w_q,
             &self.scales,
             &self.biases,
+            None,
+            None,
             self.group_size,
             self.bits,
             true,
