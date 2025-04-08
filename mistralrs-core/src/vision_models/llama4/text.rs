@@ -3,8 +3,8 @@
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer, Shard,
-    ShardedVarBuilder, SumAllReduce,
+    distributed::layers::PackedExperts, ColumnParallelLayer, QuantMethod, QuantizedConfig,
+    ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -13,8 +13,7 @@ use crate::{
     attention::SdpaParams,
     device_map::DeviceMapper,
     layers::{
-        embedding, linear_no_bias, Activation, CausalMasker, Llama3RotaryEmbedding, MatMul,
-        RmsNorm, Sdpa,
+        embedding, linear_no_bias, Activation, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
     ops::{TopKLastDimOp, TopKOutput},
@@ -153,19 +152,9 @@ impl CausalSelfAttention {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let original_dtype = x.dtype();
-        let mut x = x.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let mut q = MatMul.qmethod_matmul(&x, &*self.q_proj)?;
-        let mut k = MatMul.qmethod_matmul(&x, &*self.k_proj)?;
-        let mut v = MatMul.qmethod_matmul(&x, &*self.v_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
+        let mut q = self.q_proj.forward_autocast(x)?;
+        let mut k = self.k_proj.forward_autocast(x)?;
+        let mut v = self.v_proj.forward_autocast(x)?;
 
         q = q
             .reshape((b_sz, seq_len, self.num_attention_heads, self.head_dim))?
@@ -252,11 +241,7 @@ impl CausalSelfAttention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        let mut res = MatMul.qmethod_matmul(&y, &*self.o_proj)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
+        self.o_proj.forward(&y)
     }
 }
 
@@ -306,29 +291,21 @@ impl Mlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let lhs = self.gate.forward(&xs)?;
-        let rhs = self.up.forward(&xs)?;
-        let mut res = self.down.forward(&candle_nn::ops::mul_and_act(
+        let lhs = self.gate.forward_autocast(&xs)?;
+        let rhs = self.up.forward_autocast(&xs)?;
+
+        self.down.forward_autocast(&candle_nn::ops::mul_and_act(
             &lhs,
             &rhs,
             self.act.try_into()?,
-        )?)?;
-        if self.gate.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
-        Ok(res)
+        )?)
     }
 }
 
 struct TextExperts {
-    gate_proj: Tensor,
-    up_proj: Tensor,
-    down_proj: Tensor,
+    gate_proj: Arc<dyn QuantMethod>,
+    up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
     act: Activation,
     hidden_size: usize,
     sum_all_reduce: SumAllReduce,
@@ -341,59 +318,23 @@ impl TextExperts {
         quantization_config: &Option<QuantizedConfig>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        // Parallelized like:
-        // Each gpu holds all experts.
-        // Gate/Up proj is parallelized on dim 2 (column)
-        // Down proj is parallelized on dim 1 (row)
-        // All reduce at the end.
-
-        let gate_up_block_size = cfg.intermediate_size / comm.world_size();
-        let gate_up_start = gate_up_block_size * comm.rank();
-
-        // Gate is right before Up in the gate_up
-        let shard_gate = Shard::Offset {
-            dim: 2,
-            offset: gate_up_start,
-            len: gate_up_block_size,
-        };
-        let shard_up = Shard::Offset {
-            dim: 2,
-            offset: cfg.intermediate_size + gate_up_start,
-            len: gate_up_block_size,
-        };
-        let shard_down = Shard::Simple {
-            dim: 1,
-            rank: comm.rank(),
-            world_size: comm.world_size(),
-        };
+        let PackedExperts {
+            gate_proj,
+            up_proj,
+            down_proj,
+        } = PackedExperts::new(
+            cfg.num_local_experts,
+            cfg.hidden_size,
+            cfg.intermediate_size,
+            &quantization_config,
+            false,
+            comm,
+            vb,
+        )?;
         Ok(Self {
-            gate_proj: vb.get_with_hints(
-                (
-                    cfg.num_local_experts,
-                    cfg.hidden_size,
-                    cfg.intermediate_size * 2,
-                ),
-                "gate_up_proj",
-                shard_gate,
-            )?,
-            up_proj: vb.get_with_hints(
-                (
-                    cfg.num_local_experts,
-                    cfg.hidden_size,
-                    cfg.intermediate_size * 2,
-                ),
-                "gate_up_proj",
-                shard_up,
-            )?,
-            down_proj: vb.get_with_hints(
-                (
-                    cfg.num_local_experts,
-                    cfg.intermediate_size,
-                    cfg.hidden_size,
-                ),
-                "down_proj",
-                shard_down,
-            )?,
+            gate_proj,
+            up_proj,
+            down_proj,
             act: cfg.hidden_act,
             hidden_size: cfg.hidden_size,
             sum_all_reduce: SumAllReduce::new(comm),
@@ -403,14 +344,12 @@ impl TextExperts {
     // xs: (bs * seq_len, hidden_size)
     // expert indices: (bs * seq_len)
     fn forward(&self, xs: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        let gate_proj = self.gate_proj.index_select(indices, 0)?;
-        let up_proj = self.up_proj.index_select(indices, 0)?;
-        let down_proj = self.down_proj.index_select(indices, 0)?;
-
         let xs = xs.unsqueeze(1)?;
-        let gate = xs.broadcast_matmul(&gate_proj)?;
-        let up = xs.broadcast_matmul(&up_proj)?;
-        let mut xs = (up * gate.apply(&self.act)?)?.broadcast_matmul(&down_proj)?;
+        let gate = self.gate_proj.forward_indexed_autocast(&xs, indices)?;
+        let up = self.up_proj.forward_indexed_autocast(&xs, indices)?;
+        let mut xs = self
+            .down_proj
+            .forward_indexed_autocast(&(up * gate.apply(&self.act)?)?, indices)?;
         xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
         xs.reshape(((), self.hidden_size))
     }
@@ -480,7 +419,7 @@ enum MoeOrMlp {
 }
 
 impl MoeOrMlp {
-    fn foward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         match self {
             Self::Mlp(l) => l.forward(xs),
             Self::Moe(l) => l.forward(xs),
@@ -580,7 +519,7 @@ impl Block {
             flash_params,
         )? + residual)?;
         let residual = &x;
-        let x = (self.ff.foward(&self.rms_2.forward(&x)?)? + residual)?;
+        let x = (self.ff.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
     }
 }
@@ -821,13 +760,10 @@ impl TextModel {
                 flash_params,
             )?;
         }
-        let x = x.to_device(&self.device)?;
-        let mut x = self.ln_f.forward(&x)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            x = x.to_dtype(t)?;
-        }
-        let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
-        extract_logits(&xs, context_lens)
+        let mut x = x.to_device(&self.device)?;
+        x = self.ln_f.forward(&x)?;
+        x = self.lm_head.forward_autocast(&x)?;
+        extract_logits(&x, context_lens)
     }
 }
 

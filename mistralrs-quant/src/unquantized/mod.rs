@@ -128,6 +128,13 @@ impl QuantMethod for UnquantLinear {
         }
     }
 
+    fn forward_indexed(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        // Actually do the indexing here! This is the only difference from above unfortunately.
+        let w = self.w.index_select(indices, 0)?;
+
+        a.broadcast_matmul(&w.t()?)
+    }
+
     fn quantized_act_type(&self) -> Option<DType> {
         None
     }

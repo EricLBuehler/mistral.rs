@@ -573,6 +573,164 @@ impl QuantizedSerde for ReplicatedLayer {
     }
 }
 
+#[derive(Debug)]
+pub struct PackedExperts {
+    pub gate_proj: Arc<dyn QuantMethod>,
+    pub up_proj: Arc<dyn QuantMethod>,
+    pub down_proj: Arc<dyn QuantMethod>,
+}
+
+impl PackedExperts {
+    /// Note: we only support AFQ and unquantized here because they are the only ones that support indexed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        num_local_experts: usize,
+        hidden_size: usize,
+        intermediate_size: usize,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        comm: &Arc<crate::Comm>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
+        if bias {
+            candle_core::bail!("PackedExperts does not support bias.");
+        }
+
+        let (gate_proj, up_proj, down_proj) = if let Some(quant_conf) = &config {
+            // GPTQ and BNB do not support tensor parallelism
+            if comm.world_size() != 1 {
+                candle_core::bail!(
+                    "PackedExperts with quantization config does not support distributed (world size {}). Use ISQ.",
+                    comm.world_size()
+                );
+            }
+
+            match quant_conf {
+                QuantizedConfig::Afq { .. } => {
+                    if !vb.contains_tensor("gate_up_proj")
+                        || !vb.contains_tensor("gate_up_proj.weight")
+                    {
+                        candle_core::bail!("PackedExperts with AFQ quantization config does not support `gate_up_proj` format.");
+                    }
+
+                    (
+                        AfqLayer::afq_packed_linear_b(
+                            num_local_experts,
+                            hidden_size,
+                            intermediate_size,
+                            quant_conf,
+                            bias,
+                            vb.pp("gate_proj"),
+                        )?,
+                        AfqLayer::afq_packed_linear_b(
+                            num_local_experts,
+                            hidden_size,
+                            intermediate_size,
+                            quant_conf,
+                            bias,
+                            vb.pp("up_proj"),
+                        )?,
+                        AfqLayer::afq_packed_linear_b(
+                            num_local_experts,
+                            intermediate_size,
+                            hidden_size,
+                            quant_conf,
+                            bias,
+                            vb.pp("down_proj"),
+                        )?,
+                    )
+                }
+                _ => candle_core::bail!(
+                    "PackedExperts with quantization config only allows AFQ quantization"
+                ),
+            }
+        } else {
+            // Parallelized like:
+            // Each gpu holds all experts.
+            // Gate/Up proj is parallelized on dim 2 (column)
+            // Down proj is parallelized on dim 1 (row)
+            // All reduce at the end.
+
+            let gate_up_block_size = intermediate_size / comm.world_size();
+            let gate_up_start = gate_up_block_size * comm.rank();
+
+            // Gate is right before Up in the gate_up
+            let shard_gate = Shard::Offset {
+                dim: 2,
+                offset: gate_up_start,
+                len: gate_up_block_size,
+            };
+            let shard_up = Shard::Offset {
+                dim: 2,
+                offset: intermediate_size + gate_up_start,
+                len: gate_up_block_size,
+            };
+            let shard_down = Shard::Simple {
+                dim: 1,
+                rank: comm.rank(),
+                world_size: comm.world_size(),
+            };
+
+            let gate_proj = vb
+                .get_with_hints(
+                    (num_local_experts, hidden_size, intermediate_size * 2),
+                    "gate_up_proj",
+                    shard_gate,
+                )?
+                .t()?
+                .contiguous()?;
+            let up_proj = vb
+                .get_with_hints(
+                    (num_local_experts, hidden_size, intermediate_size * 2),
+                    "gate_up_proj",
+                    shard_up,
+                )?
+                .t()?
+                .contiguous()?;
+            let down_proj = vb
+                .get_with_hints(
+                    (num_local_experts, intermediate_size, hidden_size),
+                    "down_proj",
+                    shard_down,
+                )?
+                .t()?
+                .contiguous()?;
+            let gate_proj = merge_lora_weights(
+                &vb,
+                gate_proj,
+                hidden_size,
+                intermediate_size * 2,
+                shard_gate,
+            )?;
+            let up_proj =
+                merge_lora_weights(&vb, up_proj, hidden_size, intermediate_size * 2, shard_up)?;
+            let down_proj =
+                merge_lora_weights(&vb, down_proj, intermediate_size, hidden_size, shard_down)?;
+
+            let gate_proj = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(gate_proj, None),
+            ))?;
+            let up_proj = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(up_proj, None),
+            ))?;
+            let down_proj = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                Linear::new(down_proj, None),
+            ))?;
+            (
+                Arc::new(gate_proj) as Arc<dyn QuantMethod>,
+                Arc::new(up_proj) as Arc<dyn QuantMethod>,
+                Arc::new(down_proj) as Arc<dyn QuantMethod>,
+            )
+        };
+
+        Ok(Self {
+            gate_proj,
+            up_proj,
+            down_proj,
+        })
+    }
+}
+
 /// Compute the appropriate KV shard. This handles KV head replication. Be sure to use `compute_n_kv_groups` in tandem.
 pub fn compute_kv_shard(total_num_kv_heads: usize, head_dim: usize, comm: &Comm) -> Shard {
     if comm.world_size() == 1 {
