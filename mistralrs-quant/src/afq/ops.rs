@@ -202,7 +202,7 @@ pub(crate) fn afq_dequantize_op(
 fn make_dummy_indices(x: &Tensor) -> Result<Tensor> {
     let x_batches = x
         .dims()
-        .into_iter()
+        .iter()
         .take(x.rank() - 2)
         .copied()
         .collect::<Vec<_>>();
@@ -215,6 +215,7 @@ fn make_dummy_indices(x: &Tensor) -> Result<Tensor> {
 }
 
 /// The indices lhs_indices and rhs_indices contain flat indices along the batch dimensions (i.e. all but the last two dimensions) of a and b respectively.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn afq_mm_op(
     x: &Tensor,
     w: &Tensor,
