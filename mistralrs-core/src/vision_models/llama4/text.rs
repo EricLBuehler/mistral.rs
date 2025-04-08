@@ -458,7 +458,12 @@ impl Block {
         )?;
         let is_moe_layer = cfg.moe_layers().contains(&layer_idx);
         let ff = if is_moe_layer {
-            let moe = TextMoe::new(vb.pp("feed_forward"), cfg, &cfg.quantization_config, comm)?;
+            let moe = TextMoe::new(
+                mapper.set_device(layer_idx, vb.pp("feed_forward"), loading_isq),
+                cfg,
+                &cfg.quantization_config,
+                comm,
+            )?;
             MoeOrMlp::Moe(moe)
         } else {
             let mlp = Mlp::new(
