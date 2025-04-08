@@ -32,7 +32,6 @@ use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
 use crate::vision_models::inputs_processor::Phi4MMProcessor;
-use crate::vision_models::llama4::{Llama4Config, Llama4Model, Llama4Processor};
 use crate::vision_models::llava::config::Config as LLaVAConfig;
 use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::{self, LLaVAProcessor};
@@ -152,8 +151,6 @@ pub enum VisionLoaderType {
     Gemma3,
     #[serde(rename = "mistral3")]
     Mistral3,
-    #[serde(rename = "llama4")]
-    Llama4,
 }
 
 impl FromStr for VisionLoaderType {
@@ -172,8 +169,7 @@ impl FromStr for VisionLoaderType {
             "qwen2_5vl" => Ok(Self::Qwen2_5VL),
             "gemma3" => Ok(Self::Gemma3),
             "mistral3" => Ok(Self::Mistral3),
-            "llama4" => Ok(Self::Llama4),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`.")),
         }
     }
 }
@@ -3712,174 +3708,6 @@ impl DeviceMappedModelLoader for Mistral3Loader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.head_dim(),
             v_head_dim: cfg.head_dim(),
-        };
-
-        Ok(Box::new(cfg))
-    }
-
-    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
-        Some(vec![NonMappedSubModel::Vision])
-    }
-}
-
-// ======================== Llama 4 Loader
-
-/// [`VisionLoader`] for an Llama 4 model.
-///
-/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
-pub struct Llama4Loader;
-
-pub struct Llama4Prefixer;
-
-impl VisionPromptPrefixer for Llama4Prefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
-        todo!()
-    }
-}
-
-impl VisionModelLoader for Llama4Loader {
-    fn load(
-        &self,
-        config: &str,
-        use_flash_attn: bool,
-        vb: ShardedVarBuilder,
-        normal_loading_metadata: NormalLoadingMetadata,
-        attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: Llama4Config = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(Llama4Model::new(
-            &config,
-            vb,
-            self.is_gptx(),
-            normal_loading_metadata,
-            attention_mechanism,
-        )?))
-    }
-    fn is_gptx(&self) -> bool {
-        false
-    }
-    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let config: Llama4Config = serde_json::from_str(config)?;
-        Ok(Box::new(config))
-    }
-    fn get_processor(
-        &self,
-        _model_config: &str,
-        processor_config: Option<ProcessorConfig>,
-        _preprocessor_config: PreProcessorConfig,
-        _max_edge: Option<u32>,
-    ) -> Arc<dyn Processor + Send + Sync> {
-        Arc::new(Llama4Processor::new(processor_config.unwrap()))
-    }
-    fn supports_paged_attention(&self) -> bool {
-        true
-    }
-    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
-        Arc::new(Llama4Prefixer)
-    }
-}
-
-impl IsqModelLoader for Llama4Loader {
-    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
-        todo!()
-    }
-}
-
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-impl DeviceMappedModelLoader for Llama4Loader {
-    fn mapped_max_act_size_elems(
-        &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
-        _prompt_chunksize: usize,
-    ) -> Result<usize> {
-        let cfg: Llama4Config = serde_json::from_str(config)?;
-        // let vcfg = &cfg.vision_config;
-        // let tcfg = &cfg.text_config;
-
-        // let AutoDeviceMapParams::Vision {
-        //     max_seq_len,
-        //     max_batch_size,
-        //     max_image_shape: (mut height, mut width),
-        //     max_num_images,
-        // } = params
-        // else {
-        //     anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
-        // };
-
-        Ok(0)
-    }
-
-    fn non_mapped_max_act_size_elems(
-        &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
-    ) -> Result<usize> {
-        let cfg: Llama4Config = serde_json::from_str(config)?;
-        // let cfg = &cfg.vision_config;
-
-        // let AutoDeviceMapParams::Vision {
-        //     max_seq_len: _,
-        //     max_batch_size,
-        //     max_image_shape: (mut height, mut width),
-        //     max_num_images,
-        // } = params
-        // else {
-        //     anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
-        // };
-
-        Ok(0)
-    }
-
-    fn non_mapped_size_in_bytes(
-        &self,
-        config: &str,
-        dtype: DType,
-        weight_pack_factor: usize,
-    ) -> Result<usize> {
-        let cfg: Llama4Config = serde_json::from_str(config)?;
-
-        let elems = 0;
-
-        Ok(elems * dtype.size_in_bytes())
-    }
-
-    fn layer_sizes_in_bytes(
-        &self,
-        config: &str,
-        dtype: DType,
-        weight_pack_factor: usize,
-    ) -> Result<Vec<usize>> {
-        let cfg: Llama4Config = serde_json::from_str(config)?;
-        let cfg = &cfg.text_config;
-
-        let per_layer_elems = { 0 };
-        Ok(vec![
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
-    }
-
-    fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg: Llama4Config = serde_json::from_str(config)?;
-        let cfg = &cfg.text_config;
-        Ok(cfg.num_hidden_layers)
-    }
-
-    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg: Llama4Config = serde_json::from_str(config)?;
-        let cfg = &cfg.text_config;
-
-        let cfg = ModelConfigMetadata {
-            max_seq_len: cfg.max_position_embeddings,
-            num_layers: cfg.num_hidden_layers,
-            hidden_size: cfg.hidden_size,
-            num_kv_heads: cfg.num_key_value_heads,
-            num_attn_heads: cfg.num_attention_heads,
-            sliding_window: None,
-            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))

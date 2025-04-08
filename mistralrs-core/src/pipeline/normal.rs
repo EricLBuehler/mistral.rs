@@ -12,9 +12,9 @@ use super::{
     IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
-    AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
-    MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader,
-    Qwen2Loader, Starcoder2Loader,
+    AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, Llama4Loader,
+    LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader,
+    Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::device_map::{self, DeviceMapper};
@@ -219,6 +219,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::Phi3_5MoE) => Box::new(Phi3_5MoELoader),
             Some(NormalLoaderType::DeepSeekV2) => Box::new(DeepSeekV2Loader),
             Some(NormalLoaderType::DeepSeekV3) => Box::new(DeepSeekV3Loader),
+            Some(NormalLoaderType::Llama4) => Box::new(Llama4Loader),
             None => Box::new(AutoLoader),
         };
         Ok(Box::new(NormalLoader {
@@ -303,6 +304,10 @@ impl Loader for NormalLoader {
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
+
+        if !self.inner.supports_paged_attention() {
+            paged_attn_config = None;
+        }
 
         // Apply default prompt size here
         let prompt_chunksize = self

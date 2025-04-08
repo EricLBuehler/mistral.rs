@@ -1,6 +1,6 @@
 mod text;
 
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use candle_core::{Device, Result, Tensor};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
@@ -12,15 +12,13 @@ use crate::{
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
+        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel,
     },
 };
 
 mod config;
-mod inputs_processor;
 
 pub use config::{Llama4Config, TextConfig};
-pub use inputs_processor::Llama4Processor;
 
 pub struct Llama4Model {
     language_model: TextModel,
@@ -72,25 +70,21 @@ impl IsqModel for Llama4Model {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        todo!()
+        self.language_model.get_layers()
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        todo!()
+        self.language_model.residual_tensors()
     }
 }
 
-pub struct Llama4ModelSpecificArgs;
-
-impl VisionModel for Llama4Model {
+impl NormalModel for Llama4Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         _position_ids: Vec<usize>,
-        model_specific_args: Box<dyn Any>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> candle_core::Result<Tensor> {
@@ -102,7 +96,21 @@ impl VisionModel for Llama4Model {
             flash_params,
         )
     }
-
+    fn xlora_forward(
+        &self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
+    ) -> Result<Tensor> {
+        unimplemented!()
+    }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
     }
@@ -112,14 +120,11 @@ impl VisionModel for Llama4Model {
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
     }
-    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
-        Box::new(Llama4ModelSpecificArgs)
+    fn is_xlora(&self) -> bool {
+        false
     }
     fn device(&self) -> &Device {
         self.language_model.device()
-    }
-    fn has_conv2d(&self) -> bool {
-        true
     }
     fn max_seq_len(&self) -> usize {
         self.language_model.max_seq_len()

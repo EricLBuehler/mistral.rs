@@ -23,7 +23,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
     },
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 use super::config::TextConfig;
@@ -765,6 +765,55 @@ impl TextModel {
         x = self.lm_head.forward_autocast(&x)?;
         extract_logits(&x, context_lens)
     }
+
+    pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {
+        uvb_m.pp("embed_tokens").add(&self.wte);
+        uvb_m.pp("norm").add(&self.ln_f);
+
+        for (layer_idx, layer) in self.blocks.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.rms_1);
+            uvb_l.pp("post_attention_layernorm").add(&layer.rms_2);
+        }
+
+        uvb_m.to_safetensors()
+    }
+}
+
+impl IsqModel for TextModel {
+    fn get_layers(
+        &mut self,
+    ) -> (
+        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
+        &dyn DeviceMapper,
+    ) {
+        let mut tensors = Vec::new();
+        tensors.push((&mut self.lm_head, None));
+        for (i, layer) in self.blocks.iter_mut().enumerate() {
+            tensors.push((&mut layer.attn.q_proj, Some(i)));
+            tensors.push((&mut layer.attn.k_proj, Some(i)));
+            tensors.push((&mut layer.attn.v_proj, Some(i)));
+            tensors.push((&mut layer.attn.o_proj, Some(i)));
+            match &mut layer.ff {
+                MoeOrMlp::Mlp(x) => {
+                    tensors.push((&mut x.gate, Some(i)));
+                    tensors.push((&mut x.up, Some(i)));
+                    tensors.push((&mut x.down, Some(i)));
+                }
+                MoeOrMlp::Moe(x) => {
+                    tensors.push((&mut x.experts.gate_proj, Some(i)));
+                    tensors.push((&mut x.experts.up_proj, Some(i)));
+                    tensors.push((&mut x.experts.down_proj, Some(i)));
+                }
+            }
+        }
+        (tensors, &*self.mapper)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        self.residual_tensors_m(uvb.pp("model"))
+    }
 }
 
 impl NormalModel for TextModel {
@@ -811,21 +860,6 @@ impl NormalModel for TextModel {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
-    }
-}
-
-impl IsqModel for TextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        todo!()
-    }
-
-    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        todo!()
     }
 }
 
