@@ -573,28 +573,29 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     fn forward(&self, a: &Tensor) -> Result<Tensor>;
 
-    /// Indexed counterpart to `forward_autocast`. One expert per token.
-    ///
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
     /// Automatically cast to required quantization activation type and back.
-    /// Equivalent to x.broadcast_matmul(&w.index_select(indices, 0)?.t()?).
-    fn forward_indexed_autocast(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    ///
+    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
+    /// then the indices are (n_tokens, n_experts).
+    fn gather_forward_autocast(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
         let original_ty = a.dtype();
         let a = if let Some(t) = self.quantized_act_type() {
             a.to_dtype(t)?
         } else {
             a.clone()
         };
-        self.forward_indexed(&a, indices)?.to_dtype(original_ty)
+        self.gather_forward(&a, indices)?.to_dtype(original_ty)
     }
 
-    /// Indexed counterpart to `forward`. One expert per token.
-    ///
     /// Compute matmul of `self` and `a`. `self` should contain the weights.
-    /// Equivalent to x.broadcast_matmul(&w.index_select(indices, 0)?.t()?).
-    fn forward_indexed(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
+    ///
+    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
+    /// then the indices are (n_tokens, n_experts).
+    fn gather_forward(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
         candle_core::bail!(
-            "This quant method does not support `forward_indexed`. Please raise an issue."
+            "{} does not support `gather_forward`. Please raise an issue.",
+            self.name()
         )
     }
 

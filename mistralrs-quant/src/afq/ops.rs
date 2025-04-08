@@ -1,7 +1,8 @@
 #![allow(unused)]
 
 use candle_core::{
-    backend::BackendStorage, from_storage_no_op, DType, MetalStorage, Result, Storage, Tensor, D,
+    backend::BackendStorage, from_storage_no_op, DType, MetalStorage, Result, Shape, Storage,
+    Tensor, D,
 };
 
 use super::{AfqBits, AfqGroupSize};
@@ -198,11 +199,30 @@ pub(crate) fn afq_dequantize_op(
     }
 }
 
+fn make_dummy_indices(x: &Tensor) -> Result<Tensor> {
+    let x_batches = x
+        .dims()
+        .iter()
+        .take(x.rank() - 2)
+        .copied()
+        .collect::<Vec<_>>();
+
+    (Tensor::ones(x_batches.iter().product::<usize>(), DType::F32, x.device())?
+        .cumsum(0)?
+        .to_dtype(DType::U32)?
+        - 1.)?
+        .reshape(x_batches)
+}
+
+/// The indices lhs_indices and rhs_indices contain flat indices along the batch dimensions (i.e. all but the last two dimensions) of a and b respectively.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn afq_mm_op(
     x: &Tensor,
     w: &Tensor,
     scales: &Tensor,
     biases: &Tensor,
+    lhs_indices: Option<&Tensor>,
+    rhs_indices: Option<&Tensor>,
     group_size: AfqGroupSize,
     bits: AfqBits,
     transpose: bool,
@@ -268,41 +288,113 @@ pub(crate) fn afq_mm_op(
         let device = w_s.device();
 
         let command_buffer = device.command_buffer()?;
-        command_buffer.set_label("afq-dequantize");
-
-        let mut out_shape = x.dims().to_vec();
-        *out_shape.last_mut().unwrap() = w_outer_dims;
-
-        let output =
-            device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-qmm-output")?;
+        command_buffer.set_label("afq-qmm");
 
         assert_eq!(x.layout().start_offset(), 0);
         assert_eq!(w.layout().start_offset(), 0);
         assert_eq!(scales.layout().start_offset(), 0);
         assert_eq!(biases.layout().start_offset(), 0);
 
-        crate::metal_kernels::call_afq_qmm(
-            device.device(),
-            &command_buffer,
-            &crate::metal_kernels::Kernels::new(),
-            scales.dtype(),
-            x_s.buffer(),
-            x.dims(),
-            x.stride(),
-            w_s.buffer(),
-            w.dims(),
-            w.stride(),
-            s_s.buffer(),
-            scales.stride(),
-            b_s.buffer(),
-            biases.stride(),
-            &output,
-            &out_shape,
-            transpose,
-            bits,
-            group_size,
-        )
-        .map_err(candle_core::Error::wrap)?;
+        let (output, out_shape) = if lhs_indices.is_some() || rhs_indices.is_some() {
+            let mut lhs_indices = match lhs_indices {
+                Some(lhs_indices) => lhs_indices.clone(),
+                None => make_dummy_indices(x)?,
+            };
+            let mut rhs_indices = match rhs_indices {
+                Some(rhs_indices) => rhs_indices.clone(),
+                None => make_dummy_indices(w)?,
+            };
+            if lhs_indices.dtype() != DType::U32 || rhs_indices.dtype() != DType::U32 {
+                candle_core::bail!("lhs and rhs indices must be u32.")
+            }
+            // Broadcase the indices if applicable.
+            {
+                let mut shape = lhs_indices.shape().clone();
+                shape = rhs_indices
+                    .shape()
+                    .broadcast_shape_binary_op(rhs_indices.shape(), "afq-qmm")?;
+                lhs_indices = lhs_indices.broadcast_as(shape.clone())?;
+                rhs_indices = rhs_indices.broadcast_as(shape)?;
+            }
+
+            let li_s = lhs_indices.storage_and_layout().0;
+            let Storage::Metal(li_s) = &*li_s else {
+                candle_core::bail!("expected metal")
+            };
+            let ri_s = rhs_indices.storage_and_layout().0;
+            let Storage::Metal(ri_s) = &*ri_s else {
+                candle_core::bail!("expected metal")
+            };
+
+            let mut out_shape = lhs_indices.dims().to_vec();
+            out_shape.push(x.dim(D::Minus2)?);
+            out_shape.push(w_outer_dims);
+
+            let output =
+                device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-qmm-output")?;
+
+            crate::metal_kernels::call_afq_qmm(
+                device.device(),
+                &command_buffer,
+                &crate::metal_kernels::Kernels::new(),
+                scales.dtype(),
+                x_s.buffer(),
+                x.dims(),
+                x.stride(),
+                w_s.buffer(),
+                w.dims(),
+                w.stride(),
+                s_s.buffer(),
+                scales.stride(),
+                b_s.buffer(),
+                biases.stride(),
+                &output,
+                &out_shape,
+                Some((li_s.buffer(), ri_s.buffer())),
+                Some(lhs_indices.dims()),
+                Some((lhs_indices.stride(), rhs_indices.stride())),
+                transpose,
+                bits,
+                group_size,
+            )
+            .map_err(candle_core::Error::wrap)?;
+
+            (output, out_shape)
+        } else {
+            let mut out_shape = x.dims().to_vec();
+            *out_shape.last_mut().unwrap() = w_outer_dims;
+
+            let output =
+                device.new_buffer(out_shape.iter().product(), scales.dtype(), "afq-qmm-output")?;
+
+            crate::metal_kernels::call_afq_qmm(
+                device.device(),
+                &command_buffer,
+                &crate::metal_kernels::Kernels::new(),
+                scales.dtype(),
+                x_s.buffer(),
+                x.dims(),
+                x.stride(),
+                w_s.buffer(),
+                w.dims(),
+                w.stride(),
+                s_s.buffer(),
+                scales.stride(),
+                b_s.buffer(),
+                biases.stride(),
+                &output,
+                &out_shape,
+                None,
+                None,
+                None,
+                transpose,
+                bits,
+                group_size,
+            )
+            .map_err(candle_core::Error::wrap)?;
+
+            (output, out_shape)
+        };
 
         let output = from_storage_no_op(
             Storage::Metal(MetalStorage::new(
