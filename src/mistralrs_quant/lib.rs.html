@@ -573,135 +573,161 @@
 <a href=#573 id=573 data-nosnippet>573</a>    <span class="doccomment">/// Compute matmul of `self` and `a`. `self` should contain the weights.
 <a href=#574 id=574 data-nosnippet>574</a>    </span><span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt;;
 <a href=#575 id=575 data-nosnippet>575</a>
-<a href=#576 id=576 data-nosnippet>576</a>    <span class="doccomment">/// If a quantized method, return the activation dtype.
-<a href=#577 id=577 data-nosnippet>577</a>    </span><span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DType&gt;;
-<a href=#578 id=578 data-nosnippet>578</a>
-<a href=#579 id=579 data-nosnippet>579</a>    <span class="doccomment">/// Weight dtype and device
-<a href=#580 id=580 data-nosnippet>580</a>    </span><span class="kw">fn </span>dtype_and_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (DType, Device);
-<a href=#581 id=581 data-nosnippet>581</a>
-<a href=#582 id=582 data-nosnippet>582</a>    <span class="doccomment">/// Add a delta weight from LoRA to the weights. This should be prescaled with alpha.
-<a href=#583 id=583 data-nosnippet>583</a>    </span><span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
-<a href=#584 id=584 data-nosnippet>584</a>
-<a href=#585 id=585 data-nosnippet>585</a>    <span class="doccomment">/// If the quant is backed by a qmatmul.
-<a href=#586 id=586 data-nosnippet>586</a>    </span><span class="kw">fn </span>apply_isq(
-<a href=#587 id=587 data-nosnippet>587</a>        <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
-<a href=#588 id=588 data-nosnippet>588</a>        dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
-<a href=#589 id=589 data-nosnippet>589</a>        device: Device,
-<a href=#590 id=590 data-nosnippet>590</a>        n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
-<a href=#591 id=591 data-nosnippet>591</a>        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
-<a href=#592 id=592 data-nosnippet>592</a>        guard: QuantizeOntoGuard,
-<a href=#593 id=593 data-nosnippet>593</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
-<a href=#594 id=594 data-nosnippet>594</a>
-<a href=#595 id=595 data-nosnippet>595</a>    <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
-<a href=#596 id=596 data-nosnippet>596</a>        <span class="prelude-val">None
-<a href=#597 id=597 data-nosnippet>597</a>    </span>}
-<a href=#598 id=598 data-nosnippet>598</a>
-<a href=#599 id=599 data-nosnippet>599</a>    <span class="doccomment">/// Begin tracking stats into an ImatrixLayerStats
-<a href=#600 id=600 data-nosnippet>600</a>    </span><span class="kw">fn </span>begin_track_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#601 id=601 data-nosnippet>601</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`{}` does not support tracking stats."</span>, <span class="self">self</span>.name())
-<a href=#602 id=602 data-nosnippet>602</a>    }
-<a href=#603 id=603 data-nosnippet>603</a>
-<a href=#604 id=604 data-nosnippet>604</a>    <span class="doccomment">/// End tracking stats into an ImatrixLayerStats. Returns the computed imatrix.
-<a href=#605 id=605 data-nosnippet>605</a>    </span><span class="kw">fn </span>end_track_stats(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#606 id=606 data-nosnippet>606</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`{}` does not support tracking stats."</span>, <span class="self">self</span>.name())
-<a href=#607 id=607 data-nosnippet>607</a>    }
-<a href=#608 id=608 data-nosnippet>608</a>
-<a href=#609 id=609 data-nosnippet>609</a>    <span class="kw">fn </span>is_distributed(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DistributedKind&gt; {
-<a href=#610 id=610 data-nosnippet>610</a>        <span class="prelude-val">None
-<a href=#611 id=611 data-nosnippet>611</a>    </span>}
-<a href=#612 id=612 data-nosnippet>612</a>}
-<a href=#613 id=613 data-nosnippet>613</a>
-<a href=#614 id=614 data-nosnippet>614</a><span class="kw">impl </span>Module <span class="kw">for dyn </span>QuantMethod {
-<a href=#615 id=615 data-nosnippet>615</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
-<a href=#616 id=616 data-nosnippet>616</a>        <span class="self">Self</span>::forward(<span class="self">self</span>, xs)
-<a href=#617 id=617 data-nosnippet>617</a>    }
-<a href=#618 id=618 data-nosnippet>618</a>}
-<a href=#619 id=619 data-nosnippet>619</a>
-<a href=#620 id=620 data-nosnippet>620</a><span class="kw">pub fn </span>linear_no_bias(
-<a href=#621 id=621 data-nosnippet>621</a>    in_dim: usize,
-<a href=#622 id=622 data-nosnippet>622</a>    out_dim: usize,
-<a href=#623 id=623 data-nosnippet>623</a>    config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
-<a href=#624 id=624 data-nosnippet>624</a>    vb: ShardedVarBuilder,
-<a href=#625 id=625 data-nosnippet>625</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#626 id=626 data-nosnippet>626</a>    <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
-<a href=#627 id=627 data-nosnippet>627</a>        <span class="kw">match </span>quant_conf {
-<a href=#628 id=628 data-nosnippet>628</a>            QuantizedConfig::Gptq { .. } =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
-<a href=#629 id=629 data-nosnippet>629</a>            QuantizedConfig::Fp8 { .. } =&gt; {
-<a href=#630 id=630 data-nosnippet>630</a>                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">false</span>, Default::default(), vb)<span class="question-mark">?
-<a href=#631 id=631 data-nosnippet>631</a>            </span>}
-<a href=#632 id=632 data-nosnippet>632</a>            QuantizedConfig::Bitsandbytes { .. } =&gt; {
-<a href=#633 id=633 data-nosnippet>633</a>                Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">false</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
-<a href=#634 id=634 data-nosnippet>634</a>            }
-<a href=#635 id=635 data-nosnippet>635</a>            QuantizedConfig::Afq { .. } =&gt; {
-<a href=#636 id=636 data-nosnippet>636</a>                AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">false</span>, vb)<span class="question-mark">?
-<a href=#637 id=637 data-nosnippet>637</a>            </span>}
-<a href=#638 id=638 data-nosnippet>638</a>        }
-<a href=#639 id=639 data-nosnippet>639</a>    } <span class="kw">else </span>{
-<a href=#640 id=640 data-nosnippet>640</a>        <span class="comment">// Handle the case where the layer is dummy (no tensors)
-<a href=#641 id=641 data-nosnippet>641</a>        </span><span class="kw">if </span>!vb.contains_tensor(<span class="string">"weight"</span>) {
-<a href=#642 id=642 data-nosnippet>642</a>            <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
-<a href=#643 id=643 data-nosnippet>643</a>            Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
-<a href=#644 id=644 data-nosnippet>644</a>        } <span class="kw">else </span>{
-<a href=#645 id=645 data-nosnippet>645</a>            <span class="kw">let </span>weight = vb.get_with_hints((out_dim, in_dim), <span class="string">"weight"</span>, Default::default())<span class="question-mark">?</span>;
-<a href=#646 id=646 data-nosnippet>646</a>            <span class="kw">let </span>weight = merge_lora_weights(<span class="kw-2">&amp;</span>vb, weight, in_dim, out_dim, Default::default())<span class="question-mark">?</span>;
-<a href=#647 id=647 data-nosnippet>647</a>
-<a href=#648 id=648 data-nosnippet>648</a>            <span class="kw">let </span>layer = &lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Unquantized(
-<a href=#649 id=649 data-nosnippet>649</a>                Linear::new(weight, <span class="prelude-val">None</span>),
-<a href=#650 id=650 data-nosnippet>650</a>            ))<span class="question-mark">?</span>;
-<a href=#651 id=651 data-nosnippet>651</a>            Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
-<a href=#652 id=652 data-nosnippet>652</a>        }
-<a href=#653 id=653 data-nosnippet>653</a>    };
-<a href=#654 id=654 data-nosnippet>654</a>    <span class="prelude-val">Ok</span>(layer)
-<a href=#655 id=655 data-nosnippet>655</a>}
-<a href=#656 id=656 data-nosnippet>656</a>
-<a href=#657 id=657 data-nosnippet>657</a><span class="kw">pub fn </span>linear(
-<a href=#658 id=658 data-nosnippet>658</a>    in_dim: usize,
-<a href=#659 id=659 data-nosnippet>659</a>    out_dim: usize,
-<a href=#660 id=660 data-nosnippet>660</a>    config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
-<a href=#661 id=661 data-nosnippet>661</a>    vb: ShardedVarBuilder,
-<a href=#662 id=662 data-nosnippet>662</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#663 id=663 data-nosnippet>663</a>    <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
-<a href=#664 id=664 data-nosnippet>664</a>        <span class="kw">match </span>quant_conf {
-<a href=#665 id=665 data-nosnippet>665</a>            QuantizedConfig::Gptq { .. } =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
-<a href=#666 id=666 data-nosnippet>666</a>            QuantizedConfig::Fp8 { .. } =&gt; {
-<a href=#667 id=667 data-nosnippet>667</a>                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">true</span>, Default::default(), vb)<span class="question-mark">?
-<a href=#668 id=668 data-nosnippet>668</a>            </span>}
-<a href=#669 id=669 data-nosnippet>669</a>            QuantizedConfig::Bitsandbytes { .. } =&gt; {
-<a href=#670 id=670 data-nosnippet>670</a>                Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">true</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
-<a href=#671 id=671 data-nosnippet>671</a>            }
-<a href=#672 id=672 data-nosnippet>672</a>            QuantizedConfig::Afq { .. } =&gt; {
-<a href=#673 id=673 data-nosnippet>673</a>                AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">true</span>, vb)<span class="question-mark">?
-<a href=#674 id=674 data-nosnippet>674</a>            </span>}
-<a href=#675 id=675 data-nosnippet>675</a>        }
-<a href=#676 id=676 data-nosnippet>676</a>    } <span class="kw">else </span>{
-<a href=#677 id=677 data-nosnippet>677</a>        <span class="comment">// Handle the case where the layer is dummy (no tensors)
-<a href=#678 id=678 data-nosnippet>678</a>        </span><span class="kw">if </span>!(vb.contains_tensor(<span class="string">"weight"</span>) &amp;&amp; vb.contains_tensor(<span class="string">"bias"</span>)) {
-<a href=#679 id=679 data-nosnippet>679</a>            <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
-<a href=#680 id=680 data-nosnippet>680</a>            Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
-<a href=#681 id=681 data-nosnippet>681</a>        } <span class="kw">else </span>{
-<a href=#682 id=682 data-nosnippet>682</a>            <span class="kw">let </span>weight = vb.get_with_hints((out_dim, in_dim), <span class="string">"weight"</span>, Default::default())<span class="question-mark">?</span>;
-<a href=#683 id=683 data-nosnippet>683</a>            <span class="kw">let </span>weight = merge_lora_weights(<span class="kw-2">&amp;</span>vb, weight, in_dim, out_dim, Default::default())<span class="question-mark">?</span>;
-<a href=#684 id=684 data-nosnippet>684</a>            <span class="kw">let </span>bias = vb.get_with_hints((out_dim,), <span class="string">"bias"</span>, Default::default())<span class="question-mark">?</span>;
-<a href=#685 id=685 data-nosnippet>685</a>
-<a href=#686 id=686 data-nosnippet>686</a>            <span class="kw">let </span>layer = &lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Unquantized(
-<a href=#687 id=687 data-nosnippet>687</a>                Linear::new(weight, <span class="prelude-val">Some</span>(bias)),
-<a href=#688 id=688 data-nosnippet>688</a>            ))<span class="question-mark">?</span>;
-<a href=#689 id=689 data-nosnippet>689</a>            Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
-<a href=#690 id=690 data-nosnippet>690</a>        }
-<a href=#691 id=691 data-nosnippet>691</a>    };
-<a href=#692 id=692 data-nosnippet>692</a>    <span class="prelude-val">Ok</span>(layer)
-<a href=#693 id=693 data-nosnippet>693</a>}
-<a href=#694 id=694 data-nosnippet>694</a>
-<a href=#695 id=695 data-nosnippet>695</a><span class="kw">pub fn </span>linear_b(
-<a href=#696 id=696 data-nosnippet>696</a>    in_dim: usize,
-<a href=#697 id=697 data-nosnippet>697</a>    out_dim: usize,
-<a href=#698 id=698 data-nosnippet>698</a>    bias: bool,
-<a href=#699 id=699 data-nosnippet>699</a>    config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
-<a href=#700 id=700 data-nosnippet>700</a>    vb: ShardedVarBuilder,
-<a href=#701 id=701 data-nosnippet>701</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
-<a href=#702 id=702 data-nosnippet>702</a>    <span class="kw">if </span>bias {
-<a href=#703 id=703 data-nosnippet>703</a>        linear(in_dim, out_dim, config, vb)
-<a href=#704 id=704 data-nosnippet>704</a>    } <span class="kw">else </span>{
-<a href=#705 id=705 data-nosnippet>705</a>        linear_no_bias(in_dim, out_dim, config, vb)
-<a href=#706 id=706 data-nosnippet>706</a>    }
-<a href=#707 id=707 data-nosnippet>707</a>}</code></pre></div></section></main></body></html>
+<a href=#576 id=576 data-nosnippet>576</a>    <span class="doccomment">/// Compute matmul of `self` and `a`. `self` should contain the weights.
+<a href=#577 id=577 data-nosnippet>577</a>    /// Automatically cast to required quantization activation type and back.
+<a href=#578 id=578 data-nosnippet>578</a>    ///
+<a href=#579 id=579 data-nosnippet>579</a>    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
+<a href=#580 id=580 data-nosnippet>580</a>    /// then the indices are (n_tokens, n_experts).
+<a href=#581 id=581 data-nosnippet>581</a>    </span><span class="kw">fn </span>gather_forward_autocast(<span class="kw-2">&amp;</span><span class="self">self</span>, a: <span class="kw-2">&amp;</span>Tensor, indices: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#582 id=582 data-nosnippet>582</a>        <span class="kw">let </span>original_ty = a.dtype();
+<a href=#583 id=583 data-nosnippet>583</a>        <span class="kw">let </span>a = <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.quantized_act_type() {
+<a href=#584 id=584 data-nosnippet>584</a>            a.to_dtype(t)<span class="question-mark">?
+<a href=#585 id=585 data-nosnippet>585</a>        </span>} <span class="kw">else </span>{
+<a href=#586 id=586 data-nosnippet>586</a>            a.clone()
+<a href=#587 id=587 data-nosnippet>587</a>        };
+<a href=#588 id=588 data-nosnippet>588</a>        <span class="self">self</span>.gather_forward(<span class="kw-2">&amp;</span>a, indices)<span class="question-mark">?</span>.to_dtype(original_ty)
+<a href=#589 id=589 data-nosnippet>589</a>    }
+<a href=#590 id=590 data-nosnippet>590</a>
+<a href=#591 id=591 data-nosnippet>591</a>    <span class="doccomment">/// Compute matmul of `self` and `a`. `self` should contain the weights.
+<a href=#592 id=592 data-nosnippet>592</a>    ///
+<a href=#593 id=593 data-nosnippet>593</a>    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
+<a href=#594 id=594 data-nosnippet>594</a>    /// then the indices are (n_tokens, n_experts).
+<a href=#595 id=595 data-nosnippet>595</a>    </span><span class="kw">fn </span>gather_forward(<span class="kw-2">&amp;</span><span class="self">self</span>, _a: <span class="kw-2">&amp;</span>Tensor, _indices: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#596 id=596 data-nosnippet>596</a>        <span class="macro">candle_core::bail!</span>(
+<a href=#597 id=597 data-nosnippet>597</a>            <span class="string">"{} does not support `gather_forward`. Please raise an issue."</span>,
+<a href=#598 id=598 data-nosnippet>598</a>            <span class="self">self</span>.name()
+<a href=#599 id=599 data-nosnippet>599</a>        )
+<a href=#600 id=600 data-nosnippet>600</a>    }
+<a href=#601 id=601 data-nosnippet>601</a>
+<a href=#602 id=602 data-nosnippet>602</a>    <span class="doccomment">/// If a quantized method, return the activation dtype.
+<a href=#603 id=603 data-nosnippet>603</a>    </span><span class="kw">fn </span>quantized_act_type(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DType&gt;;
+<a href=#604 id=604 data-nosnippet>604</a>
+<a href=#605 id=605 data-nosnippet>605</a>    <span class="doccomment">/// Weight dtype and device
+<a href=#606 id=606 data-nosnippet>606</a>    </span><span class="kw">fn </span>dtype_and_device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; (DType, Device);
+<a href=#607 id=607 data-nosnippet>607</a>
+<a href=#608 id=608 data-nosnippet>608</a>    <span class="doccomment">/// Add a delta weight from LoRA to the weights. This should be prescaled with alpha.
+<a href=#609 id=609 data-nosnippet>609</a>    </span><span class="kw">fn </span>add_delta_w(<span class="kw-2">&amp;</span><span class="self">self</span>, delta: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
+<a href=#610 id=610 data-nosnippet>610</a>
+<a href=#611 id=611 data-nosnippet>611</a>    <span class="doccomment">/// If the quant is backed by a qmatmul.
+<a href=#612 id=612 data-nosnippet>612</a>    </span><span class="kw">fn </span>apply_isq(
+<a href=#613 id=613 data-nosnippet>613</a>        <span class="self">self</span>: Arc&lt;<span class="self">Self</span>&gt;,
+<a href=#614 id=614 data-nosnippet>614</a>        dtype: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
+<a href=#615 id=615 data-nosnippet>615</a>        device: Device,
+<a href=#616 id=616 data-nosnippet>616</a>        n_quantized: <span class="kw-2">&amp;</span>AtomicUsize,
+<a href=#617 id=617 data-nosnippet>617</a>        imatrix_weight: <span class="prelude-ty">Option</span>&lt;Vec&lt;f32&gt;&gt;,
+<a href=#618 id=618 data-nosnippet>618</a>        guard: QuantizeOntoGuard,
+<a href=#619 id=619 data-nosnippet>619</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt;;
+<a href=#620 id=620 data-nosnippet>620</a>
+<a href=#621 id=621 data-nosnippet>621</a>    <span class="kw">fn </span>unquant_weight_bias(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;(Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
+<a href=#622 id=622 data-nosnippet>622</a>        <span class="prelude-val">None
+<a href=#623 id=623 data-nosnippet>623</a>    </span>}
+<a href=#624 id=624 data-nosnippet>624</a>
+<a href=#625 id=625 data-nosnippet>625</a>    <span class="doccomment">/// Begin tracking stats into an ImatrixLayerStats
+<a href=#626 id=626 data-nosnippet>626</a>    </span><span class="kw">fn </span>begin_track_stats(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#627 id=627 data-nosnippet>627</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`{}` does not support tracking stats."</span>, <span class="self">self</span>.name())
+<a href=#628 id=628 data-nosnippet>628</a>    }
+<a href=#629 id=629 data-nosnippet>629</a>
+<a href=#630 id=630 data-nosnippet>630</a>    <span class="doccomment">/// End tracking stats into an ImatrixLayerStats. Returns the computed imatrix.
+<a href=#631 id=631 data-nosnippet>631</a>    </span><span class="kw">fn </span>end_track_stats(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#632 id=632 data-nosnippet>632</a>        <span class="macro">candle_core::bail!</span>(<span class="string">"`{}` does not support tracking stats."</span>, <span class="self">self</span>.name())
+<a href=#633 id=633 data-nosnippet>633</a>    }
+<a href=#634 id=634 data-nosnippet>634</a>
+<a href=#635 id=635 data-nosnippet>635</a>    <span class="kw">fn </span>is_distributed(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;DistributedKind&gt; {
+<a href=#636 id=636 data-nosnippet>636</a>        <span class="prelude-val">None
+<a href=#637 id=637 data-nosnippet>637</a>    </span>}
+<a href=#638 id=638 data-nosnippet>638</a>}
+<a href=#639 id=639 data-nosnippet>639</a>
+<a href=#640 id=640 data-nosnippet>640</a><span class="kw">impl </span>Module <span class="kw">for dyn </span>QuantMethod {
+<a href=#641 id=641 data-nosnippet>641</a>    <span class="kw">fn </span>forward(<span class="kw-2">&amp;</span><span class="self">self</span>, xs: <span class="kw-2">&amp;</span>Tensor) -&gt; <span class="prelude-ty">Result</span>&lt;Tensor&gt; {
+<a href=#642 id=642 data-nosnippet>642</a>        <span class="self">Self</span>::forward(<span class="self">self</span>, xs)
+<a href=#643 id=643 data-nosnippet>643</a>    }
+<a href=#644 id=644 data-nosnippet>644</a>}
+<a href=#645 id=645 data-nosnippet>645</a>
+<a href=#646 id=646 data-nosnippet>646</a><span class="kw">pub fn </span>linear_no_bias(
+<a href=#647 id=647 data-nosnippet>647</a>    in_dim: usize,
+<a href=#648 id=648 data-nosnippet>648</a>    out_dim: usize,
+<a href=#649 id=649 data-nosnippet>649</a>    config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#650 id=650 data-nosnippet>650</a>    vb: ShardedVarBuilder,
+<a href=#651 id=651 data-nosnippet>651</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#652 id=652 data-nosnippet>652</a>    <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
+<a href=#653 id=653 data-nosnippet>653</a>        <span class="kw">match </span>quant_conf {
+<a href=#654 id=654 data-nosnippet>654</a>            QuantizedConfig::Gptq { .. } =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
+<a href=#655 id=655 data-nosnippet>655</a>            QuantizedConfig::Fp8 { .. } =&gt; {
+<a href=#656 id=656 data-nosnippet>656</a>                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">false</span>, Default::default(), vb)<span class="question-mark">?
+<a href=#657 id=657 data-nosnippet>657</a>            </span>}
+<a href=#658 id=658 data-nosnippet>658</a>            QuantizedConfig::Bitsandbytes { .. } =&gt; {
+<a href=#659 id=659 data-nosnippet>659</a>                Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">false</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
+<a href=#660 id=660 data-nosnippet>660</a>            }
+<a href=#661 id=661 data-nosnippet>661</a>            QuantizedConfig::Afq { .. } =&gt; {
+<a href=#662 id=662 data-nosnippet>662</a>                AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">false</span>, vb)<span class="question-mark">?
+<a href=#663 id=663 data-nosnippet>663</a>            </span>}
+<a href=#664 id=664 data-nosnippet>664</a>        }
+<a href=#665 id=665 data-nosnippet>665</a>    } <span class="kw">else </span>{
+<a href=#666 id=666 data-nosnippet>666</a>        <span class="comment">// Handle the case where the layer is dummy (no tensors)
+<a href=#667 id=667 data-nosnippet>667</a>        </span><span class="kw">if </span>!vb.contains_tensor(<span class="string">"weight"</span>) {
+<a href=#668 id=668 data-nosnippet>668</a>            <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
+<a href=#669 id=669 data-nosnippet>669</a>            Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
+<a href=#670 id=670 data-nosnippet>670</a>        } <span class="kw">else </span>{
+<a href=#671 id=671 data-nosnippet>671</a>            <span class="kw">let </span>weight = vb.get_with_hints((out_dim, in_dim), <span class="string">"weight"</span>, Default::default())<span class="question-mark">?</span>;
+<a href=#672 id=672 data-nosnippet>672</a>            <span class="kw">let </span>weight = merge_lora_weights(<span class="kw-2">&amp;</span>vb, weight, in_dim, out_dim, Default::default())<span class="question-mark">?</span>;
+<a href=#673 id=673 data-nosnippet>673</a>
+<a href=#674 id=674 data-nosnippet>674</a>            <span class="kw">let </span>layer = &lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Unquantized(
+<a href=#675 id=675 data-nosnippet>675</a>                Linear::new(weight, <span class="prelude-val">None</span>),
+<a href=#676 id=676 data-nosnippet>676</a>            ))<span class="question-mark">?</span>;
+<a href=#677 id=677 data-nosnippet>677</a>            Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
+<a href=#678 id=678 data-nosnippet>678</a>        }
+<a href=#679 id=679 data-nosnippet>679</a>    };
+<a href=#680 id=680 data-nosnippet>680</a>    <span class="prelude-val">Ok</span>(layer)
+<a href=#681 id=681 data-nosnippet>681</a>}
+<a href=#682 id=682 data-nosnippet>682</a>
+<a href=#683 id=683 data-nosnippet>683</a><span class="kw">pub fn </span>linear(
+<a href=#684 id=684 data-nosnippet>684</a>    in_dim: usize,
+<a href=#685 id=685 data-nosnippet>685</a>    out_dim: usize,
+<a href=#686 id=686 data-nosnippet>686</a>    config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#687 id=687 data-nosnippet>687</a>    vb: ShardedVarBuilder,
+<a href=#688 id=688 data-nosnippet>688</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#689 id=689 data-nosnippet>689</a>    <span class="kw">let </span>layer = <span class="kw">if let </span><span class="prelude-val">Some</span>(quant_conf) = <span class="kw-2">&amp;</span>config {
+<a href=#690 id=690 data-nosnippet>690</a>        <span class="kw">match </span>quant_conf {
+<a href=#691 id=691 data-nosnippet>691</a>            QuantizedConfig::Gptq { .. } =&gt; gptq_linear(in_dim, out_dim, quant_conf, vb)<span class="question-mark">?</span>,
+<a href=#692 id=692 data-nosnippet>692</a>            QuantizedConfig::Fp8 { .. } =&gt; {
+<a href=#693 id=693 data-nosnippet>693</a>                blockwise_fp8_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">true</span>, Default::default(), vb)<span class="question-mark">?
+<a href=#694 id=694 data-nosnippet>694</a>            </span>}
+<a href=#695 id=695 data-nosnippet>695</a>            QuantizedConfig::Bitsandbytes { .. } =&gt; {
+<a href=#696 id=696 data-nosnippet>696</a>                Arc::new(BnbLinear::linear_b(in_dim, out_dim, <span class="bool-val">true</span>, vb)<span class="question-mark">?</span>) <span class="kw">as </span>Arc&lt;<span class="kw">_</span>&gt;
+<a href=#697 id=697 data-nosnippet>697</a>            }
+<a href=#698 id=698 data-nosnippet>698</a>            QuantizedConfig::Afq { .. } =&gt; {
+<a href=#699 id=699 data-nosnippet>699</a>                AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, <span class="bool-val">true</span>, vb)<span class="question-mark">?
+<a href=#700 id=700 data-nosnippet>700</a>            </span>}
+<a href=#701 id=701 data-nosnippet>701</a>        }
+<a href=#702 id=702 data-nosnippet>702</a>    } <span class="kw">else </span>{
+<a href=#703 id=703 data-nosnippet>703</a>        <span class="comment">// Handle the case where the layer is dummy (no tensors)
+<a href=#704 id=704 data-nosnippet>704</a>        </span><span class="kw">if </span>!(vb.contains_tensor(<span class="string">"weight"</span>) &amp;&amp; vb.contains_tensor(<span class="string">"bias"</span>)) {
+<a href=#705 id=705 data-nosnippet>705</a>            <span class="kw">let </span>layer = &lt;DummyLayer <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Dummy)<span class="question-mark">?</span>;
+<a href=#706 id=706 data-nosnippet>706</a>            Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
+<a href=#707 id=707 data-nosnippet>707</a>        } <span class="kw">else </span>{
+<a href=#708 id=708 data-nosnippet>708</a>            <span class="kw">let </span>weight = vb.get_with_hints((out_dim, in_dim), <span class="string">"weight"</span>, Default::default())<span class="question-mark">?</span>;
+<a href=#709 id=709 data-nosnippet>709</a>            <span class="kw">let </span>weight = merge_lora_weights(<span class="kw-2">&amp;</span>vb, weight, in_dim, out_dim, Default::default())<span class="question-mark">?</span>;
+<a href=#710 id=710 data-nosnippet>710</a>            <span class="kw">let </span>bias = vb.get_with_hints((out_dim,), <span class="string">"bias"</span>, Default::default())<span class="question-mark">?</span>;
+<a href=#711 id=711 data-nosnippet>711</a>
+<a href=#712 id=712 data-nosnippet>712</a>            <span class="kw">let </span>layer = &lt;UnquantLinear <span class="kw">as </span>QuantMethod&gt;::new(QuantMethodConfig::Unquantized(
+<a href=#713 id=713 data-nosnippet>713</a>                Linear::new(weight, <span class="prelude-val">Some</span>(bias)),
+<a href=#714 id=714 data-nosnippet>714</a>            ))<span class="question-mark">?</span>;
+<a href=#715 id=715 data-nosnippet>715</a>            Arc::new(layer) <span class="kw">as </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;
+<a href=#716 id=716 data-nosnippet>716</a>        }
+<a href=#717 id=717 data-nosnippet>717</a>    };
+<a href=#718 id=718 data-nosnippet>718</a>    <span class="prelude-val">Ok</span>(layer)
+<a href=#719 id=719 data-nosnippet>719</a>}
+<a href=#720 id=720 data-nosnippet>720</a>
+<a href=#721 id=721 data-nosnippet>721</a><span class="kw">pub fn </span>linear_b(
+<a href=#722 id=722 data-nosnippet>722</a>    in_dim: usize,
+<a href=#723 id=723 data-nosnippet>723</a>    out_dim: usize,
+<a href=#724 id=724 data-nosnippet>724</a>    bias: bool,
+<a href=#725 id=725 data-nosnippet>725</a>    config: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;QuantizedConfig&gt;,
+<a href=#726 id=726 data-nosnippet>726</a>    vb: ShardedVarBuilder,
+<a href=#727 id=727 data-nosnippet>727</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;&gt; {
+<a href=#728 id=728 data-nosnippet>728</a>    <span class="kw">if </span>bias {
+<a href=#729 id=729 data-nosnippet>729</a>        linear(in_dim, out_dim, config, vb)
+<a href=#730 id=730 data-nosnippet>730</a>    } <span class="kw">else </span>{
+<a href=#731 id=731 data-nosnippet>731</a>        linear_no_bias(in_dim, out_dim, config, vb)
+<a href=#732 id=732 data-nosnippet>732</a>    }
+<a href=#733 id=733 data-nosnippet>733</a>}</code></pre></div></section></main></body></html>
