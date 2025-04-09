@@ -48,6 +48,7 @@ struct CausalSelfAttention {
 }
 
 impl CausalSelfAttention {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         vb: ShardedVarBuilder,
         cfg: &TextConfig,

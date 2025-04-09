@@ -654,9 +654,7 @@ template <typename OutT, typename InT> struct TransformAxpby {
   }
 };
 
-template <typename T> struct AccumHelper {
-  typedef float accum_type;
-};
+template <typename T> struct AccumHelper { typedef float accum_type; };
 
 struct BlockSwizzle {
   static METAL_FUNC int2 swizzle(uint3 tid [[threadgroup_position_in_grid]],
@@ -716,9 +714,7 @@ template <typename T> struct is_empty : metal::bool_constant<__is_empty(T)> {};
 template <typename T> constexpr constant bool is_empty_v = is_empty<T>::value;
 #endif
 
-template <typename... Ts> struct make_void {
-  typedef void type;
-};
+template <typename... Ts> struct make_void { typedef void type; };
 
 template <typename... Ts> using void_t = typename make_void<Ts...>::type;
 
@@ -3702,7 +3698,8 @@ template <typename T, const int group_size, const int bits>
 // e.g. instantiate_kernel(binary_int, binary, a, b) ->
 // [[host_name(binary_int)]] [kernel] binary<a, b>
 #define instantiate_kernel(name, func, ...)                                    \
-  template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
+  template [[host_name(                                                        \
+      name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
 
 #define instantiate_quantized(name, type, group_size, bits)                    \
   instantiate_kernel(#name "_" #type "_gs_" #group_size "_b_" #bits, name,     \
