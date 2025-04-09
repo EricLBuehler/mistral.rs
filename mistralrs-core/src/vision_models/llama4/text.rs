@@ -52,6 +52,8 @@ impl CausalSelfAttention {
         vb: ShardedVarBuilder,
         cfg: &TextConfig,
         layer_idx: usize,
+        loading_isq: bool,
+        mapper: &dyn DeviceMapper,
         rope: Arc<Llama3RotaryEmbedding>,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
@@ -65,7 +67,7 @@ impl CausalSelfAttention {
             &cfg.quantization_config,
             false,
             comm,
-            vb.pp("q_proj"),
+            mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
         )?;
         let kv_shard = mistralrs_quant::compute_kv_shard(
             cfg.num_key_value_heads,
@@ -79,7 +81,7 @@ impl CausalSelfAttention {
             false,
             comm,
             kv_shard,
-            vb.pp("k_proj"),
+            mapper.set_device(layer_idx, vb.pp("k_proj"), loading_isq),
         )?;
         let v_proj = ColumnParallelLayer::new_with_shard(
             size_in,
@@ -88,7 +90,7 @@ impl CausalSelfAttention {
             false,
             comm,
             kv_shard,
-            vb.pp("v_proj"),
+            mapper.set_device(layer_idx, vb.pp("v_proj"), loading_isq),
         )?;
         let o_proj = RowParallelLayer::new(
             size_q,
@@ -96,13 +98,13 @@ impl CausalSelfAttention {
             &cfg.quantization_config,
             false,
             comm,
-            vb.pp("o_proj"),
+            mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
         let use_rope = (layer_idx + 1) % 4 != 0;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let norm = if cfg.use_qk_norm && use_rope {
             Some(RmsNorm::from_w(
-                Tensor::ones(head_dim, vb.dtype(), vb.device())?,
+                mapper.cast_nm_device(&Tensor::ones(head_dim, vb.dtype(), vb.device())?, false)?,
                 1e-6,
             )?)
         } else {
@@ -233,9 +235,6 @@ impl CausalSelfAttention {
             }
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            y = y.to_dtype(t)?;
-        }
         y = if attention_mask.is_some() {
             y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
         } else {
@@ -449,9 +448,11 @@ impl Block {
     ) -> Result<Self> {
         let use_chunked_attention = (layer_idx + 1) % 4 != 0;
         let attn = CausalSelfAttention::new(
-            mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            vb.pp("self_attn"),
             cfg,
             layer_idx,
+            loading_isq,
+            mapper,
             rope,
             paged_attn,
             comm,
