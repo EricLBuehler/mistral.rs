@@ -17,6 +17,7 @@ use crate::{
 };
 
 mod config;
+mod vision;
 
 pub use config::{Llama4Config, TextConfig};
 

@@ -55,7 +55,35 @@ impl TextConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, serde::Deserialize)]
+pub enum VisionFeatureSelectStrategy {
+    #[serde(rename = "default")]
+    Default,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct VisionConfig {
+    pub hidden_size: usize,
+    pub hidden_act: Activation,
+    pub num_hidden_layers: usize,
+    pub num_global_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_channels: usize,
+    pub intermediate_size: usize,
+    pub vision_output_dim: usize,
+    pub image_size: usize,
+    pub patch_size: usize,
+    pub norm_eps: f64,
+    pub pixel_shuffle_ratio: f32,
+    pub projector_input_dim: usize,
+    pub projector_output_dim: usize,
+    pub vision_feature_layer: isize,
+    pub vision_feature_select_strategy: VisionFeatureSelectStrategy,
+    pub rope_theta: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Llama4Config {
     pub text_config: TextConfig,
+    pub vision_config: VisionConfig,
 }

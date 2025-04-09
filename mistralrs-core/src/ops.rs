@@ -784,17 +784,18 @@ impl TopKLastDimOp for Tensor {
 }
 
 pub trait RepeatInterleaveOp {
-    fn repeat_interleave(&self, repeats: usize, dim: usize) -> Result<Tensor>;
+    fn repeat_interleave<D: Dim>(&self, repeats: usize, dim: D) -> Result<Tensor>;
     fn repeat_interleave_flat(&self, repeats: Vec<u32>) -> Result<Tensor>;
 }
 
 impl RepeatInterleaveOp for Tensor {
-    fn repeat_interleave(&self, repeats: usize, dim: usize) -> Result<Tensor> {
+    fn repeat_interleave<D: Dim>(&self, repeats: usize, dim: D) -> Result<Tensor> {
+        let dim = self.dim(dim)?;
         // For metal
         assert!(self.dtype().is_float());
         #[allow(clippy::cast_possible_truncation)]
         let indices = Tensor::new(
-            (0..self.dim(dim)?)
+            (0..dim)
                 .flat_map(|i| vec![i as u32; repeats])
                 .collect::<Vec<_>>(),
             self.device(),
