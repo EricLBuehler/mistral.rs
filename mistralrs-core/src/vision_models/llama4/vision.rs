@@ -56,7 +56,7 @@ impl Llama4UnfoldConvolution {
                 for di in 0..kernel_size.0 {
                     for dj in 0..kernel_size.1 {
                         let h_idx = i + di * dilation.0;
-                        let w_idx = i + dj * dilation.0;
+                        let w_idx = j + dj * dilation.0;
                         // Get the block for all channels and add to our list
                         block.push(xs.i((.., .., h_idx, w_idx))?);
                     }

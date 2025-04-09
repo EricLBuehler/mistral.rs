@@ -3,16 +3,19 @@ mod text;
 use std::sync::Arc;
 
 use candle_core::{Device, Result, Tensor};
+use candle_nn::{Linear, Module};
 use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use text::TextModel;
+use vision::Llama4VisionModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
+    layers::linear_no_bias,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
 };
 
@@ -21,8 +24,29 @@ mod vision;
 
 pub use config::{Llama4Config, TextConfig};
 
+struct Llama4MultiModalProjector {
+    linear_1: Linear,
+}
+
+impl Llama4MultiModalProjector {
+    fn new(cfg: &Llama4Config, vb: ShardedVarBuilder) -> Result<Self> {
+        Ok(Self {
+            linear_1: linear_no_bias(
+                cfg.vision_config.vision_output_dim,
+                cfg.text_config.hidden_size,
+                vb.pp("linear_1"),
+            )?,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        self.linear_1.forward(xs)
+    }
+}
 pub struct Llama4Model {
     language_model: TextModel,
+    vision_model: Llama4VisionModel,
+    multi_modal_projector: Llama4MultiModalProjector,
 }
 
 impl Llama4Model {
@@ -35,6 +59,12 @@ impl Llama4Model {
     ) -> Result<Self> {
         // TODO: evaluate
         assert_eq!(attention_mechanism, AttentionImplementation::Eager);
+        let vision_model = Llama4VisionModel::new(
+            &cfg.vision_config,
+            vb.pp("vision_model"),
+            &normal_loading_metadata.real_device,
+            &normal_loading_metadata.mapper.get_comm_for(0)?,
+        )?;
         let language_model = TextModel::new(
             &cfg.text_config,
             vb.pp("language_model"),
@@ -42,13 +72,20 @@ impl Llama4Model {
             normal_loading_metadata,
             attention_mechanism,
         )?;
+        let multi_modal_projector =
+            Llama4MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
 
-        Ok(Self { language_model })
+        Ok(Self {
+            language_model,
+            vision_model,
+            multi_modal_projector,
+        })
     }
 
     fn forward(
         &self,
         input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
         seqlen_offsets: &[usize],
         context_lens: Vec<(usize, usize)>,
         metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
@@ -79,6 +116,8 @@ impl IsqModel for Llama4Model {
     }
 }
 
+pub struct Llama4ModelSpecificArgs;
+
 impl NormalModel for Llama4Model {
     fn forward(
         &self,
@@ -91,6 +130,7 @@ impl NormalModel for Llama4Model {
     ) -> candle_core::Result<Tensor> {
         self.forward(
             input_ids,
+            None,
             seqlen_offsets,
             context_lens,
             metadata,
@@ -129,6 +169,53 @@ impl NormalModel for Llama4Model {
     }
     fn max_seq_len(&self) -> usize {
         self.language_model.max_seq_len()
+    }
+}
+
+impl VisionModel for Llama4Model {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        position_ids: Vec<usize>,
+        model_specific_args: Box<dyn std::any::Any>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> candle_core::Result<Tensor> {
+        let Llama4ModelSpecificArgs = *model_specific_args
+            .downcast()
+            .expect("Cannot downcast into `Llama4ModelSpecificArgs`");
+        self.forward(
+            input_ids,
+            pixel_values,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+        )
+    }
+    fn cache(&self) -> &EitherCache {
+        self.language_model.cache()
+    }
+    fn cache_mut(&mut self) -> &mut EitherCache {
+        self.language_model.cache_mut()
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        self.language_model.config()
+    }
+    fn has_conv2d(&self) -> bool {
+        false
+    }
+    fn device(&self) -> &Device {
+        self.language_model.device()
+    }
+    fn max_seq_len(&self) -> usize {
+        self.language_model.max_seq_len()
+    }
+    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
+        Box::new(Llama4ModelSpecificArgs)
     }
 }
 
