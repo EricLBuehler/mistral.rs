@@ -195,14 +195,6 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         None
     };
 
-    // let sharded_vb = unsafe {
-    //     ShardedSafeTensors::sharded(
-    //         paths.get_weight_filenames(),
-    //         dtype,
-    //         load_device,
-    //         make_dummy_regexes,
-    //     )?
-    // };
     let sharded_vb = varbuilder_utils::from_mmaped_safetensors(
         paths.get_weight_filenames().to_vec(),
         vec![],
