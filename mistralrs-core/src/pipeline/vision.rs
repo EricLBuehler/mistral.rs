@@ -435,8 +435,8 @@ impl Loader for VisionLoader {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
-                &load_device,
                 &available_devices,
+                silent,
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
