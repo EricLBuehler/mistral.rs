@@ -564,8 +564,6 @@ pub(super) struct Llama4VisionModel {
     layernorm_post: LayerNorm,
     model: Llama4VisionEncoder,
     vision_adapter: Llama4VisionPixelShuffle,
-    pub(super) num_patches: usize,
-    num_attn_heads: usize,
 }
 
 impl Llama4VisionModel {
@@ -626,8 +624,6 @@ impl Llama4VisionModel {
             layernorm_pre,
             model,
             vision_adapter,
-            num_patches,
-            num_attn_heads: cfg.num_attention_heads,
         })
     }
 

@@ -66,7 +66,6 @@ pub struct VisionConfig {
     pub hidden_size: usize,
     pub hidden_act: Activation,
     pub num_hidden_layers: usize,
-    pub num_global_layers: usize,
     pub num_attention_heads: usize,
     pub num_channels: usize,
     pub intermediate_size: usize,
@@ -78,7 +77,6 @@ pub struct VisionConfig {
     pub projector_input_dim: usize,
     pub projector_output_dim: usize,
     pub vision_feature_layer: isize,
-    pub vision_feature_select_strategy: VisionFeatureSelectStrategy,
     pub rope_theta: f32,
 }
 
@@ -86,4 +84,5 @@ pub struct VisionConfig {
 pub struct Llama4Config {
     pub text_config: TextConfig,
     pub vision_config: VisionConfig,
+    pub image_token_index: usize,
 }
