@@ -839,10 +839,12 @@ impl SplitOp for Tensor {
     }
 }
 
+#[allow(dead_code)]
 pub trait BincountOp {
     fn bincount(&self, minlength: u32) -> Result<Vec<u32>>;
 }
 
+#[allow(dead_code)]
 fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
     // let max_val = values.iter().max().copied().unwrap_or(0);
     // let result_len = (max_val + 1).max(minlength);
@@ -899,6 +901,7 @@ fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
         )
 }
 
+#[allow(dead_code)]
 impl BincountOp for Tensor {
     fn bincount(&self, minlength: u32) -> Result<Vec<u32>> {
         let values = self.to_vec1::<u32>()?;
