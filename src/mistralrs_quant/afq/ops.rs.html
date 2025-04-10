@@ -307,7 +307,7 @@
 <a href=#307 id=307 data-nosnippet>307</a>            <span class="kw">if </span>lhs_indices.dtype() != DType::U32 || rhs_indices.dtype() != DType::U32 {
 <a href=#308 id=308 data-nosnippet>308</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"lhs and rhs indices must be u32."</span>)
 <a href=#309 id=309 data-nosnippet>309</a>            }
-<a href=#310 id=310 data-nosnippet>310</a>            <span class="comment">// Broadcase the indices if applicable.
+<a href=#310 id=310 data-nosnippet>310</a>            <span class="comment">// Broadcast the indices if applicable.
 <a href=#311 id=311 data-nosnippet>311</a>            </span>{
 <a href=#312 id=312 data-nosnippet>312</a>                <span class="kw">let </span><span class="kw-2">mut </span>shape = lhs_indices.shape().clone();
 <a href=#313 id=313 data-nosnippet>313</a>                shape = rhs_indices
