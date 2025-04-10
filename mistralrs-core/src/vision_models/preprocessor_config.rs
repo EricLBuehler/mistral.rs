@@ -52,6 +52,8 @@ pub struct PreProcessorConfig {
     pub(crate) pan_and_scan_min_ratio_to_activate: Option<f64>,
     pub(crate) do_pan_and_scan: Option<bool>,
     pub(crate) default_to_square: Option<bool>,
+    pub(crate) max_patches: Option<usize>,
+    pub(crate) resize_to_max_canvas: Option<bool>,
 }
 
 #[allow(dead_code)]

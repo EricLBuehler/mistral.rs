@@ -22,8 +22,8 @@ instantiate_bitwise_or(uint8_t) instantiate_bitwise_or(uint32_t)
         [[kernel]] void bitwise_leftshift(const device T *a [[buffer(0)]],
                                           device T *output [[buffer(1)]],
                                           device const uint &k,
-                                          uint tid [[thread_position_in_grid]]
-        ) {
+                                          uint tid
+                                          [[thread_position_in_grid]]) {
   output[tid] = a[tid] << k;
 }
 

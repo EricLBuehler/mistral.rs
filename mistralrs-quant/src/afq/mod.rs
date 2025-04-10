@@ -267,6 +267,51 @@ impl AfqLayer {
             group_size: AfqGroupSize::try_from(*group_size)?,
         }))
     }
+
+    pub fn afq_packed_linear_b(
+        num_local_experts: usize,
+        in_dim: usize,
+        out_dim: usize,
+        config: &QuantizedConfig,
+        bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let QuantizedConfig::Afq { bits, group_size } = config else {
+            candle_core::bail!("Unexpected quantization config.")
+        };
+
+        let w_q = vb.get_with_hints_dtype(
+            (num_local_experts, out_dim, in_dim * bits / 32),
+            "weight",
+            Default::default(),
+            DType::U32,
+        )?;
+        let scales = vb.get_with_hints(
+            (num_local_experts, out_dim, in_dim / group_size),
+            "scales",
+            Default::default(),
+        )?;
+        let biases = vb.get_with_hints(
+            (num_local_experts, out_dim, in_dim / group_size),
+            "biases",
+            Default::default(),
+        )?;
+
+        let bias = if bias {
+            Some(vb.get((num_local_experts, out_dim), "bias")?)
+        } else {
+            None
+        };
+
+        Ok(Arc::new(Self {
+            w_q,
+            scales,
+            bias,
+            biases,
+            bits: AfqBits::try_from(*bits)?,
+            group_size: AfqGroupSize::try_from(*group_size)?,
+        }))
+    }
 }
 
 impl QuantizedSerde for AfqLayer {

@@ -208,13 +208,13 @@ impl InputsProcessor for MLlamaImageProcessor {
             inputs:
                 text_models_inputs_processor::InputMetadata {
                     input,
-                    positions,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                    flash_meta,
+                    positions: _,
+                    context_lens: _,
+                    position_ids: _,
+                    paged_attn_meta: _,
+                    flash_meta: _,
                 },
-            seq_indices,
+            seq_indices: _,
         } = if is_prompt {
             get_prompt_input(
                 input_seqs
@@ -375,6 +375,54 @@ impl InputsProcessor for MLlamaImageProcessor {
             )
         } else {
             (None, None, None, None)
+        };
+
+        let text_models_inputs_processor::InnerInputProcessorOutput {
+            inputs:
+                text_models_inputs_processor::InputMetadata {
+                    input,
+                    positions,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                    flash_meta,
+                },
+            seq_indices,
+        } = if is_prompt {
+            get_prompt_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks().to_vec())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                None, // TODO: evaluate if it is possible to batch this
+                mapper,
+            )
+            .nth(0)
+            .unwrap()
+            .unwrap()
+        } else {
+            get_completion_input(
+                input_seqs
+                    .iter()
+                    .map(|seq| seq.get_toks().to_vec())
+                    .collect::<Vec<_>>(),
+                input_seqs,
+                device,
+                no_kv_cache,
+                last_n_context_len,
+                return_raw_logits,
+                paged_attn_metadata.as_mut(),
+                None, // TODO: evaluate if it is possible to batch this
+                mapper,
+            )
+            .nth(0)
+            .unwrap()
+            .unwrap()
         };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {

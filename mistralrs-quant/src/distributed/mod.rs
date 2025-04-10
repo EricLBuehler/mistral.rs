@@ -1,7 +1,7 @@
 use std::{fmt::Debug, sync::Barrier};
 
-use candle_core::{Result, Tensor};
-pub use ops::{Comm, Id, SumAllReduce};
+use candle_core::Result;
+pub use ops::{AllGather, Comm, Id, SumAllReduce};
 pub mod layers;
 pub mod socket;
 
@@ -32,10 +32,6 @@ pub fn use_nccl() -> bool {
     (std::env::var("MISTRALRS_NO_NCCL").is_err()
         || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"))
         && (cfg!(feature = "nccl") && cfg!(feature = "cuda"))
-}
-
-pub trait DistributedOperation {
-    fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor>;
 }
 
 #[cfg(all(feature = "cuda", feature = "nccl"))]
@@ -105,8 +101,8 @@ mod ops {
         }
     }
 
-    impl super::DistributedOperation for SumAllReduce {
-        fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
+    impl SumAllReduce {
+        pub fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
             xs.apply_op1_no_bwd(self)
         }
     }
@@ -177,6 +173,98 @@ mod ops {
             Ok((dst, l.shape().clone()))
         }
     }
+
+    #[derive(Clone, Debug)]
+    pub struct AllGather {
+        comm: Arc<Comm>,
+        dim: usize,
+    }
+
+    impl AllGather {
+        pub fn new(comm: &Arc<Comm>, dim: usize) -> Self {
+            Self {
+                comm: comm.clone(),
+                dim,
+            }
+        }
+    }
+
+    impl AllGather {
+        pub fn all_gather(&self, xs: &Tensor) -> Result<Tensor> {
+            xs.apply_op1_no_bwd(self)
+        }
+    }
+
+    impl CustomOp1 for AllGather {
+        fn name(&self) -> &'static str {
+            "AllGather"
+        }
+
+        fn cpu_fwd(&self, _s: &CpuStorage, _l: &Layout) -> Result<(CpuStorage, Shape)> {
+            candle_core::bail!("AllGather is never used on cpu")
+        }
+
+        fn cuda_fwd(
+            &self,
+            s: &candle_core::CudaStorage,
+            l: &Layout,
+        ) -> Result<(candle_core::CudaStorage, Shape)> {
+            use cudarc::driver::DeviceSlice;
+            use half::{bf16, f16};
+
+            let mut out_shape = l.shape().dims().to_vec();
+            out_shape[self.dim] = out_shape[self.dim] * self.comm.world_size();
+            let out_shape = Shape::from(out_shape);
+
+            let elem_count = out_shape.elem_count();
+            let dev = s.device().clone();
+            let dst = match s.dtype() {
+                DType::BF16 => {
+                    let s = s.as_cuda_slice::<bf16>()?;
+                    let s = match l.contiguous_offsets() {
+                        Some((0, l)) if l == s.len() => s,
+                        Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                    };
+                    assert_eq!(dev.ordinal(), self.comm.rank());
+                    assert!(elem_count > 0);
+                    let mut dst = unsafe { dev.alloc::<bf16>(elem_count) }.w()?;
+                    self.comm
+                        .comm
+                        .all_gather(s, &mut dst)
+                        .map_err(candle_core::Error::debug)?;
+                    candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                }
+                DType::F16 => {
+                    let s = s.as_cuda_slice::<f16>()?;
+                    let s = match l.contiguous_offsets() {
+                        Some((0, l)) if l == s.len() => s,
+                        Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                    };
+                    let mut dst = unsafe { dev.alloc::<f16>(elem_count) }.w()?;
+                    self.comm
+                        .comm
+                        .all_gather(s, &mut dst)
+                        .map_err(candle_core::Error::debug)?;
+                    candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                }
+                DType::F32 => {
+                    let s = s.as_cuda_slice::<f32>()?;
+                    let s = match l.contiguous_offsets() {
+                        Some((0, l)) if l == s.len() => s,
+                        Some(_) | None => candle_core::bail!("input has to be contiguous"),
+                    };
+                    let mut dst = unsafe { dev.alloc::<f32>(elem_count) }.w()?;
+                    self.comm
+                        .comm
+                        .all_gather(s, &mut dst)
+                        .map_err(candle_core::Error::debug)?;
+                    candle_core::CudaStorage::wrap_cuda_slice(dst, dev)
+                }
+                dtype => candle_core::bail!("unsupported dtype {dtype:?}"),
+            };
+            Ok((dst, out_shape))
+        }
+    }
 }
 
 #[cfg(not(all(feature = "cuda", feature = "nccl")))]
@@ -240,8 +328,23 @@ mod ops {
         }
     }
 
-    impl super::DistributedOperation for SumAllReduce {
-        fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
+    impl SumAllReduce {
+        pub fn sum_all_reduce(&self, xs: &Tensor) -> Result<Tensor> {
+            Ok(xs.clone())
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct AllGather;
+
+    impl AllGather {
+        pub fn new(_comm: &Arc<Comm>, _dim: usize) -> Self {
+            Self
+        }
+    }
+
+    impl AllGather {
+        pub fn all_gather(&self, xs: &Tensor) -> Result<Tensor> {
             Ok(xs.clone())
         }
     }
