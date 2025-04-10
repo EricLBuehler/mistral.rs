@@ -32,6 +32,7 @@ use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
 use crate::vision_models::inputs_processor::Phi4MMProcessor;
+use crate::vision_models::llama4::{self, Llama4Config, Llama4Model, Llama4Processor};
 use crate::vision_models::llava::config::Config as LLaVAConfig;
 use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::{self, LLaVAProcessor};
@@ -151,6 +152,8 @@ pub enum VisionLoaderType {
     Gemma3,
     #[serde(rename = "mistral3")]
     Mistral3,
+    #[serde(rename = "llama4")]
+    Llama4,
 }
 
 impl FromStr for VisionLoaderType {
@@ -169,7 +172,8 @@ impl FromStr for VisionLoaderType {
             "qwen2_5vl" => Ok(Self::Qwen2_5VL),
             "gemma3" => Ok(Self::Gemma3),
             "mistral3" => Ok(Self::Mistral3),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`.")),
+            "llama4" => Ok(Self::Llama4),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`.")),
         }
     }
 }
@@ -3708,6 +3712,210 @@ impl DeviceMappedModelLoader for Mistral3Loader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.head_dim(),
             v_head_dim: cfg.head_dim(),
+        };
+
+        Ok(Box::new(cfg))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
+}
+
+// ======================== Llama 4 Loader
+
+/// [`VisionLoader`] for an Llama Vision model.
+///
+/// [`VisionLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.VisionLoader.html
+pub struct VLlama4Loader;
+
+pub struct VLlama4Prefixer;
+
+impl VisionPromptPrefixer for VLlama4Prefixer {
+    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+        format!("{}{prompt}", llama4::IMAGE_TOKEN)
+    }
+}
+
+impl VisionModelLoader for VLlama4Loader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn VisionModel + Send + Sync>> {
+        let mut config: Llama4Config = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(Llama4Model::new(
+            &config,
+            vb,
+            self.is_gptx(),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self) -> bool {
+        false
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut config: Llama4Config = serde_json::from_str(config)?;
+        config.text_config.use_flash_attn = use_flash_attn;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(Llama4Processor::new(&processor_config.unwrap()))
+    }
+    fn supports_paged_attention(&self) -> bool {
+        false
+    }
+    fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
+        Arc::new(VLlama4Prefixer)
+    }
+}
+
+impl IsqModelLoader for VLlama4Loader {
+    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
+        todo!()
+    }
+}
+
+impl DeviceMappedModelLoader for VLlama4Loader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len: _,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Llama4Config = serde_json::from_str(config)?;
+
+        Ok(max_batch_size
+            * cfg.text_config.num_attention_heads
+            * prompt_chunksize
+            * prompt_chunksize)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg: Llama4Config = serde_json::from_str(config)?;
+        let tcfg = &cfg.text_config;
+
+        let elems = {
+            let embed_tokens = tcfg.hidden_size * tcfg.vocab_size / weight_pack_factor;
+            let lm_head = if !tcfg.tie_word_embeddings {
+                tcfg.hidden_size * tcfg.vocab_size
+            } else {
+                0
+            };
+            let norm = tcfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<Vec<usize>> {
+        let cfg: Llama4Config = serde_json::from_str(config)?;
+        let tcfg = &cfg.text_config;
+
+        let mut per_layer_elems = Vec::new();
+
+        for layer_idx in 0..tcfg.num_hidden_layers {
+            let input_layernorm = tcfg.hidden_size;
+            let post_attention_layernorm = tcfg.hidden_size;
+
+            let size_in = tcfg.hidden_size;
+            let size_q = (tcfg.hidden_size / tcfg.num_attention_heads) * tcfg.num_attention_heads;
+            let size_kv = (tcfg.hidden_size / tcfg.num_attention_heads) * tcfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let use_moe = tcfg.moe_layers().contains(&layer_idx);
+            let moe_block = if use_moe {
+                let h_size = tcfg.hidden_size;
+                let i_size = tcfg.intermediate_size;
+                let gate_proj = tcfg.num_local_experts * h_size * i_size / weight_pack_factor;
+                let up_proj = tcfg.num_local_experts * h_size * i_size / weight_pack_factor;
+                let down_proj = tcfg.num_local_experts * i_size * h_size / weight_pack_factor;
+
+                gate_proj + up_proj + down_proj
+            } else {
+                let h_size = tcfg.hidden_size;
+                let i_size = tcfg.intermediate_size_mlp;
+                let gate_proj = h_size * i_size / weight_pack_factor;
+                let up_proj = h_size * i_size / weight_pack_factor;
+                let down_proj = i_size * h_size / weight_pack_factor;
+
+                gate_proj + up_proj + down_proj
+            };
+
+            per_layer_elems.push(
+                input_layernorm
+                    + post_attention_layernorm
+                    + q_proj
+                    + k_proj
+                    + v_proj
+                    + o_proj
+                    + moe_block,
+            );
+        }
+
+        Ok(per_layer_elems
+            .into_iter()
+            .map(|x| x * dtype.size_in_bytes())
+            .collect())
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: Llama4Config = serde_json::from_str(config)?;
+        Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Llama4Config = serde_json::from_str(config)?;
+        let cfg = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_attention_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
 
         Ok(Box::new(cfg))

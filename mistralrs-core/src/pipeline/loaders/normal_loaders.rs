@@ -3391,6 +3391,7 @@ impl NormalModelLoader for Llama4Loader {
 
 impl IsqModelLoader for Llama4Loader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        todo!();
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention

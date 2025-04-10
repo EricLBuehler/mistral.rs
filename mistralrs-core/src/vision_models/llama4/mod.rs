@@ -24,7 +24,8 @@ mod config;
 mod inputs_processor;
 mod vision;
 
-pub use config::{Llama4Config, TextConfig};
+pub(crate) use config::{Llama4Config, TextConfig};
+pub(crate) use inputs_processor::{Llama4Processor, IMAGE_TOKEN};
 
 struct Llama4MultiModalProjector {
     linear_1: Linear,

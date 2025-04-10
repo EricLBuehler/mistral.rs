@@ -38,7 +38,7 @@ use crate::{
 
 use super::Llama4ModelSpecificArgs;
 
-const DUMMY_IMAGE_TOKEN: &str = "<|image|>";
+pub(crate) const IMAGE_TOKEN: &str = "<|image|>";
 const IMAGE_START: &str = "<|image_start|>";
 const IMAGE_END: &str = "<|image_end|>";
 const PATCH: &str = "<|patch|>";
@@ -81,7 +81,7 @@ impl Processor for Llama4Processor {
             PATCH,
             TILE_X_SEP,
             TILE_Y_SEP,
-            DUMMY_IMAGE_TOKEN,
+            IMAGE_TOKEN,
         ]
     }
 
@@ -106,7 +106,7 @@ impl Llama4ImageProcessor {
                 img_string.push_str(TILE_Y_SEP);
             }
         }
-        img_string.push_str(DUMMY_IMAGE_TOKEN);
+        img_string.push_str(IMAGE_TOKEN);
         img_string.push_str(&PATCH.repeat(num_patches_per_chunk));
         img_string.push_str(IMAGE_END);
         img_string
@@ -173,7 +173,7 @@ impl InputsProcessor for Llama4ImageProcessor {
                 .expect("Detokenization failed!");
             let n_images_in_text = detokenized
                 .iter()
-                .map(|text| text.matches(DUMMY_IMAGE_TOKEN).count())
+                .map(|text| text.matches(IMAGE_TOKEN).count())
                 .collect::<Vec<_>>();
             let n_images_in_images = input_seqs
                 .iter()
@@ -233,7 +233,7 @@ impl InputsProcessor for Llama4ImageProcessor {
             let num_patches_per_chunk =
                 (image_h / self.patch_size) * (image_w / self.patch_size) / self.downsample_ratio;
 
-            let re = Regex::new(DUMMY_IMAGE_TOKEN).unwrap();
+            let re = Regex::new(IMAGE_TOKEN).unwrap();
             let placeholder_counts = input_seqs
                 .iter()
                 .map(|seq| re.find_iter(seq.get_initial_prompt()).count())
