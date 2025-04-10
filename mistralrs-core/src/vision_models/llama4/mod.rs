@@ -21,6 +21,7 @@ use crate::{
 };
 
 mod config;
+mod inputs_processor;
 mod vision;
 
 pub use config::{Llama4Config, TextConfig};
