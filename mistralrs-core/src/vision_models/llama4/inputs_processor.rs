@@ -4,10 +4,10 @@ use std::{
     any::Any,
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
 
-use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{Context, Device, IndexOp, Result, Tensor, D};
 use image::DynamicImage;
 use itertools::Itertools;
 use mistralrs_vision::{
@@ -15,6 +15,7 @@ use mistralrs_vision::{
     Transforms,
 };
 use ordered_float::NotNan;
+use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
@@ -30,37 +31,58 @@ use crate::{
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::PreProcessorConfig,
+        processor_config::ProcessorConfig,
         ModelInputs,
     },
 };
 
 use super::Llama4ModelSpecificArgs;
 
-const IMAGE_TOKEN: &str = "<|image|>";
+const DUMMY_IMAGE_TOKEN: &str = "<|image|>";
+const IMAGE_START: &str = "<|image_start|>";
+const IMAGE_END: &str = "<|image_end|>";
+const PATCH: &str = "<|patch|>";
+const TILE_X_SEP: &str = "<|tile_x_separator|>";
+const TILE_Y_SEP: &str = "<|tile_y_separator|>";
 
 // Input processor
 struct Llama4ImageProcessor {
-    // To represent uninitialized, we do this. Should always be init by the time this is read.
-    max_image_tiles: RwLock<Option<usize>>,
+    patch_size: usize,
+    downsample_ratio: usize,
 }
 // Processor
-pub struct Llama4Processor;
+pub struct Llama4Processor {
+    patch_size: usize,
+    downsample_ratio: usize,
+}
 
 impl Llama4Processor {
-    pub fn new() -> Self {
-        Self
+    pub fn new(cfg: &ProcessorConfig) -> Self {
+        Self {
+            patch_size: cfg.patch_size.unwrap_or(14),
+            downsample_ratio: (1. / cfg.pixel_shuffle_ratio.unwrap_or(0.5).powi(2)).round()
+                as usize,
+        }
     }
 }
 
 impl Processor for Llama4Processor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Llama4ImageProcessor {
-            max_image_tiles: RwLock::new(None),
+            patch_size: self.patch_size,
+            downsample_ratio: self.downsample_ratio,
         })
     }
 
     fn get_special_tokens(&self) -> &[&'static str] {
-        &[IMAGE_TOKEN, "<|python_tag|>"]
+        &[
+            IMAGE_START,
+            IMAGE_END,
+            PATCH,
+            TILE_X_SEP,
+            TILE_Y_SEP,
+            DUMMY_IMAGE_TOKEN,
+        ]
     }
 
     fn template_action(&self) -> MessagesAction {
@@ -68,102 +90,27 @@ impl Processor for Llama4Processor {
     }
 }
 
-// https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/Llama4/processing_Llama4.py#L61
-/// Generate a cross-attention token mask for image tokens in the input sequence.
-fn get_cross_attention_token_mask(input_ids: Vec<u32>, image_token_id: u32) -> Vec<(i64, i64)> {
-    let image_token_locations = input_ids
-        .iter()
-        .positions(|token| *token == image_token_id)
-        .collect::<Vec<_>>();
-
-    if image_token_locations.is_empty() {
-        return vec![];
-    }
-
-    // If only one image present, unmask until end of sequence
-    if image_token_locations.len() == 1 {
-        return vec![(image_token_locations[0] as i64, -1)];
-    }
-
-    let mut vision_masks = image_token_locations[..image_token_locations.len() - 1]
-        .iter()
-        .zip(&image_token_locations[1..])
-        .map(|(a, b)| (*a as i64, *b as i64))
-        .collect::<Vec<_>>();
-
-    // Last image will attent to all subsequent text
-    vision_masks.push((
-        *image_token_locations.last().unwrap() as i64,
-        input_ids.len() as i64,
-    ));
-
-    // If there are 2 or more consecutive vision tokens, they should all attend
-    // to all subsequent text present
-    let mut last_mask_end = vision_masks.last().unwrap().1;
-    for vision_mask in vision_masks.iter_mut().rev() {
-        if vision_mask.0 == vision_mask.1 - 1 {
-            vision_mask.1 = last_mask_end;
-        }
-        last_mask_end = vision_mask.1;
-    }
-
-    vision_masks
-}
-
-// Convert the cross attention mask indices to a cross attention mask 4D array.
-/// `cross_attention_token_mask` structure:
-/// - The outer list represents the batch dimension.
-/// - The middle list represents different images within each batch item.
-/// - The inner list contains pairs of integers [start, end] representing token ranges for each image.
-///
-/// `num_tiles`: the number of tiles for each image in each batch item.
-///
-/// NOTE: Special handling is done for cases where the end token is -1, which is interpreted as attending to the end of the sequence.
-///
-/// Out shape is (batch_size, length, max_num_images, max_num_tiles). 1 means attn is allowed, 0 means it is not
-fn convert_sparse_cross_attention_mask_to_dense(
-    cross_attn_token_mask: Vec<Vec<(i64, i64)>>,
-    num_tiles: Vec<Vec<usize>>,
-    max_num_tiles: usize,
-    length: usize,
-    dev: &Device,
-) -> candle_core::Result<Tensor> {
-    let bs = cross_attn_token_mask.len();
-    let max_num_images = cross_attn_token_mask.iter().map(|x| x.len()).max().unwrap();
-
-    let mut cross_attention_mask = Tensor::zeros(
-        (bs, length, max_num_images, max_num_tiles),
-        DType::I64,
-        &Device::Cpu,
-    )?;
-
-    for (sample_idx, (sample_masks, sample_num_tiles)) in
-        cross_attn_token_mask.into_iter().zip(num_tiles).enumerate()
-    {
-        for (mask_idx, ((start, end), mask_num_tiles)) in
-            sample_masks.into_iter().zip(sample_num_tiles).enumerate()
-        {
-            let mut end = end.min(length as i64);
-            if end == -1 {
-                end = length as i64;
+impl Llama4ImageProcessor {
+    fn prompt_split_image(&self, aspect_ratio: &Tensor, num_patches_per_chunk: usize) -> String {
+        let mut img_string = IMAGE_START.to_string();
+        let aspect_ratio = aspect_ratio.to_vec1::<u32>().unwrap();
+        let (ratio_h, ratio_w) = (aspect_ratio[0] as usize, aspect_ratio[1] as usize);
+        if ratio_h * ratio_w > 1 {
+            for _yy in 0..ratio_h {
+                for xx in 0..ratio_w {
+                    img_string.push_str(&PATCH.repeat(num_patches_per_chunk));
+                    if xx < ratio_w - 1 {
+                        img_string.push_str(TILE_X_SEP);
+                    }
+                }
+                img_string.push_str(TILE_Y_SEP);
             }
-            cross_attention_mask = cross_attention_mask.slice_assign(
-                &[
-                    &sample_idx,
-                    &(start as usize..end as usize),
-                    &mask_idx,
-                    &(..mask_num_tiles),
-                ],
-                &Tensor::ones(
-                    (1, end as usize - start as usize, 1, mask_num_tiles),
-                    DType::I64,
-                    &Device::Cpu,
-                )?,
-            )?;
         }
+        img_string.push_str(DUMMY_IMAGE_TOKEN);
+        img_string.push_str(&PATCH.repeat(num_patches_per_chunk));
+        img_string.push_str(IMAGE_END);
+        img_string
     }
-
-    cross_attention_mask.to_device(dev)
 }
 
 impl InputsProcessor for Llama4ImageProcessor {
@@ -203,6 +150,133 @@ impl InputsProcessor for Llama4ImageProcessor {
             return Box::new(std::iter::once(Err(anyhow::Error::msg(
                 "Llama4InputProcessor requires a specified tokenizer.",
             ))));
+        };
+
+        let config = other_config.expect("Need a PreProcessorConfig config.");
+        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+
+        let has_images = input_seqs.iter().all(|seq| seq.has_images());
+
+        let pixel_values = if has_images {
+            let mut pixel_values_accum = Vec::new();
+            let mut aspect_ratios_accum = Vec::new();
+
+            let bs = input_seqs.len();
+            let detokenized = tokenizer
+                .decode_batch(
+                    &input_seqs
+                        .iter()
+                        .map(|seq| seq.get_toks())
+                        .collect::<Vec<_>>(),
+                    false,
+                )
+                .expect("Detokenization failed!");
+            let n_images_in_text = detokenized
+                .iter()
+                .map(|text| text.matches(DUMMY_IMAGE_TOKEN).count())
+                .collect::<Vec<_>>();
+            let n_images_in_images = input_seqs
+                .iter()
+                .map(|seq| seq.images().map(|imgs| imgs.len()).unwrap_or(0))
+                .collect::<Vec<_>>();
+
+            if n_images_in_text != n_images_in_images {
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(format!(
+                    "The number of images in each batch {n_images_in_text:?} should be the same as the number of images {n_images_in_images:?}. The model cannot support a different number of images per patch. Perhaps you forgot a `<|image|>` tag?"
+                )))));
+            }
+
+            let max_num_images = *n_images_in_images
+                .iter()
+                .max()
+                .expect("No max images per batch!");
+
+            for seq in input_seqs.iter_mut() {
+                let PreprocessedImages {
+                    pixel_values,
+                    pixel_attention_mask: _,
+                    image_sizes: _,
+                    num_img_tokens: _,
+                    aspect_ratio_ids,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
+                    rows: _,
+                    cols: _,
+                    pixel_values_list: _,
+                    tgt_sizes: _,
+                    image_sizes_all: _,
+                    num_crops: _,
+                } = self
+                    .preprocess(
+                        seq.take_images()
+                            .expect("Need to have images by this point."),
+                        vec![],
+                        config,
+                        device,
+                        (bs, max_num_images), // Don't use it here...
+                    )
+                    .expect("Preprocessing failed");
+                // Intentionally don't unsqueeze here as the BS is already included. Just stack now.
+                pixel_values_accum.push(pixel_values);
+                aspect_ratios_accum.push(aspect_ratio_ids.unwrap());
+            }
+
+            let pixel_values = Tensor::cat(&pixel_values_accum, 0).unwrap();
+            let aspect_ratios = Tensor::cat(&aspect_ratios_accum, 0).unwrap();
+
+            let (image_h, image_w) = (
+                pixel_values.dim(D::Minus2).unwrap(),
+                pixel_values.dim(D::Minus1).unwrap(),
+            );
+            let num_patches_per_chunk =
+                (image_h / self.patch_size) * (image_w / self.patch_size) / self.downsample_ratio;
+
+            let re = Regex::new(DUMMY_IMAGE_TOKEN).unwrap();
+            let placeholder_counts = input_seqs
+                .iter()
+                .map(|seq| re.find_iter(seq.get_initial_prompt()).count())
+                .collect::<Vec<_>>();
+            let total_placeholders = placeholder_counts.iter().sum::<usize>();
+            if total_placeholders != pixel_values.dims()[0] {
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    format!("Accross all seqs, found {total_placeholders} placholders but have {} flattened images.", pixel_values.dims()[0]),
+                ))));
+            }
+
+            let mut image_index = 0;
+            for (seq, placeholder_count) in input_seqs.iter_mut().zip(placeholder_counts) {
+                if placeholder_count == 0 {
+                    continue;
+                }
+                let prompt_splits = re.split(seq.get_initial_prompt());
+                let mut new_prompt = Vec::new();
+                for (local_image_index, split_part) in prompt_splits.enumerate() {
+                    new_prompt.push(split_part.to_string());
+                    if local_image_index < placeholder_count {
+                        let tokens_for_this_image = self.prompt_split_image(
+                            &aspect_ratios.i(image_index).unwrap(),
+                            num_patches_per_chunk,
+                        );
+                        image_index += 1;
+                        new_prompt.push(tokens_for_this_image);
+                    }
+                }
+                let prompt = new_prompt.join("");
+
+                seq.set_initial_prompt(prompt.clone());
+                let toks = tokenizer
+                    .encode_fast(prompt, false)
+                    .expect("Detokenization failed!");
+
+                let ids = toks.get_ids().to_vec();
+                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+            }
+
+            Some(pixel_values)
+        } else {
+            None
         };
 
         let text_models_inputs_processor::InnerInputProcessorOutput {
@@ -251,131 +325,6 @@ impl InputsProcessor for Llama4ImageProcessor {
             .nth(0)
             .unwrap()
             .unwrap()
-        };
-        let config = other_config.expect("Need a PreProcessorConfig config.");
-        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
-
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
-
-        let (pixel_values, aspect_ratio_ids, aspect_ratio_mask, cross_attn_mask) = if has_images {
-            let mut pixel_values_accum = Vec::new();
-            let mut aspect_ratio_ids_accum = Vec::new();
-            let mut aspect_ratio_mask_accum = Vec::new();
-            let mut num_tiles_accum = Vec::new();
-
-            let bs = input_seqs.len();
-            let detokenized = tokenizer
-                .decode_batch(
-                    &input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks())
-                        .collect::<Vec<_>>(),
-                    false,
-                )
-                .expect("Detokenization failed!");
-            let n_images_in_text = detokenized
-                .iter()
-                .map(|text| text.matches(IMAGE_TOKEN).count())
-                .collect::<Vec<_>>();
-            let n_images_in_images = input_seqs
-                .iter()
-                .map(|seq| seq.images().map(|imgs| imgs.len()).unwrap_or(0))
-                .collect::<Vec<_>>();
-
-            if n_images_in_text != n_images_in_images {
-                return Box::new(std::iter::once(Err(anyhow::Error::msg(format!(
-                    "The number of images in each batch {n_images_in_text:?} should be the same as the number of images {n_images_in_images:?}. The model cannot support a different number of images per patch. Perhaps you forgot a `<|image|>` tag?"
-                )))));
-            }
-
-            let max_num_images = *n_images_in_images
-                .iter()
-                .max()
-                .expect("No max images per batch!");
-
-            for seq in input_seqs.iter_mut() {
-                let PreprocessedImages {
-                    pixel_values,
-                    pixel_attention_mask: _,
-                    image_sizes: _,
-                    num_img_tokens: _,
-                    aspect_ratio_ids,
-                    aspect_ratio_mask,
-                    num_tiles,
-                    image_grid_thw: _,
-                    video_grid_thw: _,
-                    rows: _,
-                    cols: _,
-                    pixel_values_list: _,
-                    tgt_sizes: _,
-                    image_sizes_all: _,
-                    num_crops: _,
-                } = self
-                    .preprocess(
-                        seq.take_images()
-                            .expect("Need to have images by this point."),
-                        vec![],
-                        config,
-                        device,
-                        (bs, max_num_images), // Don't use it here...
-                    )
-                    .expect("Preprocessing failed");
-                pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
-                aspect_ratio_ids_accum.push(aspect_ratio_ids.unwrap().unsqueeze(0).unwrap());
-                aspect_ratio_mask_accum.push(aspect_ratio_mask.unwrap().unsqueeze(0).unwrap());
-                num_tiles_accum.push(num_tiles.unwrap());
-            }
-
-            // Create cross attn mask
-            let image_token_id = tokenizer
-                .encode_fast(IMAGE_TOKEN, false)
-                .unwrap()
-                .get_ids()
-                .to_vec();
-            let image_token_id = if image_token_id.len() == 1 {
-                image_token_id[0]
-            } else {
-                panic!("{IMAGE_TOKEN} encoding should be one token, got {image_token_id:?}");
-            };
-            let chunks = input.chunk(input.dim(0).unwrap(), 0).unwrap();
-            let cross_attention_token_mask = chunks
-                .iter()
-                .map(|token_ids| {
-                    get_cross_attention_token_mask(
-                        token_ids.squeeze(0).unwrap().to_vec1::<u32>().unwrap(),
-                        image_token_id,
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            let cross_attn_mask = convert_sparse_cross_attention_mask_to_dense(
-                cross_attention_token_mask,
-                num_tiles_accum,
-                self.max_image_tiles
-                    .read()
-                    .unwrap()
-                    .expect("`max_image_tiles` must be set!"),
-                chunks
-                    .iter()
-                    .map(|input_ids| *input_ids.dims().last().unwrap())
-                    .max()
-                    .unwrap(),
-                chunks[0].device(),
-            );
-
-            let cross_attn_mask = match cross_attn_mask {
-                Ok(v) => v,
-                Err(e) => return Box::new(std::iter::once(Err(anyhow::Error::msg(e.to_string())))),
-            };
-
-            (
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                Some(Tensor::cat(&aspect_ratio_ids_accum, 0).unwrap()),
-                Some(Tensor::cat(&aspect_ratio_mask_accum, 0).unwrap()),
-                Some(cross_attn_mask),
-            )
-        } else {
-            (None, None, None, None)
         };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
