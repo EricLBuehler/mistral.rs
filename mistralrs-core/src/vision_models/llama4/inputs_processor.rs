@@ -7,8 +7,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use candle_core::{Context, DType, Device, Result, Tensor, D};
-use image::{imageops::FilterType, DynamicImage};
+use candle_core::{Context, DType, Device, IndexOp, Result, Tensor, D};
+use image::DynamicImage;
 use itertools::Itertools;
 use mistralrs_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, Rescale, TensorTransforms, ToTensorNoNorm,
@@ -29,7 +29,7 @@ use crate::{
     sequence::Sequence,
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
-        preprocessor_config::{PreProcessorConfig, ToFilter},
+        preprocessor_config::PreProcessorConfig,
         ModelInputs,
     },
 };
@@ -526,8 +526,7 @@ impl Llama4ImageProcessor {
         let chosen_canvas = possible_resolutions
             .into_iter()
             .zip(scales)
-            .enumerate()
-            .filter_map(|(i, (possible, scale))| {
+            .filter_map(|(possible, scale)| {
                 if scale == selected_scale {
                     Some(possible)
                 } else {
@@ -570,7 +569,44 @@ impl Llama4ImageProcessor {
             (new_height, new_width)
         }
     }
+
+    fn split_to_tiles(
+        &self,
+        images: &Tensor,
+        num_tiles_h: usize,
+        num_tiles_w: usize,
+    ) -> Result<Tensor> {
+        let (bs, c, h, w) = images.dims4()?;
+        let mut images = images.reshape((
+            bs,
+            c,
+            num_tiles_h,
+            h / num_tiles_h,
+            num_tiles_w,
+            w / num_tiles_w,
+        ))?;
+        images = images.permute((0, 2, 4, 1, 3, 5))?.contiguous()?;
+        images.reshape((
+            bs,
+            num_tiles_h * num_tiles_w,
+            c,
+            h / num_tiles_h,
+            w / num_tiles_w,
+        ))
+    }
+
+    fn reorder_images(
+        &self,
+        processed_images: HashMap<(usize, usize), Tensor>,
+        grouped_images_index: HashMap<usize, ((usize, usize), usize)>,
+    ) -> Result<Vec<Tensor>> {
+        grouped_images_index
+            .values()
+            .map(|(k, v)| processed_images[k].i(*v))
+            .collect::<Result<Vec<Tensor>>>()
+    }
 }
+
 impl ImagePreProcessor for Llama4ImageProcessor {
     const DEFAULT_MEAN: [f64; 3] = [0.5, 0.5, 0.5];
     const DEFAULT_STD: [f64; 3] = [0.5, 0.5, 0.5];
@@ -581,18 +617,17 @@ impl ImagePreProcessor for Llama4ImageProcessor {
         videos: Vec<Vec<DynamicImage>>,
         config: &PreProcessorConfig,
         device: &Device,
-        (bs, max_num_images): (usize, usize),
+        (_bs, _max_num_images): (usize, usize),
     ) -> Result<PreprocessedImages> {
         assert!(videos.is_empty());
 
         let max_patches = config.max_patches.context("Require `max_patches`")?;
-        let size = config.size.context("Require `size`")?;
+        let size = config.size.as_ref().context("Require `size`")?;
         let resize_to_max_canvas = config
             .resize_to_max_canvas
             .context("Require `resize_to_max_canvas`")?;
-
-        let mut sample_images = Vec::new();
-        let mut sample_aspect_ratios = Vec::new();
+        let do_rescale = config.do_rescale.unwrap_or(true);
+        let do_normalize = config.do_normalize.unwrap_or(true);
 
         let possible_resolutions = self.find_supported_resolutions(max_patches, &size)?;
 
@@ -607,19 +642,24 @@ impl ImagePreProcessor for Llama4ImageProcessor {
                 input: &ToTensorNoNorm,
                 inner_transforms: &[],
             };
-            let mut image = image.apply(to_tensor_rescale, device)?;
+            let image = image.apply(to_tensor_rescale, device)?;
             images.push(image);
         }
 
         let (grouped_images, grouped_images_index) = self.group_images_by_shape(&images)?;
 
+        let mut grouped_processed_images = HashMap::new();
+        let mut grouped_aspect_ratios = HashMap::new();
         for (shape, stacked_images) in grouped_images {
             let image_size = (
                 stacked_images.dim(D::Minus2)? as u32,
                 stacked_images.dim(D::Minus1)? as u32,
             );
-            let target_size =
-                self.get_best_fit(image_size, possible_resolutions, resize_to_max_canvas)?;
+            let target_size = self.get_best_fit(
+                image_size,
+                possible_resolutions.clone(),
+                resize_to_max_canvas,
+            )?;
             // If target_size requires upscaling, we might want to limit the upscaling to max_upscaling_size
             let max_upscaling_size = if resize_to_max_canvas {
                 None
@@ -656,9 +696,78 @@ impl ImagePreProcessor for Llama4ImageProcessor {
                     .pad_with_zeros(D::Minus2, 0, paste_y_r)?
                     .pad_with_zeros(D::Minus1, 0, paste_x_r)?
             };
-            // https://github.com/huggingface/transformers/blob/9cda4265d61b0ecc276b705bd9b361a452106128/src/transformers/models/llama4/image_processing_llama4_fast.py#L446
+
+            let rescale_and_norm_transforms = TensorTransforms {
+                inner_transforms: &[
+                    &do_rescale.then_some(Rescale {
+                        factor: config.rescale_factor,
+                    }),
+                    &do_normalize.then_some(Normalize {
+                        mean: config.image_mean.unwrap_or(Self::DEFAULT_MEAN).to_vec(),
+                        std: config.image_std.unwrap_or(Self::DEFAULT_STD).to_vec(),
+                    }),
+                ],
+            };
+            processed_images = <Tensor as ApplyTensorTransforms>::apply(
+                &processed_images,
+                rescale_and_norm_transforms,
+                device,
+            )?;
+
+            let (ratio_h, ratio_w) = (
+                target_size.0 / size["height"],
+                target_size.1 / size["width"],
+            );
+            // Split into tiles
+            processed_images =
+                self.split_to_tiles(&processed_images, ratio_h as usize, ratio_w as usize)?;
+            grouped_processed_images.insert(shape, processed_images.clone());
+            grouped_aspect_ratios.insert(
+                shape,
+                Tensor::new(vec![vec![ratio_h, ratio_w]], device)?
+                    .repeat((1, stacked_images.dim(0)?))?,
+            );
+
+            // Add a global tile to the processed tile if there are more than one tiles
+            if ratio_h * ratio_w > 1 {
+                let mut global_tiles = stacked_images
+                    .interpolate2d(size["height"] as usize, size["width"] as usize)?;
+                global_tiles = <Tensor as ApplyTensorTransforms>::apply(
+                    &global_tiles,
+                    rescale_and_norm_transforms,
+                    device,
+                )?;
+                grouped_processed_images.insert(
+                    shape,
+                    Tensor::cat(&[processed_images, global_tiles.unsqueeze(1)?], 1)?,
+                );
+            }
         }
 
-        todo!()
+        let processed_images =
+            self.reorder_images(grouped_processed_images, grouped_images_index.clone())?;
+        let aspect_ratios_list =
+            self.reorder_images(grouped_aspect_ratios, grouped_images_index.clone())?;
+
+        let processed_images = Tensor::cat(&processed_images, 0)?;
+        let aspect_ratios = Tensor::stack(&aspect_ratios_list, 0)?;
+
+        Ok(PreprocessedImages {
+            pixel_values: processed_images,
+            pixel_attention_mask: None,
+            image_sizes: None,
+            num_img_tokens: None,
+            aspect_ratio_ids: Some(aspect_ratios),
+            aspect_ratio_mask: None,
+            num_tiles: None,
+            image_grid_thw: None,
+            video_grid_thw: None,
+            rows: None,
+            cols: None,
+            pixel_values_list: None,
+            tgt_sizes: None,
+            image_sizes_all: None,
+            num_crops: None,
+        })
     }
 }
