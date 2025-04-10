@@ -4,3 +4,4 @@
 *.a
 .DS_Store
 .idea
+**/build/
