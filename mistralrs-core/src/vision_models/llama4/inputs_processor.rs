@@ -238,12 +238,6 @@ impl InputsProcessor for Llama4ImageProcessor {
                 .iter()
                 .map(|seq| re.find_iter(seq.get_initial_prompt()).count())
                 .collect::<Vec<_>>();
-            let total_placeholders = placeholder_counts.iter().sum::<usize>();
-            if total_placeholders != pixel_values.dims()[0] {
-                return Box::new(std::iter::once(Err(anyhow::Error::msg(
-                    format!("Accross all seqs, found {total_placeholders} placholders but have {} flattened images.", pixel_values.dims()[0]),
-                ))));
-            }
 
             let mut image_index = 0;
             for (seq, placeholder_count) in input_seqs.iter_mut().zip(placeholder_counts) {

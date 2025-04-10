@@ -623,7 +623,7 @@ impl TextModel {
         }
         let blocks: Vec<_> = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
-            "Loading repeating layers",
+            "Loading text repeating layers",
             &normal_loading_metadata.multi_progress,
         )
         .into_iter()

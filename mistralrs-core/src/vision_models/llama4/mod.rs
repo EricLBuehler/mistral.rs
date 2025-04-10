@@ -69,6 +69,7 @@ impl Llama4Model {
             vb.pp("vision_model"),
             &normal_loading_metadata.real_device,
             &normal_loading_metadata.mapper.get_comm_for(0)?,
+            &normal_loading_metadata.multi_progress,
         )?;
         let language_model = TextModel::new(
             &cfg.text_config,

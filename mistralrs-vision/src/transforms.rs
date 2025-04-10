@@ -1,5 +1,5 @@
 use crate::utils::{get_pixel_data, n_channels};
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor, D};
 use image::{DynamicImage, GenericImageView};
 
 use crate::ImageTransform;
@@ -83,7 +83,7 @@ impl ImageTransform for Normalize {
     type Output = Self::Input;
 
     fn map(&self, x: &Self::Input, _: &Device) -> Result<Self::Output> {
-        let num_channels = x.dim(0)?;
+        let num_channels = x.dim(D::Minus(3))?;
         if self.mean.len() != num_channels || self.std.len() != num_channels {
             candle_core::bail!(
                 "Num channels ({}) must match number of mean ({}) and std ({}).",
@@ -93,10 +93,10 @@ impl ImageTransform for Normalize {
             );
         }
         let mut accum = Vec::new();
-        for (i, channel) in x.chunk(num_channels, 0)?.iter().enumerate() {
+        for (i, channel) in x.chunk(num_channels, D::Minus(3))?.iter().enumerate() {
             accum.push(((channel - self.mean[i])? / self.std[i])?);
         }
-        Tensor::cat(&accum, 0)
+        Tensor::cat(&accum, D::Minus(3))
     }
 }
 

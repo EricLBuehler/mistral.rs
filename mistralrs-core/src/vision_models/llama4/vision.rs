@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{LayerNorm, LayerNormConfig, Linear, Module};
+use indicatif::MultiProgress;
 use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
 
 use crate::{
@@ -11,7 +12,7 @@ use crate::{
     layers::{layer_norm, linear_no_bias, Activation, Sdpa},
     ops::RepeatInterleaveOp,
     pipeline::IsqModel,
-    utils::unvarbuilder::UnVarBuilder,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 use super::config::VisionConfig;
@@ -337,10 +338,15 @@ impl Llama4VisionEncoder {
         freqs: Llama4VisionRotaryEmbedding,
         real_dev: &Device,
         comm: &Arc<mistralrs_quant::Comm>,
+        multi_progress: &Arc<MultiProgress>,
     ) -> Result<Self> {
         let mut layers = Vec::with_capacity(num_layers);
         let layers_vb = vb.pp("layers");
-        for i in 0..num_layers {
+        for i in NiceProgressBar::<_, 'b'>(
+            0..num_layers,
+            "Loading vision repeating layers",
+            &multi_progress,
+        ) {
             layers.push(Llama4VisionEncoderLayer::new(
                 cfg,
                 layers_vb.pp(i),
@@ -394,7 +400,7 @@ impl Llama4VisionPixelShuffleMLP {
         Ok(Self {
             act: Activation::Gelu,
             fc1: ColumnParallelLayer::new(
-                cfg.hidden_size,
+                cfg.intermediate_size,
                 cfg.projector_input_dim,
                 &None,
                 false,
@@ -487,15 +493,16 @@ struct Llama4VisionRotaryEmbedding {
 impl Llama4VisionRotaryEmbedding {
     fn new(cfg: &VisionConfig, device: &Device, dtype: DType) -> Result<Self> {
         let idx = cfg.image_size / cfg.patch_size;
-        let mut img_idx = Tensor::arange(0f32, idx.pow(2) as f32, device)?;
+        let mut img_idx =
+            Tensor::arange(0f32, idx.pow(2) as f32, device)?.reshape((idx.pow(2), 1))?;
         img_idx = Tensor::cat(&[&img_idx, &img_idx.narrow(0, 0, 1)?], 0)?;
         // Insert ID_CLS_TOKEN in the bottom right
         img_idx = img_idx.slice_assign(
             &[
                 &(img_idx.dim(0)? - 1..img_idx.dim(0)?),
-                &(img_idx.dim(1)? - 1..img_idx.dim(1)? - 1),
+                &(img_idx.dim(1)? - 1..img_idx.dim(1)?),
             ],
-            &Tensor::new(-2f32, device)?,
+            &Tensor::new(-2f32, device)?.reshape((1, 1))?,
         )?;
         let img_ids_flat = img_idx.flatten_all()?.to_vec1::<f32>()?;
         // frequencies_x = img_idx % idx
@@ -572,6 +579,7 @@ impl Llama4VisionModel {
         vb: ShardedVarBuilder,
         real_dev: &Device,
         comm: &Arc<mistralrs_quant::Comm>,
+        multi_progress: &Arc<MultiProgress>,
     ) -> Result<Self> {
         let patch_embedding = Llama4UnfoldConvolution::new(
             cfg,
@@ -606,6 +614,7 @@ impl Llama4VisionModel {
             rotary_embedding,
             real_dev,
             comm,
+            multi_progress,
         )?;
 
         let vision_adapter = Llama4VisionPixelShuffle::new(

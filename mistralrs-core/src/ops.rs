@@ -790,12 +790,13 @@ pub trait RepeatInterleaveOp {
 
 impl RepeatInterleaveOp for Tensor {
     fn repeat_interleave<D: Dim>(&self, repeats: usize, dim: D) -> Result<Tensor> {
-        let dim = self.dim(dim)?;
+        let dim = dim.to_index(self.shape(), "repeat_interleave")?;
+        let dim_elements = self.dim(dim)?;
         // For metal
         assert!(self.dtype().is_float());
         #[allow(clippy::cast_possible_truncation)]
         let indices = Tensor::new(
-            (0..dim)
+            (0..dim_elements)
                 .flat_map(|i| vec![i as u32; repeats])
                 .collect::<Vec<_>>(),
             self.device(),

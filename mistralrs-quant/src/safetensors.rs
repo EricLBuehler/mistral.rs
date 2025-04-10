@@ -468,7 +468,7 @@ impl Backend for ShardedSafeTensors {
                         let stop = (rank + 1) * block_size;
 
                         if dim == 0 {
-                            tensor.i((start..stop, ..))?
+                            tensor.i(start..stop)?
                         } else if dim == 1 {
                             tensor.i((.., start..stop))?
                         } else if dim == 2 {
@@ -541,7 +541,7 @@ impl Backend for ShardedSafeTensors {
                         let stop = start + len;
 
                         if dim == 0 {
-                            tensor.i((start..stop, ..))?
+                            tensor.i(start..stop)?
                         } else if dim == 1 {
                             tensor.i((.., start..stop))?
                         } else if dim == 2 {
