@@ -307,7 +307,7 @@ pub(crate) fn afq_mm_op(
             if lhs_indices.dtype() != DType::U32 || rhs_indices.dtype() != DType::U32 {
                 candle_core::bail!("lhs and rhs indices must be u32.")
             }
-            // Broadcase the indices if applicable.
+            // Broadcast the indices if applicable.
             {
                 let mut shape = lhs_indices.shape().clone();
                 shape = rhs_indices
