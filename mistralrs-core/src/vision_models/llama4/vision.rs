@@ -74,7 +74,7 @@ impl Llama4UnfoldConvolution {
         // (b, c, k*k, l)
         let mut result = Tensor::stack(&blocks, D::Minus1)?;
         // (b, c*k*k, l)
-        result = result.reshape((bs, c * kernel_size.0 * kernel_size.1, h_out, w_out))?;
+        result = result.reshape((bs, c * kernel_size.0 * kernel_size.1, h_out * w_out))?;
         Ok(result)
     }
 
@@ -92,7 +92,7 @@ impl Llama4UnfoldConvolution {
         // };
 
         let mut hidden_states = self.unfold(hidden_states)?;
-        hidden_states = hidden_states.permute((0, 2, 1))?;
+        hidden_states = hidden_states.transpose(1, 2)?;
         self.linear.forward(&hidden_states)
     }
 }
@@ -103,7 +103,6 @@ struct Llama4VisionAttention {
     v_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
     sdpa_params: SdpaParams,
-    num_heads: usize,
     head_dim: usize,
     freqs: Llama4VisionRotaryEmbedding,
 }
@@ -117,36 +116,64 @@ impl Llama4VisionAttention {
     ) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         Ok(Self {
-            q_proj: ColumnParallelLayer::new(
+            // q_proj: ColumnParallelLayer::new(
+            //     cfg.hidden_size,
+            //     cfg.num_attention_heads * head_dim,
+            //     &None,
+            //     true,
+            //     comm,
+            //     vb.pp("q_proj"),
+            // )?,
+            // k_proj: ColumnParallelLayer::new(
+            //     cfg.hidden_size,
+            //     cfg.num_attention_heads * head_dim,
+            //     &None,
+            //     true,
+            //     comm,
+            //     vb.pp("k_proj"),
+            // )?,
+            // v_proj: ColumnParallelLayer::new(
+            //     cfg.hidden_size,
+            //     cfg.num_attention_heads * head_dim,
+            //     &None,
+            //     true,
+            //     comm,
+            //     vb.pp("v_proj"),
+            // )?,
+            // o_proj: RowParallelLayer::new(
+            //     cfg.hidden_size,
+            //     cfg.num_attention_heads * head_dim,
+            //     &None,
+            //     true,
+            //     comm,
+            //     vb.pp("o_proj"),
+            // )?,
+            q_proj: mistralrs_quant::linear_b(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
-                &None,
                 true,
-                comm,
+                &None,
                 vb.pp("q_proj"),
             )?,
-            k_proj: ColumnParallelLayer::new(
+            k_proj: mistralrs_quant::linear_b(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
-                &None,
                 true,
-                comm,
+                &None,
                 vb.pp("k_proj"),
             )?,
-            v_proj: ColumnParallelLayer::new(
+            v_proj: mistralrs_quant::linear_b(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
-                &None,
                 true,
-                comm,
+                &None,
                 vb.pp("v_proj"),
             )?,
-            o_proj: RowParallelLayer::new(
+            o_proj: mistralrs_quant::linear_b(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
-                &None,
                 true,
-                comm,
+                &None,
                 vb.pp("o_proj"),
             )?,
             sdpa_params: SdpaParams {
@@ -156,7 +183,6 @@ impl Llama4VisionAttention {
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
             },
-            num_heads: cfg.num_attention_heads,
             head_dim,
             freqs,
         })
@@ -177,35 +203,31 @@ impl Llama4VisionAttention {
             v = v.to_dtype(original_dtype)?;
         }
 
+        // Should be same, no caching...
+        let (bs, q_sq, _) = q.dims3()?;
+        let (_, k_sq, _) = k.dims3()?;
+
+        q = q
+            .reshape((bs, q_sq, (), self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        k = k
+            .reshape((bs, k_sq, (), self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        v = v
+            .reshape((bs, k_sq, (), self.head_dim))?
+            .transpose(1, 2)?
+            .contiguous()?;
+
         // Apply rope
         {
             q = candle_nn::rotary_emb::rope_i(&q, &self.freqs.cos, &self.freqs.sin)?;
             k = candle_nn::rotary_emb::rope_i(&k, &self.freqs.cos, &self.freqs.sin)?;
         }
 
-        // Should be same, no caching...
-        let (bs, q_sq, _) = q.dims3()?;
-        let (_, k_sq, _) = k.dims3()?;
-
-        q = q
-            .reshape((bs, q_sq, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        k = k
-            .reshape((bs, k_sq, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
-        v = v
-            .reshape((bs, k_sq, self.num_heads, self.head_dim))?
-            .transpose(1, 2)?;
-
         let mut attn_output = Sdpa
-            .run_attention(
-                &q.contiguous()?,
-                &k.contiguous()?,
-                &v.contiguous()?,
-                attention_mask,
-                None,
-                &self.sdpa_params,
-            )?
+            .run_attention(&q, &k, &v, attention_mask, None, &self.sdpa_params)?
             .transpose(1, 2)?
             .contiguous()?
             .reshape((bs, q_sq, ()))?
@@ -236,20 +258,34 @@ impl Llama4Mlp {
     ) -> Result<Self> {
         Ok(Self {
             act: cfg.hidden_act,
-            fc1: ColumnParallelLayer::new(
+            // fc1: ColumnParallelLayer::new(
+            //     cfg.hidden_size,
+            //     cfg.intermediate_size,
+            //     &None,
+            //     true,
+            //     comm,
+            //     vb.pp("fc1"),
+            // )?,
+            // fc2: RowParallelLayer::new(
+            //     cfg.intermediate_size,
+            //     cfg.hidden_size,
+            //     &None,
+            //     true,
+            //     comm,
+            //     vb.pp("fc2"),
+            // )?,
+            fc1: mistralrs_quant::linear_b(
                 cfg.hidden_size,
                 cfg.intermediate_size,
-                &None,
                 true,
-                comm,
+                &None,
                 vb.pp("fc1"),
             )?,
-            fc2: RowParallelLayer::new(
+            fc2: mistralrs_quant::linear_b(
                 cfg.intermediate_size,
                 cfg.hidden_size,
-                &None,
                 true,
-                comm,
+                &None,
                 vb.pp("fc2"),
             )?,
         })
@@ -261,9 +297,9 @@ impl Llama4Mlp {
         if let Some(t) = self.fc1.quantized_act_type() {
             hidden_states = hidden_states.to_dtype(t)?;
         }
-        hidden_states = self
-            .fc2
-            .forward(&self.act.forward(&self.fc1.forward(&hidden_states)?)?)?;
+        hidden_states = self.fc1.forward(&hidden_states)?;
+        hidden_states = self.act.forward(&hidden_states)?;
+        hidden_states = self.fc2.forward(&hidden_states)?;
         if self.fc1.quantized_act_type().is_some() {
             hidden_states = hidden_states.to_dtype(original_dtype)?;
         }
@@ -399,20 +435,34 @@ impl Llama4VisionPixelShuffleMLP {
     ) -> Result<Self> {
         Ok(Self {
             act: Activation::Gelu,
-            fc1: ColumnParallelLayer::new(
+            // fc1: ColumnParallelLayer::new(
+            //     cfg.intermediate_size,
+            //     cfg.projector_input_dim,
+            //     &None,
+            //     false,
+            //     comm,
+            //     vb.pp("fc1"),
+            // )?,
+            // fc2: RowParallelLayer::new(
+            //     cfg.projector_input_dim,
+            //     cfg.projector_output_dim,
+            //     &None,
+            //     false,
+            //     comm,
+            //     vb.pp("fc2"),
+            // )?,
+            fc1: mistralrs_quant::linear_b(
                 cfg.intermediate_size,
                 cfg.projector_input_dim,
-                &None,
                 false,
-                comm,
+                &None,
                 vb.pp("fc1"),
             )?,
-            fc2: RowParallelLayer::new(
+            fc2: mistralrs_quant::linear_b(
                 cfg.projector_input_dim,
                 cfg.projector_output_dim,
-                &None,
                 false,
-                comm,
+                &None,
                 vb.pp("fc2"),
             )?,
         })
@@ -553,7 +603,7 @@ impl Llama4VisionRotaryEmbedding {
             )?;
             freqs.index_select(&indices_every_two, D::Minus1)?
         };
-        freqs = freqs.reshape(((), 1, 1))?;
+        freqs = freqs.squeeze(1)?;
         freqs = freqs.lt(0.)?.where_cond(&freqs, &freqs.zeros_like()?)?;
 
         Ok(Self {
@@ -652,9 +702,10 @@ impl Llama4VisionModel {
             num_patches,
             hidden_dim,
         ))?;
-        hidden_state =
+        let class_embedding =
             self.class_embedding
                 .expand((hidden_state.dim(0)?, 1, hidden_state.dim(D::Minus1)?))?;
+        hidden_state = Tensor::cat(&[hidden_state, class_embedding], 1)?;
         num_patches += 1;
 
         // Position embeddings

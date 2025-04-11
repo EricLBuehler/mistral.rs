@@ -15,7 +15,6 @@ use mistralrs_vision::{
     Transforms,
 };
 use ordered_float::NotNan;
-use regex::Regex;
 use tokenizers::Tokenizer;
 use tracing::warn;
 
@@ -233,10 +232,9 @@ impl InputsProcessor for Llama4ImageProcessor {
             let num_patches_per_chunk =
                 (image_h / self.patch_size) * (image_w / self.patch_size) / self.downsample_ratio;
 
-            let re = Regex::new(IMAGE_TOKEN).unwrap();
             let placeholder_counts = input_seqs
                 .iter()
-                .map(|seq| re.find_iter(seq.get_initial_prompt()).count())
+                .map(|seq| seq.get_initial_prompt().match_indices(IMAGE_TOKEN).count())
                 .collect::<Vec<_>>();
 
             let mut image_index = 0;
@@ -244,7 +242,8 @@ impl InputsProcessor for Llama4ImageProcessor {
                 if placeholder_count == 0 {
                     continue;
                 }
-                let prompt_splits = re.split(seq.get_initial_prompt());
+                let prompt_splits: std::str::Split<'_, &str> =
+                    seq.get_initial_prompt().split(IMAGE_TOKEN);
                 let mut new_prompt = Vec::new();
                 for (local_image_index, split_part) in prompt_splits.enumerate() {
                     new_prompt.push(split_part.to_string());
