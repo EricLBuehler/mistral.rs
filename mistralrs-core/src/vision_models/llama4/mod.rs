@@ -18,6 +18,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, NormalLoadingMetadata, NormalModel, VisionModel,
     },
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 mod config;
@@ -156,7 +157,17 @@ impl IsqModel for Llama4Model {
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        self.language_model.residual_tensors()
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("multi_modal_projector")
+            .pp("linear_1")
+            .add(&self.multi_modal_projector.linear_1);
+        uvb.pp("language_model")
+            .extend(self.language_model.residual_tensors());
+        uvb.pp("vision_model")
+            .extend(self.vision_model.residual_tensors());
+
+        uvb.to_safetensors()
     }
 }
 

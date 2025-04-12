@@ -308,18 +308,14 @@ impl Llama4VisionEncoderLayer {
         let residual = hidden_state;
         let mut hidden_state = self.input_layernorm.forward(hidden_state)?;
 
-        hidden_state = hidden_state.clamp(-50., 50.)?;
         hidden_state = self.self_attn.forward(&hidden_state, attention_mask)?;
-        hidden_state = hidden_state.clamp(-50., 50.)?;
         hidden_state = (residual + hidden_state)?;
 
         // FF
         let residual = hidden_state.clone();
         hidden_state = self.post_attention_layernorm.forward(&hidden_state)?;
 
-        hidden_state = hidden_state.clamp(-50., 50.)?;
         hidden_state = self.mlp.forward(&hidden_state)?;
-        hidden_state = hidden_state.clamp(-50., 50.)?;
         residual + hidden_state
     }
 }
@@ -708,6 +704,22 @@ impl IsqModel for Llama4VisionModel {
         unreachable!("Llama4Vision model cannot be quantized.");
     }
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        todo!()
+        let uvb = UnVarBuilder::new();
+
+        uvb.pp("patch_embedding")
+            .pp("linear")
+            .add(&self.patch_embedding.linear);
+        uvb.add_tensor("class_embedding", self.class_embedding.clone());
+        uvb.add_tensor(
+            "positional_embedding_vlm",
+            self.positional_embedding_vlm.clone(),
+        );
+
+        uvb.pp("layernorm_pre").add(&self.layernorm_pre);
+        uvb.pp("layernorm_post").add(&self.layernorm_post);
+
+        uvb.pp("model").extend(self.model.residual_tensors());
+
+        uvb.to_safetensors()
     }
 }
