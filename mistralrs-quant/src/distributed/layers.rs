@@ -580,9 +580,9 @@ impl QuantizedSerde for ReplicatedLayer {
 
 #[derive(Debug)]
 pub struct PackedExperts {
-    pub gate_proj: Arc<dyn QuantMethod>,
-    pub up_proj: Arc<dyn QuantMethod>,
-    pub down_proj: Arc<dyn QuantMethod>,
+    pub gate_proj: Vec<Arc<dyn QuantMethod>>,
+    pub up_proj: Vec<Arc<dyn QuantMethod>>,
+    pub down_proj: Vec<Arc<dyn QuantMethod>>,
 }
 
 impl PackedExperts {
@@ -619,30 +619,30 @@ impl PackedExperts {
                     }
 
                     (
-                        AfqLayer::afq_packed_linear_b(
+                        vec![AfqLayer::afq_packed_linear_b(
                             num_local_experts,
                             hidden_size,
                             intermediate_size,
                             quant_conf,
                             bias,
                             vb.pp("gate_proj"),
-                        )?,
-                        AfqLayer::afq_packed_linear_b(
+                        )?],
+                        vec![AfqLayer::afq_packed_linear_b(
                             num_local_experts,
                             hidden_size,
                             intermediate_size,
                             quant_conf,
                             bias,
                             vb.pp("up_proj"),
-                        )?,
-                        AfqLayer::afq_packed_linear_b(
+                        )?],
+                        vec![AfqLayer::afq_packed_linear_b(
                             num_local_experts,
                             intermediate_size,
                             hidden_size,
                             quant_conf,
                             bias,
                             vb.pp("down_proj"),
-                        )?,
+                        )?],
                     )
                 }
                 _ => candle_core::bail!(
@@ -700,32 +700,45 @@ impl PackedExperts {
                 )?
                 .t()?
                 .contiguous()?;
-            let gate_proj = merge_lora_weights(
-                &vb,
-                gate_proj,
-                hidden_size,
-                intermediate_size * 2,
-                shard_gate,
-            )?;
-            let up_proj =
-                merge_lora_weights(&vb, up_proj, hidden_size, intermediate_size * 2, shard_up)?;
-            let down_proj =
-                merge_lora_weights(&vb, down_proj, intermediate_size, hidden_size, shard_down)?;
 
-            let gate_proj = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
-                Linear::new(gate_proj, None),
-            ))?;
-            let up_proj = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
-                Linear::new(up_proj, None),
-            ))?;
-            let down_proj = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
-                Linear::new(down_proj, None),
-            ))?;
-            (
-                Arc::new(gate_proj) as Arc<dyn QuantMethod>,
-                Arc::new(up_proj) as Arc<dyn QuantMethod>,
-                Arc::new(down_proj) as Arc<dyn QuantMethod>,
-            )
+            let mut gs = Vec::new();
+            let mut us = Vec::new();
+            let mut ds = Vec::new();
+            for ((mut gate_proj, mut up_proj), mut down_proj) in gate_proj
+                .chunk(num_local_experts, 0)?
+                .into_iter()
+                .zip(up_proj.chunk(num_local_experts, 0)?)
+                .zip(down_proj.chunk(num_local_experts, 0)?)
+            {
+                gate_proj = gate_proj.squeeze(0)?;
+                up_proj = up_proj.squeeze(0)?;
+                down_proj = down_proj.squeeze(0)?;
+                let gate_proj = merge_lora_weights(
+                    &vb,
+                    gate_proj,
+                    hidden_size,
+                    intermediate_size * 2,
+                    shard_gate,
+                )?;
+                let up_proj =
+                    merge_lora_weights(&vb, up_proj, hidden_size, intermediate_size * 2, shard_up)?;
+                let down_proj =
+                    merge_lora_weights(&vb, down_proj, intermediate_size, hidden_size, shard_down)?;
+
+                let gate_proj = <UnquantLinear as QuantMethod>::new(
+                    QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
+                )?;
+                let up_proj = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                    Linear::new(up_proj, None),
+                ))?;
+                let down_proj = <UnquantLinear as QuantMethod>::new(
+                    QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
+                )?;
+                gs.push(Arc::new(gate_proj) as Arc<dyn QuantMethod>);
+                us.push(Arc::new(up_proj) as Arc<dyn QuantMethod>);
+                ds.push(Arc::new(down_proj) as Arc<dyn QuantMethod>);
+            }
+            (gs, us, ds)
         };
 
         Ok(Self {
