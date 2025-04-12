@@ -350,14 +350,18 @@ impl Llama4VisionEncoderLayer {
         let residual = hidden_state;
         let mut hidden_state = self.input_layernorm.forward(hidden_state)?;
 
+        hidden_state = hidden_state.clamp(-50., 50.)?;
         hidden_state = self.self_attn.forward(&hidden_state, attention_mask)?;
+        hidden_state = hidden_state.clamp(-50., 50.)?;
         hidden_state = (residual + hidden_state)?;
 
         // FF
         let residual = hidden_state.clone();
         hidden_state = self.post_attention_layernorm.forward(&hidden_state)?;
 
+        hidden_state = hidden_state.clamp(-50., 50.)?;
         hidden_state = self.mlp.forward(&hidden_state)?;
+        hidden_state = hidden_state.clamp(-50., 50.)?;
         residual + hidden_state
     }
 }

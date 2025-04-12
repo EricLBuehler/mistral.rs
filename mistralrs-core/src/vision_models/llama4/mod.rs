@@ -66,8 +66,7 @@ impl Llama4Model {
         assert_eq!(attention_mechanism, AttentionImplementation::Eager);
         let vision_model = Llama4VisionModel::new(
             &cfg.vision_config,
-            vb.pp("vision_model")
-                .set_device(normal_loading_metadata.real_device.clone()),
+            vb.pp("vision_model"),
             &normal_loading_metadata.real_device,
             &normal_loading_metadata.mapper.get_comm_for(0)?,
             &normal_loading_metadata.multi_progress,
