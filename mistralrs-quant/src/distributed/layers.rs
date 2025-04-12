@@ -112,16 +112,11 @@ impl QuantMethod for RowParallelLayer {
     }
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
-        //dbg!(&a);
         let mut xs = self.weight.forward(a)?;
-        //dbg!(&xs);
         xs = self.all_reduce.sum_all_reduce(&xs.contiguous()?)?;
-        //dbg!(&xs);
         if let Some(bias) = &self.bias {
-            //dbg!(&bias);
             xs = xs.broadcast_add(bias)?;
         }
-        //dbg!(&xs);
         Ok(xs)
     }
 
