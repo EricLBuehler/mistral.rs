@@ -172,9 +172,16 @@ impl QuantMethod for RowParallelLayer {
             self.weight
                 .clone()
                 .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)?;
+        let bias = match &self.bias {
+            Some(b) => {
+                let (dtype, device) = weight.dtype_and_device();
+                Some(b.to_device(&device)?.to_dtype(dtype)?)
+            }
+            None => None,
+        };
         Ok(Arc::new(Self {
             weight,
-            bias: self.bias.clone(),
+            bias,
             all_reduce: self.all_reduce.clone(),
         }))
     }

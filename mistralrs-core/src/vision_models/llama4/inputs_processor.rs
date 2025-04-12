@@ -436,7 +436,7 @@ impl Llama4ImageProcessor {
             .iter()
             .map(|th| *th as f32 / original_height as f32);
 
-        // Min scale beetween w and h (limiting size -> no distortion)
+        // Min scale between w and h (limiting size -> no distortion)
         let scales = scale_w.zip(scale_h).map(|(w, h)| if h > w { w } else { h });
 
         // Filter only scales that allow upscaling

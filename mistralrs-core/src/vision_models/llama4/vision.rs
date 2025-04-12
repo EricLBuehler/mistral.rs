@@ -116,64 +116,36 @@ impl Llama4VisionAttention {
     ) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         Ok(Self {
-            // q_proj: ColumnParallelLayer::new(
-            //     cfg.hidden_size,
-            //     cfg.num_attention_heads * head_dim,
-            //     &None,
-            //     true,
-            //     comm,
-            //     vb.pp("q_proj"),
-            // )?,
-            // k_proj: ColumnParallelLayer::new(
-            //     cfg.hidden_size,
-            //     cfg.num_attention_heads * head_dim,
-            //     &None,
-            //     true,
-            //     comm,
-            //     vb.pp("k_proj"),
-            // )?,
-            // v_proj: ColumnParallelLayer::new(
-            //     cfg.hidden_size,
-            //     cfg.num_attention_heads * head_dim,
-            //     &None,
-            //     true,
-            //     comm,
-            //     vb.pp("v_proj"),
-            // )?,
-            // o_proj: RowParallelLayer::new(
-            //     cfg.hidden_size,
-            //     cfg.num_attention_heads * head_dim,
-            //     &None,
-            //     true,
-            //     comm,
-            //     vb.pp("o_proj"),
-            // )?,
-            q_proj: mistralrs_quant::linear_b(
+            q_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
-                true,
                 &None,
+                true,
+                comm,
                 vb.pp("q_proj"),
             )?,
-            k_proj: mistralrs_quant::linear_b(
+            k_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
-                true,
                 &None,
+                true,
+                comm,
                 vb.pp("k_proj"),
             )?,
-            v_proj: mistralrs_quant::linear_b(
+            v_proj: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
-                true,
                 &None,
+                true,
+                comm,
                 vb.pp("v_proj"),
             )?,
-            o_proj: mistralrs_quant::linear_b(
+            o_proj: RowParallelLayer::new(
                 cfg.hidden_size,
                 cfg.num_attention_heads * head_dim,
-                true,
                 &None,
+                true,
+                comm,
                 vb.pp("o_proj"),
             )?,
             sdpa_params: SdpaParams {
@@ -258,34 +230,20 @@ impl Llama4Mlp {
     ) -> Result<Self> {
         Ok(Self {
             act: cfg.hidden_act,
-            // fc1: ColumnParallelLayer::new(
-            //     cfg.hidden_size,
-            //     cfg.intermediate_size,
-            //     &None,
-            //     true,
-            //     comm,
-            //     vb.pp("fc1"),
-            // )?,
-            // fc2: RowParallelLayer::new(
-            //     cfg.intermediate_size,
-            //     cfg.hidden_size,
-            //     &None,
-            //     true,
-            //     comm,
-            //     vb.pp("fc2"),
-            // )?,
-            fc1: mistralrs_quant::linear_b(
+            fc1: ColumnParallelLayer::new(
                 cfg.hidden_size,
                 cfg.intermediate_size,
-                true,
                 &None,
+                true,
+                comm,
                 vb.pp("fc1"),
             )?,
-            fc2: mistralrs_quant::linear_b(
+            fc2: RowParallelLayer::new(
                 cfg.intermediate_size,
                 cfg.hidden_size,
-                true,
                 &None,
+                true,
+                comm,
                 vb.pp("fc2"),
             )?,
         })
@@ -439,34 +397,20 @@ impl Llama4VisionPixelShuffleMLP {
     ) -> Result<Self> {
         Ok(Self {
             act: Activation::Gelu,
-            // fc1: ColumnParallelLayer::new(
-            //     cfg.intermediate_size,
-            //     cfg.projector_input_dim,
-            //     &None,
-            //     false,
-            //     comm,
-            //     vb.pp("fc1"),
-            // )?,
-            // fc2: RowParallelLayer::new(
-            //     cfg.projector_input_dim,
-            //     cfg.projector_output_dim,
-            //     &None,
-            //     false,
-            //     comm,
-            //     vb.pp("fc2"),
-            // )?,
-            fc1: mistralrs_quant::linear_b(
+            fc1: ColumnParallelLayer::new(
                 cfg.intermediate_size,
                 cfg.projector_input_dim,
-                false,
                 &None,
+                false,
+                comm,
                 vb.pp("fc1"),
             )?,
-            fc2: mistralrs_quant::linear_b(
+            fc2: RowParallelLayer::new(
                 cfg.projector_input_dim,
                 cfg.projector_output_dim,
-                false,
                 &None,
+                false,
+                comm,
                 vb.pp("fc2"),
             )?,
         })
@@ -478,9 +422,11 @@ impl Llama4VisionPixelShuffleMLP {
         if let Some(t) = self.fc1.quantized_act_type() {
             hidden_states = hidden_states.to_dtype(t)?;
         }
-        hidden_states = self
-            .fc2
-            .forward(&self.act.forward(&self.fc1.forward(&hidden_states)?)?)?;
+        hidden_states = self.act.forward(
+            &self
+                .fc2
+                .forward(&self.act.forward(&self.fc1.forward(&hidden_states)?)?)?,
+        )?;
         if self.fc1.quantized_act_type().is_some() {
             hidden_states = hidden_states.to_dtype(original_dtype)?;
         }
@@ -568,7 +514,7 @@ impl Llama4VisionRotaryEmbedding {
                 .collect::<Vec<_>>();
             Tensor::from_vec(frequencies_x, img_idx.shape().clone(), device)?
         };
-        // frequencies_x = img_idx // idx
+        // frequencies_y = img_idx // idx
         // get the coordinates of the 2d matrix along y
         let frequencies_y = {
             let frequencies_y = img_ids_flat
@@ -608,7 +554,7 @@ impl Llama4VisionRotaryEmbedding {
             freqs.index_select(&indices_every_two, D::Minus1)?
         };
         freqs = freqs.squeeze(1)?;
-        freqs = freqs.lt(0.)?.where_cond(&freqs, &freqs.zeros_like()?)?;
+        freqs = freqs.lt(0.)?.where_cond(&freqs.zeros_like()?, &freqs)?;
 
         Ok(Self {
             cos: freqs.cos()?.to_dtype(dtype)?,
