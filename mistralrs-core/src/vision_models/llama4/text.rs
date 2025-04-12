@@ -307,6 +307,7 @@ struct TextExperts {
     act: Activation,
     hidden_size: usize,
     sum_all_reduce: SumAllReduce,
+    n_experts: usize,
 }
 
 impl TextExperts {
@@ -336,6 +337,7 @@ impl TextExperts {
             act: cfg.hidden_act,
             hidden_size: cfg.hidden_size,
             sum_all_reduce: SumAllReduce::new(comm),
+            n_experts: cfg.num_local_experts,
         })
     }
 
@@ -343,13 +345,29 @@ impl TextExperts {
     // expert indices: (bs * seq_len)
     fn forward(&self, xs: &Tensor, indices: &Tensor) -> Result<Tensor> {
         let xs = xs.unsqueeze(1)?;
-        let gate = self.gate_proj.gather_forward_autocast(&xs, indices)?;
-        let up = self.up_proj.gather_forward_autocast(&xs, indices)?;
-        let mut xs = self
-            .down_proj
-            .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, indices)?;
-        xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
-        xs.reshape(((), self.hidden_size))
+        let is_gguf = self
+            .gate_proj
+            .quantized_act_type()
+            .is_some_and(|t| matches!(t, DType::F32));
+        let is_gguf = false;
+        if is_gguf {
+            let xs = xs.repeat((1, self.n_experts, 1))?;
+            let gate = self.gate_proj.forward_autocast(&xs)?;
+            let up = self.up_proj.forward_autocast(&xs)?;
+            let mut xs = self
+                .down_proj
+                .forward_autocast(&(up * gate.apply(&self.act)?)?)?;
+            xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
+            xs.index_select(indices, 1)?.reshape(((), self.hidden_size))
+        } else {
+            let gate = self.gate_proj.gather_forward_autocast(&xs, indices)?;
+            let up = self.up_proj.gather_forward_autocast(&xs, indices)?;
+            let mut xs = self
+                .down_proj
+                .gather_forward_autocast(&(up * gate.apply(&self.act)?)?, indices)?;
+            xs = self.sum_all_reduce.sum_all_reduce(&xs)?;
+            xs.reshape(((), self.hidden_size))
+        }
     }
 }
 

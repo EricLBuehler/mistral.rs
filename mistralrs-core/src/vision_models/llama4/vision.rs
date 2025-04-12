@@ -667,11 +667,7 @@ impl Llama4VisionModel {
             multi_progress,
         )?;
 
-        let vision_adapter = Llama4VisionPixelShuffle::new(
-            cfg,
-            vb.pp("vision_adapter").set_device(real_dev.clone()),
-            comm,
-        )?;
+        let vision_adapter = Llama4VisionPixelShuffle::new(cfg, vb.pp("vision_adapter"), comm)?;
 
         assert_eq!(cfg.vision_feature_layer, -1);
 

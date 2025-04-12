@@ -146,7 +146,14 @@ impl IsqModel for Llama4Model {
         Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
         &dyn DeviceMapper,
     ) {
-        self.language_model.get_layers()
+        let (mut layers, device_map) = self.language_model.get_layers();
+        layers.extend(
+            self.vision_model
+                .get_isq_layers()
+                .into_iter()
+                .map(|x| (x, None)),
+        );
+        (layers, device_map)
     }
 
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
