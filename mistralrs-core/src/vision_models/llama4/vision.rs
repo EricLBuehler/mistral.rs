@@ -339,7 +339,7 @@ impl Llama4VisionEncoder {
         for i in NiceProgressBar::<_, 'b'>(
             0..num_layers,
             "Loading vision repeating layers",
-            &multi_progress,
+            multi_progress,
         ) {
             layers.push(Llama4VisionEncoderLayer::new(
                 cfg,
@@ -585,7 +585,7 @@ impl Llama4VisionModel {
         let class_embedding = vb
             .get((cfg.hidden_size,), "class_embedding")?
             .to_device(real_dev)?;
-        let num_patches = (cfg.image_size / cfg.patch_size).pow(2) + 1;
+        let num_patches = cfg.num_patches();
         let positional_embedding_vlm = vb
             .get((num_patches, cfg.hidden_size), "positional_embedding_vlm")?
             .to_device(real_dev)?;

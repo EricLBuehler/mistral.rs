@@ -80,6 +80,12 @@ pub struct VisionConfig {
     pub rope_theta: f32,
 }
 
+impl VisionConfig {
+    pub fn num_patches(&self) -> usize {
+        (self.image_size / self.patch_size).pow(2) + 1
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Llama4Config {
     pub text_config: TextConfig,

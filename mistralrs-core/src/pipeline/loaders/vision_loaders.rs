@@ -5,6 +5,7 @@ use std::{fmt::Debug, str::FromStr};
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::Conv2dConfig;
+use image::{ColorType, DynamicImage};
 use mistralrs_quant::ShardedVarBuilder;
 
 #[cfg(feature = "pyo3_macros")]
@@ -31,8 +32,11 @@ use crate::vision_models::gemma3::{Gemma3Model, Gemma3Processor};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
+use crate::vision_models::image_processor::ImagePreProcessor;
 use crate::vision_models::inputs_processor::Phi4MMProcessor;
-use crate::vision_models::llama4::{self, Llama4Config, Llama4Model, Llama4Processor};
+use crate::vision_models::llama4::{
+    self, Llama4Config, Llama4ImageProcessor, Llama4Model, Llama4Processor,
+};
 use crate::vision_models::llava::config::Config as LLaVAConfig;
 use crate::vision_models::llava15::Model as LLaVA;
 use crate::vision_models::llava_inputs_processor::{self, LLaVAProcessor};
@@ -3774,7 +3778,7 @@ impl VisionModelLoader for VLlama4Loader {
         Arc::new(Llama4Processor::new(&processor_config.unwrap()))
     }
     fn supports_paged_attention(&self) -> bool {
-        false
+        true
     }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(VLlama4Prefixer)
@@ -3782,35 +3786,116 @@ impl VisionModelLoader for VLlama4Loader {
 }
 
 impl IsqModelLoader for VLlama4Loader {
-    fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
-        todo!()
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // FF MoE
+            Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.gate_up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.router\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$")?,
+            // FF MLP
+            Regex::new(r"layers\.(\d+)\.feed_forward\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+}
+
+impl VLlama4Loader {
+    /// This incorporates the max batch size!
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    fn get_pixels_max_bs(
+        &self,
+        cfg: &Llama4Config,
+        height: usize,
+        width: usize,
+        max_num_images: usize,
+        max_batch_size: usize,
+    ) -> Result<usize> {
+        let cfg = &cfg.vision_config;
+
+        let img_processor =
+            Llama4ImageProcessor::new(Some(cfg.patch_size), Some(cfg.pixel_shuffle_ratio));
+        let image = DynamicImage::new(width as u32, height as u32, ColorType::Rgb8);
+        let res = img_processor.preprocess(
+            vec![image; max_num_images],
+            vec![],
+            &PreProcessorConfig::default(),
+            &Device::Cpu,
+            (max_batch_size, max_num_images),
+        )?;
+
+        let pixels_batch_size = res.pixel_values.dim(0)?;
+
+        Ok(pixels_batch_size * max_batch_size)
     }
 }
 
 impl DeviceMappedModelLoader for VLlama4Loader {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
         params: &AutoDeviceMapParams,
-        prompt_chunksize: usize,
+        _prompt_chunksize: usize,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Vision { max_batch_size, .. } = params else {
-            anyhow::bail!("Expected TODO AutoDeviceMapParams for this model!")
+        let AutoDeviceMapParams::Vision {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: (height, width),
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
         };
 
         let cfg: Llama4Config = serde_json::from_str(config)?;
 
-        Ok(max_batch_size
-            * cfg.text_config.num_attention_heads
-            * prompt_chunksize
-            * prompt_chunksize)
+        let pixels_batch_size =
+            self.get_pixels_max_bs(&cfg, *height, *width, *max_num_images, *max_batch_size)?;
+        let num_patches = cfg.vision_config.num_patches();
+        let vision_seq_len = pixels_batch_size
+            * (num_patches as f32 / cfg.vision_config.pixel_shuffle_ratio.powi(2)) as usize;
+
+        let max_seq_len = max_seq_len + vision_seq_len;
+
+        Ok(max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len)
     }
     fn non_mapped_max_act_size_elems(
         &self,
-        _config: &str,
-        _params: &AutoDeviceMapParams,
+        config: &str,
+        params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        Ok(0)
+        let AutoDeviceMapParams::Vision {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape: (height, width),
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected vision AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Llama4Config = serde_json::from_str(config)?;
+
+        let pixels_batch_size =
+            self.get_pixels_max_bs(&cfg, *height, *width, *max_num_images, *max_batch_size)?;
+        let max_seq_len = cfg.vision_config.num_patches();
+
+        Ok((max_batch_size * pixels_batch_size)
+            * cfg.vision_config.num_attention_heads
+            * max_seq_len
+            * max_seq_len)
     }
 
     fn non_mapped_size_in_bytes(
@@ -3822,7 +3907,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         let cfg: Llama4Config = serde_json::from_str(config)?;
         let tcfg = &cfg.text_config;
 
-        let elems = {
+        let text_elems = {
             let embed_tokens = tcfg.hidden_size * tcfg.vocab_size / weight_pack_factor;
             let lm_head = if !tcfg.tie_word_embeddings {
                 tcfg.hidden_size * tcfg.vocab_size
@@ -3832,6 +3917,67 @@ impl DeviceMappedModelLoader for VLlama4Loader {
             let norm = tcfg.hidden_size;
             embed_tokens + lm_head + norm
         };
+
+        let vision_elems = {
+            let cfg = &cfg.vision_config;
+
+            let num_patches = cfg.num_patches();
+
+            let unfold_elems =
+                (cfg.num_channels * cfg.patch_size * cfg.patch_size) * cfg.hidden_size;
+            let class_embeddng_elems = cfg.hidden_size;
+            let positional_embedding_vlm_elems = num_patches * cfg.hidden_size;
+            let layernorm_pre_elems = cfg.hidden_size;
+            let layernorm_post_elems = cfg.hidden_size;
+
+            let pixel_shuffle_elems = cfg.intermediate_size * cfg.projector_input_dim
+                / weight_pack_factor
+                + cfg.projector_input_dim * cfg.projector_output_dim / weight_pack_factor;
+
+            let encoder_layer = {
+                let input_layernorm = cfg.hidden_size + cfg.hidden_size;
+                let post_attention_layernorm = cfg.hidden_size + cfg.hidden_size;
+
+                let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+                let q_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
+                    / weight_pack_factor
+                    + cfg.num_attention_heads * head_dim;
+                let k_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
+                    / weight_pack_factor
+                    + cfg.num_attention_heads * head_dim;
+                let v_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
+                    / weight_pack_factor
+                    + cfg.num_attention_heads * head_dim;
+                let o_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
+                    / weight_pack_factor
+                    + cfg.num_attention_heads * head_dim;
+
+                let fc1 = (cfg.hidden_size * cfg.intermediate_size) / weight_pack_factor
+                    + cfg.intermediate_size;
+                let fc2 = (cfg.intermediate_size * cfg.hidden_size) / weight_pack_factor
+                    + cfg.hidden_size;
+
+                input_layernorm
+                    + post_attention_layernorm
+                    + q_proj
+                    + k_proj
+                    + v_proj
+                    + o_proj
+                    + fc1
+                    + fc2
+            };
+
+            unfold_elems
+                + class_embeddng_elems
+                + positional_embedding_vlm_elems
+                + layernorm_post_elems
+                + layernorm_pre_elems
+                + pixel_shuffle_elems
+                + encoder_layer * cfg.num_hidden_layers
+        };
+
+        let elems = text_elems + vision_elems;
+
         Ok(elems * dtype.size_in_bytes())
     }
 

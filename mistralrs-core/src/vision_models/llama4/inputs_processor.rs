@@ -45,10 +45,20 @@ const TILE_X_SEP: &str = "<|tile_x_separator|>";
 const TILE_Y_SEP: &str = "<|tile_y_separator|>";
 
 // Input processor
-struct Llama4ImageProcessor {
+pub struct Llama4ImageProcessor {
     patch_size: usize,
     downsample_ratio: usize,
 }
+
+impl Llama4ImageProcessor {
+    pub fn new(patch_size: Option<usize>, pixel_shuffle_ratio: Option<f32>) -> Self {
+        Self {
+            patch_size: patch_size.unwrap_or(14),
+            downsample_ratio: (1. / pixel_shuffle_ratio.unwrap_or(0.5).powi(2)).round() as usize,
+        }
+    }
+}
+
 // Processor
 pub struct Llama4Processor {
     patch_size: usize,
@@ -391,16 +401,17 @@ impl Llama4ImageProcessor {
         Ok(possible_resolutions)
     }
 
+    #[allow(clippy::type_complexity)]
     fn group_images_by_shape(
         &self,
-        images: &Vec<Tensor>,
+        images: &[Tensor],
     ) -> Result<(
         HashMap<(usize, usize), Tensor>,
         HashMap<usize, ((usize, usize), usize)>,
     )> {
         let mut grouped_images = HashMap::new();
         let mut grouped_images_index = HashMap::new();
-        for (i, image) in images.into_iter().enumerate() {
+        for (i, image) in images.iter().enumerate() {
             let (_c, h, w) = image.dims3()?;
             let shape = (h, w);
             grouped_images
@@ -563,11 +574,12 @@ impl ImagePreProcessor for Llama4ImageProcessor {
     ) -> Result<PreprocessedImages> {
         assert!(videos.is_empty());
 
-        let max_patches = config.max_patches.context("Require `max_patches`")?;
-        let size = config.size.as_ref().context("Require `size`")?;
-        let resize_to_max_canvas = config
-            .resize_to_max_canvas
-            .context("Require `resize_to_max_canvas`")?;
+        let max_patches = config.max_patches.unwrap_or(16);
+        let size = config.size.clone().unwrap_or(HashMap::from_iter([
+            ("height".to_string(), 336),
+            ("width".to_string(), 336),
+        ]));
+        let resize_to_max_canvas = config.resize_to_max_canvas.unwrap_or(false);
         let do_rescale = config.do_rescale.unwrap_or(true);
         let do_normalize = config.do_normalize.unwrap_or(true);
 
@@ -666,8 +678,7 @@ impl ImagePreProcessor for Llama4ImageProcessor {
             grouped_processed_images.insert(shape, processed_images.clone());
             grouped_aspect_ratios.insert(
                 shape,
-                Tensor::new(vec![vec![ratio_h, ratio_w]], device)?
-                    .repeat((1, stacked_images.dim(0)?))?,
+                Tensor::new(vec![vec![ratio_h, ratio_w]; stacked_images.dim(0)?], device)?,
             );
 
             // Add a global tile to the processed tile if there are more than one tiles

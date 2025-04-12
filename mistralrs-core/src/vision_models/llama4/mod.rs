@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 mod text;
 
 use std::sync::Arc;
@@ -26,7 +28,7 @@ mod inputs_processor;
 mod vision;
 
 pub(crate) use config::{Llama4Config, TextConfig};
-pub(crate) use inputs_processor::{Llama4Processor, IMAGE_TOKEN};
+pub(crate) use inputs_processor::{Llama4ImageProcessor, Llama4Processor, IMAGE_TOKEN};
 
 struct Llama4MultiModalProjector {
     linear_1: Linear,
@@ -63,8 +65,6 @@ impl Llama4Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        // TODO: evaluate
-        assert_eq!(attention_mechanism, AttentionImplementation::Eager);
         let vision_model = Llama4VisionModel::new(
             &cfg.vision_config,
             vb.pp("vision_model"),
