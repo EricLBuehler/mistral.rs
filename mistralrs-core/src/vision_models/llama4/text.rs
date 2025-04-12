@@ -102,8 +102,9 @@ impl CausalSelfAttention {
         let use_rope = (layer_idx + 1) % 4 != 0;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let norm = if cfg.use_qk_norm && use_rope {
+            let vb = mapper.set_device(layer_idx, vb, false);
             Some(RmsNorm::from_w(
-                mapper.cast_nm_device(&Tensor::ones(head_dim, vb.dtype(), vb.device())?, false)?,
+                Tensor::ones(head_dim, vb.dtype(), vb.device())?,
                 1e-6,
             )?)
         } else {
