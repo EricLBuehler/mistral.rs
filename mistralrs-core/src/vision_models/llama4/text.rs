@@ -3,8 +3,8 @@
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::{
-    distributed::layers::PackedExperts, ColumnParallelLayer, QuantMethod, QuantizedConfig,
-    ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce,
+    distributed::layers::PackedExperts, linear_no_bias, ColumnParallelLayer, QuantMethod,
+    QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, SumAllReduce,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -12,9 +12,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    layers::{
-        embedding, linear_no_bias, Activation, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa,
-    },
+    layers::{embedding, Activation, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     ops::{TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -241,7 +239,7 @@ impl CausalSelfAttention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
-        self.o_proj.forward(&y)
+        self.o_proj.forward_autocast(&y)
     }
 }
 
@@ -358,7 +356,7 @@ impl TextExperts {
 struct TextMoe {
     experts: TextExperts,
     shared_expert: Mlp,
-    router: Linear,
+    router: Arc<dyn QuantMethod>,
     topk: usize,
 }
 
@@ -370,7 +368,12 @@ impl TextMoe {
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let experts = TextExperts::new(vb.pp("experts"), cfg, quantization_config, comm)?;
-        let router = linear_no_bias(cfg.hidden_size, cfg.num_local_experts, vb.pp("router"))?;
+        let router = linear_no_bias(
+            cfg.hidden_size,
+            cfg.num_local_experts,
+            quantization_config,
+            vb.pp("router"),
+        )?;
         let shared_expert = Mlp::new(
             vb.pp("shared_expert"),
             cfg.hidden_size,
@@ -390,7 +393,7 @@ impl TextMoe {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (bs, seq_len, hidden_dim) = xs.dims3()?;
         let xs = xs.reshape(((), hidden_dim))?;
-        let router_logits = self.router.forward(&xs)?;
+        let router_logits = self.router.forward_autocast(&xs)?;
 
         let TopKOutput {
             values: router_top_value,
@@ -794,9 +797,13 @@ impl IsqModel for TextModel {
                     tensors.push((&mut x.down, Some(i)));
                 }
                 MoeOrMlp::Moe(x) => {
+                    tensors.push((&mut x.router, Some(i)));
                     tensors.push((&mut x.experts.gate_proj, Some(i)));
                     tensors.push((&mut x.experts.up_proj, Some(i)));
                     tensors.push((&mut x.experts.down_proj, Some(i)));
+                    tensors.push((&mut x.shared_expert.gate, Some(i)));
+                    tensors.push((&mut x.shared_expert.up, Some(i)));
+                    tensors.push((&mut x.shared_expert.down, Some(i)));
                 }
             }
         }

@@ -3794,12 +3794,8 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         params: &AutoDeviceMapParams,
         prompt_chunksize: usize,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Text {
-            max_seq_len: _,
-            max_batch_size,
-        } = params
-        else {
-            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        let AutoDeviceMapParams::Vision { max_batch_size, .. } = params else {
+            anyhow::bail!("Expected TODO AutoDeviceMapParams for this model!")
         };
 
         let cfg: Llama4Config = serde_json::from_str(config)?;

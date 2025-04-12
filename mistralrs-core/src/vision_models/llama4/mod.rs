@@ -66,10 +66,16 @@ impl Llama4Model {
         assert_eq!(attention_mechanism, AttentionImplementation::Eager);
         let vision_model = Llama4VisionModel::new(
             &cfg.vision_config,
-            vb.pp("vision_model"),
+            vb.pp("vision_model")
+                .set_device(normal_loading_metadata.real_device.clone()),
             &normal_loading_metadata.real_device,
             &normal_loading_metadata.mapper.get_comm_for(0)?,
             &normal_loading_metadata.multi_progress,
+        )?;
+        let multi_modal_projector = Llama4MultiModalProjector::new(
+            cfg,
+            vb.pp("multi_modal_projector")
+                .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let language_model = TextModel::new(
             &cfg.text_config,
@@ -78,8 +84,6 @@ impl Llama4Model {
             normal_loading_metadata,
             attention_mechanism,
         )?;
-        let multi_modal_projector =
-            Llama4MultiModalProjector::new(cfg, vb.pp("multi_modal_projector"))?;
 
         Ok(Self {
             language_model,

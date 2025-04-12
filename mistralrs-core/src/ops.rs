@@ -755,11 +755,8 @@ impl TopKLastDimOp for Tensor {
         // let (values, sorted_indices) = self.sort(false)?;
         // #[cfg(not(feature = "cuda"))]
         let (values, sorted_indices) = self.sort_last_dim(false)?;
-        dbg!(&values, &sorted_indices);
         let topk_indices = sorted_indices.narrow(D::Minus1, 0, topk)?.contiguous()?;
-        dbg!(&topk_indices);
         let topk_values = values.narrow(D::Minus1, 0, topk)?.contiguous()?;
-        dbg!(&topk_values);
         Ok(TopKOutput {
             values: topk_values,
             indices: topk_indices,
