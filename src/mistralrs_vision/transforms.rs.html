@@ -1,5 +1,5 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-vision/src/transforms.rs`."><title>transforms.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-6c3ea77c.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="mistralrs_vision" data-themes="" data-resource-suffix="" data-rustdoc-version="1.86.0 (05f9846f8 2025-03-31)" data-channel="1.86.0" data-search-js="search-581efc7a.js" data-settings-js="settings-6dad6058.js" ><script src="../../static.files/storage-3a5871a4.js"></script><script defer src="../../static.files/src-script-b8d3f215.js"></script><script defer src="../../src-files.js"></script><script defer src="../../static.files/main-4d63596a.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_vision/</div>transforms.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span><span class="kw">crate</span>::utils::{get_pixel_data, n_channels};
-<a href=#2 id=2 data-nosnippet>2</a><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor};
+<a href=#2 id=2 data-nosnippet>2</a><span class="kw">use </span>candle_core::{DType, Device, <span class="prelude-ty">Result</span>, Tensor, D};
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>image::{DynamicImage, GenericImageView};
 <a href=#4 id=4 data-nosnippet>4</a>
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span><span class="kw">crate</span>::ImageTransform;
@@ -83,7 +83,7 @@
 <a href=#83 id=83 data-nosnippet>83</a>    <span class="kw">type </span>Output = <span class="self">Self</span>::Input;
 <a href=#84 id=84 data-nosnippet>84</a>
 <a href=#85 id=85 data-nosnippet>85</a>    <span class="kw">fn </span>map(<span class="kw-2">&amp;</span><span class="self">self</span>, x: <span class="kw-2">&amp;</span><span class="self">Self</span>::Input, <span class="kw">_</span>: <span class="kw-2">&amp;</span>Device) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::Output&gt; {
-<a href=#86 id=86 data-nosnippet>86</a>        <span class="kw">let </span>num_channels = x.dim(<span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#86 id=86 data-nosnippet>86</a>        <span class="kw">let </span>num_channels = x.dim(D::Minus(<span class="number">3</span>))<span class="question-mark">?</span>;
 <a href=#87 id=87 data-nosnippet>87</a>        <span class="kw">if </span><span class="self">self</span>.mean.len() != num_channels || <span class="self">self</span>.std.len() != num_channels {
 <a href=#88 id=88 data-nosnippet>88</a>            <span class="macro">candle_core::bail!</span>(
 <a href=#89 id=89 data-nosnippet>89</a>                <span class="string">"Num channels ({}) must match number of mean ({}) and std ({})."</span>,
@@ -93,10 +93,10 @@
 <a href=#93 id=93 data-nosnippet>93</a>            );
 <a href=#94 id=94 data-nosnippet>94</a>        }
 <a href=#95 id=95 data-nosnippet>95</a>        <span class="kw">let </span><span class="kw-2">mut </span>accum = Vec::new();
-<a href=#96 id=96 data-nosnippet>96</a>        <span class="kw">for </span>(i, channel) <span class="kw">in </span>x.chunk(num_channels, <span class="number">0</span>)<span class="question-mark">?</span>.iter().enumerate() {
+<a href=#96 id=96 data-nosnippet>96</a>        <span class="kw">for </span>(i, channel) <span class="kw">in </span>x.chunk(num_channels, D::Minus(<span class="number">3</span>))<span class="question-mark">?</span>.iter().enumerate() {
 <a href=#97 id=97 data-nosnippet>97</a>            accum.push(((channel - <span class="self">self</span>.mean[i])<span class="question-mark">? </span>/ <span class="self">self</span>.std[i])<span class="question-mark">?</span>);
 <a href=#98 id=98 data-nosnippet>98</a>        }
-<a href=#99 id=99 data-nosnippet>99</a>        Tensor::cat(<span class="kw-2">&amp;</span>accum, <span class="number">0</span>)
+<a href=#99 id=99 data-nosnippet>99</a>        Tensor::cat(<span class="kw-2">&amp;</span>accum, D::Minus(<span class="number">3</span>))
 <a href=#100 id=100 data-nosnippet>100</a>    }
 <a href=#101 id=101 data-nosnippet>101</a>}
 <a href=#102 id=102 data-nosnippet>102</a>
