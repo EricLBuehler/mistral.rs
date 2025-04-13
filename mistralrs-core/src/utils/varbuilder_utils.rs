@@ -75,6 +75,9 @@ pub(crate) fn from_mmaped_safetensors(
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
 ) -> Result<ShardedVarBuilder> {
     if xlora_paths.is_empty() {
+        if !silent {
+            tracing::info!("Loading model using mmap strategy.");
+        }
         return Ok(unsafe {
             ShardedSafeTensors::sharded(
                 &paths,
