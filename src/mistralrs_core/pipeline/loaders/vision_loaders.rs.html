@@ -3878,203 +3878,201 @@
 <a href=#3878 id=3878 data-nosnippet>3878</a>
 <a href=#3879 id=3879 data-nosnippet>3879</a>        <span class="kw">let </span>max_seq_len = max_seq_len + num_text_image_toks;
 <a href=#3880 id=3880 data-nosnippet>3880</a>
-<a href=#3881 id=3881 data-nosnippet>3881</a>        <span class="prelude-val">Ok</span>(<span class="macro">dbg!</span>(
-<a href=#3882 id=3882 data-nosnippet>3882</a>            max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
-<a href=#3883 id=3883 data-nosnippet>3883</a>        ))
-<a href=#3884 id=3884 data-nosnippet>3884</a>    }
-<a href=#3885 id=3885 data-nosnippet>3885</a>    <span class="kw">fn </span>non_mapped_max_act_size_elems(
-<a href=#3886 id=3886 data-nosnippet>3886</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#3887 id=3887 data-nosnippet>3887</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#3888 id=3888 data-nosnippet>3888</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-<a href=#3889 id=3889 data-nosnippet>3889</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#3890 id=3890 data-nosnippet>3890</a>        <span class="kw">let </span>AutoDeviceMapParams::Vision {
-<a href=#3891 id=3891 data-nosnippet>3891</a>            max_seq_len: <span class="kw">_</span>,
-<a href=#3892 id=3892 data-nosnippet>3892</a>            max_batch_size,
-<a href=#3893 id=3893 data-nosnippet>3893</a>            max_image_shape: (height, width),
-<a href=#3894 id=3894 data-nosnippet>3894</a>            max_num_images,
-<a href=#3895 id=3895 data-nosnippet>3895</a>        } = params
-<a href=#3896 id=3896 data-nosnippet>3896</a>        <span class="kw">else </span>{
-<a href=#3897 id=3897 data-nosnippet>3897</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
-<a href=#3898 id=3898 data-nosnippet>3898</a>        };
+<a href=#3881 id=3881 data-nosnippet>3881</a>        <span class="prelude-val">Ok</span>(max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len)
+<a href=#3882 id=3882 data-nosnippet>3882</a>    }
+<a href=#3883 id=3883 data-nosnippet>3883</a>    <span class="kw">fn </span>non_mapped_max_act_size_elems(
+<a href=#3884 id=3884 data-nosnippet>3884</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#3885 id=3885 data-nosnippet>3885</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#3886 id=3886 data-nosnippet>3886</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+<a href=#3887 id=3887 data-nosnippet>3887</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#3888 id=3888 data-nosnippet>3888</a>        <span class="kw">let </span>AutoDeviceMapParams::Vision {
+<a href=#3889 id=3889 data-nosnippet>3889</a>            max_seq_len: <span class="kw">_</span>,
+<a href=#3890 id=3890 data-nosnippet>3890</a>            max_batch_size,
+<a href=#3891 id=3891 data-nosnippet>3891</a>            max_image_shape: (height, width),
+<a href=#3892 id=3892 data-nosnippet>3892</a>            max_num_images,
+<a href=#3893 id=3893 data-nosnippet>3893</a>        } = params
+<a href=#3894 id=3894 data-nosnippet>3894</a>        <span class="kw">else </span>{
+<a href=#3895 id=3895 data-nosnippet>3895</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"Expected vision AutoDeviceMapParams for this model!"</span>)
+<a href=#3896 id=3896 data-nosnippet>3896</a>        };
+<a href=#3897 id=3897 data-nosnippet>3897</a>
+<a href=#3898 id=3898 data-nosnippet>3898</a>        <span class="kw">let </span>cfg: Llama4Config = serde_json::from_str(config)<span class="question-mark">?</span>;
 <a href=#3899 id=3899 data-nosnippet>3899</a>
-<a href=#3900 id=3900 data-nosnippet>3900</a>        <span class="kw">let </span>cfg: Llama4Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#3901 id=3901 data-nosnippet>3901</a>
-<a href=#3902 id=3902 data-nosnippet>3902</a>        <span class="kw">let </span>(pixels_batch_size, _num_text_image_toks) =
-<a href=#3903 id=3903 data-nosnippet>3903</a>            <span class="self">self</span>.run_dummy_processing(<span class="kw-2">&amp;</span>cfg, <span class="kw-2">*</span>height, <span class="kw-2">*</span>width, <span class="kw-2">*</span>max_num_images, <span class="kw-2">*</span>max_batch_size)<span class="question-mark">?</span>;
-<a href=#3904 id=3904 data-nosnippet>3904</a>        <span class="kw">let </span>max_seq_len = cfg.vision_config.num_patches();
-<a href=#3905 id=3905 data-nosnippet>3905</a>
-<a href=#3906 id=3906 data-nosnippet>3906</a>        <span class="prelude-val">Ok</span>((max_batch_size * pixels_batch_size)
-<a href=#3907 id=3907 data-nosnippet>3907</a>            * cfg.vision_config.num_attention_heads
-<a href=#3908 id=3908 data-nosnippet>3908</a>            * max_seq_len
-<a href=#3909 id=3909 data-nosnippet>3909</a>            * max_seq_len)
-<a href=#3910 id=3910 data-nosnippet>3910</a>    }
-<a href=#3911 id=3911 data-nosnippet>3911</a>
-<a href=#3912 id=3912 data-nosnippet>3912</a>    <span class="kw">fn </span>non_mapped_size_in_bytes(
-<a href=#3913 id=3913 data-nosnippet>3913</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#3914 id=3914 data-nosnippet>3914</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#3915 id=3915 data-nosnippet>3915</a>        dtype: DType,
-<a href=#3916 id=3916 data-nosnippet>3916</a>        weight_pack_factor: usize,
-<a href=#3917 id=3917 data-nosnippet>3917</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#3918 id=3918 data-nosnippet>3918</a>        <span class="kw">let </span>cfg: Llama4Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#3919 id=3919 data-nosnippet>3919</a>        <span class="kw">let </span>tcfg = <span class="kw-2">&amp;</span>cfg.text_config;
-<a href=#3920 id=3920 data-nosnippet>3920</a>
-<a href=#3921 id=3921 data-nosnippet>3921</a>        <span class="kw">let </span>text_elems = {
-<a href=#3922 id=3922 data-nosnippet>3922</a>            <span class="kw">let </span>embed_tokens = tcfg.hidden_size * tcfg.vocab_size / weight_pack_factor;
-<a href=#3923 id=3923 data-nosnippet>3923</a>            <span class="kw">let </span>lm_head = <span class="kw">if </span>!tcfg.tie_word_embeddings {
-<a href=#3924 id=3924 data-nosnippet>3924</a>                tcfg.hidden_size * tcfg.vocab_size
-<a href=#3925 id=3925 data-nosnippet>3925</a>            } <span class="kw">else </span>{
-<a href=#3926 id=3926 data-nosnippet>3926</a>                <span class="number">0
-<a href=#3927 id=3927 data-nosnippet>3927</a>            </span>};
-<a href=#3928 id=3928 data-nosnippet>3928</a>            <span class="kw">let </span>norm = tcfg.hidden_size;
-<a href=#3929 id=3929 data-nosnippet>3929</a>            embed_tokens + lm_head + norm
-<a href=#3930 id=3930 data-nosnippet>3930</a>        };
-<a href=#3931 id=3931 data-nosnippet>3931</a>
-<a href=#3932 id=3932 data-nosnippet>3932</a>        <span class="kw">let </span>vision_elems = {
-<a href=#3933 id=3933 data-nosnippet>3933</a>            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.vision_config;
+<a href=#3900 id=3900 data-nosnippet>3900</a>        <span class="kw">let </span>(pixels_batch_size, _num_text_image_toks) =
+<a href=#3901 id=3901 data-nosnippet>3901</a>            <span class="self">self</span>.run_dummy_processing(<span class="kw-2">&amp;</span>cfg, <span class="kw-2">*</span>height, <span class="kw-2">*</span>width, <span class="kw-2">*</span>max_num_images, <span class="kw-2">*</span>max_batch_size)<span class="question-mark">?</span>;
+<a href=#3902 id=3902 data-nosnippet>3902</a>        <span class="kw">let </span>max_seq_len = cfg.vision_config.num_patches();
+<a href=#3903 id=3903 data-nosnippet>3903</a>
+<a href=#3904 id=3904 data-nosnippet>3904</a>        <span class="prelude-val">Ok</span>((max_batch_size * pixels_batch_size)
+<a href=#3905 id=3905 data-nosnippet>3905</a>            * cfg.vision_config.num_attention_heads
+<a href=#3906 id=3906 data-nosnippet>3906</a>            * max_seq_len
+<a href=#3907 id=3907 data-nosnippet>3907</a>            * max_seq_len)
+<a href=#3908 id=3908 data-nosnippet>3908</a>    }
+<a href=#3909 id=3909 data-nosnippet>3909</a>
+<a href=#3910 id=3910 data-nosnippet>3910</a>    <span class="kw">fn </span>non_mapped_size_in_bytes(
+<a href=#3911 id=3911 data-nosnippet>3911</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#3912 id=3912 data-nosnippet>3912</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#3913 id=3913 data-nosnippet>3913</a>        dtype: DType,
+<a href=#3914 id=3914 data-nosnippet>3914</a>        weight_pack_factor: usize,
+<a href=#3915 id=3915 data-nosnippet>3915</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#3916 id=3916 data-nosnippet>3916</a>        <span class="kw">let </span>cfg: Llama4Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#3917 id=3917 data-nosnippet>3917</a>        <span class="kw">let </span>tcfg = <span class="kw-2">&amp;</span>cfg.text_config;
+<a href=#3918 id=3918 data-nosnippet>3918</a>
+<a href=#3919 id=3919 data-nosnippet>3919</a>        <span class="kw">let </span>text_elems = {
+<a href=#3920 id=3920 data-nosnippet>3920</a>            <span class="kw">let </span>embed_tokens = tcfg.hidden_size * tcfg.vocab_size / weight_pack_factor;
+<a href=#3921 id=3921 data-nosnippet>3921</a>            <span class="kw">let </span>lm_head = <span class="kw">if </span>!tcfg.tie_word_embeddings {
+<a href=#3922 id=3922 data-nosnippet>3922</a>                tcfg.hidden_size * tcfg.vocab_size
+<a href=#3923 id=3923 data-nosnippet>3923</a>            } <span class="kw">else </span>{
+<a href=#3924 id=3924 data-nosnippet>3924</a>                <span class="number">0
+<a href=#3925 id=3925 data-nosnippet>3925</a>            </span>};
+<a href=#3926 id=3926 data-nosnippet>3926</a>            <span class="kw">let </span>norm = tcfg.hidden_size;
+<a href=#3927 id=3927 data-nosnippet>3927</a>            embed_tokens + lm_head + norm
+<a href=#3928 id=3928 data-nosnippet>3928</a>        };
+<a href=#3929 id=3929 data-nosnippet>3929</a>
+<a href=#3930 id=3930 data-nosnippet>3930</a>        <span class="kw">let </span>vision_elems = {
+<a href=#3931 id=3931 data-nosnippet>3931</a>            <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.vision_config;
+<a href=#3932 id=3932 data-nosnippet>3932</a>
+<a href=#3933 id=3933 data-nosnippet>3933</a>            <span class="kw">let </span>num_patches = cfg.num_patches();
 <a href=#3934 id=3934 data-nosnippet>3934</a>
-<a href=#3935 id=3935 data-nosnippet>3935</a>            <span class="kw">let </span>num_patches = cfg.num_patches();
-<a href=#3936 id=3936 data-nosnippet>3936</a>
-<a href=#3937 id=3937 data-nosnippet>3937</a>            <span class="kw">let </span>unfold_elems =
-<a href=#3938 id=3938 data-nosnippet>3938</a>                (cfg.num_channels * cfg.patch_size * cfg.patch_size) * cfg.hidden_size;
-<a href=#3939 id=3939 data-nosnippet>3939</a>            <span class="kw">let </span>class_embeddng_elems = cfg.hidden_size;
-<a href=#3940 id=3940 data-nosnippet>3940</a>            <span class="kw">let </span>positional_embedding_vlm_elems = num_patches * cfg.hidden_size;
-<a href=#3941 id=3941 data-nosnippet>3941</a>            <span class="kw">let </span>layernorm_pre_elems = cfg.hidden_size;
-<a href=#3942 id=3942 data-nosnippet>3942</a>            <span class="kw">let </span>layernorm_post_elems = cfg.hidden_size;
-<a href=#3943 id=3943 data-nosnippet>3943</a>
-<a href=#3944 id=3944 data-nosnippet>3944</a>            <span class="kw">let </span>pixel_shuffle_elems = cfg.intermediate_size * cfg.projector_input_dim
-<a href=#3945 id=3945 data-nosnippet>3945</a>                / weight_pack_factor
-<a href=#3946 id=3946 data-nosnippet>3946</a>                + cfg.projector_input_dim * cfg.projector_output_dim / weight_pack_factor;
-<a href=#3947 id=3947 data-nosnippet>3947</a>
-<a href=#3948 id=3948 data-nosnippet>3948</a>            <span class="kw">let </span>encoder_layer = {
-<a href=#3949 id=3949 data-nosnippet>3949</a>                <span class="kw">let </span>input_layernorm = cfg.hidden_size + cfg.hidden_size;
-<a href=#3950 id=3950 data-nosnippet>3950</a>                <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size + cfg.hidden_size;
-<a href=#3951 id=3951 data-nosnippet>3951</a>
-<a href=#3952 id=3952 data-nosnippet>3952</a>                <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
-<a href=#3953 id=3953 data-nosnippet>3953</a>                <span class="kw">let </span>q_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
-<a href=#3954 id=3954 data-nosnippet>3954</a>                    / weight_pack_factor
-<a href=#3955 id=3955 data-nosnippet>3955</a>                    + cfg.num_attention_heads * head_dim;
-<a href=#3956 id=3956 data-nosnippet>3956</a>                <span class="kw">let </span>k_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
-<a href=#3957 id=3957 data-nosnippet>3957</a>                    / weight_pack_factor
-<a href=#3958 id=3958 data-nosnippet>3958</a>                    + cfg.num_attention_heads * head_dim;
-<a href=#3959 id=3959 data-nosnippet>3959</a>                <span class="kw">let </span>v_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
-<a href=#3960 id=3960 data-nosnippet>3960</a>                    / weight_pack_factor
-<a href=#3961 id=3961 data-nosnippet>3961</a>                    + cfg.num_attention_heads * head_dim;
-<a href=#3962 id=3962 data-nosnippet>3962</a>                <span class="kw">let </span>o_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
-<a href=#3963 id=3963 data-nosnippet>3963</a>                    / weight_pack_factor
-<a href=#3964 id=3964 data-nosnippet>3964</a>                    + cfg.num_attention_heads * head_dim;
-<a href=#3965 id=3965 data-nosnippet>3965</a>
-<a href=#3966 id=3966 data-nosnippet>3966</a>                <span class="kw">let </span>fc1 = (cfg.hidden_size * cfg.intermediate_size) / weight_pack_factor
-<a href=#3967 id=3967 data-nosnippet>3967</a>                    + cfg.intermediate_size;
-<a href=#3968 id=3968 data-nosnippet>3968</a>                <span class="kw">let </span>fc2 = (cfg.intermediate_size * cfg.hidden_size) / weight_pack_factor
-<a href=#3969 id=3969 data-nosnippet>3969</a>                    + cfg.hidden_size;
-<a href=#3970 id=3970 data-nosnippet>3970</a>
-<a href=#3971 id=3971 data-nosnippet>3971</a>                input_layernorm
-<a href=#3972 id=3972 data-nosnippet>3972</a>                    + post_attention_layernorm
-<a href=#3973 id=3973 data-nosnippet>3973</a>                    + q_proj
-<a href=#3974 id=3974 data-nosnippet>3974</a>                    + k_proj
-<a href=#3975 id=3975 data-nosnippet>3975</a>                    + v_proj
-<a href=#3976 id=3976 data-nosnippet>3976</a>                    + o_proj
-<a href=#3977 id=3977 data-nosnippet>3977</a>                    + fc1
-<a href=#3978 id=3978 data-nosnippet>3978</a>                    + fc2
-<a href=#3979 id=3979 data-nosnippet>3979</a>            };
-<a href=#3980 id=3980 data-nosnippet>3980</a>
-<a href=#3981 id=3981 data-nosnippet>3981</a>            unfold_elems
-<a href=#3982 id=3982 data-nosnippet>3982</a>                + class_embeddng_elems
-<a href=#3983 id=3983 data-nosnippet>3983</a>                + positional_embedding_vlm_elems
-<a href=#3984 id=3984 data-nosnippet>3984</a>                + layernorm_post_elems
-<a href=#3985 id=3985 data-nosnippet>3985</a>                + layernorm_pre_elems
-<a href=#3986 id=3986 data-nosnippet>3986</a>                + pixel_shuffle_elems
-<a href=#3987 id=3987 data-nosnippet>3987</a>                + encoder_layer * cfg.num_hidden_layers
-<a href=#3988 id=3988 data-nosnippet>3988</a>        };
+<a href=#3935 id=3935 data-nosnippet>3935</a>            <span class="kw">let </span>unfold_elems =
+<a href=#3936 id=3936 data-nosnippet>3936</a>                (cfg.num_channels * cfg.patch_size * cfg.patch_size) * cfg.hidden_size;
+<a href=#3937 id=3937 data-nosnippet>3937</a>            <span class="kw">let </span>class_embeddng_elems = cfg.hidden_size;
+<a href=#3938 id=3938 data-nosnippet>3938</a>            <span class="kw">let </span>positional_embedding_vlm_elems = num_patches * cfg.hidden_size;
+<a href=#3939 id=3939 data-nosnippet>3939</a>            <span class="kw">let </span>layernorm_pre_elems = cfg.hidden_size;
+<a href=#3940 id=3940 data-nosnippet>3940</a>            <span class="kw">let </span>layernorm_post_elems = cfg.hidden_size;
+<a href=#3941 id=3941 data-nosnippet>3941</a>
+<a href=#3942 id=3942 data-nosnippet>3942</a>            <span class="kw">let </span>pixel_shuffle_elems = cfg.intermediate_size * cfg.projector_input_dim
+<a href=#3943 id=3943 data-nosnippet>3943</a>                / weight_pack_factor
+<a href=#3944 id=3944 data-nosnippet>3944</a>                + cfg.projector_input_dim * cfg.projector_output_dim / weight_pack_factor;
+<a href=#3945 id=3945 data-nosnippet>3945</a>
+<a href=#3946 id=3946 data-nosnippet>3946</a>            <span class="kw">let </span>encoder_layer = {
+<a href=#3947 id=3947 data-nosnippet>3947</a>                <span class="kw">let </span>input_layernorm = cfg.hidden_size + cfg.hidden_size;
+<a href=#3948 id=3948 data-nosnippet>3948</a>                <span class="kw">let </span>post_attention_layernorm = cfg.hidden_size + cfg.hidden_size;
+<a href=#3949 id=3949 data-nosnippet>3949</a>
+<a href=#3950 id=3950 data-nosnippet>3950</a>                <span class="kw">let </span>head_dim = cfg.hidden_size / cfg.num_attention_heads;
+<a href=#3951 id=3951 data-nosnippet>3951</a>                <span class="kw">let </span>q_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
+<a href=#3952 id=3952 data-nosnippet>3952</a>                    / weight_pack_factor
+<a href=#3953 id=3953 data-nosnippet>3953</a>                    + cfg.num_attention_heads * head_dim;
+<a href=#3954 id=3954 data-nosnippet>3954</a>                <span class="kw">let </span>k_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
+<a href=#3955 id=3955 data-nosnippet>3955</a>                    / weight_pack_factor
+<a href=#3956 id=3956 data-nosnippet>3956</a>                    + cfg.num_attention_heads * head_dim;
+<a href=#3957 id=3957 data-nosnippet>3957</a>                <span class="kw">let </span>v_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
+<a href=#3958 id=3958 data-nosnippet>3958</a>                    / weight_pack_factor
+<a href=#3959 id=3959 data-nosnippet>3959</a>                    + cfg.num_attention_heads * head_dim;
+<a href=#3960 id=3960 data-nosnippet>3960</a>                <span class="kw">let </span>o_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
+<a href=#3961 id=3961 data-nosnippet>3961</a>                    / weight_pack_factor
+<a href=#3962 id=3962 data-nosnippet>3962</a>                    + cfg.num_attention_heads * head_dim;
+<a href=#3963 id=3963 data-nosnippet>3963</a>
+<a href=#3964 id=3964 data-nosnippet>3964</a>                <span class="kw">let </span>fc1 = (cfg.hidden_size * cfg.intermediate_size) / weight_pack_factor
+<a href=#3965 id=3965 data-nosnippet>3965</a>                    + cfg.intermediate_size;
+<a href=#3966 id=3966 data-nosnippet>3966</a>                <span class="kw">let </span>fc2 = (cfg.intermediate_size * cfg.hidden_size) / weight_pack_factor
+<a href=#3967 id=3967 data-nosnippet>3967</a>                    + cfg.hidden_size;
+<a href=#3968 id=3968 data-nosnippet>3968</a>
+<a href=#3969 id=3969 data-nosnippet>3969</a>                input_layernorm
+<a href=#3970 id=3970 data-nosnippet>3970</a>                    + post_attention_layernorm
+<a href=#3971 id=3971 data-nosnippet>3971</a>                    + q_proj
+<a href=#3972 id=3972 data-nosnippet>3972</a>                    + k_proj
+<a href=#3973 id=3973 data-nosnippet>3973</a>                    + v_proj
+<a href=#3974 id=3974 data-nosnippet>3974</a>                    + o_proj
+<a href=#3975 id=3975 data-nosnippet>3975</a>                    + fc1
+<a href=#3976 id=3976 data-nosnippet>3976</a>                    + fc2
+<a href=#3977 id=3977 data-nosnippet>3977</a>            };
+<a href=#3978 id=3978 data-nosnippet>3978</a>
+<a href=#3979 id=3979 data-nosnippet>3979</a>            unfold_elems
+<a href=#3980 id=3980 data-nosnippet>3980</a>                + class_embeddng_elems
+<a href=#3981 id=3981 data-nosnippet>3981</a>                + positional_embedding_vlm_elems
+<a href=#3982 id=3982 data-nosnippet>3982</a>                + layernorm_post_elems
+<a href=#3983 id=3983 data-nosnippet>3983</a>                + layernorm_pre_elems
+<a href=#3984 id=3984 data-nosnippet>3984</a>                + pixel_shuffle_elems
+<a href=#3985 id=3985 data-nosnippet>3985</a>                + encoder_layer * cfg.num_hidden_layers
+<a href=#3986 id=3986 data-nosnippet>3986</a>        };
+<a href=#3987 id=3987 data-nosnippet>3987</a>
+<a href=#3988 id=3988 data-nosnippet>3988</a>        <span class="kw">let </span>elems = text_elems + vision_elems;
 <a href=#3989 id=3989 data-nosnippet>3989</a>
-<a href=#3990 id=3990 data-nosnippet>3990</a>        <span class="kw">let </span>elems = text_elems + vision_elems;
-<a href=#3991 id=3991 data-nosnippet>3991</a>
-<a href=#3992 id=3992 data-nosnippet>3992</a>        <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
-<a href=#3993 id=3993 data-nosnippet>3993</a>    }
-<a href=#3994 id=3994 data-nosnippet>3994</a>
-<a href=#3995 id=3995 data-nosnippet>3995</a>    <span class="kw">fn </span>layer_sizes_in_bytes(
-<a href=#3996 id=3996 data-nosnippet>3996</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#3997 id=3997 data-nosnippet>3997</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#3998 id=3998 data-nosnippet>3998</a>        dtype: DType,
-<a href=#3999 id=3999 data-nosnippet>3999</a>        weight_pack_factor: usize,
-<a href=#4000 id=4000 data-nosnippet>4000</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
-<a href=#4001 id=4001 data-nosnippet>4001</a>        <span class="kw">let </span>cfg: Llama4Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#4002 id=4002 data-nosnippet>4002</a>        <span class="kw">let </span>tcfg = <span class="kw-2">&amp;</span>cfg.text_config;
+<a href=#3990 id=3990 data-nosnippet>3990</a>        <span class="prelude-val">Ok</span>(elems * dtype.size_in_bytes())
+<a href=#3991 id=3991 data-nosnippet>3991</a>    }
+<a href=#3992 id=3992 data-nosnippet>3992</a>
+<a href=#3993 id=3993 data-nosnippet>3993</a>    <span class="kw">fn </span>layer_sizes_in_bytes(
+<a href=#3994 id=3994 data-nosnippet>3994</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#3995 id=3995 data-nosnippet>3995</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#3996 id=3996 data-nosnippet>3996</a>        dtype: DType,
+<a href=#3997 id=3997 data-nosnippet>3997</a>        weight_pack_factor: usize,
+<a href=#3998 id=3998 data-nosnippet>3998</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt; {
+<a href=#3999 id=3999 data-nosnippet>3999</a>        <span class="kw">let </span>cfg: Llama4Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#4000 id=4000 data-nosnippet>4000</a>        <span class="kw">let </span>tcfg = <span class="kw-2">&amp;</span>cfg.text_config;
+<a href=#4001 id=4001 data-nosnippet>4001</a>
+<a href=#4002 id=4002 data-nosnippet>4002</a>        <span class="kw">let </span><span class="kw-2">mut </span>per_layer_elems = Vec::new();
 <a href=#4003 id=4003 data-nosnippet>4003</a>
-<a href=#4004 id=4004 data-nosnippet>4004</a>        <span class="kw">let </span><span class="kw-2">mut </span>per_layer_elems = Vec::new();
-<a href=#4005 id=4005 data-nosnippet>4005</a>
-<a href=#4006 id=4006 data-nosnippet>4006</a>        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..tcfg.num_hidden_layers {
-<a href=#4007 id=4007 data-nosnippet>4007</a>            <span class="kw">let </span>input_layernorm = tcfg.hidden_size;
-<a href=#4008 id=4008 data-nosnippet>4008</a>            <span class="kw">let </span>post_attention_layernorm = tcfg.hidden_size;
-<a href=#4009 id=4009 data-nosnippet>4009</a>
-<a href=#4010 id=4010 data-nosnippet>4010</a>            <span class="kw">let </span>size_in = tcfg.hidden_size;
-<a href=#4011 id=4011 data-nosnippet>4011</a>            <span class="kw">let </span>size_q = (tcfg.hidden_size / tcfg.num_attention_heads) * tcfg.num_attention_heads;
-<a href=#4012 id=4012 data-nosnippet>4012</a>            <span class="kw">let </span>size_kv = (tcfg.hidden_size / tcfg.num_attention_heads) * tcfg.num_key_value_heads;
-<a href=#4013 id=4013 data-nosnippet>4013</a>            <span class="kw">let </span>q_proj = size_in * size_q / weight_pack_factor;
-<a href=#4014 id=4014 data-nosnippet>4014</a>            <span class="kw">let </span>k_proj = size_in * size_kv / weight_pack_factor;
-<a href=#4015 id=4015 data-nosnippet>4015</a>            <span class="kw">let </span>v_proj = size_in * size_kv / weight_pack_factor;
-<a href=#4016 id=4016 data-nosnippet>4016</a>            <span class="kw">let </span>o_proj = size_q * size_in / weight_pack_factor;
-<a href=#4017 id=4017 data-nosnippet>4017</a>
-<a href=#4018 id=4018 data-nosnippet>4018</a>            <span class="kw">let </span>use_moe = tcfg.moe_layers().contains(<span class="kw-2">&amp;</span>layer_idx);
-<a href=#4019 id=4019 data-nosnippet>4019</a>            <span class="kw">let </span>moe_block = <span class="kw">if </span>use_moe {
-<a href=#4020 id=4020 data-nosnippet>4020</a>                <span class="kw">let </span>h_size = tcfg.hidden_size;
-<a href=#4021 id=4021 data-nosnippet>4021</a>                <span class="kw">let </span>i_size = tcfg.intermediate_size;
-<a href=#4022 id=4022 data-nosnippet>4022</a>                <span class="kw">let </span>gate_proj = tcfg.num_local_experts * h_size * i_size / weight_pack_factor;
-<a href=#4023 id=4023 data-nosnippet>4023</a>                <span class="kw">let </span>up_proj = tcfg.num_local_experts * h_size * i_size / weight_pack_factor;
-<a href=#4024 id=4024 data-nosnippet>4024</a>                <span class="kw">let </span>down_proj = tcfg.num_local_experts * i_size * h_size / weight_pack_factor;
-<a href=#4025 id=4025 data-nosnippet>4025</a>
-<a href=#4026 id=4026 data-nosnippet>4026</a>                gate_proj + up_proj + down_proj
-<a href=#4027 id=4027 data-nosnippet>4027</a>            } <span class="kw">else </span>{
-<a href=#4028 id=4028 data-nosnippet>4028</a>                <span class="kw">let </span>h_size = tcfg.hidden_size;
-<a href=#4029 id=4029 data-nosnippet>4029</a>                <span class="kw">let </span>i_size = tcfg.intermediate_size_mlp;
-<a href=#4030 id=4030 data-nosnippet>4030</a>                <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
-<a href=#4031 id=4031 data-nosnippet>4031</a>                <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
-<a href=#4032 id=4032 data-nosnippet>4032</a>                <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
-<a href=#4033 id=4033 data-nosnippet>4033</a>
-<a href=#4034 id=4034 data-nosnippet>4034</a>                gate_proj + up_proj + down_proj
-<a href=#4035 id=4035 data-nosnippet>4035</a>            };
-<a href=#4036 id=4036 data-nosnippet>4036</a>
-<a href=#4037 id=4037 data-nosnippet>4037</a>            per_layer_elems.push(
-<a href=#4038 id=4038 data-nosnippet>4038</a>                input_layernorm
-<a href=#4039 id=4039 data-nosnippet>4039</a>                    + post_attention_layernorm
-<a href=#4040 id=4040 data-nosnippet>4040</a>                    + q_proj
-<a href=#4041 id=4041 data-nosnippet>4041</a>                    + k_proj
-<a href=#4042 id=4042 data-nosnippet>4042</a>                    + v_proj
-<a href=#4043 id=4043 data-nosnippet>4043</a>                    + o_proj
-<a href=#4044 id=4044 data-nosnippet>4044</a>                    + moe_block,
-<a href=#4045 id=4045 data-nosnippet>4045</a>            );
-<a href=#4046 id=4046 data-nosnippet>4046</a>        }
-<a href=#4047 id=4047 data-nosnippet>4047</a>
-<a href=#4048 id=4048 data-nosnippet>4048</a>        <span class="prelude-val">Ok</span>(per_layer_elems
-<a href=#4049 id=4049 data-nosnippet>4049</a>            .into_iter()
-<a href=#4050 id=4050 data-nosnippet>4050</a>            .map(|x| x * dtype.size_in_bytes())
-<a href=#4051 id=4051 data-nosnippet>4051</a>            .collect())
-<a href=#4052 id=4052 data-nosnippet>4052</a>    }
-<a href=#4053 id=4053 data-nosnippet>4053</a>
-<a href=#4054 id=4054 data-nosnippet>4054</a>    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#4055 id=4055 data-nosnippet>4055</a>        <span class="kw">let </span>cfg: Llama4Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#4056 id=4056 data-nosnippet>4056</a>        <span class="prelude-val">Ok</span>(cfg.text_config.num_hidden_layers)
-<a href=#4057 id=4057 data-nosnippet>4057</a>    }
-<a href=#4058 id=4058 data-nosnippet>4058</a>
-<a href=#4059 id=4059 data-nosnippet>4059</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
-<a href=#4060 id=4060 data-nosnippet>4060</a>        <span class="kw">let </span>cfg: Llama4Config = serde_json::from_str(config)<span class="question-mark">?</span>;
-<a href=#4061 id=4061 data-nosnippet>4061</a>        <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.text_config;
-<a href=#4062 id=4062 data-nosnippet>4062</a>
-<a href=#4063 id=4063 data-nosnippet>4063</a>        <span class="kw">let </span>cfg = ModelConfigMetadata {
-<a href=#4064 id=4064 data-nosnippet>4064</a>            max_seq_len: cfg.max_position_embeddings,
-<a href=#4065 id=4065 data-nosnippet>4065</a>            num_layers: cfg.num_hidden_layers,
-<a href=#4066 id=4066 data-nosnippet>4066</a>            hidden_size: cfg.hidden_size,
-<a href=#4067 id=4067 data-nosnippet>4067</a>            num_kv_heads: cfg.num_attention_heads,
-<a href=#4068 id=4068 data-nosnippet>4068</a>            num_attn_heads: cfg.num_attention_heads,
-<a href=#4069 id=4069 data-nosnippet>4069</a>            sliding_window: <span class="prelude-val">None</span>,
-<a href=#4070 id=4070 data-nosnippet>4070</a>            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-<a href=#4071 id=4071 data-nosnippet>4071</a>            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-<a href=#4072 id=4072 data-nosnippet>4072</a>        };
-<a href=#4073 id=4073 data-nosnippet>4073</a>
-<a href=#4074 id=4074 data-nosnippet>4074</a>        <span class="prelude-val">Ok</span>(Box::new(cfg))
-<a href=#4075 id=4075 data-nosnippet>4075</a>    }
-<a href=#4076 id=4076 data-nosnippet>4076</a>
-<a href=#4077 id=4077 data-nosnippet>4077</a>    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
-<a href=#4078 id=4078 data-nosnippet>4078</a>        <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[NonMappedSubModel::Vision])
-<a href=#4079 id=4079 data-nosnippet>4079</a>    }
-<a href=#4080 id=4080 data-nosnippet>4080</a>}</code></pre></div></section></main></body></html>
+<a href=#4004 id=4004 data-nosnippet>4004</a>        <span class="kw">for </span>layer_idx <span class="kw">in </span><span class="number">0</span>..tcfg.num_hidden_layers {
+<a href=#4005 id=4005 data-nosnippet>4005</a>            <span class="kw">let </span>input_layernorm = tcfg.hidden_size;
+<a href=#4006 id=4006 data-nosnippet>4006</a>            <span class="kw">let </span>post_attention_layernorm = tcfg.hidden_size;
+<a href=#4007 id=4007 data-nosnippet>4007</a>
+<a href=#4008 id=4008 data-nosnippet>4008</a>            <span class="kw">let </span>size_in = tcfg.hidden_size;
+<a href=#4009 id=4009 data-nosnippet>4009</a>            <span class="kw">let </span>size_q = (tcfg.hidden_size / tcfg.num_attention_heads) * tcfg.num_attention_heads;
+<a href=#4010 id=4010 data-nosnippet>4010</a>            <span class="kw">let </span>size_kv = (tcfg.hidden_size / tcfg.num_attention_heads) * tcfg.num_key_value_heads;
+<a href=#4011 id=4011 data-nosnippet>4011</a>            <span class="kw">let </span>q_proj = size_in * size_q / weight_pack_factor;
+<a href=#4012 id=4012 data-nosnippet>4012</a>            <span class="kw">let </span>k_proj = size_in * size_kv / weight_pack_factor;
+<a href=#4013 id=4013 data-nosnippet>4013</a>            <span class="kw">let </span>v_proj = size_in * size_kv / weight_pack_factor;
+<a href=#4014 id=4014 data-nosnippet>4014</a>            <span class="kw">let </span>o_proj = size_q * size_in / weight_pack_factor;
+<a href=#4015 id=4015 data-nosnippet>4015</a>
+<a href=#4016 id=4016 data-nosnippet>4016</a>            <span class="kw">let </span>use_moe = tcfg.moe_layers().contains(<span class="kw-2">&amp;</span>layer_idx);
+<a href=#4017 id=4017 data-nosnippet>4017</a>            <span class="kw">let </span>moe_block = <span class="kw">if </span>use_moe {
+<a href=#4018 id=4018 data-nosnippet>4018</a>                <span class="kw">let </span>h_size = tcfg.hidden_size;
+<a href=#4019 id=4019 data-nosnippet>4019</a>                <span class="kw">let </span>i_size = tcfg.intermediate_size;
+<a href=#4020 id=4020 data-nosnippet>4020</a>                <span class="kw">let </span>gate_proj = tcfg.num_local_experts * h_size * i_size / weight_pack_factor;
+<a href=#4021 id=4021 data-nosnippet>4021</a>                <span class="kw">let </span>up_proj = tcfg.num_local_experts * h_size * i_size / weight_pack_factor;
+<a href=#4022 id=4022 data-nosnippet>4022</a>                <span class="kw">let </span>down_proj = tcfg.num_local_experts * i_size * h_size / weight_pack_factor;
+<a href=#4023 id=4023 data-nosnippet>4023</a>
+<a href=#4024 id=4024 data-nosnippet>4024</a>                gate_proj + up_proj + down_proj
+<a href=#4025 id=4025 data-nosnippet>4025</a>            } <span class="kw">else </span>{
+<a href=#4026 id=4026 data-nosnippet>4026</a>                <span class="kw">let </span>h_size = tcfg.hidden_size;
+<a href=#4027 id=4027 data-nosnippet>4027</a>                <span class="kw">let </span>i_size = tcfg.intermediate_size_mlp;
+<a href=#4028 id=4028 data-nosnippet>4028</a>                <span class="kw">let </span>gate_proj = h_size * i_size / weight_pack_factor;
+<a href=#4029 id=4029 data-nosnippet>4029</a>                <span class="kw">let </span>up_proj = h_size * i_size / weight_pack_factor;
+<a href=#4030 id=4030 data-nosnippet>4030</a>                <span class="kw">let </span>down_proj = i_size * h_size / weight_pack_factor;
+<a href=#4031 id=4031 data-nosnippet>4031</a>
+<a href=#4032 id=4032 data-nosnippet>4032</a>                gate_proj + up_proj + down_proj
+<a href=#4033 id=4033 data-nosnippet>4033</a>            };
+<a href=#4034 id=4034 data-nosnippet>4034</a>
+<a href=#4035 id=4035 data-nosnippet>4035</a>            per_layer_elems.push(
+<a href=#4036 id=4036 data-nosnippet>4036</a>                input_layernorm
+<a href=#4037 id=4037 data-nosnippet>4037</a>                    + post_attention_layernorm
+<a href=#4038 id=4038 data-nosnippet>4038</a>                    + q_proj
+<a href=#4039 id=4039 data-nosnippet>4039</a>                    + k_proj
+<a href=#4040 id=4040 data-nosnippet>4040</a>                    + v_proj
+<a href=#4041 id=4041 data-nosnippet>4041</a>                    + o_proj
+<a href=#4042 id=4042 data-nosnippet>4042</a>                    + moe_block,
+<a href=#4043 id=4043 data-nosnippet>4043</a>            );
+<a href=#4044 id=4044 data-nosnippet>4044</a>        }
+<a href=#4045 id=4045 data-nosnippet>4045</a>
+<a href=#4046 id=4046 data-nosnippet>4046</a>        <span class="prelude-val">Ok</span>(per_layer_elems
+<a href=#4047 id=4047 data-nosnippet>4047</a>            .into_iter()
+<a href=#4048 id=4048 data-nosnippet>4048</a>            .map(|x| x * dtype.size_in_bytes())
+<a href=#4049 id=4049 data-nosnippet>4049</a>            .collect())
+<a href=#4050 id=4050 data-nosnippet>4050</a>    }
+<a href=#4051 id=4051 data-nosnippet>4051</a>
+<a href=#4052 id=4052 data-nosnippet>4052</a>    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#4053 id=4053 data-nosnippet>4053</a>        <span class="kw">let </span>cfg: Llama4Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#4054 id=4054 data-nosnippet>4054</a>        <span class="prelude-val">Ok</span>(cfg.text_config.num_hidden_layers)
+<a href=#4055 id=4055 data-nosnippet>4055</a>    }
+<a href=#4056 id=4056 data-nosnippet>4056</a>
+<a href=#4057 id=4057 data-nosnippet>4057</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt; {
+<a href=#4058 id=4058 data-nosnippet>4058</a>        <span class="kw">let </span>cfg: Llama4Config = serde_json::from_str(config)<span class="question-mark">?</span>;
+<a href=#4059 id=4059 data-nosnippet>4059</a>        <span class="kw">let </span>cfg = <span class="kw-2">&amp;</span>cfg.text_config;
+<a href=#4060 id=4060 data-nosnippet>4060</a>
+<a href=#4061 id=4061 data-nosnippet>4061</a>        <span class="kw">let </span>cfg = ModelConfigMetadata {
+<a href=#4062 id=4062 data-nosnippet>4062</a>            max_seq_len: cfg.max_position_embeddings,
+<a href=#4063 id=4063 data-nosnippet>4063</a>            num_layers: cfg.num_hidden_layers,
+<a href=#4064 id=4064 data-nosnippet>4064</a>            hidden_size: cfg.hidden_size,
+<a href=#4065 id=4065 data-nosnippet>4065</a>            num_kv_heads: cfg.num_attention_heads,
+<a href=#4066 id=4066 data-nosnippet>4066</a>            num_attn_heads: cfg.num_attention_heads,
+<a href=#4067 id=4067 data-nosnippet>4067</a>            sliding_window: <span class="prelude-val">None</span>,
+<a href=#4068 id=4068 data-nosnippet>4068</a>            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+<a href=#4069 id=4069 data-nosnippet>4069</a>            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+<a href=#4070 id=4070 data-nosnippet>4070</a>        };
+<a href=#4071 id=4071 data-nosnippet>4071</a>
+<a href=#4072 id=4072 data-nosnippet>4072</a>        <span class="prelude-val">Ok</span>(Box::new(cfg))
+<a href=#4073 id=4073 data-nosnippet>4073</a>    }
+<a href=#4074 id=4074 data-nosnippet>4074</a>
+<a href=#4075 id=4075 data-nosnippet>4075</a>    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
+<a href=#4076 id=4076 data-nosnippet>4076</a>        <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[NonMappedSubModel::Vision])
+<a href=#4077 id=4077 data-nosnippet>4077</a>    }
+<a href=#4078 id=4078 data-nosnippet>4078</a>}</code></pre></div></section></main></body></html>
