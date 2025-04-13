@@ -22,7 +22,7 @@ res = runner.send_chat_completion_request(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": str(encoded_string),
+                            "url": f"data:image/png;base64,{encoded_string}",
                         },
                     },
                     {
