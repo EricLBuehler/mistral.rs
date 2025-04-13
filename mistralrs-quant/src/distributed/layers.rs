@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{Context, Result, Tensor};
+use candle_core::{Context, Device, Result, Tensor, D};
 use candle_nn::Linear;
 
 use crate::{
@@ -762,14 +762,16 @@ impl PackedExperts {
                 .t()?
                 .contiguous()?;
 
+            let gc = gate_proj.chunk(num_local_experts, 0)?;
+            let uc = up_proj.chunk(num_local_experts, 0)?;
+            let dc = down_proj.chunk(num_local_experts, 0)?;
+            drop((gate_proj, up_proj, down_proj));
+
             let mut gs = Vec::new();
             let mut us = Vec::new();
             let mut ds = Vec::new();
-            for ((mut gate_proj, mut up_proj), mut down_proj) in gate_proj
-                .chunk(num_local_experts, 0)?
-                .into_iter()
-                .zip(up_proj.chunk(num_local_experts, 0)?)
-                .zip(down_proj.chunk(num_local_experts, 0)?)
+            for ((mut gate_proj, mut up_proj), mut down_proj) in
+                gc.into_iter().zip(uc.into_iter()).zip(dc.into_iter())
             {
                 gate_proj = gate_proj.squeeze(0)?;
                 up_proj = up_proj.squeeze(0)?;
@@ -786,18 +788,48 @@ impl PackedExperts {
                 let down_proj =
                     merge_lora_weights(&vb, down_proj, intermediate_size, hidden_size, shard_down)?;
 
-                let gate_proj = <UnquantLinear as QuantMethod>::new(
-                    QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
-                )?;
-                let up_proj = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
-                    Linear::new(up_proj, None),
-                ))?;
-                let down_proj = <UnquantLinear as QuantMethod>::new(
-                    QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
-                )?;
-                gs.push(Arc::new(gate_proj) as Arc<dyn QuantMethod>);
-                us.push(Arc::new(up_proj) as Arc<dyn QuantMethod>);
-                ds.push(Arc::new(down_proj) as Arc<dyn QuantMethod>);
+                let mut gate_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<UnquantLinear as QuantMethod>::new(
+                        QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
+                    )?);
+                if let Some(immediate_isq) = get_immediate_isq() {
+                    gate_proj = gate_proj.clone().apply_isq(
+                        Some(immediate_isq),
+                        vb.device().clone(),
+                        &AtomicUsize::new(0),
+                        None,
+                        QuantizeOntoGuard::new(),
+                    )?;
+                }
+                let mut up_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<UnquantLinear as QuantMethod>::new(
+                        QuantMethodConfig::Unquantized(Linear::new(up_proj, None)),
+                    )?);
+                if let Some(immediate_isq) = get_immediate_isq() {
+                    up_proj = up_proj.clone().apply_isq(
+                        Some(immediate_isq),
+                        vb.device().clone(),
+                        &AtomicUsize::new(0),
+                        None,
+                        QuantizeOntoGuard::new(),
+                    )?;
+                }
+                let mut down_proj: Arc<dyn QuantMethod> =
+                    Arc::new(<UnquantLinear as QuantMethod>::new(
+                        QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
+                    )?);
+                if let Some(immediate_isq) = get_immediate_isq() {
+                    down_proj = down_proj.clone().apply_isq(
+                        Some(immediate_isq),
+                        vb.device().clone(),
+                        &AtomicUsize::new(0),
+                        None,
+                        QuantizeOntoGuard::new(),
+                    )?;
+                }
+                gs.push(gate_proj);
+                us.push(up_proj);
+                ds.push(down_proj);
             }
             (gs, us, ds)
         };

@@ -403,6 +403,10 @@ impl Loader for VisionLoader {
         );
 
         let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
+        {
+            mistralrs_quant::set_immediate_isq(in_situ_quant);
+            loading_isq = false;
+        }
         if let Some(ref topology) = self.config.topology {
             loading_isq |= topology
                 .0

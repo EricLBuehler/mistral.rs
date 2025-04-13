@@ -25,6 +25,11 @@ pub(crate) fn afq_quantize_op(
             w.dims()
         );
     }
+    let w = if w.layout().start_offset() != 0 {
+        w.copy()?
+    } else {
+        w.clone()
+    };
 
     #[cfg(feature = "metal")]
     {
@@ -49,7 +54,6 @@ pub(crate) fn afq_quantize_op(
         let biases =
             device.new_buffer(s_shape.iter().product(), w.dtype(), "afq-quantize-biases")?;
 
-        assert_eq!(w.layout().start_offset(), 0);
         crate::metal_kernels::call_affine_quantize(
             device.device(),
             &command_buffer,
