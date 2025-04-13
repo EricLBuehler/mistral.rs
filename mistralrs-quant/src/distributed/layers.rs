@@ -101,10 +101,10 @@ impl RowParallelLayer {
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
         });
-        if let Some((immediate_isq, dev)) = get_immediate_isq() {
+        if let Some(immediate_isq) = get_immediate_isq() {
             this = this.clone().apply_isq(
                 Some(immediate_isq),
-                dev,
+                vb.device().clone(),
                 &AtomicUsize::new(0),
                 None,
                 QuantizeOntoGuard::new(),
@@ -308,10 +308,10 @@ impl ColumnParallelLayer {
         };
 
         let mut this: Arc<dyn QuantMethod> = Arc::new(Self { weight, bias });
-        if let Some((immediate_isq, dev)) = get_immediate_isq() {
+        if let Some(immediate_isq) = get_immediate_isq() {
             this = this.clone().apply_isq(
                 Some(immediate_isq),
-                dev,
+                vb.device().clone(),
                 &AtomicUsize::new(0),
                 None,
                 QuantizeOntoGuard::new(),
@@ -454,9 +454,10 @@ pub struct ReplicatedLayer(Arc<dyn QuantMethod>);
 
 impl ReplicatedLayer {
     pub fn from_linear(lin: Linear) -> Result<Arc<dyn QuantMethod>> {
+        let dev = lin.weight().device().clone();
         let mut this: Arc<dyn QuantMethod> =
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
-        if let Some((immediate_isq, dev)) = get_immediate_isq() {
+        if let Some(immediate_isq) = get_immediate_isq() {
             this = this.clone().apply_isq(
                 Some(immediate_isq),
                 dev,
@@ -518,10 +519,10 @@ impl ReplicatedLayer {
         };
 
         let mut this: Arc<dyn QuantMethod> = Arc::new(Self(layer));
-        if let Some((immediate_isq, dev)) = get_immediate_isq() {
+        if let Some(immediate_isq) = get_immediate_isq() {
             this = this.clone().apply_isq(
                 Some(immediate_isq),
-                dev,
+                vb.device().clone(),
                 &AtomicUsize::new(0),
                 None,
                 QuantizeOntoGuard::new(),

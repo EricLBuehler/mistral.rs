@@ -61,16 +61,16 @@ pub use utils::UQFF_QUANT_TYPE_OFFSET;
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
 
-static IMMEDIATE_ISQ: OnceLock<Mutex<Option<(IsqType, Device)>>> = OnceLock::new();
+static IMMEDIATE_ISQ: OnceLock<Mutex<Option<IsqType>>> = OnceLock::new();
 
-pub fn set_immediate_isq(isq: Option<IsqType>, device: Device) {
+pub fn set_immediate_isq(isq: Option<IsqType>) {
     *IMMEDIATE_ISQ
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap() = isq.map(|i| (i, device));
+        .unwrap() = isq;
 }
 
-pub fn get_immediate_isq() -> Option<(IsqType, Device)> {
+pub fn get_immediate_isq() -> Option<IsqType> {
     IMMEDIATE_ISQ
         .get_or_init(|| Mutex::new(None))
         .lock()
