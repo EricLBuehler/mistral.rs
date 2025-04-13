@@ -2,7 +2,7 @@ use std::{
     borrow::Cow,
     fmt::Debug,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
+    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard, OnceLock},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -60,6 +60,23 @@ pub use utils::UQFF_QUANT_TYPE_OFFSET;
 
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
+
+static IMMEDIATE_ISQ: OnceLock<Mutex<Option<(IsqType, Device)>>> = OnceLock::new();
+
+pub fn set_immediate_isq(isq: Option<IsqType>, device: Device) {
+    *IMMEDIATE_ISQ
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap() = isq.map(|i| (i, device));
+}
+
+pub fn get_immediate_isq() -> Option<(IsqType, Device)> {
+    IMMEDIATE_ISQ
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "quant_method", rename_all = "lowercase")]

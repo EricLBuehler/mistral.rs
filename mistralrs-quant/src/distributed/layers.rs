@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::sync::{atomic::AtomicUsize, Arc};
 
 use candle_core::{Context, Result, Tensor};
 use candle_nn::Linear;
 
 use crate::{
-    blockwise_fp8::blockwise_fp8_linear_b, distributed, gptq::gptq_linear,
+    blockwise_fp8::blockwise_fp8_linear_b, distributed, get_immediate_isq, gptq::gptq_linear,
     lora::merge_lora_weights, AfqLayer, BnbLinear, DistributedKind, DummyLayer, FP8Linear,
     GgufMatMul, HqqLayer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
     QuantizedSerde, QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
@@ -96,11 +96,21 @@ impl RowParallelLayer {
             None
         };
 
-        Ok(Arc::new(Self {
+        let mut this: Arc<dyn QuantMethod> = Arc::new(Self {
             weight,
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
-        }))
+        });
+        if let Some((immediate_isq, dev)) = get_immediate_isq() {
+            this = this.clone().apply_isq(
+                Some(immediate_isq),
+                dev,
+                &AtomicUsize::new(0),
+                None,
+                QuantizeOntoGuard::new(),
+            )?;
+        }
+        Ok(this)
     }
 }
 
@@ -297,7 +307,17 @@ impl ColumnParallelLayer {
             None
         };
 
-        Ok(Arc::new(Self { weight, bias }))
+        let mut this: Arc<dyn QuantMethod> = Arc::new(Self { weight, bias });
+        if let Some((immediate_isq, dev)) = get_immediate_isq() {
+            this = this.clone().apply_isq(
+                Some(immediate_isq),
+                dev,
+                &AtomicUsize::new(0),
+                None,
+                QuantizeOntoGuard::new(),
+            )?;
+        }
+        Ok(this)
     }
 
     #[allow(clippy::new_ret_no_self)]
@@ -434,9 +454,18 @@ pub struct ReplicatedLayer(Arc<dyn QuantMethod>);
 
 impl ReplicatedLayer {
     pub fn from_linear(lin: Linear) -> Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(lin),
-        )?))
+        let mut this: Arc<dyn QuantMethod> =
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
+        if let Some((immediate_isq, dev)) = get_immediate_isq() {
+            this = this.clone().apply_isq(
+                Some(immediate_isq),
+                dev,
+                &AtomicUsize::new(0),
+                None,
+                QuantizeOntoGuard::new(),
+            )?;
+        }
+        Ok(this)
     }
 
     #[allow(clippy::new_ret_no_self)]
@@ -449,17 +478,19 @@ impl ReplicatedLayer {
     ) -> Result<Arc<dyn QuantMethod>> {
         let layer = if let Some(quant_conf) = &config {
             match quant_conf {
-                QuantizedConfig::Gptq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
+                QuantizedConfig::Gptq { .. } => {
+                    gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
+                }
                 QuantizedConfig::Fp8 { .. } => blockwise_fp8_linear_b(
                     in_dim,
                     out_dim,
                     quant_conf,
                     bias,
                     Default::default(),
-                    vb,
+                    vb.clone(),
                 )?,
                 QuantizedConfig::Bitsandbytes { .. } => {
-                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb)?) as Arc<_>
+                    Arc::new(BnbLinear::linear_b(in_dim, out_dim, bias, vb.clone())?) as Arc<_>
                 }
                 QuantizedConfig::Afq { .. } => {
                     AfqLayer::afq_linear_b(in_dim, out_dim, quant_conf, bias, vb.clone())?
@@ -486,7 +517,17 @@ impl ReplicatedLayer {
             }
         };
 
-        Ok(Arc::new(Self(layer)))
+        let mut this: Arc<dyn QuantMethod> = Arc::new(Self(layer));
+        if let Some((immediate_isq, dev)) = get_immediate_isq() {
+            this = this.clone().apply_isq(
+                Some(immediate_isq),
+                dev,
+                &AtomicUsize::new(0),
+                None,
+                QuantizeOntoGuard::new(),
+            )?;
+        }
+        Ok(this)
     }
 }
 
