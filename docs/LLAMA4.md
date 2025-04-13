@@ -6,7 +6,7 @@
 
 The Llama 4 collection of models are natively multimodal AI models that enable text and multimodal experiences. 
 
-**Architecure:**
+**Architecture:**
 - Efficient inference: 17B activated parameters
 - Very sparse: 1 activated expert for both Scout (of 16), and Maverick (of 128)
 - RoPE enhancement: iRoPE enables high context-length functionality
