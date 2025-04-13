@@ -3878,9 +3878,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
 
         let max_seq_len = max_seq_len + num_text_image_toks;
 
-        Ok(dbg!(
-            max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
-        ))
+        Ok(max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len)
     }
     fn non_mapped_max_act_size_elems(
         &self,
