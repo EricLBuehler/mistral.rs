@@ -1,4 +1,4 @@
-use std::{fs::File, num::NonZeroUsize, path::PathBuf};
+use std::{fs::File, num::NonZeroUsize, path::PathBuf, str::FromStr};
 
 use mistralrs_quant::MULTI_LORA_DELIMITER;
 use serde::Deserialize;
@@ -8,7 +8,7 @@ use crate::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
     ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
     SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
-    GGUF_MULTI_FILE_DELIMITER,
+    GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -64,7 +64,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// .imatrix file to enhance GGUF quantizations with.
         /// Incompatible with `--imatrix/-i`
@@ -115,7 +115,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_seq_len")]
@@ -151,7 +151,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_seq_len")]
@@ -407,7 +407,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
         /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
@@ -613,7 +613,12 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix,
                 calibration_file,
                 hf_cache_path,
@@ -645,7 +650,12 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -684,7 +694,12 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -907,7 +922,12 @@ fn loader_from_selected(
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 max_edge,
                 calibration_file,
                 imatrix,

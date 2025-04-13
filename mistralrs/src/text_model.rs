@@ -15,7 +15,7 @@ pub struct TextModelBuilder {
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
     pub(crate) write_uqff: Option<PathBuf>,
-    pub(crate) from_uqff: Option<PathBuf>,
+    pub(crate) from_uqff: Option<Vec<PathBuf>>,
     pub(crate) imatrix: Option<PathBuf>,
     pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
@@ -261,7 +261,7 @@ impl TextModelBuilder {
     }
 
     /// Path to read a UQFF file from.
-    pub fn from_uqff(mut self, path: PathBuf) -> Self {
+    pub fn from_uqff(mut self, path: Vec<PathBuf>) -> Self {
         self.from_uqff = Some(path);
         self
     }
@@ -375,7 +375,7 @@ impl UqffTextModelBuilder {
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
-    pub fn new(model_id: impl ToString, uqff_file: PathBuf) -> Self {
+    pub fn new(model_id: impl ToString, uqff_file: Vec<PathBuf>) -> Self {
         let mut inner = TextModelBuilder::new(model_id);
         inner = inner.from_uqff(uqff_file);
         Self(inner)

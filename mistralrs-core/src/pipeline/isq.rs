@@ -29,6 +29,7 @@ use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 // 10 GB max per file
 const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
+pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 
 /// Parse ISQ value.
 ///
@@ -619,7 +620,7 @@ pub trait IsqModel {
                 let n_files = size_estimate_bytes.div_ceil(MAX_UQFF_SIZE_BYTES);
 
                 if n_files == 1 {
-                    info!("Serializing to `{}`", serialized.display());
+                    info!("Writing to `{}`", serialized.display());
                     safetensors::serialize_to_file(quantized_values, &None, serialized)?;
                 } else {
                     let chunksize = quantized_values.len() / n_files;
@@ -627,7 +628,7 @@ pub trait IsqModel {
                     for (i, chunk) in quantized_values_chunks.into_iter().enumerate() {
                         let mut name = parent.to_path_buf();
                         name.push(format!("{file_stem}-{i}.uqff"));
-                        info!("Serializing shard {i} to `{}`", name.display());
+                        info!("Writing shard {i} to `{}`", name.display());
                         safetensors::serialize_to_file(chunk, &None, &name)?;
                     }
                 }
@@ -727,7 +728,7 @@ pub trait IsqModel {
         device: Device,
         topology: Option<&Topology>,
         silent: bool,
-        artifacts: &PathBuf,
+        artifacts: &[PathBuf],
     ) -> candle_core::Result<()> {
         let (tensors, mapper) = self.get_layers();
         let total_tensors = tensors.len();
@@ -764,7 +765,7 @@ pub trait IsqModel {
             comms.push(mapper.get_comm_for(layer_num.unwrap_or(0))?)
         }
 
-        let artifacts = unsafe { candle_core::safetensors::MmapedSafetensors::new(artifacts)? };
+        let artifacts = unsafe { candle_core::safetensors::MmapedSafetensors::multi(artifacts)? };
 
         let artifact_isqs = artifacts
             .tensors()
