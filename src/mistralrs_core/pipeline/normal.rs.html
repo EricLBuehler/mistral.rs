@@ -92,7 +92,7 @@
 <a href=#92 id=92 data-nosnippet>92</a>    tgt_non_granular_index: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 <a href=#93 id=93 data-nosnippet>93</a>    token_source: RwLock&lt;<span class="prelude-ty">Option</span>&lt;TokenSource&gt;&gt;,
 <a href=#94 id=94 data-nosnippet>94</a>    revision: RwLock&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;,
-<a href=#95 id=95 data-nosnippet>95</a>    from_uqff: RwLock&lt;<span class="prelude-ty">Option</span>&lt;PathBuf&gt;&gt;,
+<a href=#95 id=95 data-nosnippet>95</a>    from_uqff: RwLock&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;PathBuf&gt;&gt;&gt;,
 <a href=#96 id=96 data-nosnippet>96</a>    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#97 id=97 data-nosnippet>97</a>    hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#98 id=98 data-nosnippet>98</a>}
@@ -122,7 +122,7 @@
 <a href=#122 id=122 data-nosnippet>122</a>    <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
 <a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">pub </span>organization: IsqOrganization,
 <a href=#124 id=124 data-nosnippet>124</a>    <span class="kw">pub </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#125 id=125 data-nosnippet>125</a>    <span class="kw">pub </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="kw">pub </span>from_uqff: <span class="prelude-ty">Option</span>&lt;Vec&lt;PathBuf&gt;&gt;,
 <a href=#126 id=126 data-nosnippet>126</a>    <span class="kw">pub </span>imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#127 id=127 data-nosnippet>127</a>    <span class="kw">pub </span>calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#128 id=128 data-nosnippet>128</a>    <span class="kw">pub </span>hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
@@ -349,7 +349,7 @@
 <a href=#349 id=349 data-nosnippet>349</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(serialized) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
 <a href=#350 id=350 data-nosnippet>350</a>                    <span class="kw">let </span>weight_pack_factor = {
 <a href=#351 id=351 data-nosnippet>351</a>                        <span class="kw">let </span>ser_artifacts = <span class="kw">unsafe </span>{
-<a href=#352 id=352 data-nosnippet>352</a>                            candle_core::safetensors::MmapedSafetensors::new(serialized)<span class="question-mark">?
+<a href=#352 id=352 data-nosnippet>352</a>                            candle_core::safetensors::MmapedSafetensors::multi(serialized)<span class="question-mark">?
 <a href=#353 id=353 data-nosnippet>353</a>                        </span>};
 <a href=#354 id=354 data-nosnippet>354</a>                        <span class="kw">let </span><span class="kw-2">mut </span>total_pack_factors = <span class="number">0</span>;
 <a href=#355 id=355 data-nosnippet>355</a>                        <span class="kw">let </span>total_tensors = ser_artifacts.tensors().len();

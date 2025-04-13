@@ -63,9 +63,9 @@
 <a href=#63 id=63 data-nosnippet>63</a>        </span><span class="attr">#[arg(short, long)]
 <a href=#64 id=64 data-nosnippet>64</a>        </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#65 id=65 data-nosnippet>65</a>
-<a href=#66 id=66 data-nosnippet>66</a>        <span class="doccomment">/// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+<a href=#66 id=66 data-nosnippet>66</a>        <span class="doccomment">/// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;)
 <a href=#67 id=67 data-nosnippet>67</a>        </span><span class="attr">#[arg(short, long)]
-<a href=#68 id=68 data-nosnippet>68</a>        </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#68 id=68 data-nosnippet>68</a>        </span>from_uqff: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#69 id=69 data-nosnippet>69</a>
 <a href=#70 id=70 data-nosnippet>70</a>        <span class="doccomment">/// .imatrix file to enhance GGUF quantizations with.
 <a href=#71 id=71 data-nosnippet>71</a>        /// Incompatible with `--calibration-file/-c`
@@ -129,9 +129,9 @@
 <a href=#129 id=129 data-nosnippet>129</a>        </span><span class="attr">#[arg(short, long)]
 <a href=#130 id=130 data-nosnippet>130</a>        </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#131 id=131 data-nosnippet>131</a>
-<a href=#132 id=132 data-nosnippet>132</a>        <span class="doccomment">/// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="doccomment">/// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
 <a href=#133 id=133 data-nosnippet>133</a>        </span><span class="attr">#[arg(short, long)]
-<a href=#134 id=134 data-nosnippet>134</a>        </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#134 id=134 data-nosnippet>134</a>        </span>from_uqff: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#135 id=135 data-nosnippet>135</a>
 <a href=#136 id=136 data-nosnippet>136</a>        <span class="doccomment">/// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
 <a href=#137 id=137 data-nosnippet>137</a>        </span><span class="attr">#[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
@@ -176,9 +176,9 @@
 <a href=#176 id=176 data-nosnippet>176</a>        </span><span class="attr">#[arg(short, long)]
 <a href=#177 id=177 data-nosnippet>177</a>        </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#178 id=178 data-nosnippet>178</a>
-<a href=#179 id=179 data-nosnippet>179</a>        <span class="doccomment">/// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+<a href=#179 id=179 data-nosnippet>179</a>        <span class="doccomment">/// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
 <a href=#180 id=180 data-nosnippet>180</a>        </span><span class="attr">#[arg(short, long)]
-<a href=#181 id=181 data-nosnippet>181</a>        </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#181 id=181 data-nosnippet>181</a>        </span>from_uqff: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#182 id=182 data-nosnippet>182</a>
 <a href=#183 id=183 data-nosnippet>183</a>        <span class="doccomment">/// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
 <a href=#184 id=184 data-nosnippet>184</a>        </span><span class="attr">#[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
@@ -486,9 +486,9 @@
 <a href=#486 id=486 data-nosnippet>486</a>        </span><span class="attr">#[arg(short, long)]
 <a href=#487 id=487 data-nosnippet>487</a>        </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#488 id=488 data-nosnippet>488</a>
-<a href=#489 id=489 data-nosnippet>489</a>        <span class="doccomment">/// UQFF path to load from. If provided, this takes precedence over applying ISQ.
+<a href=#489 id=489 data-nosnippet>489</a>        <span class="doccomment">/// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
 <a href=#490 id=490 data-nosnippet>490</a>        </span><span class="attr">#[arg(short, long)]
-<a href=#491 id=491 data-nosnippet>491</a>        </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#491 id=491 data-nosnippet>491</a>        </span>from_uqff: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#492 id=492 data-nosnippet>492</a>
 <a href=#493 id=493 data-nosnippet>493</a>        <span class="doccomment">/// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
 <a href=#494 id=494 data-nosnippet>494</a>        /// This is only supported on the Qwen2-VL and Idefics models. Others handle this internally.

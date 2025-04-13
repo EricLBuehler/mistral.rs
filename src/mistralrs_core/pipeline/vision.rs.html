@@ -87,7 +87,7 @@
 <a href=#87 id=87 data-nosnippet>87</a>    xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
 <a href=#88 id=88 data-nosnippet>88</a>    token_source: RwLock&lt;<span class="prelude-ty">Option</span>&lt;TokenSource&gt;&gt;,
 <a href=#89 id=89 data-nosnippet>89</a>    revision: RwLock&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;,
-<a href=#90 id=90 data-nosnippet>90</a>    from_uqff: RwLock&lt;<span class="prelude-ty">Option</span>&lt;PathBuf&gt;&gt;,
+<a href=#90 id=90 data-nosnippet>90</a>    from_uqff: RwLock&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;PathBuf&gt;&gt;&gt;,
 <a href=#91 id=91 data-nosnippet>91</a>    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#92 id=92 data-nosnippet>92</a>    hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#93 id=93 data-nosnippet>93</a>    lora_adapter_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
@@ -113,7 +113,7 @@
 <a href=#113 id=113 data-nosnippet>113</a>    <span class="kw">pub </span>prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 <a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
 <a href=#115 id=115 data-nosnippet>115</a>    <span class="kw">pub </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">pub </span>from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">pub </span>from_uqff: <span class="prelude-ty">Option</span>&lt;Vec&lt;PathBuf&gt;&gt;,
 <a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">pub </span>max_edge: <span class="prelude-ty">Option</span>&lt;u32&gt;,
 <a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">pub </span>imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">pub </span>calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
@@ -286,7 +286,7 @@
 <a href=#286 id=286 data-nosnippet>286</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(serialized) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
 <a href=#287 id=287 data-nosnippet>287</a>                    <span class="kw">let </span>weight_pack_factor = {
 <a href=#288 id=288 data-nosnippet>288</a>                        <span class="kw">let </span>ser_artifacts = <span class="kw">unsafe </span>{
-<a href=#289 id=289 data-nosnippet>289</a>                            candle_core::safetensors::MmapedSafetensors::new(serialized)<span class="question-mark">?
+<a href=#289 id=289 data-nosnippet>289</a>                            candle_core::safetensors::MmapedSafetensors::multi(serialized)<span class="question-mark">?
 <a href=#290 id=290 data-nosnippet>290</a>                        </span>};
 <a href=#291 id=291 data-nosnippet>291</a>                        <span class="kw">let </span><span class="kw-2">mut </span>total_pack_factors = <span class="number">0</span>;
 <a href=#292 id=292 data-nosnippet>292</a>                        <span class="kw">let </span>total_tensors = ser_artifacts.tensors().len();

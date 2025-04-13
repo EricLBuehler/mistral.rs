@@ -15,7 +15,7 @@
 <a href=#15 id=15 data-nosnippet>15</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) token_source: TokenSource,
 <a href=#16 id=16 data-nosnippet>16</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) hf_revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#17 id=17 data-nosnippet>17</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#18 id=18 data-nosnippet>18</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#18 id=18 data-nosnippet>18</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) from_uqff: <span class="prelude-ty">Option</span>&lt;Vec&lt;PathBuf&gt;&gt;,
 <a href=#19 id=19 data-nosnippet>19</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#20 id=20 data-nosnippet>20</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#21 id=21 data-nosnippet>21</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -191,7 +191,7 @@
 <a href=#191 id=191 data-nosnippet>191</a>    </span>}
 <a href=#192 id=192 data-nosnippet>192</a>
 <a href=#193 id=193 data-nosnippet>193</a>    <span class="doccomment">/// Path to read a UQFF file from.
-<a href=#194 id=194 data-nosnippet>194</a>    </span><span class="kw">pub fn </span>from_uqff(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
+<a href=#194 id=194 data-nosnippet>194</a>    </span><span class="kw">pub fn </span>from_uqff(<span class="kw-2">mut </span><span class="self">self</span>, path: Vec&lt;PathBuf&gt;) -&gt; <span class="self">Self </span>{
 <a href=#195 id=195 data-nosnippet>195</a>        <span class="self">self</span>.from_uqff = <span class="prelude-val">Some</span>(path);
 <a href=#196 id=196 data-nosnippet>196</a>        <span class="self">self
 <a href=#197 id=197 data-nosnippet>197</a>    </span>}
@@ -305,38 +305,42 @@
 <a href=#305 id=305 data-nosnippet>305</a>    /// - Token source is from the cache (.cache/huggingface/token)
 <a href=#306 id=306 data-nosnippet>306</a>    /// - Maximum number of sequences running is 32
 <a href=#307 id=307 data-nosnippet>307</a>    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
-<a href=#308 id=308 data-nosnippet>308</a>    </span><span class="kw">pub fn </span>new(model_id: <span class="kw">impl </span>ToString, loader_type: VisionLoaderType, uqff_file: PathBuf) -&gt; <span class="self">Self </span>{
-<a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">let </span><span class="kw-2">mut </span>inner = VisionModelBuilder::new(model_id, loader_type);
-<a href=#310 id=310 data-nosnippet>310</a>        inner = inner.from_uqff(uqff_file);
-<a href=#311 id=311 data-nosnippet>311</a>        <span class="self">Self</span>(inner)
-<a href=#312 id=312 data-nosnippet>312</a>    }
-<a href=#313 id=313 data-nosnippet>313</a>
-<a href=#314 id=314 data-nosnippet>314</a>    <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
-<a href=#315 id=315 data-nosnippet>315</a>        <span class="self">self</span>.<span class="number">0</span>.build().<span class="kw">await
-<a href=#316 id=316 data-nosnippet>316</a>    </span>}
+<a href=#308 id=308 data-nosnippet>308</a>    </span><span class="kw">pub fn </span>new(
+<a href=#309 id=309 data-nosnippet>309</a>        model_id: <span class="kw">impl </span>ToString,
+<a href=#310 id=310 data-nosnippet>310</a>        loader_type: VisionLoaderType,
+<a href=#311 id=311 data-nosnippet>311</a>        uqff_file: Vec&lt;PathBuf&gt;,
+<a href=#312 id=312 data-nosnippet>312</a>    ) -&gt; <span class="self">Self </span>{
+<a href=#313 id=313 data-nosnippet>313</a>        <span class="kw">let </span><span class="kw-2">mut </span>inner = VisionModelBuilder::new(model_id, loader_type);
+<a href=#314 id=314 data-nosnippet>314</a>        inner = inner.from_uqff(uqff_file);
+<a href=#315 id=315 data-nosnippet>315</a>        <span class="self">Self</span>(inner)
+<a href=#316 id=316 data-nosnippet>316</a>    }
 <a href=#317 id=317 data-nosnippet>317</a>
-<a href=#318 id=318 data-nosnippet>318</a>    <span class="doccomment">/// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related methods.
-<a href=#319 id=319 data-nosnippet>319</a>    </span><span class="kw">pub fn </span>into_inner(<span class="self">self</span>) -&gt; VisionModelBuilder {
-<a href=#320 id=320 data-nosnippet>320</a>        <span class="self">self</span>.<span class="number">0
-<a href=#321 id=321 data-nosnippet>321</a>    </span>}
-<a href=#322 id=322 data-nosnippet>322</a>}
-<a href=#323 id=323 data-nosnippet>323</a>
-<a href=#324 id=324 data-nosnippet>324</a><span class="kw">impl </span>Deref <span class="kw">for </span>UqffVisionModelBuilder {
-<a href=#325 id=325 data-nosnippet>325</a>    <span class="kw">type </span>Target = VisionModelBuilder;
-<a href=#326 id=326 data-nosnippet>326</a>
-<a href=#327 id=327 data-nosnippet>327</a>    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
-<a href=#328 id=328 data-nosnippet>328</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0
-<a href=#329 id=329 data-nosnippet>329</a>    </span>}
-<a href=#330 id=330 data-nosnippet>330</a>}
-<a href=#331 id=331 data-nosnippet>331</a>
-<a href=#332 id=332 data-nosnippet>332</a><span class="kw">impl </span>DerefMut <span class="kw">for </span>UqffVisionModelBuilder {
-<a href=#333 id=333 data-nosnippet>333</a>    <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="self">Self</span>::Target {
-<a href=#334 id=334 data-nosnippet>334</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>.<span class="number">0
-<a href=#335 id=335 data-nosnippet>335</a>    </span>}
-<a href=#336 id=336 data-nosnippet>336</a>}
-<a href=#337 id=337 data-nosnippet>337</a>
-<a href=#338 id=338 data-nosnippet>338</a><span class="kw">impl </span>From&lt;UqffVisionModelBuilder&gt; <span class="kw">for </span>VisionModelBuilder {
-<a href=#339 id=339 data-nosnippet>339</a>    <span class="kw">fn </span>from(value: UqffVisionModelBuilder) -&gt; <span class="self">Self </span>{
-<a href=#340 id=340 data-nosnippet>340</a>        value.<span class="number">0
-<a href=#341 id=341 data-nosnippet>341</a>    </span>}
-<a href=#342 id=342 data-nosnippet>342</a>}</code></pre></div></section></main></body></html>
+<a href=#318 id=318 data-nosnippet>318</a>    <span class="kw">pub async fn </span>build(<span class="self">self</span>) -&gt; anyhow::Result&lt;Model&gt; {
+<a href=#319 id=319 data-nosnippet>319</a>        <span class="self">self</span>.<span class="number">0</span>.build().<span class="kw">await
+<a href=#320 id=320 data-nosnippet>320</a>    </span>}
+<a href=#321 id=321 data-nosnippet>321</a>
+<a href=#322 id=322 data-nosnippet>322</a>    <span class="doccomment">/// This wraps the VisionModelBuilder, so users should take care to not call UQFF-related methods.
+<a href=#323 id=323 data-nosnippet>323</a>    </span><span class="kw">pub fn </span>into_inner(<span class="self">self</span>) -&gt; VisionModelBuilder {
+<a href=#324 id=324 data-nosnippet>324</a>        <span class="self">self</span>.<span class="number">0
+<a href=#325 id=325 data-nosnippet>325</a>    </span>}
+<a href=#326 id=326 data-nosnippet>326</a>}
+<a href=#327 id=327 data-nosnippet>327</a>
+<a href=#328 id=328 data-nosnippet>328</a><span class="kw">impl </span>Deref <span class="kw">for </span>UqffVisionModelBuilder {
+<a href=#329 id=329 data-nosnippet>329</a>    <span class="kw">type </span>Target = VisionModelBuilder;
+<a href=#330 id=330 data-nosnippet>330</a>
+<a href=#331 id=331 data-nosnippet>331</a>    <span class="kw">fn </span>deref(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Target {
+<a href=#332 id=332 data-nosnippet>332</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0
+<a href=#333 id=333 data-nosnippet>333</a>    </span>}
+<a href=#334 id=334 data-nosnippet>334</a>}
+<a href=#335 id=335 data-nosnippet>335</a>
+<a href=#336 id=336 data-nosnippet>336</a><span class="kw">impl </span>DerefMut <span class="kw">for </span>UqffVisionModelBuilder {
+<a href=#337 id=337 data-nosnippet>337</a>    <span class="kw">fn </span>deref_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span><span class="self">Self</span>::Target {
+<a href=#338 id=338 data-nosnippet>338</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>.<span class="number">0
+<a href=#339 id=339 data-nosnippet>339</a>    </span>}
+<a href=#340 id=340 data-nosnippet>340</a>}
+<a href=#341 id=341 data-nosnippet>341</a>
+<a href=#342 id=342 data-nosnippet>342</a><span class="kw">impl </span>From&lt;UqffVisionModelBuilder&gt; <span class="kw">for </span>VisionModelBuilder {
+<a href=#343 id=343 data-nosnippet>343</a>    <span class="kw">fn </span>from(value: UqffVisionModelBuilder) -&gt; <span class="self">Self </span>{
+<a href=#344 id=344 data-nosnippet>344</a>        value.<span class="number">0
+<a href=#345 id=345 data-nosnippet>345</a>    </span>}
+<a href=#346 id=346 data-nosnippet>346</a>}</code></pre></div></section></main></body></html>

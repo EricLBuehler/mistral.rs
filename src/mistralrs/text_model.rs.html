@@ -15,7 +15,7 @@
 <a href=#15 id=15 data-nosnippet>15</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) token_source: TokenSource,
 <a href=#16 id=16 data-nosnippet>16</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) hf_revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#17 id=17 data-nosnippet>17</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#18 id=18 data-nosnippet>18</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) from_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#18 id=18 data-nosnippet>18</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) from_uqff: <span class="prelude-ty">Option</span>&lt;Vec&lt;PathBuf&gt;&gt;,
 <a href=#19 id=19 data-nosnippet>19</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#20 id=20 data-nosnippet>20</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) calibration_file: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
 <a href=#21 id=21 data-nosnippet>21</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
@@ -261,7 +261,7 @@
 <a href=#261 id=261 data-nosnippet>261</a>    </span>}
 <a href=#262 id=262 data-nosnippet>262</a>
 <a href=#263 id=263 data-nosnippet>263</a>    <span class="doccomment">/// Path to read a UQFF file from.
-<a href=#264 id=264 data-nosnippet>264</a>    </span><span class="kw">pub fn </span>from_uqff(<span class="kw-2">mut </span><span class="self">self</span>, path: PathBuf) -&gt; <span class="self">Self </span>{
+<a href=#264 id=264 data-nosnippet>264</a>    </span><span class="kw">pub fn </span>from_uqff(<span class="kw-2">mut </span><span class="self">self</span>, path: Vec&lt;PathBuf&gt;) -&gt; <span class="self">Self </span>{
 <a href=#265 id=265 data-nosnippet>265</a>        <span class="self">self</span>.from_uqff = <span class="prelude-val">Some</span>(path);
 <a href=#266 id=266 data-nosnippet>266</a>        <span class="self">self
 <a href=#267 id=267 data-nosnippet>267</a>    </span>}
@@ -375,7 +375,7 @@
 <a href=#375 id=375 data-nosnippet>375</a>    /// - Maximum number of sequences running is 32
 <a href=#376 id=376 data-nosnippet>376</a>    /// - Number of sequences to hold in prefix cache is 16.
 <a href=#377 id=377 data-nosnippet>377</a>    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
-<a href=#378 id=378 data-nosnippet>378</a>    </span><span class="kw">pub fn </span>new(model_id: <span class="kw">impl </span>ToString, uqff_file: PathBuf) -&gt; <span class="self">Self </span>{
+<a href=#378 id=378 data-nosnippet>378</a>    </span><span class="kw">pub fn </span>new(model_id: <span class="kw">impl </span>ToString, uqff_file: Vec&lt;PathBuf&gt;) -&gt; <span class="self">Self </span>{
 <a href=#379 id=379 data-nosnippet>379</a>        <span class="kw">let </span><span class="kw-2">mut </span>inner = TextModelBuilder::new(model_id);
 <a href=#380 id=380 data-nosnippet>380</a>        inner = inner.from_uqff(uqff_file);
 <a href=#381 id=381 data-nosnippet>381</a>        <span class="self">Self</span>(inner)
