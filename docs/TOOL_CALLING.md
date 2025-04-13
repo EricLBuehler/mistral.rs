@@ -14,6 +14,7 @@ OpenAI docs: https://cookbook.openai.com/examples/how_to_call_functions_with_cha
 
 We support the following models' tool calling in OpenAI-compatible and parse native tool calling:
 
+- Llama 4
 - Llama 3.1/3.2/3.3
 - Mistral Small (including 3.1 + multimodal)
 - Mistral Nemo

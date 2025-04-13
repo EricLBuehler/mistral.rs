@@ -31,7 +31,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
-- 🔥 Try out AFQ (2, 3, 4, 6, 8 bit) for blazingly fast Metal performance!
+- 🔥 Try out AFQ ISQ (2, 3, 4, 6, 8 bit) for blazingly fast Metal performance in all models!
 
     ```
     ./mistralrs-server -i --isq afq8 plain -m meta-llama/Llama-3.2-3B-Instruct
@@ -42,6 +42,13 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
     ./mistralrs-server --enable-search --port 1234 --isq q4k plain -m NousResearch/Hermes-3-Llama-3.1-8B
     ```
+
+- 🦙🦙🦙🦙 Run the **Llama 4** Models with long context length and vision support: [documentation](docs/LLAMA4.md)
+
+    ```
+    ./mistralrs-server -i --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct -a llama4
+    ```
+
 
 - 💎💎💎 Run the entire **Gemma 3** Model family (1b, 4b, 12b, 27b) with 128k context length and vision support: [documentation](docs/GEMMA3.md)
 
@@ -233,11 +240,11 @@ OpenAI API compatible API server
 ---
 
 ## Supported accelerators
-- CUDA:
+- NVIDIA GPUs (CUDA):
   - Compile with the `cuda` feature: `--features cuda`
   - FlashAttention support: compile with the `flash-attn` feature
   - cuDNN support: compile with the`cudnn` feature: `--features cudnn`
-- Metal:
+- Apple Silicon GPU (Metal):
   - Compile with the `metal` feature: `--features metal`
 - CPU:
   - Intel MKL: compile with the `mkl` feature: `--features mkl`
@@ -469,6 +476,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `qwen2_5vl`
 - `gemma3`
 - `mistral3`
+- `llama4`
 
 ### Supported GGUF architectures
 
