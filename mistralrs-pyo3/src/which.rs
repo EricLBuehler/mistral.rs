@@ -57,6 +57,7 @@ pub enum VisionArchitecture {
     Qwen2_5VL,
     Gemma3,
     Mistral3,
+    Llama4,
 }
 
 impl From<VisionArchitecture> for VisionLoaderType {
@@ -74,6 +75,7 @@ impl From<VisionArchitecture> for VisionLoaderType {
             VisionArchitecture::Qwen2_5VL => VisionLoaderType::Qwen2_5VL,
             VisionArchitecture::Gemma3 => VisionLoaderType::Gemma3,
             VisionArchitecture::Mistral3 => VisionLoaderType::Mistral3,
+            VisionArchitecture::Llama4 => VisionLoaderType::Llama4,
         }
     }
 }

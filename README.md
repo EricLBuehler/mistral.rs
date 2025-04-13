@@ -195,6 +195,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Qwen2.5-VL|✅| |✅| |
 |Gemma 3|✅| |✅|✅|
 |Mistral 3|✅| |✅|✅|
+|Llama 4|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -530,17 +531,6 @@ Example:
 
 ---
 
-## Benchmarks
-|Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
-|-|-|-|-|-|
-|A10 GPU, CUDA|86|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
-|A100 GPU, CUDA|131|134|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|RTX 6000 GPU, CUDA|103|96|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-
-> Note: All CUDA tests for mistral.rs conducted with PagedAttention enabled, block size = 32
-
 Please submit more benchmarks via raising an issue!
 
 ## Supported models
@@ -571,6 +561,7 @@ Please submit more benchmarks via raising an issue!
 |Qwen2.5-VL| | |✅|
 |Gemma 3| | |✅|
 |Mistral 3| | |✅|
+|Llama 4| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -605,6 +596,7 @@ Please submit more benchmarks via raising an issue!
 |Qwen2.5-VL| | | |
 |Gemma 3| | | |
 |Mistral 3| | | |
+|Llama 4| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -632,6 +624,7 @@ Please submit more benchmarks via raising an issue!
 |Qwen2.5-VL| |
 |Gemma 3|✅|
 |Mistral 3|✅|
+|Llama 4| |
 
 ### Using derivative model
 
@@ -641,7 +634,7 @@ To use a derivative model, select the model architecture using the correct subco
 - **Quantized**: Quantized model id, quantized filename, and tokenizer id
 - **X-LoRA**: Model id, X-LoRA ordering
 - **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
-- **LoRA**: Model id, LoRA ordering
+- **LoRA**: Model id
 - **LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and LoRA ordering
 - **Vision Plain**: Model id
 
