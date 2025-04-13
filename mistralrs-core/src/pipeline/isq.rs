@@ -27,6 +27,8 @@ use tracing::{info, warn};
 use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
 
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
+// 10 GB max per file
+const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
 
 /// Parse ISQ value.
 ///
@@ -596,6 +598,7 @@ pub trait IsqModel {
                             .collect::<candle_core::Result<Vec<_>>>()
                     }
                 });
+                let quantized_values = quantized_values?;
 
                 let parent = serialized
                     .parent()
@@ -603,7 +606,31 @@ pub trait IsqModel {
 
                 std::fs::create_dir_all(parent)?;
 
-                safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
+                let file_stem = serialized
+                    .file_stem()
+                    .context("Target UQFF path must have a file stem!")?
+                    .to_string_lossy()
+                    .to_string();
+
+                let size_estimate_bytes = quantized_values
+                    .iter()
+                    .map(|(_, x)| x.elem_count() * x.dtype().size_in_bytes())
+                    .sum::<usize>();
+                let n_files = size_estimate_bytes.div_ceil(MAX_UQFF_SIZE_BYTES);
+
+                if n_files == 1 {
+                    info!("Serializing to `{}`", serialized.display());
+                    safetensors::serialize_to_file(quantized_values, &None, serialized)?;
+                } else {
+                    let chunksize = quantized_values.len() / n_files;
+                    let quantized_values_chunks = quantized_values.into_iter().chunks(chunksize);
+                    for (i, chunk) in quantized_values_chunks.into_iter().enumerate() {
+                        let mut name = parent.to_path_buf();
+                        name.push(format!("{file_stem}-{i}.uqff"));
+                        info!("Serializing shard {i} to `{}`", name.display());
+                        safetensors::serialize_to_file(chunk, &None, &name)?;
+                    }
+                }
 
                 let residual = match organization {
                     IsqOrganization::Default => self.residual_tensors(),
