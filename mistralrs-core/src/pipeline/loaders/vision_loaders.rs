@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::{fmt::Debug, str::FromStr};
 
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+use candle_core::{DType, Device, Tensor, D};
 use candle_nn::Conv2dConfig;
 use image::{ColorType, DynamicImage};
 use mistralrs_quant::ShardedVarBuilder;
@@ -3813,15 +3813,16 @@ impl IsqModelLoader for VLlama4Loader {
 
 impl VLlama4Loader {
     /// This incorporates the max batch size!
+    /// Returns (pixels max batch size, num text image tokens)
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-    fn get_pixels_max_bs(
+    fn run_dummy_processing(
         &self,
         cfg: &Llama4Config,
         height: usize,
         width: usize,
         max_num_images: usize,
         max_batch_size: usize,
-    ) -> Result<usize> {
+    ) -> Result<(usize, usize)> {
         let cfg = &cfg.vision_config;
 
         let img_processor =
@@ -3836,13 +3837,24 @@ impl VLlama4Loader {
         )?;
 
         let pixels_batch_size = res.pixel_values.dim(0)?;
+        let pixels_max_batch_size = pixels_batch_size * max_batch_size;
 
-        Ok(pixels_batch_size * max_batch_size)
+        let (image_h, image_w) = (
+            res.pixel_values.dim(D::Minus2).unwrap(),
+            res.pixel_values.dim(D::Minus1).unwrap(),
+        );
+        let num_patches_per_chunk = (image_h / img_processor.patch_size)
+            * (image_w / img_processor.patch_size)
+            / img_processor.downsample_ratio;
+
+        Ok((
+            pixels_max_batch_size,
+            num_patches_per_chunk * pixels_max_batch_size,
+        ))
     }
 }
 
 impl DeviceMappedModelLoader for VLlama4Loader {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -3861,15 +3873,14 @@ impl DeviceMappedModelLoader for VLlama4Loader {
 
         let cfg: Llama4Config = serde_json::from_str(config)?;
 
-        let pixels_batch_size =
-            self.get_pixels_max_bs(&cfg, *height, *width, *max_num_images, *max_batch_size)?;
-        let num_patches = cfg.vision_config.num_patches();
-        let vision_seq_len = pixels_batch_size
-            * (num_patches as f32 / cfg.vision_config.pixel_shuffle_ratio.powi(2)) as usize;
+        let (_pixels_batch_size, num_text_image_toks) =
+            self.run_dummy_processing(&cfg, *height, *width, *max_num_images, *max_batch_size)?;
 
-        let max_seq_len = max_seq_len + vision_seq_len;
+        let max_seq_len = max_seq_len + num_text_image_toks;
 
-        Ok(max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len)
+        Ok(dbg!(
+            max_batch_size * cfg.text_config.num_attention_heads * max_seq_len * max_seq_len
+        ))
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -3888,8 +3899,8 @@ impl DeviceMappedModelLoader for VLlama4Loader {
 
         let cfg: Llama4Config = serde_json::from_str(config)?;
 
-        let pixels_batch_size =
-            self.get_pixels_max_bs(&cfg, *height, *width, *max_num_images, *max_batch_size)?;
+        let (pixels_batch_size, _num_text_image_toks) =
+            self.run_dummy_processing(&cfg, *height, *width, *max_num_images, *max_batch_size)?;
         let max_seq_len = cfg.vision_config.num_patches();
 
         Ok((max_batch_size * pixels_batch_size)

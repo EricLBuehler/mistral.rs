@@ -46,8 +46,8 @@ const TILE_Y_SEP: &str = "<|tile_y_separator|>";
 
 // Input processor
 pub struct Llama4ImageProcessor {
-    patch_size: usize,
-    downsample_ratio: usize,
+    pub patch_size: usize,
+    pub downsample_ratio: usize,
 }
 
 impl Llama4ImageProcessor {
