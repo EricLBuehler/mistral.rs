@@ -15,7 +15,7 @@ pub struct VisionModelBuilder {
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
     pub(crate) write_uqff: Option<PathBuf>,
-    pub(crate) from_uqff: Option<PathBuf>,
+    pub(crate) from_uqff: Option<Vec<PathBuf>>,
     pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) imatrix: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
@@ -191,7 +191,7 @@ impl VisionModelBuilder {
     }
 
     /// Path to read a UQFF file from.
-    pub fn from_uqff(mut self, path: PathBuf) -> Self {
+    pub fn from_uqff(mut self, path: Vec<PathBuf>) -> Self {
         self.from_uqff = Some(path);
         self
     }
@@ -305,7 +305,11 @@ impl UqffVisionModelBuilder {
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
-    pub fn new(model_id: impl ToString, loader_type: VisionLoaderType, uqff_file: PathBuf) -> Self {
+    pub fn new(
+        model_id: impl ToString,
+        loader_type: VisionLoaderType,
+        uqff_file: Vec<PathBuf>,
+    ) -> Self {
         let mut inner = VisionModelBuilder::new(model_id, loader_type);
         inner = inner.from_uqff(uqff_file);
         Self(inner)

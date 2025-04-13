@@ -217,9 +217,13 @@ macro_rules! get_uqff_paths {
             revision.clone(),
         ));
 
-        let file = $from_uqff.display().to_string();
+        let mut files = Vec::new();
+        for file in $from_uqff {
+            let file = file.display().to_string();
 
-        api_get_file!(api, &file, Path::new(&$this.model_id))
+            files.push(api_get_file!(api, &file, Path::new(&$this.model_id)));
+        }
+        files
     }};
 }
 

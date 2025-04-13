@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::{
     cell::RefCell,
     num::NonZeroUsize,
+    path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -105,7 +106,12 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.map(Into::into).unwrap_or(Default::default()),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix,
                 calibration_file,
                 hf_cache_path,
@@ -137,7 +143,12 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -176,7 +187,12 @@ fn parse_which(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -382,7 +398,12 @@ fn parse_which(
                 prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.right_or_else(|l| vec![l])
+                        .iter()
+                        .map(|x| PathBuf::from_str(x).unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 max_edge,
                 calibration_file,
                 imatrix,

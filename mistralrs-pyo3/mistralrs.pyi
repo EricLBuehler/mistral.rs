@@ -178,6 +178,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         topology: str | None = None
         organization: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
@@ -194,6 +195,7 @@ class Which(Enum):
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
@@ -206,6 +208,7 @@ class Which(Enum):
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
@@ -286,6 +289,7 @@ class Which(Enum):
         arch: VisionArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
