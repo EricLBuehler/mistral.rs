@@ -40,8 +40,7 @@ instantiate_dequantize_8bit(float)
                                     const device T *zero [[buffer(2)]],
                                     device T *output [[buffer(3)]],
                                     device const uint &h, device const uint &w,
-                                    uint tid [[thread_position_in_grid]]
-    ) {
+                                    uint tid [[thread_position_in_grid]]) {
   uint n = h * w;
   uint j = tid % w;
   output[tid] =
@@ -75,8 +74,7 @@ instantiate_dequantize_4bit(float)
                                     const device T *zero [[buffer(2)]],
                                     device T *output [[buffer(3)]],
                                     device const uint &h, device const uint &w,
-                                    uint tid [[thread_position_in_grid]]
-    ) {
+                                    uint tid [[thread_position_in_grid]]) {
   uint n = h * w;
   uint j = tid % w;
   output[tid] =
@@ -114,8 +112,7 @@ instantiate_dequantize_2bit(float)
                                     const device T *zero [[buffer(2)]],
                                     device T *output [[buffer(3)]],
                                     device const uint &h, device const uint &w,
-                                    uint tid [[thread_position_in_grid]]
-    ) {
+                                    uint tid [[thread_position_in_grid]]) {
   uint n = h * w;
   uint j = tid % w;
   output[tid] =
@@ -161,8 +158,7 @@ instantiate_dequantize_1bit(float)
                                     const device T *zero [[buffer(2)]],
                                     device T *output [[buffer(3)]],
                                     device const uint &h, device const uint &w,
-                                    uint tid [[thread_position_in_grid]]
-    ) {
+                                    uint tid [[thread_position_in_grid]]) {
   uint n = h * w;
   uint j = tid % w;
   output[tid] =

@@ -2,8 +2,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterator, Literal, Optional
 
-from torch import OptionalType
-
 class SearchContextSize(Enum):
     Low = "low"
     Medium = "medium"
@@ -119,6 +117,7 @@ class VisionArchitecture(Enum):
     Qwen2_5VL = "qwen2_5vl"
     Gemma3 = "gemma3"
     Mistral3 = "mistral3"
+    Llama4 = "llama4"
 
 @dataclass
 class DiffusionArchitecture(Enum):

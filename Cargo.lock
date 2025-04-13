@@ -361,7 +361,7 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 [[package]]
 name = "candle-core"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=1f137cd4#1f137cd4f99ee76797cc4a6969802d85e041dd54"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=bca0107d#bca0107d46fb0c18c454412823b56a0895ad8b94"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -389,7 +389,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=1f137cd4#1f137cd4f99ee76797cc4a6969802d85e041dd54"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=bca0107d#bca0107d46fb0c18c454412823b56a0895ad8b94"
 dependencies = [
  "anyhow",
  "bindgen_cuda 0.1.5",
@@ -400,7 +400,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=1f137cd4#1f137cd4f99ee76797cc4a6969802d85e041dd54"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=bca0107d#bca0107d46fb0c18c454412823b56a0895ad8b94"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -412,7 +412,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=1f137cd4#1f137cd4f99ee76797cc4a6969802d85e041dd54"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=bca0107d#bca0107d46fb0c18c454412823b56a0895ad8b94"
 dependencies = [
  "bindgen_cuda 0.1.5",
 ]
@@ -420,7 +420,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=1f137cd4#1f137cd4f99ee76797cc4a6969802d85e041dd54"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=bca0107d#bca0107d46fb0c18c454412823b56a0895ad8b94"
 dependencies = [
  "metal",
  "once_cell",
@@ -431,7 +431,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.8.0"
-source = "git+https://github.com/EricLBuehler/candle.git?rev=1f137cd4#1f137cd4f99ee76797cc4a6969802d85e041dd54"
+source = "git+https://github.com/EricLBuehler/candle.git?rev=bca0107d#bca0107d46fb0c18c454412823b56a0895ad8b94"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -2433,6 +2433,7 @@ dependencies = [
  "mistralrs-vision",
  "objc",
  "once_cell",
+ "ordered-float",
  "pyo3",
  "radix_trie",
  "rand 0.9.0",
@@ -2839,6 +2840,15 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "ordered-float"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2c1f9f56e534ac6a9b8a4600bdf0f530fb393b5f393e7b4d03489c3cf0c3f01"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "overload"

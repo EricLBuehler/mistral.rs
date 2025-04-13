@@ -304,6 +304,10 @@ impl Loader for NormalLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
+        if !self.inner.supports_paged_attention(&config)? {
+            paged_attn_config = None;
+        }
+
         // Apply default prompt size here
         let prompt_chunksize = self
             .config
@@ -497,8 +501,8 @@ impl Loader for NormalLoader {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
-                &load_device,
                 &available_devices,
+                silent,
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),

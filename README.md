@@ -31,7 +31,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
-- 🔥 Try out AFQ (2, 3, 4, 6, 8 bit) for blazingly fast Metal performance!
+- 🔥 Try out AFQ ISQ (2, 3, 4, 6, 8 bit) for blazingly fast Metal performance in all models!
 
     ```
     ./mistralrs-server -i --isq afq8 plain -m meta-llama/Llama-3.2-3B-Instruct
@@ -42,6 +42,13 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ```
     ./mistralrs-server --enable-search --port 1234 --isq q4k plain -m NousResearch/Hermes-3-Llama-3.1-8B
     ```
+
+- 🦙🦙🦙🦙 Run the **Llama 4** Models with long context length and vision support: [documentation](docs/LLAMA4.md)
+
+    ```
+    ./mistralrs-server -i --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct -a llama4
+    ```
+
 
 - 💎💎💎 Run the entire **Gemma 3** Model family (1b, 4b, 12b, 27b) with 128k context length and vision support: [documentation](docs/GEMMA3.md)
 
@@ -195,6 +202,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Qwen2.5-VL|✅| |✅| |
 |Gemma 3|✅| |✅|✅|
 |Mistral 3|✅| |✅|✅|
+|Llama 4|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -232,11 +240,11 @@ OpenAI API compatible API server
 ---
 
 ## Supported accelerators
-- CUDA:
+- NVIDIA GPUs (CUDA):
   - Compile with the `cuda` feature: `--features cuda`
   - FlashAttention support: compile with the `flash-attn` feature
   - cuDNN support: compile with the`cudnn` feature: `--features cudnn`
-- Metal:
+- Apple Silicon GPU (Metal):
   - Compile with the `metal` feature: `--features metal`
 - CPU:
   - Intel MKL: compile with the `mkl` feature: `--features mkl`
@@ -468,6 +476,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `qwen2_5vl`
 - `gemma3`
 - `mistral3`
+- `llama4`
 
 ### Supported GGUF architectures
 
@@ -530,17 +539,6 @@ Example:
 
 ---
 
-## Benchmarks
-|Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
-|-|-|-|-|-|
-|A10 GPU, CUDA|86|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
-|A100 GPU, CUDA|131|134|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|RTX 6000 GPU, CUDA|103|96|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-
-> Note: All CUDA tests for mistral.rs conducted with PagedAttention enabled, block size = 32
-
 Please submit more benchmarks via raising an issue!
 
 ## Supported models
@@ -571,6 +569,7 @@ Please submit more benchmarks via raising an issue!
 |Qwen2.5-VL| | |✅|
 |Gemma 3| | |✅|
 |Mistral 3| | |✅|
+|Llama 4| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -605,6 +604,7 @@ Please submit more benchmarks via raising an issue!
 |Qwen2.5-VL| | | |
 |Gemma 3| | | |
 |Mistral 3| | | |
+|Llama 4| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -632,6 +632,7 @@ Please submit more benchmarks via raising an issue!
 |Qwen2.5-VL| |
 |Gemma 3|✅|
 |Mistral 3|✅|
+|Llama 4| |
 
 ### Using derivative model
 
@@ -641,7 +642,7 @@ To use a derivative model, select the model architecture using the correct subco
 - **Quantized**: Quantized model id, quantized filename, and tokenizer id
 - **X-LoRA**: Model id, X-LoRA ordering
 - **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
-- **LoRA**: Model id, LoRA ordering
+- **LoRA**: Model id
 - **LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and LoRA ordering
 - **Vision Plain**: Model id
 

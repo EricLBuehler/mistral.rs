@@ -41,12 +41,14 @@ pub trait ImageTransform {
 
 /// Transforms to apply, starting with the `input` and then with each transform in
 /// `inner_transforms` applied sequentially
+#[derive(Clone, Copy)]
 pub struct Transforms<'a> {
     pub input: &'a dyn ImageTransform<Input = DynamicImage, Output = Tensor>,
     pub inner_transforms: &'a [&'a dyn ImageTransform<Input = Tensor, Output = Tensor>],
 }
 
 /// Transforms, with each of `inner_transforms` applied sequentially
+#[derive(Clone, Copy)]
 pub struct TensorTransforms<'a> {
     pub inner_transforms: &'a [&'a dyn ImageTransform<Input = Tensor, Output = Tensor>],
 }

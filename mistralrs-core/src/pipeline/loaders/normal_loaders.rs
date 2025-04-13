@@ -105,6 +105,9 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self, config: &str) -> Result<bool>;
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        Ok(true)
+    }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
     fn get_device_for_tensor(
         &self,
@@ -318,6 +321,9 @@ impl NormalModelLoader for AutoLoader {
     }
     fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
         Self::get_loader(config)?.get_config_repr(config, use_flash_attn)
+    }
+    fn supports_paged_attention(&self, config: &str) -> Result<bool> {
+        Self::get_loader(config)?.supports_paged_attention(config)
     }
     fn is_gptx(&self, config: &str) -> Result<bool> {
         Self::get_loader(config)?.is_gptx(config)

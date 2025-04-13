@@ -1,8 +1,20 @@
-# Mistral Small 3.1 Model: [`mistralai/Mistral-Small-3.1-24B-Instruct-2503`](https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503)
+# Llama 4 Series: [`meta-llama/Llama-4-Scout-17B-16E-Instruct`](https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct)
 
-The Mistral Small 3.1 model is a strong multimodal (text+vision) model with 128k context length, function calling, and strong visual understanding.
+**🚧 We are preparing a collection of UQFF quantized models! 🚧**
 
-We support the Mistral 3 Model in the Rust, Python, and HTTP APIs, including ISQ for increased performance.
+---
+
+The Llama 4 collection of models are natively multimodal AI models that enable text and multimodal experiences. 
+
+**Architecture:**
+- Efficient inference: 17B activated parameters
+- Very sparse: 1 activated expert for both Scout (of 16), and Maverick (of 128)
+- RoPE enhancement: iRoPE enables high context-length functionality
+
+**Integration in mistral.rs:**
+- Tool calling + [Automatic web search](WEB_SEARCH.md)
+- ISQ
+- Rust, Python and HTTP APIs
 
 The Python and HTTP APIs support sending images as:
 - URL
@@ -11,18 +23,8 @@ The Python and HTTP APIs support sending images as:
 
 The Rust API takes an image from the [image](https://docs.rs/image/latest/image/index.html) crate.
 
-## Tool calling with Mistral Small 3.1
-
-The Mistral Small 3.1 model itself does not come with the correct JINJA chat template to enable tool calling. We provide a chat template for
-tool calling with Mistral Small 3.1, and you can use it by specifying the `jinja_explicit` parameter in the various APIs. For example:
-
-```bash
-./mistralrs-server --port 1234 --isq q4k --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3  
-```
-
-
 ## HTTP server
-You can find this example [here](../examples/server/mistral3.py).
+You can find this example [here](../examples/server/llama4.py).
 
 We support an OpenAI compatible HTTP API for vision models. This example demonstrates sending a chat completion request with an image.
 
@@ -32,21 +34,28 @@ We support an OpenAI compatible HTTP API for vision models. This example demonst
 
 **Image:**
 
-<img src="https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg">
-<h6><a href = "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg">Credit</a></h6>
+<img src="https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg">
+<h6><a href = "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg">Credit</a></h6>
 
 **Prompt:**
 ```
-What is this?
+Please describe this image in detail.
 ```
 
 **Output:**
 ```
-The image shows a close-up of a vibrant flower with pink petals and a central cluster of yellowish-brown stamens. This flower appears to be from the genus *Gazania*, commonly known as treasure flowers or gazanias. These flowers are known for their daisy-like appearance and bright colors.
+The image presents a breathtaking mountain landscape, with a snow-capped peak dominating the scene. The mountain's rugged terrain is characterized by numerous ridges and valleys, while its summit is adorned with several structures that appear to be communication towers or antennas.
 
-Gazania flowers typically have ray florets (the petal-like structures) that can change color based on light conditions—often appearing more vibrant in direct sunlight. They are popular in gardens for their hardiness and ability to thrive in sunny locations with well-drained soil.
+**Key Features:**
 
-If there's anything specific about this flower or its care that interests you further, feel free to ask!
+* **Mountain:** The mountain is the central focus of the image, showcasing a mix of snow-covered and bare areas.
+* **Sky:** The sky above the mountain features a dramatic display of clouds, with dark grey clouds at the top gradually giving way to lighter blue skies towards the bottom.
+* **Valley:** In the foreground, a valley stretches out, covered in trees that are mostly bare, suggesting a winter setting.
+* **Lighting:** The lighting in the image is striking, with the sun casting a warm glow on the mountain's snow-covered slopes while leaving the surrounding areas in shadow.
+
+**Overall Impression:**
+
+The image exudes a sense of serenity and majesty, capturing the beauty of nature in a dramatic and awe-inspiring way. The contrast between the snow-covered mountain and the bare trees in the valley creates a visually appealing scene that invites the viewer to appreciate the natural world.
 ```
 
 ---
@@ -57,7 +66,7 @@ If there's anything specific about this flower or its care that interests you fu
 > You should replace `--features ...` with one of the features specified [here](../README.md#supported-accelerators), or remove it for pure CPU inference.
 
 ```
-cargo run --release --features ... -- --port 1234 vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3
+cargo run --release --features ... -- --port 1234 --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct -a llama4
 ```
 
 2) Send a request
@@ -73,7 +82,7 @@ client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
 
 completion = client.chat.completions.create(
-    model="mistral3",
+    model="llama4",
     messages=[
         {
             "role": "user",
@@ -81,12 +90,12 @@ completion = client.chat.completions.create(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pink_flower.jpg"
+                        "url": "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
                     },
                 },
                 {
                     "type": "text",
-                    "text": "What is this?",
+                    "text": "Please describe this image in detail.",
                 },
             ],
         },
@@ -107,9 +116,9 @@ print(resp)
 ---
 
 ## Rust
-You can find this example [here](../mistralrs/examples/mistral3/main.rs).
+You can find this example [here](../mistralrs/examples/llama4/main.rs).
 
-This is a minimal example of running the Mistral 3 model with a dummy image.
+This is a minimal example of running the Llama 4 model with a dummy image.
 
 ```rust
 use anyhow::Result;
@@ -117,12 +126,14 @@ use mistralrs::{IsqType, TextMessageRole, VisionLoaderType, VisionMessages, Visi
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model =
-        VisionModelBuilder::new("mistralai/Mistral-Small-3.1-24B-Instruct-2503", VisionLoaderType::Mistral3)
-            .with_isq(IsqType::Q4K)
-            .with_logging()
-            .build()
-            .await?;
+    let model = VisionModelBuilder::new(
+        "meta-llama/Llama-4-Scout-17B-16E-Instruct",
+        VisionLoaderType::Llama4,
+    )
+    .with_isq(IsqType::Q4K)
+    .with_logging()
+    .build()
+    .await?;
 
     let bytes = match reqwest::blocking::get(
         "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
@@ -134,7 +145,7 @@ async fn main() -> Result<()> {
 
     let messages = VisionMessages::new().add_image_message(
         TextMessageRole::User,
-        "What is depicted here? Please describe the scene in detail.",
+        "What is this?",
         image,
         &model,
     )?;
@@ -152,7 +163,7 @@ async fn main() -> Result<()> {
 ```
 
 ## Python
-You can find this example [here](../examples/python/mistral3.py).
+You can find this example [here](../examples/python/llama4.py).
 
 This example demonstrates loading and sending a chat completion request with an image.
 
@@ -163,15 +174,15 @@ from mistralrs import Runner, Which, ChatCompletionRequest, VisionArchitecture
 
 runner = Runner(
     which=Which.VisionPlain(
-        model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503",
-        arch=VisionArchitecture.Mistral3,
+        model_id="meta-llama/Llama-4-Scout-17B-16E-Instruct",
+        arch=VisionArchitecture.Llama4,
     ),
-    in_situ_quant="Q4K"
+    in_situ_quant="Q4K",
 )
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
-        model="mistral3",
+        model="gemma3",
         messages=[
             {
                 "role": "user",
@@ -197,7 +208,6 @@ res = runner.send_chat_completion_request(
 )
 print(res.choices[0].message.content)
 print(res.usage)
-
 ```
 
 - You can find an example of encoding the [image via base64 here](../examples/python/phi3v_base64.py).

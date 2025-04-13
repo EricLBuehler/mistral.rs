@@ -751,9 +751,9 @@ pub trait TopKLastDimOp {
 impl TopKLastDimOp for Tensor {
     fn topk(&self, topk: usize) -> Result<TopKOutput> {
         // Sorted descending
-        #[cfg(feature = "cuda")]
-        let (values, sorted_indices) = self.sort(false)?;
-        #[cfg(not(feature = "cuda"))]
+        // #[cfg(feature = "cuda")]
+        // let (values, sorted_indices) = self.sort(false)?;
+        // #[cfg(not(feature = "cuda"))]
         let (values, sorted_indices) = self.sort_last_dim(false)?;
         let topk_indices = sorted_indices.narrow(D::Minus1, 0, topk)?.contiguous()?;
         let topk_values = values.narrow(D::Minus1, 0, topk)?.contiguous()?;
@@ -784,17 +784,19 @@ impl TopKLastDimOp for Tensor {
 }
 
 pub trait RepeatInterleaveOp {
-    fn repeat_interleave(&self, repeats: usize, dim: usize) -> Result<Tensor>;
+    fn repeat_interleave<D: Dim>(&self, repeats: usize, dim: D) -> Result<Tensor>;
     fn repeat_interleave_flat(&self, repeats: Vec<u32>) -> Result<Tensor>;
 }
 
 impl RepeatInterleaveOp for Tensor {
-    fn repeat_interleave(&self, repeats: usize, dim: usize) -> Result<Tensor> {
+    fn repeat_interleave<D: Dim>(&self, repeats: usize, dim: D) -> Result<Tensor> {
+        let dim = dim.to_index(self.shape(), "repeat_interleave")?;
+        let dim_elements = self.dim(dim)?;
         // For metal
         assert!(self.dtype().is_float());
         #[allow(clippy::cast_possible_truncation)]
         let indices = Tensor::new(
-            (0..self.dim(dim)?)
+            (0..dim_elements)
                 .flat_map(|i| vec![i as u32; repeats])
                 .collect::<Vec<_>>(),
             self.device(),

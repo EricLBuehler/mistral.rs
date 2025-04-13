@@ -10,7 +10,7 @@ use crate::{
     QuantizedSerde, QuantizedSerdeType, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
-use super::{Comm, DistributedOperation, SumAllReduce};
+use super::{Comm, SumAllReduce};
 
 fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {
@@ -113,7 +113,7 @@ impl QuantMethod for RowParallelLayer {
 
     fn forward(&self, a: &Tensor) -> Result<Tensor> {
         let mut xs = self.weight.forward(a)?;
-        xs = self.all_reduce.sum_all_reduce(&xs)?;
+        xs = self.all_reduce.sum_all_reduce(&xs.contiguous()?)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
         }
@@ -167,9 +167,16 @@ impl QuantMethod for RowParallelLayer {
             self.weight
                 .clone()
                 .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)?;
+        let bias = match &self.bias {
+            Some(b) => {
+                let (dtype, device) = weight.dtype_and_device();
+                Some(b.to_device(&device)?.to_dtype(dtype)?)
+            }
+            None => None,
+        };
         Ok(Arc::new(Self {
             weight,
-            bias: self.bias.clone(),
+            bias,
             all_reduce: self.all_reduce.clone(),
         }))
     }
@@ -570,6 +577,177 @@ impl QuantizedSerde for ReplicatedLayer {
             QuantizedSerdeType::Afq => AfqLayer::deserialize(data, device, comm, guard)?,
         };
         Ok(Arc::new(Self(deserialized)))
+    }
+}
+
+#[derive(Debug)]
+pub struct PackedExperts {
+    pub gate_proj: Vec<Arc<dyn QuantMethod>>,
+    pub up_proj: Vec<Arc<dyn QuantMethod>>,
+    pub down_proj: Vec<Arc<dyn QuantMethod>>,
+}
+
+impl PackedExperts {
+    /// Note: we only support AFQ and unquantized here because they are the only ones that support indexed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        num_local_experts: usize,
+        hidden_size: usize,
+        intermediate_size: usize,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        comm: &Arc<crate::Comm>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
+        if bias {
+            candle_core::bail!("PackedExperts does not support bias.");
+        }
+
+        let (gate_proj, up_proj, down_proj) = if let Some(quant_conf) = &config {
+            // GPTQ and BNB do not support tensor parallelism
+            if comm.world_size() != 1 {
+                candle_core::bail!(
+                    "PackedExperts with quantization config does not support distributed (world size {}). Use ISQ.",
+                    comm.world_size()
+                );
+            }
+
+            match quant_conf {
+                QuantizedConfig::Afq { .. } => {
+                    if !vb.contains_tensor("gate_up_proj")
+                        || !vb.contains_tensor("gate_up_proj.weight")
+                    {
+                        candle_core::bail!("PackedExperts with AFQ quantization config does not support `gate_up_proj` format.");
+                    }
+
+                    (
+                        vec![AfqLayer::afq_packed_linear_b(
+                            num_local_experts,
+                            hidden_size,
+                            intermediate_size,
+                            quant_conf,
+                            bias,
+                            vb.pp("gate_proj"),
+                        )?],
+                        vec![AfqLayer::afq_packed_linear_b(
+                            num_local_experts,
+                            hidden_size,
+                            intermediate_size,
+                            quant_conf,
+                            bias,
+                            vb.pp("up_proj"),
+                        )?],
+                        vec![AfqLayer::afq_packed_linear_b(
+                            num_local_experts,
+                            intermediate_size,
+                            hidden_size,
+                            quant_conf,
+                            bias,
+                            vb.pp("down_proj"),
+                        )?],
+                    )
+                }
+                _ => candle_core::bail!(
+                    "PackedExperts with quantization config only allows AFQ quantization"
+                ),
+            }
+        } else {
+            // Parallelized like:
+            // Each gpu holds all experts.
+            // Gate/Up proj is parallelized on dim 2 (column)
+            // Down proj is parallelized on dim 1 (row)
+            // All reduce at the end.
+
+            let gate_up_block_size = intermediate_size / comm.world_size();
+            let gate_up_start = gate_up_block_size * comm.rank();
+
+            // Gate is right before Up in the gate_up
+            let shard_gate = Shard::Offset {
+                dim: 2,
+                offset: gate_up_start,
+                len: gate_up_block_size,
+            };
+            let shard_up = Shard::Offset {
+                dim: 2,
+                offset: intermediate_size + gate_up_start,
+                len: gate_up_block_size,
+            };
+            let shard_down = Shard::Simple {
+                dim: 1,
+                rank: comm.rank(),
+                world_size: comm.world_size(),
+            };
+
+            let gate_proj = vb
+                .get_with_hints(
+                    (num_local_experts, hidden_size, intermediate_size * 2),
+                    "gate_up_proj",
+                    shard_gate,
+                )?
+                .t()?
+                .contiguous()?;
+            let up_proj = vb
+                .get_with_hints(
+                    (num_local_experts, hidden_size, intermediate_size * 2),
+                    "gate_up_proj",
+                    shard_up,
+                )?
+                .t()?
+                .contiguous()?;
+            let down_proj = vb
+                .get_with_hints(
+                    (num_local_experts, intermediate_size, hidden_size),
+                    "down_proj",
+                    shard_down,
+                )?
+                .t()?
+                .contiguous()?;
+
+            let mut gs = Vec::new();
+            let mut us = Vec::new();
+            let mut ds = Vec::new();
+            for ((mut gate_proj, mut up_proj), mut down_proj) in gate_proj
+                .chunk(num_local_experts, 0)?
+                .into_iter()
+                .zip(up_proj.chunk(num_local_experts, 0)?)
+                .zip(down_proj.chunk(num_local_experts, 0)?)
+            {
+                gate_proj = gate_proj.squeeze(0)?;
+                up_proj = up_proj.squeeze(0)?;
+                down_proj = down_proj.squeeze(0)?;
+                let gate_proj = merge_lora_weights(
+                    &vb,
+                    gate_proj,
+                    hidden_size,
+                    intermediate_size * 2,
+                    shard_gate,
+                )?;
+                let up_proj =
+                    merge_lora_weights(&vb, up_proj, hidden_size, intermediate_size * 2, shard_up)?;
+                let down_proj =
+                    merge_lora_weights(&vb, down_proj, intermediate_size, hidden_size, shard_down)?;
+
+                let gate_proj = <UnquantLinear as QuantMethod>::new(
+                    QuantMethodConfig::Unquantized(Linear::new(gate_proj, None)),
+                )?;
+                let up_proj = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+                    Linear::new(up_proj, None),
+                ))?;
+                let down_proj = <UnquantLinear as QuantMethod>::new(
+                    QuantMethodConfig::Unquantized(Linear::new(down_proj, None)),
+                )?;
+                gs.push(Arc::new(gate_proj) as Arc<dyn QuantMethod>);
+                us.push(Arc::new(up_proj) as Arc<dyn QuantMethod>);
+                ds.push(Arc::new(down_proj) as Arc<dyn QuantMethod>);
+            }
+            (gs, us, ds)
+        };
+
+        Ok(Self {
+            gate_proj,
+            up_proj,
+            down_proj,
+        })
     }
 }
 

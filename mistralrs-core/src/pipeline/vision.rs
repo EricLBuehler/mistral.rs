@@ -5,8 +5,8 @@ use super::{
     get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader, GeneralMetadata,
     IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths,
-    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader,
-    VisionModel, VisionModelLoader, VisionPromptPrefixer,
+    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlama4Loader,
+    VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
 };
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
@@ -167,6 +167,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
             VisionLoaderType::Gemma3 => Box::new(Gemma3Loader),
             VisionLoaderType::Mistral3 => Box::new(Mistral3Loader),
+            VisionLoaderType::Llama4 => Box::new(VLlama4Loader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -435,8 +436,8 @@ impl Loader for VisionLoader {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
-                &load_device,
                 &available_devices,
+                silent,
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),

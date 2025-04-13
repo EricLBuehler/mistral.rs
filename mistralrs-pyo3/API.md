@@ -41,6 +41,10 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `Idefics3`
 - `MiniCpmO`
 - `Phi4MM`
+- `Qwen2_5VL`
+- `Gemma3`
+- `Mistral3`
+- `Llama4`
 
 ### Architecture for diffusion models
 - `Flux`

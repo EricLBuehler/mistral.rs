@@ -2,7 +2,7 @@ use candle_core::Result;
 
 use crate::{QuantMethod, QuantizeOntoGuard, QuantizedSerde};
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct DummyLayer;
 
 impl QuantMethod for DummyLayer {
