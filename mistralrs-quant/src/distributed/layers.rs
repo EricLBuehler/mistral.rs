@@ -89,7 +89,8 @@ impl RowParallelLayer {
             }
         };
 
-        let bias = if bias {
+        // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
+        let bias = if bias && vb.contains_tensor("bias") {
             Some(vb.get((out_dim,), "bias")?)
         } else {
             None
@@ -289,7 +290,8 @@ impl ColumnParallelLayer {
             }
         };
 
-        let bias = if bias {
+        // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
+        let bias = if bias && vb.contains_tensor("bias") {
             Some(vb.get_with_hints((out_dim,), "bias", shard)?)
         } else {
             None
@@ -651,6 +653,20 @@ impl PackedExperts {
                     "PackedExperts with quantization config only allows AFQ quantization"
                 ),
             }
+        } else if !vb.contains_tensor("down_proj") {
+            // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
+            let mut gs = Vec::new();
+            let mut us = Vec::new();
+            let mut ds = Vec::new();
+            for _ in 0..num_local_experts {
+                let gate_proj = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+                let up_proj = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+                let down_proj = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
+                gs.push(Arc::new(gate_proj) as Arc<dyn QuantMethod>);
+                us.push(Arc::new(up_proj) as Arc<dyn QuantMethod>);
+                ds.push(Arc::new(down_proj) as Arc<dyn QuantMethod>);
+            }
+            (gs, us, ds)
         } else {
             // Parallelized like:
             // Each gpu holds all experts.
@@ -658,6 +674,7 @@ impl PackedExperts {
             // Down proj is parallelized on dim 1 (row)
             // All reduce at the end.
 
+            // Handle the case where the layer is dummy (no tensors)
             let gate_up_block_size = intermediate_size / comm.world_size();
             let gate_up_start = gate_up_block_size * comm.rank();
 
