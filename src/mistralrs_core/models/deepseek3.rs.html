@@ -533,7 +533,7 @@
 <a href=#533 id=533 data-nosnippet>533</a>                    .reshape((bs * seq_len, <span class="self">self</span>.cfg.n_group, ()))<span class="question-mark">?
 <a href=#534 id=534 data-nosnippet>534</a>                    </span>.max(D::Minus1)<span class="question-mark">?</span>;
 <a href=#535 id=535 data-nosnippet>535</a>                <span class="comment">// (n, topk_group)
-<a href=#536 id=536 data-nosnippet>536</a>                </span><span class="kw">let </span>group_idx = scores.topk_unsorted(<span class="self">self</span>.cfg.topk_group)<span class="question-mark">?</span>.indices;
+<a href=#536 id=536 data-nosnippet>536</a>                </span><span class="kw">let </span>group_idx = group_scores.topk_unsorted(<span class="self">self</span>.cfg.topk_group)<span class="question-mark">?</span>.indices;
 <a href=#537 id=537 data-nosnippet>537</a>                <span class="comment">// (n, n_group)
 <a href=#538 id=538 data-nosnippet>538</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>group_mask = group_scores.zeros_like()<span class="question-mark">?</span>;
 <a href=#539 id=539 data-nosnippet>539</a>                <span class="comment">// (n, n_group)
@@ -550,7 +550,7 @@
 <a href=#550 id=550 data-nosnippet>550</a>                        <span class="self">self</span>.cfg.n_group,
 <a href=#551 id=551 data-nosnippet>551</a>                        <span class="self">self</span>.n_routed_experts / <span class="self">self</span>.cfg.n_group,
 <a href=#552 id=552 data-nosnippet>552</a>                    ))<span class="question-mark">?
-<a href=#553 id=553 data-nosnippet>553</a>                    </span>.reshape((bs, seq_len, ()))<span class="question-mark">?</span>;
+<a href=#553 id=553 data-nosnippet>553</a>                    </span>.reshape((bs * seq_len, ()))<span class="question-mark">?</span>;
 <a href=#554 id=554 data-nosnippet>554</a>                <span class="comment">// (n, e)
 <a href=#555 id=555 data-nosnippet>555</a>                // Invert the mask
 <a href=#556 id=556 data-nosnippet>556</a>                </span><span class="kw">let </span>tmp_scores = masked_fill(<span class="kw-2">&amp;</span>score_mask, <span class="kw-2">&amp;</span>(<span class="number">1. </span>- <span class="kw-2">&amp;</span>score_mask.ne(<span class="number">0.</span>)<span class="question-mark">?</span>)<span class="question-mark">?</span>, <span class="number">0.</span>)<span class="question-mark">?</span>;
