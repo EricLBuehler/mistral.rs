@@ -533,7 +533,7 @@ impl MoeGate {
                     .reshape((bs * seq_len, self.cfg.n_group, ()))?
                     .max(D::Minus1)?;
                 // (n, topk_group)
-                let group_idx = scores.topk_unsorted(self.cfg.topk_group)?.indices;
+                let group_idx = group_scores.topk_unsorted(self.cfg.topk_group)?.indices;
                 // (n, n_group)
                 let mut group_mask = group_scores.zeros_like()?;
                 // (n, n_group)
@@ -550,7 +550,7 @@ impl MoeGate {
                         self.cfg.n_group,
                         self.n_routed_experts / self.cfg.n_group,
                     ))?
-                    .reshape((bs, seq_len, ()))?;
+                    .reshape((bs * seq_len, ()))?;
                 // (n, e)
                 // Invert the mask
                 let tmp_scores = masked_fill(&score_mask, &(1. - &score_mask.ne(0.)?)?, 0.)?;
