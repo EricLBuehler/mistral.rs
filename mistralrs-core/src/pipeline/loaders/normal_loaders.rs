@@ -1763,7 +1763,7 @@ struct Qwen2BasicConfig {
     num_attention_heads: usize,
     num_key_value_heads: usize,
     max_position_embeddings: usize,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
     rope_theta: f64,
     rms_norm_eps: f64,
     hidden_act: Activation,
@@ -1958,7 +1958,7 @@ impl DeviceMappedModelLoader for Qwen2Loader {
             hidden_size: cfg.hidden_size,
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
-            sliding_window: Some(cfg.sliding_window),
+            sliding_window: cfg.sliding_window,
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
         };
