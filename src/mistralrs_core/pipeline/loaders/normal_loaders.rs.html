@@ -1763,7 +1763,7 @@
 <a href=#1763 id=1763 data-nosnippet>1763</a>    num_attention_heads: usize,
 <a href=#1764 id=1764 data-nosnippet>1764</a>    num_key_value_heads: usize,
 <a href=#1765 id=1765 data-nosnippet>1765</a>    max_position_embeddings: usize,
-<a href=#1766 id=1766 data-nosnippet>1766</a>    sliding_window: usize,
+<a href=#1766 id=1766 data-nosnippet>1766</a>    sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 <a href=#1767 id=1767 data-nosnippet>1767</a>    rope_theta: f64,
 <a href=#1768 id=1768 data-nosnippet>1768</a>    rms_norm_eps: f64,
 <a href=#1769 id=1769 data-nosnippet>1769</a>    hidden_act: Activation,
@@ -1958,7 +1958,7 @@
 <a href=#1958 id=1958 data-nosnippet>1958</a>            hidden_size: cfg.hidden_size,
 <a href=#1959 id=1959 data-nosnippet>1959</a>            num_kv_heads: cfg.num_key_value_heads,
 <a href=#1960 id=1960 data-nosnippet>1960</a>            num_attn_heads: cfg.num_attention_heads,
-<a href=#1961 id=1961 data-nosnippet>1961</a>            sliding_window: <span class="prelude-val">Some</span>(cfg.sliding_window),
+<a href=#1961 id=1961 data-nosnippet>1961</a>            sliding_window: cfg.sliding_window,
 <a href=#1962 id=1962 data-nosnippet>1962</a>            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
 <a href=#1963 id=1963 data-nosnippet>1963</a>            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
 <a href=#1964 id=1964 data-nosnippet>1964</a>        };
