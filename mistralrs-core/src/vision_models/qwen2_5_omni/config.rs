@@ -1,3 +1,4 @@
+use mistralrs_quant::QuantizedConfig;
 use serde::{Deserialize, Serialize};
 
 use crate::{layers::Activation, serde_default_fn};
@@ -133,42 +134,8 @@ serde_default_fn!(usize, default_audio_output_dim, 3584);
 // Rope scaling configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RopeScalingConfig {
-    #[serde(default = "default_rope_type")]
-    #[serde(rename = "rope_type")]
-    pub rope_type: String,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub factor: Option<f64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub original_max_position_embeddings: Option<usize>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub attention_factor: Option<f64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub beta_fast: Option<f64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub beta_slow: Option<f64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub short_factor: Option<Vec<f64>>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub long_factor: Option<Vec<f64>>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub low_freq_factor: Option<f64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub high_freq_factor: Option<f64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mrope_section: Option<Vec<usize>>,
+    pub mrope_section: Vec<usize>,
 }
-
-serde_default_fn!(String, default_rope_type, "default".to_string());
 
 // Text Config
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -212,8 +179,7 @@ pub struct Qwen25OmniTextConfig {
     #[serde(default = "default_text_rope_theta")]
     pub rope_theta: f64,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rope_scaling: Option<RopeScalingConfig>,
+    pub rope_scaling: RopeScalingConfig,
 
     #[serde(default = "default_text_use_sliding_window")]
     pub use_sliding_window: bool,
@@ -226,6 +192,8 @@ pub struct Qwen25OmniTextConfig {
 
     #[serde(default = "default_text_attention_dropout")]
     pub attention_dropout: f32,
+
+    pub quantization_config: Option<QuantizedConfig>,
 }
 
 // Default value functions for text config
@@ -388,7 +356,6 @@ pub struct Qwen25OmniTalkerConfig {
     #[serde(default = "default_talker_attention_dropout")]
     pub attention_dropout: f32,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub rope_scaling: Option<RopeScalingConfig>,
 
     #[serde(default = "default_talker_position_id_per_seconds")]
