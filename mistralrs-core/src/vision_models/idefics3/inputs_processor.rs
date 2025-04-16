@@ -194,13 +194,16 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     sample.push_str(&format!("{image_prompt_string}{}", split_sample[i]));
                 }
 
-                seq.set_initial_prompt(sample.clone());
-                let toks = tokenizer
-                    .encode_fast(sample, false)
-                    .expect("Detokenization failed!");
+                if !seq.has_changed_prompt {
+                    seq.set_initial_prompt(sample.clone());
+                    let toks = tokenizer
+                        .encode_fast(sample, false)
+                        .expect("Detokenization failed!");
 
-                let ids = toks.get_ids().to_vec();
-                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                    let ids = toks.get_ids().to_vec();
+                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                    seq.has_changed_prompt = true;
+                }
             }
 
             (

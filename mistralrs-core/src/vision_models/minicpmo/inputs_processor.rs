@@ -216,7 +216,19 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 }
 
                 let final_text = text_chunks.join("");
-                seq.set_initial_prompt(final_text.clone());
+
+                let input_ids = tokenizer
+                    .encode_fast(final_text.clone(), false)
+                    .unwrap()
+                    .get_ids()
+                    .to_vec();
+
+                if !seq.has_changed_prompt {
+                    seq.set_initial_prompt(final_text.clone());
+
+                    seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
+                    seq.has_changed_prompt = true;
+                }
 
                 let image_bounds = {
                     let im_start_id = tokenizer
@@ -259,14 +271,6 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         )
                         .unwrap()
                         .get_ids()[0];
-
-                    let input_ids = tokenizer
-                        .encode_fast(final_text, false)
-                        .unwrap()
-                        .get_ids()
-                        .to_vec();
-
-                    seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
 
                     let image_start_idx = input_ids
                         .iter()

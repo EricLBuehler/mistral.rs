@@ -11,7 +11,7 @@ use crate::metal::kernels;
 pub fn copy_blocks(
     key_caches: Vec<&mut Tensor>,
     value_caches: Vec<&mut Tensor>,
-    block_mapping: HashMap<usize, Vec<usize>>,
+    block_mapping: &HashMap<usize, Vec<usize>>,
 ) -> Result<()> {
     let cache_dev = key_caches.first().unwrap().device();
     let Device::Metal(dev) = cache_dev else {
@@ -35,8 +35,8 @@ pub fn copy_blocks(
     let mut block_mapping_vec: Vec<i64> = Vec::new();
     for (src_block_number, dst_blocks) in block_mapping {
         for dst_block_number in dst_blocks {
-            block_mapping_vec.push(src_block_number.try_into().unwrap());
-            block_mapping_vec.push(dst_block_number.try_into().unwrap());
+            block_mapping_vec.push((*src_block_number).try_into().unwrap());
+            block_mapping_vec.push((*dst_block_number).try_into().unwrap());
         }
     }
     let block_mapping = dev.new_buffer_with_data(&block_mapping_vec)?;

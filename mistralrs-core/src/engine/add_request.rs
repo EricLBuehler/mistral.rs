@@ -599,7 +599,7 @@ impl Engine {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!");
-            let seq = Sequence::new_waiting(
+            let mut seq = Sequence::new_waiting(
                 prompt_tokens.clone(),
                 prompt_text.clone(),
                 *get_mut_arcmutex!(self.id).deref(),
@@ -633,7 +633,7 @@ impl Engine {
                 eos_toks,
             );
             self.logger.add_new_sequence();
-            let seq = if let Some(prefill_cache) = prefill_cache.clone() {
+            seq = if let Some(prefill_cache) = prefill_cache.clone() {
                 self.logger.add_prefix_cache_hit();
 
                 seq.prefill_v2(
@@ -644,6 +644,26 @@ impl Engine {
             } else {
                 seq
             };
+
+            // Run the inputs processor to update the prompt for multimodal models.
+            if images.is_some() {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                let _ = pipeline.get_processor().inputs_processor().process_inputs(
+                    pipeline.tokenizer(),
+                    &mut [&mut seq],
+                    true,
+                    pipeline.get_metadata().is_xlora,
+                    &pipeline.device(),
+                    pipeline.get_metadata().no_kv_cache,
+                    None,
+                    false,
+                    pipeline.get_input_processor_config(),
+                    None,
+                    pipeline.get_metadata().prompt_chunksize,
+                    pipeline.device_mapper(),
+                );
+            }
+
             *get_mut_arcmutex!(self.id) += 1;
             get_mut_arcmutex!(self.scheduler).add_seq(seq);
         }

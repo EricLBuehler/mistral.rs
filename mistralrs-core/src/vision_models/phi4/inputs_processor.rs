@@ -240,16 +240,19 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
                 .to_string();
 
-            seq.set_toks_and_reallocate(
-                tokenizer
-                    .encode_fast(detokenized.clone(), false)
-                    .expect("Encode failed")
-                    .get_ids()
-                    .to_vec(),
-                paged_attn_metadata.as_mut(),
-            );
+            let has_changed_prompt = seq.has_changed_prompt;
+            if !has_changed_prompt {
+                seq.set_toks_and_reallocate(
+                    tokenizer
+                        .encode_fast(detokenized.clone(), false)
+                        .expect("Encode failed")
+                        .get_ids()
+                        .to_vec(),
+                    paged_attn_metadata.as_mut(),
+                );
 
-            seq.set_initial_prompt(detokenized);
+                seq.set_initial_prompt(detokenized);
+            }
 
             let mut i = 0;
             let mut image_token_count_iter = num_img_tokens.iter();
@@ -265,8 +268,13 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 let mut new_ids = seq.get_toks()[..i].to_vec();
                 new_ids.extend(vec![token_id; *token_count]);
                 new_ids.extend(seq.get_toks()[i + 1..].to_vec());
-                seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
+                if !has_changed_prompt {
+                    seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
+                }
                 i += token_count;
+            }
+            if !has_changed_prompt {
+                seq.has_changed_prompt = true;
             }
             toks.push(seq.get_toks().to_vec());
         }

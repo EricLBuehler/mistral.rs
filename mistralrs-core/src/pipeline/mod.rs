@@ -484,9 +484,9 @@ pub trait Pipeline:
                     .as_ref()
                     .expect("PagedAttention must have cache engines.")
                     .execute_scheduler_ops(
-                        blocks_to_swap_in.clone(),
-                        blocks_to_swap_out.clone(),
-                        blocks_to_copy.clone(),
+                        &blocks_to_swap_in,
+                        &blocks_to_swap_out,
+                        &blocks_to_copy,
                     )?;
 
                 let inputs_iter = self.get_processor().inputs_processor().process_inputs(
