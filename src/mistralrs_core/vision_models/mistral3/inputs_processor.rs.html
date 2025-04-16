@@ -194,219 +194,222 @@
 <a href=#194 id=194 data-nosnippet>194</a>                    prompt = prompt.replace(PLACEHOLDER, <span class="kw-2">&amp;</span>replace_str);
 <a href=#195 id=195 data-nosnippet>195</a>                }
 <a href=#196 id=196 data-nosnippet>196</a>
-<a href=#197 id=197 data-nosnippet>197</a>                seq.set_initial_prompt(prompt.clone());
-<a href=#198 id=198 data-nosnippet>198</a>                <span class="kw">let </span>toks = tokenizer
-<a href=#199 id=199 data-nosnippet>199</a>                    .encode_fast(prompt, <span class="bool-val">false</span>)
-<a href=#200 id=200 data-nosnippet>200</a>                    .expect(<span class="string">"Detokenization failed!"</span>);
-<a href=#201 id=201 data-nosnippet>201</a>
-<a href=#202 id=202 data-nosnippet>202</a>                <span class="kw">let </span>ids = toks.get_ids().to_vec();
-<a href=#203 id=203 data-nosnippet>203</a>                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
-<a href=#204 id=204 data-nosnippet>204</a>            }
-<a href=#205 id=205 data-nosnippet>205</a>
-<a href=#206 id=206 data-nosnippet>206</a>            (
-<a href=#207 id=207 data-nosnippet>207</a>                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>pixel_values_accum, <span class="number">0</span>).unwrap()),
-<a href=#208 id=208 data-nosnippet>208</a>                <span class="prelude-val">Some</span>(image_sizes_accum),
-<a href=#209 id=209 data-nosnippet>209</a>            )
-<a href=#210 id=210 data-nosnippet>210</a>        } <span class="kw">else </span>{
-<a href=#211 id=211 data-nosnippet>211</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
-<a href=#212 id=212 data-nosnippet>212</a>        };
-<a href=#213 id=213 data-nosnippet>213</a>
-<a href=#214 id=214 data-nosnippet>214</a>        <span class="kw">let </span>text_models_inputs_processor::InnerInputProcessorOutput {
-<a href=#215 id=215 data-nosnippet>215</a>            inputs:
-<a href=#216 id=216 data-nosnippet>216</a>                text_models_inputs_processor::InputMetadata {
-<a href=#217 id=217 data-nosnippet>217</a>                    input,
-<a href=#218 id=218 data-nosnippet>218</a>                    positions,
-<a href=#219 id=219 data-nosnippet>219</a>                    context_lens,
-<a href=#220 id=220 data-nosnippet>220</a>                    position_ids,
-<a href=#221 id=221 data-nosnippet>221</a>                    paged_attn_meta,
-<a href=#222 id=222 data-nosnippet>222</a>                    flash_meta,
-<a href=#223 id=223 data-nosnippet>223</a>                },
-<a href=#224 id=224 data-nosnippet>224</a>            seq_indices,
-<a href=#225 id=225 data-nosnippet>225</a>        } = <span class="kw">if </span>is_prompt {
-<a href=#226 id=226 data-nosnippet>226</a>            get_prompt_input(
-<a href=#227 id=227 data-nosnippet>227</a>                input_seqs
-<a href=#228 id=228 data-nosnippet>228</a>                    .iter()
-<a href=#229 id=229 data-nosnippet>229</a>                    .map(|seq| seq.get_toks().to_vec())
-<a href=#230 id=230 data-nosnippet>230</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#231 id=231 data-nosnippet>231</a>                input_seqs,
-<a href=#232 id=232 data-nosnippet>232</a>                device,
-<a href=#233 id=233 data-nosnippet>233</a>                last_n_context_len,
-<a href=#234 id=234 data-nosnippet>234</a>                return_raw_logits,
-<a href=#235 id=235 data-nosnippet>235</a>                paged_attn_metadata.as_mut(),
-<a href=#236 id=236 data-nosnippet>236</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
-<a href=#237 id=237 data-nosnippet>237</a>                </span>mapper,
-<a href=#238 id=238 data-nosnippet>238</a>            )
-<a href=#239 id=239 data-nosnippet>239</a>            .nth(<span class="number">0</span>)
-<a href=#240 id=240 data-nosnippet>240</a>            .unwrap()
-<a href=#241 id=241 data-nosnippet>241</a>            .unwrap()
-<a href=#242 id=242 data-nosnippet>242</a>        } <span class="kw">else </span>{
-<a href=#243 id=243 data-nosnippet>243</a>            get_completion_input(
-<a href=#244 id=244 data-nosnippet>244</a>                input_seqs
-<a href=#245 id=245 data-nosnippet>245</a>                    .iter()
-<a href=#246 id=246 data-nosnippet>246</a>                    .map(|seq| seq.get_toks().to_vec())
-<a href=#247 id=247 data-nosnippet>247</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#248 id=248 data-nosnippet>248</a>                input_seqs,
-<a href=#249 id=249 data-nosnippet>249</a>                device,
-<a href=#250 id=250 data-nosnippet>250</a>                no_kv_cache,
-<a href=#251 id=251 data-nosnippet>251</a>                last_n_context_len,
-<a href=#252 id=252 data-nosnippet>252</a>                return_raw_logits,
-<a href=#253 id=253 data-nosnippet>253</a>                paged_attn_metadata.as_mut(),
-<a href=#254 id=254 data-nosnippet>254</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
-<a href=#255 id=255 data-nosnippet>255</a>                </span>mapper,
-<a href=#256 id=256 data-nosnippet>256</a>            )
-<a href=#257 id=257 data-nosnippet>257</a>            .nth(<span class="number">0</span>)
-<a href=#258 id=258 data-nosnippet>258</a>            .unwrap()
-<a href=#259 id=259 data-nosnippet>259</a>            .unwrap()
-<a href=#260 id=260 data-nosnippet>260</a>        };
-<a href=#261 id=261 data-nosnippet>261</a>
-<a href=#262 id=262 data-nosnippet>262</a>        <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
-<a href=#263 id=263 data-nosnippet>263</a>            input_ids: input,
-<a href=#264 id=264 data-nosnippet>264</a>            seqlen_offsets: positions,
-<a href=#265 id=265 data-nosnippet>265</a>            context_lens,
-<a href=#266 id=266 data-nosnippet>266</a>            position_ids,
-<a href=#267 id=267 data-nosnippet>267</a>            pixel_values,
-<a href=#268 id=268 data-nosnippet>268</a>            model_specific_args: Box::new(Mistral3SpecificArgs { image_sizes }),
-<a href=#269 id=269 data-nosnippet>269</a>            paged_attn_meta,
-<a href=#270 id=270 data-nosnippet>270</a>            flash_meta,
-<a href=#271 id=271 data-nosnippet>271</a>        });
-<a href=#272 id=272 data-nosnippet>272</a>        Box::new(std::iter::once(<span class="prelude-val">Ok</span>(InputProcessorOutput {
-<a href=#273 id=273 data-nosnippet>273</a>            inputs,
-<a href=#274 id=274 data-nosnippet>274</a>            seq_indices,
-<a href=#275 id=275 data-nosnippet>275</a>        })))
-<a href=#276 id=276 data-nosnippet>276</a>    }
-<a href=#277 id=277 data-nosnippet>277</a>}
-<a href=#278 id=278 data-nosnippet>278</a>
-<a href=#279 id=279 data-nosnippet>279</a><span class="kw">impl </span>Mistral3ImageProcessor {
-<a href=#280 id=280 data-nosnippet>280</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#281 id=281 data-nosnippet>281</a>    </span><span class="kw">fn </span>resize(
-<a href=#282 id=282 data-nosnippet>282</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#283 id=283 data-nosnippet>283</a>        image: <span class="kw-2">&amp;</span>DynamicImage,
-<a href=#284 id=284 data-nosnippet>284</a>        <span class="kw-2">mut </span>height: usize,
-<a href=#285 id=285 data-nosnippet>285</a>        <span class="kw-2">mut </span>width: usize,
-<a href=#286 id=286 data-nosnippet>286</a>        max_height: usize,
-<a href=#287 id=287 data-nosnippet>287</a>        max_width: usize,
-<a href=#288 id=288 data-nosnippet>288</a>        patch_size: usize,
-<a href=#289 id=289 data-nosnippet>289</a>        filter: FilterType,
-<a href=#290 id=290 data-nosnippet>290</a>    ) -&gt; DynamicImage {
-<a href=#291 id=291 data-nosnippet>291</a>        <span class="kw">let </span>ratio = (height <span class="kw">as </span>f64 / max_height <span class="kw">as </span>f64).max(width <span class="kw">as </span>f64 / max_width <span class="kw">as </span>f64);
-<a href=#292 id=292 data-nosnippet>292</a>        <span class="kw">if </span>ratio &gt; <span class="number">1. </span>{
-<a href=#293 id=293 data-nosnippet>293</a>            height = (height <span class="kw">as </span>f64 / ratio).floor() <span class="kw">as </span>usize;
-<a href=#294 id=294 data-nosnippet>294</a>            width = (width <span class="kw">as </span>f64 / ratio).floor() <span class="kw">as </span>usize;
-<a href=#295 id=295 data-nosnippet>295</a>        }
-<a href=#296 id=296 data-nosnippet>296</a>
-<a href=#297 id=297 data-nosnippet>297</a>        <span class="kw">let </span>num_height_tokens = (height - <span class="number">1</span>) / patch_size + <span class="number">1</span>;
-<a href=#298 id=298 data-nosnippet>298</a>        <span class="kw">let </span>num_width_tokens = (width - <span class="number">1</span>) / patch_size + <span class="number">1</span>;
+<a href=#197 id=197 data-nosnippet>197</a>                <span class="kw">if </span>!seq.has_changed_prompt {
+<a href=#198 id=198 data-nosnippet>198</a>                    seq.set_initial_prompt(prompt.clone());
+<a href=#199 id=199 data-nosnippet>199</a>                    <span class="kw">let </span>toks = tokenizer
+<a href=#200 id=200 data-nosnippet>200</a>                        .encode_fast(prompt, <span class="bool-val">false</span>)
+<a href=#201 id=201 data-nosnippet>201</a>                        .expect(<span class="string">"Detokenization failed!"</span>);
+<a href=#202 id=202 data-nosnippet>202</a>
+<a href=#203 id=203 data-nosnippet>203</a>                    <span class="kw">let </span>ids = toks.get_ids().to_vec();
+<a href=#204 id=204 data-nosnippet>204</a>                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+<a href=#205 id=205 data-nosnippet>205</a>                    seq.has_changed_prompt = <span class="bool-val">true</span>;
+<a href=#206 id=206 data-nosnippet>206</a>                }
+<a href=#207 id=207 data-nosnippet>207</a>            }
+<a href=#208 id=208 data-nosnippet>208</a>
+<a href=#209 id=209 data-nosnippet>209</a>            (
+<a href=#210 id=210 data-nosnippet>210</a>                <span class="prelude-val">Some</span>(Tensor::cat(<span class="kw-2">&amp;</span>pixel_values_accum, <span class="number">0</span>).unwrap()),
+<a href=#211 id=211 data-nosnippet>211</a>                <span class="prelude-val">Some</span>(image_sizes_accum),
+<a href=#212 id=212 data-nosnippet>212</a>            )
+<a href=#213 id=213 data-nosnippet>213</a>        } <span class="kw">else </span>{
+<a href=#214 id=214 data-nosnippet>214</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
+<a href=#215 id=215 data-nosnippet>215</a>        };
+<a href=#216 id=216 data-nosnippet>216</a>
+<a href=#217 id=217 data-nosnippet>217</a>        <span class="kw">let </span>text_models_inputs_processor::InnerInputProcessorOutput {
+<a href=#218 id=218 data-nosnippet>218</a>            inputs:
+<a href=#219 id=219 data-nosnippet>219</a>                text_models_inputs_processor::InputMetadata {
+<a href=#220 id=220 data-nosnippet>220</a>                    input,
+<a href=#221 id=221 data-nosnippet>221</a>                    positions,
+<a href=#222 id=222 data-nosnippet>222</a>                    context_lens,
+<a href=#223 id=223 data-nosnippet>223</a>                    position_ids,
+<a href=#224 id=224 data-nosnippet>224</a>                    paged_attn_meta,
+<a href=#225 id=225 data-nosnippet>225</a>                    flash_meta,
+<a href=#226 id=226 data-nosnippet>226</a>                },
+<a href=#227 id=227 data-nosnippet>227</a>            seq_indices,
+<a href=#228 id=228 data-nosnippet>228</a>        } = <span class="kw">if </span>is_prompt {
+<a href=#229 id=229 data-nosnippet>229</a>            get_prompt_input(
+<a href=#230 id=230 data-nosnippet>230</a>                input_seqs
+<a href=#231 id=231 data-nosnippet>231</a>                    .iter()
+<a href=#232 id=232 data-nosnippet>232</a>                    .map(|seq| seq.get_toks().to_vec())
+<a href=#233 id=233 data-nosnippet>233</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#234 id=234 data-nosnippet>234</a>                input_seqs,
+<a href=#235 id=235 data-nosnippet>235</a>                device,
+<a href=#236 id=236 data-nosnippet>236</a>                last_n_context_len,
+<a href=#237 id=237 data-nosnippet>237</a>                return_raw_logits,
+<a href=#238 id=238 data-nosnippet>238</a>                paged_attn_metadata.as_mut(),
+<a href=#239 id=239 data-nosnippet>239</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
+<a href=#240 id=240 data-nosnippet>240</a>                </span>mapper,
+<a href=#241 id=241 data-nosnippet>241</a>            )
+<a href=#242 id=242 data-nosnippet>242</a>            .nth(<span class="number">0</span>)
+<a href=#243 id=243 data-nosnippet>243</a>            .unwrap()
+<a href=#244 id=244 data-nosnippet>244</a>            .unwrap()
+<a href=#245 id=245 data-nosnippet>245</a>        } <span class="kw">else </span>{
+<a href=#246 id=246 data-nosnippet>246</a>            get_completion_input(
+<a href=#247 id=247 data-nosnippet>247</a>                input_seqs
+<a href=#248 id=248 data-nosnippet>248</a>                    .iter()
+<a href=#249 id=249 data-nosnippet>249</a>                    .map(|seq| seq.get_toks().to_vec())
+<a href=#250 id=250 data-nosnippet>250</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#251 id=251 data-nosnippet>251</a>                input_seqs,
+<a href=#252 id=252 data-nosnippet>252</a>                device,
+<a href=#253 id=253 data-nosnippet>253</a>                no_kv_cache,
+<a href=#254 id=254 data-nosnippet>254</a>                last_n_context_len,
+<a href=#255 id=255 data-nosnippet>255</a>                return_raw_logits,
+<a href=#256 id=256 data-nosnippet>256</a>                paged_attn_metadata.as_mut(),
+<a href=#257 id=257 data-nosnippet>257</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
+<a href=#258 id=258 data-nosnippet>258</a>                </span>mapper,
+<a href=#259 id=259 data-nosnippet>259</a>            )
+<a href=#260 id=260 data-nosnippet>260</a>            .nth(<span class="number">0</span>)
+<a href=#261 id=261 data-nosnippet>261</a>            .unwrap()
+<a href=#262 id=262 data-nosnippet>262</a>            .unwrap()
+<a href=#263 id=263 data-nosnippet>263</a>        };
+<a href=#264 id=264 data-nosnippet>264</a>
+<a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+<a href=#266 id=266 data-nosnippet>266</a>            input_ids: input,
+<a href=#267 id=267 data-nosnippet>267</a>            seqlen_offsets: positions,
+<a href=#268 id=268 data-nosnippet>268</a>            context_lens,
+<a href=#269 id=269 data-nosnippet>269</a>            position_ids,
+<a href=#270 id=270 data-nosnippet>270</a>            pixel_values,
+<a href=#271 id=271 data-nosnippet>271</a>            model_specific_args: Box::new(Mistral3SpecificArgs { image_sizes }),
+<a href=#272 id=272 data-nosnippet>272</a>            paged_attn_meta,
+<a href=#273 id=273 data-nosnippet>273</a>            flash_meta,
+<a href=#274 id=274 data-nosnippet>274</a>        });
+<a href=#275 id=275 data-nosnippet>275</a>        Box::new(std::iter::once(<span class="prelude-val">Ok</span>(InputProcessorOutput {
+<a href=#276 id=276 data-nosnippet>276</a>            inputs,
+<a href=#277 id=277 data-nosnippet>277</a>            seq_indices,
+<a href=#278 id=278 data-nosnippet>278</a>        })))
+<a href=#279 id=279 data-nosnippet>279</a>    }
+<a href=#280 id=280 data-nosnippet>280</a>}
+<a href=#281 id=281 data-nosnippet>281</a>
+<a href=#282 id=282 data-nosnippet>282</a><span class="kw">impl </span>Mistral3ImageProcessor {
+<a href=#283 id=283 data-nosnippet>283</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#284 id=284 data-nosnippet>284</a>    </span><span class="kw">fn </span>resize(
+<a href=#285 id=285 data-nosnippet>285</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#286 id=286 data-nosnippet>286</a>        image: <span class="kw-2">&amp;</span>DynamicImage,
+<a href=#287 id=287 data-nosnippet>287</a>        <span class="kw-2">mut </span>height: usize,
+<a href=#288 id=288 data-nosnippet>288</a>        <span class="kw-2">mut </span>width: usize,
+<a href=#289 id=289 data-nosnippet>289</a>        max_height: usize,
+<a href=#290 id=290 data-nosnippet>290</a>        max_width: usize,
+<a href=#291 id=291 data-nosnippet>291</a>        patch_size: usize,
+<a href=#292 id=292 data-nosnippet>292</a>        filter: FilterType,
+<a href=#293 id=293 data-nosnippet>293</a>    ) -&gt; DynamicImage {
+<a href=#294 id=294 data-nosnippet>294</a>        <span class="kw">let </span>ratio = (height <span class="kw">as </span>f64 / max_height <span class="kw">as </span>f64).max(width <span class="kw">as </span>f64 / max_width <span class="kw">as </span>f64);
+<a href=#295 id=295 data-nosnippet>295</a>        <span class="kw">if </span>ratio &gt; <span class="number">1. </span>{
+<a href=#296 id=296 data-nosnippet>296</a>            height = (height <span class="kw">as </span>f64 / ratio).floor() <span class="kw">as </span>usize;
+<a href=#297 id=297 data-nosnippet>297</a>            width = (width <span class="kw">as </span>f64 / ratio).floor() <span class="kw">as </span>usize;
+<a href=#298 id=298 data-nosnippet>298</a>        }
 <a href=#299 id=299 data-nosnippet>299</a>
-<a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">let </span>resize_height = num_height_tokens * patch_size;
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">let </span>resize_width = num_width_tokens * patch_size;
+<a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">let </span>num_height_tokens = (height - <span class="number">1</span>) / patch_size + <span class="number">1</span>;
+<a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">let </span>num_width_tokens = (width - <span class="number">1</span>) / patch_size + <span class="number">1</span>;
 <a href=#302 id=302 data-nosnippet>302</a>
-<a href=#303 id=303 data-nosnippet>303</a>        image.resize_exact(resize_width <span class="kw">as </span>u32, resize_height <span class="kw">as </span>u32, filter)
-<a href=#304 id=304 data-nosnippet>304</a>    }
-<a href=#305 id=305 data-nosnippet>305</a>}
-<a href=#306 id=306 data-nosnippet>306</a>
-<a href=#307 id=307 data-nosnippet>307</a><span class="kw">impl </span>ImagePreProcessor <span class="kw">for </span>Mistral3ImageProcessor {
-<a href=#308 id=308 data-nosnippet>308</a>    <span class="attr">#[allow(clippy::excessive_precision)]
-<a href=#309 id=309 data-nosnippet>309</a>    </span><span class="kw">const </span>DEFAULT_MEAN: [f64; <span class="number">3</span>] = [<span class="number">0.48145466</span>, <span class="number">0.4578275</span>, <span class="number">0.40821073</span>];
-<a href=#310 id=310 data-nosnippet>310</a>    <span class="attr">#[allow(clippy::excessive_precision)]
-<a href=#311 id=311 data-nosnippet>311</a>    </span><span class="kw">const </span>DEFAULT_STD: [f64; <span class="number">3</span>] = [<span class="number">0.26862954</span>, <span class="number">0.26130258</span>, <span class="number">0.27577711</span>];
-<a href=#312 id=312 data-nosnippet>312</a>
-<a href=#313 id=313 data-nosnippet>313</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/main/src/transformers/models/pixtral/image_processing_pixtral.py
-<a href=#314 id=314 data-nosnippet>314</a>    </span><span class="kw">fn </span>preprocess(
-<a href=#315 id=315 data-nosnippet>315</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#316 id=316 data-nosnippet>316</a>        <span class="kw-2">mut </span>images: Vec&lt;DynamicImage&gt;,
-<a href=#317 id=317 data-nosnippet>317</a>        videos: Vec&lt;Vec&lt;DynamicImage&gt;&gt;,
-<a href=#318 id=318 data-nosnippet>318</a>        config: <span class="kw-2">&amp;</span>PreProcessorConfig,
-<a href=#319 id=319 data-nosnippet>319</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#320 id=320 data-nosnippet>320</a>        (_bs, _max_num_images): (usize, usize),
-<a href=#321 id=321 data-nosnippet>321</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;PreprocessedImages&gt; {
-<a href=#322 id=322 data-nosnippet>322</a>        <span class="macro">assert!</span>(videos.is_empty());
-<a href=#323 id=323 data-nosnippet>323</a>
-<a href=#324 id=324 data-nosnippet>324</a>        <span class="kw">let </span>do_resize = config.do_resize.unwrap();
-<a href=#325 id=325 data-nosnippet>325</a>        <span class="kw">let </span>do_rescale = config.do_rescale.unwrap();
-<a href=#326 id=326 data-nosnippet>326</a>        <span class="kw">let </span>rescale_factor = config.rescale_factor.unwrap();
-<a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">let </span>do_normalize = config.do_normalize.unwrap();
-<a href=#328 id=328 data-nosnippet>328</a>        <span class="kw">let </span>image_mean = config.image_mean.unwrap_or(<span class="self">Self</span>::DEFAULT_MEAN);
-<a href=#329 id=329 data-nosnippet>329</a>        <span class="kw">let </span>image_std = config.image_std.unwrap_or(<span class="self">Self</span>::DEFAULT_STD);
-<a href=#330 id=330 data-nosnippet>330</a>        <span class="kw">let </span>do_convert_rgb = config.do_convert_rgb.unwrap_or(<span class="bool-val">true</span>);
-<a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">let </span>patch_size = config.patch_size.unwrap();
-<a href=#332 id=332 data-nosnippet>332</a>        <span class="kw">let </span>size = config.size.as_ref().unwrap();
-<a href=#333 id=333 data-nosnippet>333</a>        <span class="kw">let </span>resample = config.resampling.to_filter()<span class="question-mark">?</span>;
-<a href=#334 id=334 data-nosnippet>334</a>
-<a href=#335 id=335 data-nosnippet>335</a>        <span class="kw">let </span>default_to_square = config.default_to_square.unwrap();
-<a href=#336 id=336 data-nosnippet>336</a>        <span class="macro">assert!</span>(default_to_square);
+<a href=#303 id=303 data-nosnippet>303</a>        <span class="kw">let </span>resize_height = num_height_tokens * patch_size;
+<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw">let </span>resize_width = num_width_tokens * patch_size;
+<a href=#305 id=305 data-nosnippet>305</a>
+<a href=#306 id=306 data-nosnippet>306</a>        image.resize_exact(resize_width <span class="kw">as </span>u32, resize_height <span class="kw">as </span>u32, filter)
+<a href=#307 id=307 data-nosnippet>307</a>    }
+<a href=#308 id=308 data-nosnippet>308</a>}
+<a href=#309 id=309 data-nosnippet>309</a>
+<a href=#310 id=310 data-nosnippet>310</a><span class="kw">impl </span>ImagePreProcessor <span class="kw">for </span>Mistral3ImageProcessor {
+<a href=#311 id=311 data-nosnippet>311</a>    <span class="attr">#[allow(clippy::excessive_precision)]
+<a href=#312 id=312 data-nosnippet>312</a>    </span><span class="kw">const </span>DEFAULT_MEAN: [f64; <span class="number">3</span>] = [<span class="number">0.48145466</span>, <span class="number">0.4578275</span>, <span class="number">0.40821073</span>];
+<a href=#313 id=313 data-nosnippet>313</a>    <span class="attr">#[allow(clippy::excessive_precision)]
+<a href=#314 id=314 data-nosnippet>314</a>    </span><span class="kw">const </span>DEFAULT_STD: [f64; <span class="number">3</span>] = [<span class="number">0.26862954</span>, <span class="number">0.26130258</span>, <span class="number">0.27577711</span>];
+<a href=#315 id=315 data-nosnippet>315</a>
+<a href=#316 id=316 data-nosnippet>316</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/main/src/transformers/models/pixtral/image_processing_pixtral.py
+<a href=#317 id=317 data-nosnippet>317</a>    </span><span class="kw">fn </span>preprocess(
+<a href=#318 id=318 data-nosnippet>318</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#319 id=319 data-nosnippet>319</a>        <span class="kw-2">mut </span>images: Vec&lt;DynamicImage&gt;,
+<a href=#320 id=320 data-nosnippet>320</a>        videos: Vec&lt;Vec&lt;DynamicImage&gt;&gt;,
+<a href=#321 id=321 data-nosnippet>321</a>        config: <span class="kw-2">&amp;</span>PreProcessorConfig,
+<a href=#322 id=322 data-nosnippet>322</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#323 id=323 data-nosnippet>323</a>        (_bs, _max_num_images): (usize, usize),
+<a href=#324 id=324 data-nosnippet>324</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;PreprocessedImages&gt; {
+<a href=#325 id=325 data-nosnippet>325</a>        <span class="macro">assert!</span>(videos.is_empty());
+<a href=#326 id=326 data-nosnippet>326</a>
+<a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">let </span>do_resize = config.do_resize.unwrap();
+<a href=#328 id=328 data-nosnippet>328</a>        <span class="kw">let </span>do_rescale = config.do_rescale.unwrap();
+<a href=#329 id=329 data-nosnippet>329</a>        <span class="kw">let </span>rescale_factor = config.rescale_factor.unwrap();
+<a href=#330 id=330 data-nosnippet>330</a>        <span class="kw">let </span>do_normalize = config.do_normalize.unwrap();
+<a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">let </span>image_mean = config.image_mean.unwrap_or(<span class="self">Self</span>::DEFAULT_MEAN);
+<a href=#332 id=332 data-nosnippet>332</a>        <span class="kw">let </span>image_std = config.image_std.unwrap_or(<span class="self">Self</span>::DEFAULT_STD);
+<a href=#333 id=333 data-nosnippet>333</a>        <span class="kw">let </span>do_convert_rgb = config.do_convert_rgb.unwrap_or(<span class="bool-val">true</span>);
+<a href=#334 id=334 data-nosnippet>334</a>        <span class="kw">let </span>patch_size = config.patch_size.unwrap();
+<a href=#335 id=335 data-nosnippet>335</a>        <span class="kw">let </span>size = config.size.as_ref().unwrap();
+<a href=#336 id=336 data-nosnippet>336</a>        <span class="kw">let </span>resample = config.resampling.to_filter()<span class="question-mark">?</span>;
 <a href=#337 id=337 data-nosnippet>337</a>
-<a href=#338 id=338 data-nosnippet>338</a>        <span class="kw">let </span><span class="kw-2">mut </span>pixel_values = Vec::new();
-<a href=#339 id=339 data-nosnippet>339</a>        <span class="kw">let </span><span class="kw-2">mut </span>image_sizes = Vec::new();
+<a href=#338 id=338 data-nosnippet>338</a>        <span class="kw">let </span>default_to_square = config.default_to_square.unwrap();
+<a href=#339 id=339 data-nosnippet>339</a>        <span class="macro">assert!</span>(default_to_square);
 <a href=#340 id=340 data-nosnippet>340</a>
-<a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">let </span>(max_height, max_width) = <span class="kw">if </span>size.contains_key(<span class="string">"longest_edge"</span>) {
-<a href=#342 id=342 data-nosnippet>342</a>            (size[<span class="string">"longest_edge"</span>] <span class="kw">as </span>usize, size[<span class="string">"longest_edge"</span>] <span class="kw">as </span>usize)
-<a href=#343 id=343 data-nosnippet>343</a>        } <span class="kw">else if </span>size.contains_key(<span class="string">"height"</span>) &amp;&amp; size.contains_key(<span class="string">"width"</span>) {
-<a href=#344 id=344 data-nosnippet>344</a>            (size[<span class="string">"height"</span>] <span class="kw">as </span>usize, size[<span class="string">"width"</span>] <span class="kw">as </span>usize)
-<a href=#345 id=345 data-nosnippet>345</a>        } <span class="kw">else </span>{
-<a href=#346 id=346 data-nosnippet>346</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"Size must be a map of `longest_edge` or `height` and `width`."</span>);
-<a href=#347 id=347 data-nosnippet>347</a>        };
-<a href=#348 id=348 data-nosnippet>348</a>
-<a href=#349 id=349 data-nosnippet>349</a>        <span class="kw">for </span>image <span class="kw">in </span>images.iter_mut() {
-<a href=#350 id=350 data-nosnippet>350</a>            <span class="kw">let </span>(width, height) = image.dimensions();
+<a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">let </span><span class="kw-2">mut </span>pixel_values = Vec::new();
+<a href=#342 id=342 data-nosnippet>342</a>        <span class="kw">let </span><span class="kw-2">mut </span>image_sizes = Vec::new();
+<a href=#343 id=343 data-nosnippet>343</a>
+<a href=#344 id=344 data-nosnippet>344</a>        <span class="kw">let </span>(max_height, max_width) = <span class="kw">if </span>size.contains_key(<span class="string">"longest_edge"</span>) {
+<a href=#345 id=345 data-nosnippet>345</a>            (size[<span class="string">"longest_edge"</span>] <span class="kw">as </span>usize, size[<span class="string">"longest_edge"</span>] <span class="kw">as </span>usize)
+<a href=#346 id=346 data-nosnippet>346</a>        } <span class="kw">else if </span>size.contains_key(<span class="string">"height"</span>) &amp;&amp; size.contains_key(<span class="string">"width"</span>) {
+<a href=#347 id=347 data-nosnippet>347</a>            (size[<span class="string">"height"</span>] <span class="kw">as </span>usize, size[<span class="string">"width"</span>] <span class="kw">as </span>usize)
+<a href=#348 id=348 data-nosnippet>348</a>        } <span class="kw">else </span>{
+<a href=#349 id=349 data-nosnippet>349</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"Size must be a map of `longest_edge` or `height` and `width`."</span>);
+<a href=#350 id=350 data-nosnippet>350</a>        };
 <a href=#351 id=351 data-nosnippet>351</a>
-<a href=#352 id=352 data-nosnippet>352</a>            <span class="comment">// Convert to rgb
-<a href=#353 id=353 data-nosnippet>353</a>            </span><span class="kw">if </span>do_convert_rgb {
-<a href=#354 id=354 data-nosnippet>354</a>                <span class="kw-2">*</span>image = DynamicImage::ImageRgb8(image.to_rgb8());
-<a href=#355 id=355 data-nosnippet>355</a>            }
-<a href=#356 id=356 data-nosnippet>356</a>
-<a href=#357 id=357 data-nosnippet>357</a>            <span class="kw">if </span>do_resize {
-<a href=#358 id=358 data-nosnippet>358</a>                <span class="kw-2">*</span>image = <span class="self">self</span>.resize(
-<a href=#359 id=359 data-nosnippet>359</a>                    image,
-<a href=#360 id=360 data-nosnippet>360</a>                    height <span class="kw">as </span>usize,
-<a href=#361 id=361 data-nosnippet>361</a>                    width <span class="kw">as </span>usize,
-<a href=#362 id=362 data-nosnippet>362</a>                    max_height,
-<a href=#363 id=363 data-nosnippet>363</a>                    max_width,
-<a href=#364 id=364 data-nosnippet>364</a>                    patch_size,
-<a href=#365 id=365 data-nosnippet>365</a>                    resample,
-<a href=#366 id=366 data-nosnippet>366</a>                );
-<a href=#367 id=367 data-nosnippet>367</a>            }
-<a href=#368 id=368 data-nosnippet>368</a>
-<a href=#369 id=369 data-nosnippet>369</a>            <span class="kw">let </span>(width, height) = image.dimensions();
-<a href=#370 id=370 data-nosnippet>370</a>
-<a href=#371 id=371 data-nosnippet>371</a>            image_sizes.push((height, width));
-<a href=#372 id=372 data-nosnippet>372</a>        }
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">for </span>image <span class="kw">in </span>images.iter_mut() {
+<a href=#353 id=353 data-nosnippet>353</a>            <span class="kw">let </span>(width, height) = image.dimensions();
+<a href=#354 id=354 data-nosnippet>354</a>
+<a href=#355 id=355 data-nosnippet>355</a>            <span class="comment">// Convert to rgb
+<a href=#356 id=356 data-nosnippet>356</a>            </span><span class="kw">if </span>do_convert_rgb {
+<a href=#357 id=357 data-nosnippet>357</a>                <span class="kw-2">*</span>image = DynamicImage::ImageRgb8(image.to_rgb8());
+<a href=#358 id=358 data-nosnippet>358</a>            }
+<a href=#359 id=359 data-nosnippet>359</a>
+<a href=#360 id=360 data-nosnippet>360</a>            <span class="kw">if </span>do_resize {
+<a href=#361 id=361 data-nosnippet>361</a>                <span class="kw-2">*</span>image = <span class="self">self</span>.resize(
+<a href=#362 id=362 data-nosnippet>362</a>                    image,
+<a href=#363 id=363 data-nosnippet>363</a>                    height <span class="kw">as </span>usize,
+<a href=#364 id=364 data-nosnippet>364</a>                    width <span class="kw">as </span>usize,
+<a href=#365 id=365 data-nosnippet>365</a>                    max_height,
+<a href=#366 id=366 data-nosnippet>366</a>                    max_width,
+<a href=#367 id=367 data-nosnippet>367</a>                    patch_size,
+<a href=#368 id=368 data-nosnippet>368</a>                    resample,
+<a href=#369 id=369 data-nosnippet>369</a>                );
+<a href=#370 id=370 data-nosnippet>370</a>            }
+<a href=#371 id=371 data-nosnippet>371</a>
+<a href=#372 id=372 data-nosnippet>372</a>            <span class="kw">let </span>(width, height) = image.dimensions();
 <a href=#373 id=373 data-nosnippet>373</a>
-<a href=#374 id=374 data-nosnippet>374</a>        images = mistralrs_vision::pad_to_max_image_size(images);
-<a href=#375 id=375 data-nosnippet>375</a>
-<a href=#376 id=376 data-nosnippet>376</a>        <span class="kw">for </span>image <span class="kw">in </span>images.iter_mut() {
-<a href=#377 id=377 data-nosnippet>377</a>            <span class="kw">let </span>transforms = Transforms {
-<a href=#378 id=378 data-nosnippet>378</a>                input: <span class="kw-2">&amp;</span>ToTensorNoNorm,
-<a href=#379 id=379 data-nosnippet>379</a>                inner_transforms: <span class="kw-2">&amp;</span>[
-<a href=#380 id=380 data-nosnippet>380</a>                    <span class="kw-2">&amp;</span>do_rescale.then_some(Rescale {
-<a href=#381 id=381 data-nosnippet>381</a>                        factor: <span class="prelude-val">Some</span>(rescale_factor),
-<a href=#382 id=382 data-nosnippet>382</a>                    }),
-<a href=#383 id=383 data-nosnippet>383</a>                    <span class="kw-2">&amp;</span>do_normalize.then(|| Normalize {
-<a href=#384 id=384 data-nosnippet>384</a>                        mean: image_mean.to_vec(),
-<a href=#385 id=385 data-nosnippet>385</a>                        std: image_std.to_vec(),
-<a href=#386 id=386 data-nosnippet>386</a>                    }),
-<a href=#387 id=387 data-nosnippet>387</a>                ],
-<a href=#388 id=388 data-nosnippet>388</a>            };
-<a href=#389 id=389 data-nosnippet>389</a>
-<a href=#390 id=390 data-nosnippet>390</a>            <span class="kw">let </span>image = image.apply(transforms, device)<span class="question-mark">?</span>;
-<a href=#391 id=391 data-nosnippet>391</a>            pixel_values.push(image.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
-<a href=#392 id=392 data-nosnippet>392</a>        }
-<a href=#393 id=393 data-nosnippet>393</a>
-<a href=#394 id=394 data-nosnippet>394</a>        <span class="prelude-val">Ok</span>(PreprocessedImages {
-<a href=#395 id=395 data-nosnippet>395</a>            pixel_values: Tensor::cat(<span class="kw-2">&amp;</span>pixel_values, <span class="number">0</span>)<span class="question-mark">?</span>,
-<a href=#396 id=396 data-nosnippet>396</a>            pixel_attention_mask: <span class="prelude-val">None</span>,
-<a href=#397 id=397 data-nosnippet>397</a>            image_sizes: <span class="prelude-val">None</span>,
-<a href=#398 id=398 data-nosnippet>398</a>            num_img_tokens: <span class="prelude-val">None</span>,
-<a href=#399 id=399 data-nosnippet>399</a>            aspect_ratio_ids: <span class="prelude-val">None</span>,
-<a href=#400 id=400 data-nosnippet>400</a>            aspect_ratio_mask: <span class="prelude-val">None</span>,
-<a href=#401 id=401 data-nosnippet>401</a>            num_tiles: <span class="prelude-val">None</span>,
-<a href=#402 id=402 data-nosnippet>402</a>            image_grid_thw: <span class="prelude-val">None</span>,
-<a href=#403 id=403 data-nosnippet>403</a>            video_grid_thw: <span class="prelude-val">None</span>,
-<a href=#404 id=404 data-nosnippet>404</a>            rows: <span class="prelude-val">None</span>,
-<a href=#405 id=405 data-nosnippet>405</a>            cols: <span class="prelude-val">None</span>,
-<a href=#406 id=406 data-nosnippet>406</a>            pixel_values_list: <span class="prelude-val">None</span>,
-<a href=#407 id=407 data-nosnippet>407</a>            tgt_sizes: <span class="prelude-val">None</span>,
-<a href=#408 id=408 data-nosnippet>408</a>            image_sizes_all: <span class="prelude-val">Some</span>(image_sizes),
-<a href=#409 id=409 data-nosnippet>409</a>            num_crops: <span class="prelude-val">None</span>,
-<a href=#410 id=410 data-nosnippet>410</a>        })
-<a href=#411 id=411 data-nosnippet>411</a>    }
-<a href=#412 id=412 data-nosnippet>412</a>}</code></pre></div></section></main></body></html>
+<a href=#374 id=374 data-nosnippet>374</a>            image_sizes.push((height, width));
+<a href=#375 id=375 data-nosnippet>375</a>        }
+<a href=#376 id=376 data-nosnippet>376</a>
+<a href=#377 id=377 data-nosnippet>377</a>        images = mistralrs_vision::pad_to_max_image_size(images);
+<a href=#378 id=378 data-nosnippet>378</a>
+<a href=#379 id=379 data-nosnippet>379</a>        <span class="kw">for </span>image <span class="kw">in </span>images.iter_mut() {
+<a href=#380 id=380 data-nosnippet>380</a>            <span class="kw">let </span>transforms = Transforms {
+<a href=#381 id=381 data-nosnippet>381</a>                input: <span class="kw-2">&amp;</span>ToTensorNoNorm,
+<a href=#382 id=382 data-nosnippet>382</a>                inner_transforms: <span class="kw-2">&amp;</span>[
+<a href=#383 id=383 data-nosnippet>383</a>                    <span class="kw-2">&amp;</span>do_rescale.then_some(Rescale {
+<a href=#384 id=384 data-nosnippet>384</a>                        factor: <span class="prelude-val">Some</span>(rescale_factor),
+<a href=#385 id=385 data-nosnippet>385</a>                    }),
+<a href=#386 id=386 data-nosnippet>386</a>                    <span class="kw-2">&amp;</span>do_normalize.then(|| Normalize {
+<a href=#387 id=387 data-nosnippet>387</a>                        mean: image_mean.to_vec(),
+<a href=#388 id=388 data-nosnippet>388</a>                        std: image_std.to_vec(),
+<a href=#389 id=389 data-nosnippet>389</a>                    }),
+<a href=#390 id=390 data-nosnippet>390</a>                ],
+<a href=#391 id=391 data-nosnippet>391</a>            };
+<a href=#392 id=392 data-nosnippet>392</a>
+<a href=#393 id=393 data-nosnippet>393</a>            <span class="kw">let </span>image = image.apply(transforms, device)<span class="question-mark">?</span>;
+<a href=#394 id=394 data-nosnippet>394</a>            pixel_values.push(image.unsqueeze(<span class="number">0</span>)<span class="question-mark">?</span>);
+<a href=#395 id=395 data-nosnippet>395</a>        }
+<a href=#396 id=396 data-nosnippet>396</a>
+<a href=#397 id=397 data-nosnippet>397</a>        <span class="prelude-val">Ok</span>(PreprocessedImages {
+<a href=#398 id=398 data-nosnippet>398</a>            pixel_values: Tensor::cat(<span class="kw-2">&amp;</span>pixel_values, <span class="number">0</span>)<span class="question-mark">?</span>,
+<a href=#399 id=399 data-nosnippet>399</a>            pixel_attention_mask: <span class="prelude-val">None</span>,
+<a href=#400 id=400 data-nosnippet>400</a>            image_sizes: <span class="prelude-val">None</span>,
+<a href=#401 id=401 data-nosnippet>401</a>            num_img_tokens: <span class="prelude-val">None</span>,
+<a href=#402 id=402 data-nosnippet>402</a>            aspect_ratio_ids: <span class="prelude-val">None</span>,
+<a href=#403 id=403 data-nosnippet>403</a>            aspect_ratio_mask: <span class="prelude-val">None</span>,
+<a href=#404 id=404 data-nosnippet>404</a>            num_tiles: <span class="prelude-val">None</span>,
+<a href=#405 id=405 data-nosnippet>405</a>            image_grid_thw: <span class="prelude-val">None</span>,
+<a href=#406 id=406 data-nosnippet>406</a>            video_grid_thw: <span class="prelude-val">None</span>,
+<a href=#407 id=407 data-nosnippet>407</a>            rows: <span class="prelude-val">None</span>,
+<a href=#408 id=408 data-nosnippet>408</a>            cols: <span class="prelude-val">None</span>,
+<a href=#409 id=409 data-nosnippet>409</a>            pixel_values_list: <span class="prelude-val">None</span>,
+<a href=#410 id=410 data-nosnippet>410</a>            tgt_sizes: <span class="prelude-val">None</span>,
+<a href=#411 id=411 data-nosnippet>411</a>            image_sizes_all: <span class="prelude-val">Some</span>(image_sizes),
+<a href=#412 id=412 data-nosnippet>412</a>            num_crops: <span class="prelude-val">None</span>,
+<a href=#413 id=413 data-nosnippet>413</a>        })
+<a href=#414 id=414 data-nosnippet>414</a>    }
+<a href=#415 id=415 data-nosnippet>415</a>}</code></pre></div></section></main></body></html>

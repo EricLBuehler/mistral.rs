@@ -260,144 +260,147 @@
 <a href=#260 id=260 data-nosnippet>260</a>            {
 <a href=#261 id=261 data-nosnippet>261</a>                input_ids.extend(item);
 <a href=#262 id=262 data-nosnippet>262</a>            }
-<a href=#263 id=263 data-nosnippet>263</a>            <span class="comment">// NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-<a href=#264 id=264 data-nosnippet>264</a>            </span>seq.set_toks_and_reallocate(
-<a href=#265 id=265 data-nosnippet>265</a>                input_ids
-<a href=#266 id=266 data-nosnippet>266</a>                    .iter()
-<a href=#267 id=267 data-nosnippet>267</a>                    .map(|x| <span class="kw">if </span><span class="kw-2">*</span>x &lt; <span class="number">0 </span>{ <span class="number">0u32 </span>} <span class="kw">else </span>{ <span class="kw-2">*</span>x <span class="kw">as </span>u32 })
-<a href=#268 id=268 data-nosnippet>268</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#269 id=269 data-nosnippet>269</a>                paged_attn_metadata.as_mut(),
-<a href=#270 id=270 data-nosnippet>270</a>            );
-<a href=#271 id=271 data-nosnippet>271</a>
-<a href=#272 id=272 data-nosnippet>272</a>            toks.push(input_ids);
-<a href=#273 id=273 data-nosnippet>273</a>        }
+<a href=#263 id=263 data-nosnippet>263</a>            <span class="kw">let </span>new_ids = input_ids
+<a href=#264 id=264 data-nosnippet>264</a>                .iter()
+<a href=#265 id=265 data-nosnippet>265</a>                .map(|x| <span class="kw">if </span><span class="kw-2">*</span>x &lt; <span class="number">0 </span>{ <span class="number">0u32 </span>} <span class="kw">else </span>{ <span class="kw-2">*</span>x <span class="kw">as </span>u32 })
+<a href=#266 id=266 data-nosnippet>266</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#267 id=267 data-nosnippet>267</a>            <span class="kw">if </span>!seq.has_changed_prompt {
+<a href=#268 id=268 data-nosnippet>268</a>                <span class="kw">let </span>new_prompt = tokenizer.decode(<span class="kw-2">&amp;</span>new_ids, <span class="bool-val">false</span>).unwrap();
+<a href=#269 id=269 data-nosnippet>269</a>                seq.set_initial_prompt(new_prompt);
+<a href=#270 id=270 data-nosnippet>270</a>                <span class="comment">// NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
+<a href=#271 id=271 data-nosnippet>271</a>                </span>seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
+<a href=#272 id=272 data-nosnippet>272</a>                seq.has_changed_prompt = <span class="bool-val">true</span>;
+<a href=#273 id=273 data-nosnippet>273</a>            }
 <a href=#274 id=274 data-nosnippet>274</a>
-<a href=#275 id=275 data-nosnippet>275</a>        <span class="kw">let </span>iter = <span class="kw">if </span>is_prompt {
-<a href=#276 id=276 data-nosnippet>276</a>            get_prompt_input(
-<a href=#277 id=277 data-nosnippet>277</a>                toks,
-<a href=#278 id=278 data-nosnippet>278</a>                input_seqs,
-<a href=#279 id=279 data-nosnippet>279</a>                device,
-<a href=#280 id=280 data-nosnippet>280</a>                last_n_context_len,
-<a href=#281 id=281 data-nosnippet>281</a>                return_raw_logits,
-<a href=#282 id=282 data-nosnippet>282</a>                paged_attn_metadata.as_mut(),
-<a href=#283 id=283 data-nosnippet>283</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
-<a href=#284 id=284 data-nosnippet>284</a>                </span>mapper,
-<a href=#285 id=285 data-nosnippet>285</a>            )
-<a href=#286 id=286 data-nosnippet>286</a>        } <span class="kw">else </span>{
-<a href=#287 id=287 data-nosnippet>287</a>            get_completion_input(
-<a href=#288 id=288 data-nosnippet>288</a>                toks,
-<a href=#289 id=289 data-nosnippet>289</a>                input_seqs,
-<a href=#290 id=290 data-nosnippet>290</a>                device,
-<a href=#291 id=291 data-nosnippet>291</a>                no_kv_cache,
-<a href=#292 id=292 data-nosnippet>292</a>                last_n_context_len,
-<a href=#293 id=293 data-nosnippet>293</a>                return_raw_logits,
-<a href=#294 id=294 data-nosnippet>294</a>                paged_attn_metadata.as_mut(),
-<a href=#295 id=295 data-nosnippet>295</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
-<a href=#296 id=296 data-nosnippet>296</a>                </span>mapper,
-<a href=#297 id=297 data-nosnippet>297</a>            )
-<a href=#298 id=298 data-nosnippet>298</a>        };
-<a href=#299 id=299 data-nosnippet>299</a>
-<a href=#300 id=300 data-nosnippet>300</a>        Box::new(iter.into_iter().map(<span class="kw">move </span>|metadata| {
-<a href=#301 id=301 data-nosnippet>301</a>            <span class="kw">let </span>text_models_inputs_processor::InnerInputProcessorOutput {
-<a href=#302 id=302 data-nosnippet>302</a>                inputs:
-<a href=#303 id=303 data-nosnippet>303</a>                    text_models_inputs_processor::InputMetadata {
-<a href=#304 id=304 data-nosnippet>304</a>                        input,
-<a href=#305 id=305 data-nosnippet>305</a>                        positions,
-<a href=#306 id=306 data-nosnippet>306</a>                        context_lens,
-<a href=#307 id=307 data-nosnippet>307</a>                        position_ids,
-<a href=#308 id=308 data-nosnippet>308</a>                        paged_attn_meta,
-<a href=#309 id=309 data-nosnippet>309</a>                        flash_meta,
-<a href=#310 id=310 data-nosnippet>310</a>                    },
-<a href=#311 id=311 data-nosnippet>311</a>                seq_indices,
-<a href=#312 id=312 data-nosnippet>312</a>            } = metadata<span class="question-mark">?</span>;
-<a href=#313 id=313 data-nosnippet>313</a>            <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
-<a href=#314 id=314 data-nosnippet>314</a>                input_ids: input,
-<a href=#315 id=315 data-nosnippet>315</a>                seqlen_offsets: positions,
-<a href=#316 id=316 data-nosnippet>316</a>                context_lens,
-<a href=#317 id=317 data-nosnippet>317</a>                position_ids,
-<a href=#318 id=318 data-nosnippet>318</a>                pixel_values: pixel_values.clone(),
-<a href=#319 id=319 data-nosnippet>319</a>                model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
-<a href=#320 id=320 data-nosnippet>320</a>                paged_attn_meta,
-<a href=#321 id=321 data-nosnippet>321</a>                flash_meta,
-<a href=#322 id=322 data-nosnippet>322</a>            });
-<a href=#323 id=323 data-nosnippet>323</a>            <span class="prelude-val">Ok</span>(InputProcessorOutput {
-<a href=#324 id=324 data-nosnippet>324</a>                inputs,
-<a href=#325 id=325 data-nosnippet>325</a>                seq_indices,
-<a href=#326 id=326 data-nosnippet>326</a>            })
-<a href=#327 id=327 data-nosnippet>327</a>        }))
-<a href=#328 id=328 data-nosnippet>328</a>    }
-<a href=#329 id=329 data-nosnippet>329</a>}
-<a href=#330 id=330 data-nosnippet>330</a>
-<a href=#331 id=331 data-nosnippet>331</a><span class="kw">impl </span>ImagePreProcessor <span class="kw">for </span>LLaVAInputProcessor {
-<a href=#332 id=332 data-nosnippet>332</a>    <span class="attr">#[allow(clippy::excessive_precision)]
-<a href=#333 id=333 data-nosnippet>333</a>    </span><span class="kw">const </span>DEFAULT_MEAN: [f64; <span class="number">3</span>] = [<span class="number">0.48145466</span>, <span class="number">0.4578275</span>, <span class="number">0.40821073</span>];
-<a href=#334 id=334 data-nosnippet>334</a>    <span class="attr">#[allow(clippy::excessive_precision)]
-<a href=#335 id=335 data-nosnippet>335</a>    </span><span class="kw">const </span>DEFAULT_STD: [f64; <span class="number">3</span>] = [<span class="number">0.26862954</span>, <span class="number">0.26130258</span>, <span class="number">0.27577711</span>];
-<a href=#336 id=336 data-nosnippet>336</a>    <span class="kw">fn </span>preprocess(
-<a href=#337 id=337 data-nosnippet>337</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#338 id=338 data-nosnippet>338</a>        images: Vec&lt;image::DynamicImage&gt;,
-<a href=#339 id=339 data-nosnippet>339</a>        videos: Vec&lt;Vec&lt;image::DynamicImage&gt;&gt;,
-<a href=#340 id=340 data-nosnippet>340</a>        config: <span class="kw-2">&amp;</span>preprocessor_config::PreProcessorConfig,
-<a href=#341 id=341 data-nosnippet>341</a>        device: <span class="kw-2">&amp;</span>candle_core::Device,
-<a href=#342 id=342 data-nosnippet>342</a>        (<span class="kw">_</span>, <span class="kw">_</span>): (usize, usize),
-<a href=#343 id=343 data-nosnippet>343</a>    ) -&gt; candle_core::Result&lt;image_processor::PreprocessedImages&gt; {
-<a href=#344 id=344 data-nosnippet>344</a>        <span class="kw">if </span>images.len() &gt; <span class="number">1 </span>{
-<a href=#345 id=345 data-nosnippet>345</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"Can only process one image per batch"</span>); <span class="comment">// This is no different from phi3_input_processor
-<a href=#346 id=346 data-nosnippet>346</a>        </span>};
-<a href=#347 id=347 data-nosnippet>347</a>        <span class="macro">assert!</span>(videos.is_empty());
-<a href=#348 id=348 data-nosnippet>348</a>        <span class="kw">let </span>resized_size = <span class="kw-2">*</span>config.size.as_ref().unwrap().get(<span class="string">"shortest_edge"</span>).unwrap() <span class="kw">as </span>usize;
-<a href=#349 id=349 data-nosnippet>349</a>
-<a href=#350 id=350 data-nosnippet>350</a>        <span class="kw">let </span>original_size = images[<span class="number">0</span>].dimensions();
-<a href=#351 id=351 data-nosnippet>351</a>        <span class="kw">let </span>filter = config.resampling.to_filter()<span class="question-mark">?</span>;
-<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">let </span>image_mean = config
-<a href=#353 id=353 data-nosnippet>353</a>            .image_mean
-<a href=#354 id=354 data-nosnippet>354</a>            .unwrap_or(<span class="self">Self</span>::DEFAULT_MEAN)
-<a href=#355 id=355 data-nosnippet>355</a>            .map(|x| x <span class="kw">as </span>f32);
-<a href=#356 id=356 data-nosnippet>356</a>        <span class="kw">let </span>mean_color = image_mean
-<a href=#357 id=357 data-nosnippet>357</a>            .iter()
-<a href=#358 id=358 data-nosnippet>358</a>            .map(|x| ((<span class="kw-2">*</span>x) * <span class="number">255.0</span>) <span class="kw">as </span>u8)
-<a href=#359 id=359 data-nosnippet>359</a>            .collect::&lt;Vec&lt;u8&gt;&gt;();
-<a href=#360 id=360 data-nosnippet>360</a>        <span class="kw">let </span>mean_color = Rgb::from([mean_color[<span class="number">0</span>], mean_color[<span class="number">1</span>], mean_color[<span class="number">2</span>]]);
-<a href=#361 id=361 data-nosnippet>361</a>        <span class="kw">let </span>image = expand2square(<span class="kw-2">&amp;</span>images[<span class="number">0</span>], mean_color);
-<a href=#362 id=362 data-nosnippet>362</a>        <span class="kw">let </span>image_std = config
-<a href=#363 id=363 data-nosnippet>363</a>            .image_std
-<a href=#364 id=364 data-nosnippet>364</a>            .unwrap_or(<span class="self">Self</span>::DEFAULT_STD)
-<a href=#365 id=365 data-nosnippet>365</a>            .map(|x| x <span class="kw">as </span>f32);
-<a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span>pixel_values = [image]
-<a href=#367 id=367 data-nosnippet>367</a>            .iter()
-<a href=#368 id=368 data-nosnippet>368</a>            .map(|x| {
-<a href=#369 id=369 data-nosnippet>369</a>                LLaVAImageProcessor::process_one_image(
-<a href=#370 id=370 data-nosnippet>370</a>                    x,
-<a href=#371 id=371 data-nosnippet>371</a>                    config,
-<a href=#372 id=372 data-nosnippet>372</a>                    resized_size <span class="kw">as </span>u32,
-<a href=#373 id=373 data-nosnippet>373</a>                    filter,
-<a href=#374 id=374 data-nosnippet>374</a>                    DType::BF16,
-<a href=#375 id=375 data-nosnippet>375</a>                    device,
-<a href=#376 id=376 data-nosnippet>376</a>                    <span class="kw-2">&amp;</span>image_mean,
-<a href=#377 id=377 data-nosnippet>377</a>                    <span class="kw-2">&amp;</span>image_std,
-<a href=#378 id=378 data-nosnippet>378</a>                )
-<a href=#379 id=379 data-nosnippet>379</a>            })
-<a href=#380 id=380 data-nosnippet>380</a>            .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;Tensor&gt;&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#381 id=381 data-nosnippet>381</a>        <span class="kw">let </span>pixel_values = Tensor::stack(<span class="kw-2">&amp;</span>pixel_values, <span class="number">0</span>)<span class="question-mark">?</span>;
-<a href=#382 id=382 data-nosnippet>382</a>
-<a href=#383 id=383 data-nosnippet>383</a>        <span class="prelude-val">Ok</span>(image_processor::PreprocessedImages {
-<a href=#384 id=384 data-nosnippet>384</a>            pixel_values,
-<a href=#385 id=385 data-nosnippet>385</a>            pixel_attention_mask: <span class="prelude-val">None</span>,
-<a href=#386 id=386 data-nosnippet>386</a>            image_sizes: <span class="prelude-val">Some</span>((original_size.<span class="number">0 </span><span class="kw">as </span>usize, original_size.<span class="number">1 </span><span class="kw">as </span>usize)),
-<a href=#387 id=387 data-nosnippet>387</a>            num_img_tokens: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[LLaVAInputProcessor::get_num_image_tokens(
-<a href=#388 id=388 data-nosnippet>388</a>                <span class="kw-2">&amp;</span><span class="self">self</span>.model_config,
-<a href=#389 id=389 data-nosnippet>389</a>            )]),
-<a href=#390 id=390 data-nosnippet>390</a>            aspect_ratio_ids: <span class="prelude-val">None</span>,
-<a href=#391 id=391 data-nosnippet>391</a>            aspect_ratio_mask: <span class="prelude-val">None</span>,
-<a href=#392 id=392 data-nosnippet>392</a>            num_tiles: <span class="prelude-val">None</span>,
-<a href=#393 id=393 data-nosnippet>393</a>            image_grid_thw: <span class="prelude-val">None</span>,
-<a href=#394 id=394 data-nosnippet>394</a>            video_grid_thw: <span class="prelude-val">None</span>,
-<a href=#395 id=395 data-nosnippet>395</a>            rows: <span class="prelude-val">None</span>,
-<a href=#396 id=396 data-nosnippet>396</a>            cols: <span class="prelude-val">None</span>,
-<a href=#397 id=397 data-nosnippet>397</a>            pixel_values_list: <span class="prelude-val">None</span>,
-<a href=#398 id=398 data-nosnippet>398</a>            tgt_sizes: <span class="prelude-val">None</span>,
-<a href=#399 id=399 data-nosnippet>399</a>            image_sizes_all: <span class="prelude-val">None</span>,
-<a href=#400 id=400 data-nosnippet>400</a>            num_crops: <span class="prelude-val">None</span>,
-<a href=#401 id=401 data-nosnippet>401</a>        })
-<a href=#402 id=402 data-nosnippet>402</a>    }
-<a href=#403 id=403 data-nosnippet>403</a>}</code></pre></div></section></main></body></html>
+<a href=#275 id=275 data-nosnippet>275</a>            toks.push(input_ids);
+<a href=#276 id=276 data-nosnippet>276</a>        }
+<a href=#277 id=277 data-nosnippet>277</a>
+<a href=#278 id=278 data-nosnippet>278</a>        <span class="kw">let </span>iter = <span class="kw">if </span>is_prompt {
+<a href=#279 id=279 data-nosnippet>279</a>            get_prompt_input(
+<a href=#280 id=280 data-nosnippet>280</a>                toks,
+<a href=#281 id=281 data-nosnippet>281</a>                input_seqs,
+<a href=#282 id=282 data-nosnippet>282</a>                device,
+<a href=#283 id=283 data-nosnippet>283</a>                last_n_context_len,
+<a href=#284 id=284 data-nosnippet>284</a>                return_raw_logits,
+<a href=#285 id=285 data-nosnippet>285</a>                paged_attn_metadata.as_mut(),
+<a href=#286 id=286 data-nosnippet>286</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
+<a href=#287 id=287 data-nosnippet>287</a>                </span>mapper,
+<a href=#288 id=288 data-nosnippet>288</a>            )
+<a href=#289 id=289 data-nosnippet>289</a>        } <span class="kw">else </span>{
+<a href=#290 id=290 data-nosnippet>290</a>            get_completion_input(
+<a href=#291 id=291 data-nosnippet>291</a>                toks,
+<a href=#292 id=292 data-nosnippet>292</a>                input_seqs,
+<a href=#293 id=293 data-nosnippet>293</a>                device,
+<a href=#294 id=294 data-nosnippet>294</a>                no_kv_cache,
+<a href=#295 id=295 data-nosnippet>295</a>                last_n_context_len,
+<a href=#296 id=296 data-nosnippet>296</a>                return_raw_logits,
+<a href=#297 id=297 data-nosnippet>297</a>                paged_attn_metadata.as_mut(),
+<a href=#298 id=298 data-nosnippet>298</a>                <span class="prelude-val">None</span>, <span class="comment">// TODO: evaluate if it is possible to batch this
+<a href=#299 id=299 data-nosnippet>299</a>                </span>mapper,
+<a href=#300 id=300 data-nosnippet>300</a>            )
+<a href=#301 id=301 data-nosnippet>301</a>        };
+<a href=#302 id=302 data-nosnippet>302</a>
+<a href=#303 id=303 data-nosnippet>303</a>        Box::new(iter.into_iter().map(<span class="kw">move </span>|metadata| {
+<a href=#304 id=304 data-nosnippet>304</a>            <span class="kw">let </span>text_models_inputs_processor::InnerInputProcessorOutput {
+<a href=#305 id=305 data-nosnippet>305</a>                inputs:
+<a href=#306 id=306 data-nosnippet>306</a>                    text_models_inputs_processor::InputMetadata {
+<a href=#307 id=307 data-nosnippet>307</a>                        input,
+<a href=#308 id=308 data-nosnippet>308</a>                        positions,
+<a href=#309 id=309 data-nosnippet>309</a>                        context_lens,
+<a href=#310 id=310 data-nosnippet>310</a>                        position_ids,
+<a href=#311 id=311 data-nosnippet>311</a>                        paged_attn_meta,
+<a href=#312 id=312 data-nosnippet>312</a>                        flash_meta,
+<a href=#313 id=313 data-nosnippet>313</a>                    },
+<a href=#314 id=314 data-nosnippet>314</a>                seq_indices,
+<a href=#315 id=315 data-nosnippet>315</a>            } = metadata<span class="question-mark">?</span>;
+<a href=#316 id=316 data-nosnippet>316</a>            <span class="kw">let </span>inputs: Box&lt;<span class="kw">dyn </span>Any&gt; = Box::new(ModelInputs {
+<a href=#317 id=317 data-nosnippet>317</a>                input_ids: input,
+<a href=#318 id=318 data-nosnippet>318</a>                seqlen_offsets: positions,
+<a href=#319 id=319 data-nosnippet>319</a>                context_lens,
+<a href=#320 id=320 data-nosnippet>320</a>                position_ids,
+<a href=#321 id=321 data-nosnippet>321</a>                pixel_values: pixel_values.clone(),
+<a href=#322 id=322 data-nosnippet>322</a>                model_specific_args: Box::new(LLaVAVisionSpecificArgs {}),
+<a href=#323 id=323 data-nosnippet>323</a>                paged_attn_meta,
+<a href=#324 id=324 data-nosnippet>324</a>                flash_meta,
+<a href=#325 id=325 data-nosnippet>325</a>            });
+<a href=#326 id=326 data-nosnippet>326</a>            <span class="prelude-val">Ok</span>(InputProcessorOutput {
+<a href=#327 id=327 data-nosnippet>327</a>                inputs,
+<a href=#328 id=328 data-nosnippet>328</a>                seq_indices,
+<a href=#329 id=329 data-nosnippet>329</a>            })
+<a href=#330 id=330 data-nosnippet>330</a>        }))
+<a href=#331 id=331 data-nosnippet>331</a>    }
+<a href=#332 id=332 data-nosnippet>332</a>}
+<a href=#333 id=333 data-nosnippet>333</a>
+<a href=#334 id=334 data-nosnippet>334</a><span class="kw">impl </span>ImagePreProcessor <span class="kw">for </span>LLaVAInputProcessor {
+<a href=#335 id=335 data-nosnippet>335</a>    <span class="attr">#[allow(clippy::excessive_precision)]
+<a href=#336 id=336 data-nosnippet>336</a>    </span><span class="kw">const </span>DEFAULT_MEAN: [f64; <span class="number">3</span>] = [<span class="number">0.48145466</span>, <span class="number">0.4578275</span>, <span class="number">0.40821073</span>];
+<a href=#337 id=337 data-nosnippet>337</a>    <span class="attr">#[allow(clippy::excessive_precision)]
+<a href=#338 id=338 data-nosnippet>338</a>    </span><span class="kw">const </span>DEFAULT_STD: [f64; <span class="number">3</span>] = [<span class="number">0.26862954</span>, <span class="number">0.26130258</span>, <span class="number">0.27577711</span>];
+<a href=#339 id=339 data-nosnippet>339</a>    <span class="kw">fn </span>preprocess(
+<a href=#340 id=340 data-nosnippet>340</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#341 id=341 data-nosnippet>341</a>        images: Vec&lt;image::DynamicImage&gt;,
+<a href=#342 id=342 data-nosnippet>342</a>        videos: Vec&lt;Vec&lt;image::DynamicImage&gt;&gt;,
+<a href=#343 id=343 data-nosnippet>343</a>        config: <span class="kw-2">&amp;</span>preprocessor_config::PreProcessorConfig,
+<a href=#344 id=344 data-nosnippet>344</a>        device: <span class="kw-2">&amp;</span>candle_core::Device,
+<a href=#345 id=345 data-nosnippet>345</a>        (<span class="kw">_</span>, <span class="kw">_</span>): (usize, usize),
+<a href=#346 id=346 data-nosnippet>346</a>    ) -&gt; candle_core::Result&lt;image_processor::PreprocessedImages&gt; {
+<a href=#347 id=347 data-nosnippet>347</a>        <span class="kw">if </span>images.len() &gt; <span class="number">1 </span>{
+<a href=#348 id=348 data-nosnippet>348</a>            <span class="macro">candle_core::bail!</span>(<span class="string">"Can only process one image per batch"</span>); <span class="comment">// This is no different from phi3_input_processor
+<a href=#349 id=349 data-nosnippet>349</a>        </span>};
+<a href=#350 id=350 data-nosnippet>350</a>        <span class="macro">assert!</span>(videos.is_empty());
+<a href=#351 id=351 data-nosnippet>351</a>        <span class="kw">let </span>resized_size = <span class="kw-2">*</span>config.size.as_ref().unwrap().get(<span class="string">"shortest_edge"</span>).unwrap() <span class="kw">as </span>usize;
+<a href=#352 id=352 data-nosnippet>352</a>
+<a href=#353 id=353 data-nosnippet>353</a>        <span class="kw">let </span>original_size = images[<span class="number">0</span>].dimensions();
+<a href=#354 id=354 data-nosnippet>354</a>        <span class="kw">let </span>filter = config.resampling.to_filter()<span class="question-mark">?</span>;
+<a href=#355 id=355 data-nosnippet>355</a>        <span class="kw">let </span>image_mean = config
+<a href=#356 id=356 data-nosnippet>356</a>            .image_mean
+<a href=#357 id=357 data-nosnippet>357</a>            .unwrap_or(<span class="self">Self</span>::DEFAULT_MEAN)
+<a href=#358 id=358 data-nosnippet>358</a>            .map(|x| x <span class="kw">as </span>f32);
+<a href=#359 id=359 data-nosnippet>359</a>        <span class="kw">let </span>mean_color = image_mean
+<a href=#360 id=360 data-nosnippet>360</a>            .iter()
+<a href=#361 id=361 data-nosnippet>361</a>            .map(|x| ((<span class="kw-2">*</span>x) * <span class="number">255.0</span>) <span class="kw">as </span>u8)
+<a href=#362 id=362 data-nosnippet>362</a>            .collect::&lt;Vec&lt;u8&gt;&gt;();
+<a href=#363 id=363 data-nosnippet>363</a>        <span class="kw">let </span>mean_color = Rgb::from([mean_color[<span class="number">0</span>], mean_color[<span class="number">1</span>], mean_color[<span class="number">2</span>]]);
+<a href=#364 id=364 data-nosnippet>364</a>        <span class="kw">let </span>image = expand2square(<span class="kw-2">&amp;</span>images[<span class="number">0</span>], mean_color);
+<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">let </span>image_std = config
+<a href=#366 id=366 data-nosnippet>366</a>            .image_std
+<a href=#367 id=367 data-nosnippet>367</a>            .unwrap_or(<span class="self">Self</span>::DEFAULT_STD)
+<a href=#368 id=368 data-nosnippet>368</a>            .map(|x| x <span class="kw">as </span>f32);
+<a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">let </span>pixel_values = [image]
+<a href=#370 id=370 data-nosnippet>370</a>            .iter()
+<a href=#371 id=371 data-nosnippet>371</a>            .map(|x| {
+<a href=#372 id=372 data-nosnippet>372</a>                LLaVAImageProcessor::process_one_image(
+<a href=#373 id=373 data-nosnippet>373</a>                    x,
+<a href=#374 id=374 data-nosnippet>374</a>                    config,
+<a href=#375 id=375 data-nosnippet>375</a>                    resized_size <span class="kw">as </span>u32,
+<a href=#376 id=376 data-nosnippet>376</a>                    filter,
+<a href=#377 id=377 data-nosnippet>377</a>                    DType::BF16,
+<a href=#378 id=378 data-nosnippet>378</a>                    device,
+<a href=#379 id=379 data-nosnippet>379</a>                    <span class="kw-2">&amp;</span>image_mean,
+<a href=#380 id=380 data-nosnippet>380</a>                    <span class="kw-2">&amp;</span>image_std,
+<a href=#381 id=381 data-nosnippet>381</a>                )
+<a href=#382 id=382 data-nosnippet>382</a>            })
+<a href=#383 id=383 data-nosnippet>383</a>            .collect::&lt;<span class="prelude-ty">Result</span>&lt;Vec&lt;Tensor&gt;&gt;&gt;()<span class="question-mark">?</span>;
+<a href=#384 id=384 data-nosnippet>384</a>        <span class="kw">let </span>pixel_values = Tensor::stack(<span class="kw-2">&amp;</span>pixel_values, <span class="number">0</span>)<span class="question-mark">?</span>;
+<a href=#385 id=385 data-nosnippet>385</a>
+<a href=#386 id=386 data-nosnippet>386</a>        <span class="prelude-val">Ok</span>(image_processor::PreprocessedImages {
+<a href=#387 id=387 data-nosnippet>387</a>            pixel_values,
+<a href=#388 id=388 data-nosnippet>388</a>            pixel_attention_mask: <span class="prelude-val">None</span>,
+<a href=#389 id=389 data-nosnippet>389</a>            image_sizes: <span class="prelude-val">Some</span>((original_size.<span class="number">0 </span><span class="kw">as </span>usize, original_size.<span class="number">1 </span><span class="kw">as </span>usize)),
+<a href=#390 id=390 data-nosnippet>390</a>            num_img_tokens: <span class="prelude-val">Some</span>(<span class="macro">vec!</span>[LLaVAInputProcessor::get_num_image_tokens(
+<a href=#391 id=391 data-nosnippet>391</a>                <span class="kw-2">&amp;</span><span class="self">self</span>.model_config,
+<a href=#392 id=392 data-nosnippet>392</a>            )]),
+<a href=#393 id=393 data-nosnippet>393</a>            aspect_ratio_ids: <span class="prelude-val">None</span>,
+<a href=#394 id=394 data-nosnippet>394</a>            aspect_ratio_mask: <span class="prelude-val">None</span>,
+<a href=#395 id=395 data-nosnippet>395</a>            num_tiles: <span class="prelude-val">None</span>,
+<a href=#396 id=396 data-nosnippet>396</a>            image_grid_thw: <span class="prelude-val">None</span>,
+<a href=#397 id=397 data-nosnippet>397</a>            video_grid_thw: <span class="prelude-val">None</span>,
+<a href=#398 id=398 data-nosnippet>398</a>            rows: <span class="prelude-val">None</span>,
+<a href=#399 id=399 data-nosnippet>399</a>            cols: <span class="prelude-val">None</span>,
+<a href=#400 id=400 data-nosnippet>400</a>            pixel_values_list: <span class="prelude-val">None</span>,
+<a href=#401 id=401 data-nosnippet>401</a>            tgt_sizes: <span class="prelude-val">None</span>,
+<a href=#402 id=402 data-nosnippet>402</a>            image_sizes_all: <span class="prelude-val">None</span>,
+<a href=#403 id=403 data-nosnippet>403</a>            num_crops: <span class="prelude-val">None</span>,
+<a href=#404 id=404 data-nosnippet>404</a>        })
+<a href=#405 id=405 data-nosnippet>405</a>    }
+<a href=#406 id=406 data-nosnippet>406</a>}</code></pre></div></section></main></body></html>
