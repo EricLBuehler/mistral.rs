@@ -268,13 +268,16 @@ impl InputsProcessor for Llama4ImageProcessor {
                 }
                 let prompt = new_prompt.join("");
 
-                seq.set_initial_prompt(prompt.clone());
-                let toks = tokenizer
-                    .encode_fast(prompt, false)
-                    .expect("Detokenization failed!");
+                if !seq.has_changed_prompt {
+                    seq.set_initial_prompt(prompt.clone());
+                    let toks = tokenizer
+                        .encode_fast(prompt, false)
+                        .expect("Detokenization failed!");
 
-                let ids = toks.get_ids().to_vec();
-                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                    let ids = toks.get_ids().to_vec();
+                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                    seq.has_changed_prompt = true;
+                }
             }
 
             Some(pixel_values)

@@ -322,13 +322,17 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             let mut all_continuous_img_pad = Vec::new();
             let mut all_continuous_vid_pad = Vec::new();
             for (detok, seq) in detok_seqs.into_iter().zip(input_seqs.iter_mut()) {
-                seq.set_initial_prompt(detok.clone());
-
                 let toks = tokenizer
-                    .encode_fast(detok, false)
+                    .encode_fast(detok.clone(), false)
                     .expect("Detokenization failed!");
-
                 let ids = toks.get_ids().to_vec();
+
+                if !seq.has_changed_prompt {
+                    seq.set_initial_prompt(detok.clone());
+
+                    seq.set_toks_and_reallocate(ids.clone(), paged_attn_metadata.as_mut());
+                    seq.has_changed_prompt = true;
+                }
                 all_ids.push(ids.clone());
 
                 let img_pad = tokenizer
@@ -346,8 +350,6 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                     .to_vec();
                 let continuous_vid_pad = find_sequences(&ids, vid_pad[0]);
                 all_continuous_vid_pad.push(continuous_vid_pad);
-
-                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
             }
 
             let mut input_ids_searching = Vec::new();

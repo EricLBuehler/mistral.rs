@@ -208,6 +208,7 @@ pub struct Sequence {
     pub cached_pixel_values: Option<Tensor>,
     pub cached_img_thw: Option<Tensor>,
     pub cached_vid_thw: Option<Tensor>,
+    pub has_changed_prompt: bool,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -350,6 +351,7 @@ impl Sequence {
             return_raw_logits,
             token_offset: 0,
             eos_tokens,
+            has_changed_prompt: false,
         }
     }
 
@@ -780,7 +782,14 @@ impl Sequence {
     }
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
-        self.input_images.take()
+        // So that we don't keep having an image after the actual prompt
+        if self.has_changed_prompt {
+            // Actual prompt
+            self.input_images.take()
+        } else {
+            // Dummy inputs processing
+            self.input_images.clone()
+        }
     }
 
     pub fn clone_images(&mut self) -> Option<Vec<image::DynamicImage>> {
