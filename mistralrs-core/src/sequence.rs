@@ -65,7 +65,7 @@ pub enum SequenceState {
 }
 
 pub enum SequenceRecognizer {
-    Llguidance(Box<llguidance::Constraint>),
+    Llguidance(Box<llguidance::Matcher>),
     None,
 }
 

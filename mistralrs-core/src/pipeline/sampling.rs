@@ -379,28 +379,18 @@ pub async fn sample_sequence(
 
     let bias_if_not_allowed = match &mut seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
-            let step_res = llg.compute_mask().map_err(candle_core::Error::msg)?;
-            if let Some(mask) = &step_res.sample_mask {
-                if mask.is_allowed(first_lobprobs_response.token) {
-                    None
-                } else {
-                    let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
-                    mask.iter_set_entries(|idx| {
-                        if idx < acc.len() {
-                            acc[idx] = 0.0;
-                        }
-                    });
-
-                    Some(acc)
-                }
-            } else if step_res.is_stop() {
-                let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
-                for eos_tok in seq.eos_tokens() {
-                    acc[*eos_tok as usize] = 0.0;
-                }
-                Some(acc)
-            } else {
+            let mask = llg.compute_mask_or_eos().map_err(candle_core::Error::msg)?;
+            if mask.is_allowed(first_lobprobs_response.token) {
                 None
+            } else {
+                let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
+                mask.iter_set_entries(|idx| {
+                    if idx < acc.len() {
+                        acc[idx] = 0.0;
+                    }
+                });
+
+                Some(acc)
             }
         }
         SequenceRecognizer::None => None,
@@ -439,8 +429,10 @@ pub async fn sample_sequence(
     if add_to_trie {
         match seq.recognizer {
             SequenceRecognizer::Llguidance(ref mut llg) => {
-                llg.commit_token(Some(second_logprobs_response.token))
-                    .map_err(candle_core::Error::msg)?;
+                if !llg.is_stopped() {
+                    llg.consume_token(second_logprobs_response.token)
+                        .map_err(candle_core::Error::msg)?;
+                }
             }
             SequenceRecognizer::None => {}
         }

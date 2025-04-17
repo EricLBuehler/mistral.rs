@@ -493,6 +493,25 @@ impl Pipeline for SpeculativePipeline {
                     }
                 }
 
+                // only accept tokens that are OK with the recognizer
+                match seq.recognizer {
+                    SequenceRecognizer::Llguidance(ref mut llg) => {
+                        let mut tokens =
+                            accepted_tokens.iter().map(|s| s.token).collect::<Vec<_>>();
+                        let n_tokens = llg.validate_tokens(&tokens)
+                            .map_err(candle_core::Error::msg)?;
+                        if n_tokens == 0 {
+                            // shouldn't happen - the sampling should follow constraint...
+                            candle_core::bail!("No tokens accepted by LLG.");
+                        }
+                        tokens.truncate(n_tokens);
+                        accepted_tokens.truncate(n_tokens);
+                        llg.consume_tokens(&tokens)
+                            .map_err(candle_core::Error::msg)?;
+                    }
+                    SequenceRecognizer::None => {}
+                }
+
                 // ======================= Narrow caches to account for rejections ============================
                 let n_not_accepted = self.gamma - accepted_tokens.len();
                 match get_mut_arcmutex!(self.draft).cache() {
@@ -573,13 +592,6 @@ impl Pipeline for SpeculativePipeline {
                         false,
                     )
                     .await?;
-                    match seq.recognizer {
-                        SequenceRecognizer::Llguidance(ref mut llg) => {
-                            llg.commit_token(Some(accepted.token))
-                                .map_err(candle_core::Error::msg)?;
-                        }
-                        SequenceRecognizer::None => {}
-                    }
                 }
 
                 // Trick to improve lower bounds. Sample last token in multinomial

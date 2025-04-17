@@ -29,7 +29,7 @@ pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<Top
 pub fn constraint_from_llg_grammar(
     factory: &ParserFactory,
     grm: TopLevelGrammar,
-) -> Result<llguidance::Constraint> {
+) -> Result<llguidance::Matcher> {
     let parser = factory.create_parser(grm)?;
-    Ok(llguidance::Constraint::new(parser))
+    Ok(llguidance::Matcher::new(Ok(parser)))
 }

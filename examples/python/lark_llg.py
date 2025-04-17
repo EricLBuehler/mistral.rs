@@ -32,7 +32,7 @@ res = runner.send_chat_completion_request(
                 "content": "If all dogs are mammals, and all mammals are animals, are dogs animals?",
             }
         ],
-        max_tokens=30,
+        max_tokens=100,
         temperature=0.1,
         grammar_type="lark",
         grammar=top_lark,
