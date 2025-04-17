@@ -402,7 +402,6 @@ impl Pipeline for SpeculativePipeline {
                         seq.return_logprobs(),
                         rng.clone(),
                         false, // todo tune
-                        false, // do not add to tok trie yet
                         true,
                     )
                     .await?;
@@ -493,27 +492,18 @@ impl Pipeline for SpeculativePipeline {
                     }
                 }
 
-                // only accept tokens that are OK with the recognizer
+                // ======================= Narrow caches to account for rejections ============================
+                let n_not_accepted = self.gamma - accepted_tokens.len();
+
+                // rollback any tokens that were not accepted
                 match seq.recognizer {
                     SequenceRecognizer::Llguidance(ref mut llg) => {
-                        let mut tokens =
-                            accepted_tokens.iter().map(|s| s.token).collect::<Vec<_>>();
-                        let n_tokens = llg.validate_tokens(&tokens)
-                            .map_err(candle_core::Error::msg)?;
-                        if n_tokens == 0 {
-                            // shouldn't happen - the sampling should follow constraint...
-                            candle_core::bail!("No tokens accepted by LLG.");
-                        }
-                        tokens.truncate(n_tokens);
-                        accepted_tokens.truncate(n_tokens);
-                        llg.consume_tokens(&tokens)
+                        llg.rollback(n_not_accepted)
                             .map_err(candle_core::Error::msg)?;
                     }
                     SequenceRecognizer::None => {}
                 }
 
-                // ======================= Narrow caches to account for rejections ============================
-                let n_not_accepted = self.gamma - accepted_tokens.len();
                 match get_mut_arcmutex!(self.draft).cache() {
                     EitherCache::Full(full) => {
                         for (k, v) in full.lock().iter_mut().flatten() {
