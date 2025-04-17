@@ -394,7 +394,7 @@ impl Engine {
             Some(StopTokens::Ids(ref i)) => {
                 let tok_env = {
                     let pipeline = get_mut_arcmutex!(self.pipeline);
-                    pipeline.get_metadata().tok_env.clone()
+                    pipeline.get_metadata().tok_env()
                 };
                 for id in i {
                     // We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
@@ -420,7 +420,7 @@ impl Engine {
 
                 let (tok_env, tokenizer) = {
                     let pipeline = get_mut_arcmutex!(self.pipeline);
-                    let tok_env = pipeline.get_metadata().tok_env.clone();
+                    let tok_env = pipeline.get_metadata().tok_env();
                     let tokenizer = pipeline.tokenizer();
                     (tok_env, tokenizer)
                 };
@@ -496,11 +496,11 @@ impl Engine {
 
         // Add sequences
         for response_index in 0..request.sampling_params.n_choices {
-            let trie = get_mut_arcmutex!(self.pipeline)
+            let factory = get_mut_arcmutex!(self.pipeline)
                 .get_metadata()
-                .tok_env
+                .llg_factory
                 .clone();
-            let recognizer = match Self::build_sequence_recognizer(&trie, &request.constraint) {
+            let recognizer = match Self::build_sequence_recognizer(&factory, &request.constraint) {
                 Ok(recognizer) => recognizer,
                 Err(err) => {
                     request

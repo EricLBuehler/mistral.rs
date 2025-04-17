@@ -13,7 +13,7 @@ use crate::{
     CompletionResponse, SchedulerConfig, DEBUG,
 };
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
-use llguidance::toktrie::TokEnv;
+use llguidance::ParserFactory;
 use logger::IntervalLogger;
 use once_cell::sync::Lazy;
 use rand::SeedableRng;
@@ -463,14 +463,14 @@ impl Engine {
     }
 
     fn build_sequence_recognizer(
-        tok_env: &Option<TokEnv>,
+        factory: &Option<Arc<ParserFactory>>,
         constraint: &Constraint,
     ) -> anyhow::Result<SequenceRecognizer> {
         if let Some(grm) = llg_grammar_from_constraint(constraint)? {
-            let tok_env = tok_env
+            let factory = factory
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("No token environment found."))?;
-            let llg = constraint_from_llg_grammar(tok_env.clone(), grm)?;
+                .ok_or_else(|| anyhow::anyhow!("No token environment (llg_factory) found."))?;
+            let llg = constraint_from_llg_grammar(factory, grm)?;
             Ok(SequenceRecognizer::Llguidance(Box::new(llg)))
         } else {
             Ok(SequenceRecognizer::None)

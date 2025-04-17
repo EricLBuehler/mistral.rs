@@ -77,8 +77,8 @@ regex.workspace = true
 serde_plain = "1.0.2"
 as-any = "0.3.1"
 float8.workspace = true
-llguidance = { git = "https://github.com/EricLBuehler/llguidance", rev = "8d71957", default-features = false, features = ["lark"] }
-toktrie_hf_tokenizers = { git = "https://github.com/EricLBuehler/llguidance", rev = "8d71957" }
+llguidance = { version = "0.7.16", default-features = false, features = ["lark"] }
+toktrie_hf_tokenizers = "0.7.16"
 objc = { version = "0.2.7", optional = true }
 metal = { workspace = true, optional = true }
 candle-flash-attn-v3 = { workspace = true, optional = true }

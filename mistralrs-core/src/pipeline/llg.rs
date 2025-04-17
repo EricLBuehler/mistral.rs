@@ -1,21 +1,18 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use llguidance::{
-    api::{ParserLimits, TopLevelGrammar},
-    toktrie::{InferenceCapabilities, TokEnv},
-    TokenParser,
-};
+use llguidance::{api::TopLevelGrammar, ParserFactory};
 use tokenizers::Tokenizer;
 
 use crate::Constraint;
 
-pub fn build_tok_env(tokenizer: Tokenizer) -> TokEnv {
-    let bt = toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(tokenizer)
-        .expect("Failed to create ByteTokenizer from Tokenizer");
-    let env = toktrie_hf_tokenizers::ByteTokenizerEnv::new(bt, None)
+pub fn build_llg_factory(tokenizer: Tokenizer) -> Arc<ParserFactory> {
+    let env = toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(tokenizer)
+        .expect("Failed to create ByteTokenizer from Tokenizer")
+        .into_tok_env(None)
         .expect("Failed to create ByteTokenizerEnv");
-    Arc::new(env)
+    let factory = ParserFactory::new_simple(&env).expect("Failed to create ParserFactory");
+    Arc::new(factory)
 }
 
 pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<TopLevelGrammar>> {
@@ -30,18 +27,9 @@ pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<Top
 }
 
 pub fn constraint_from_llg_grammar(
-    tok_env: TokEnv,
+    factory: &ParserFactory,
     grm: TopLevelGrammar,
 ) -> Result<llguidance::Constraint> {
-    let parser = TokenParser::from_grammar(
-        tok_env,
-        grm,
-        llguidance::Logger::new(0, 1),
-        InferenceCapabilities {
-            ..Default::default()
-        },
-        ParserLimits::default(),
-        vec![],
-    )?;
+    let parser = factory.create_parser(grm)?;
     Ok(llguidance::Constraint::new(parser))
 }

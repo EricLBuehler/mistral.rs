@@ -16,7 +16,7 @@ use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-use crate::pipeline::llg::build_tok_env;
+use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
@@ -655,7 +655,7 @@ impl Loader for VisionLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let tok_env = build_tok_env(tokenizer.clone());
+        let llg_factory = build_llg_factory(tokenizer.clone());
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
@@ -670,7 +670,7 @@ impl Loader for VisionLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_env: Some(tok_env),
+                llg_factory: Some(llg_factory),
                 is_xlora: false,
                 num_hidden_layers,
                 eos_tok: eos,
