@@ -458,7 +458,7 @@ pub async fn sample_target_sequence_speculative(
     seq: &mut Sequence,
     return_logprobs: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    draft_samples: &Vec<SpeculativeSample>,
+    draft_samples: &[SpeculativeSample],
 ) -> Result<Vec<SpeculativeSample>> {
     let n_toks = draft_samples.len();
 
