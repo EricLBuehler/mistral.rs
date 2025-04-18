@@ -16,7 +16,7 @@
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span><span class="kw">crate</span>::distributed::{<span class="self">self</span>, WorkerTransferData};
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span><span class="kw">crate</span>::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::llg::build_tok_env;
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::llg::build_llg_factory;
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::sampling::sample_and_add_toks;
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::make_prompt_chunk;
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
@@ -655,7 +655,7 @@
 <a href=#655 id=655 data-nosnippet>655</a>        };
 <a href=#656 id=656 data-nosnippet>656</a>
 <a href=#657 id=657 data-nosnippet>657</a>        <span class="kw">let </span>max_seq_len = model.max_seq_len();
-<a href=#658 id=658 data-nosnippet>658</a>        <span class="kw">let </span>tok_env = build_tok_env(tokenizer.clone());
+<a href=#658 id=658 data-nosnippet>658</a>        <span class="kw">let </span>llg_factory = build_llg_factory(tokenizer.clone())<span class="question-mark">?</span>;
 <a href=#659 id=659 data-nosnippet>659</a>        <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model.cache() {
 <a href=#660 id=660 data-nosnippet>660</a>            EitherCache::Full(full) =&gt; full.lock().len(),
 <a href=#661 id=661 data-nosnippet>661</a>            EitherCache::Normal(normal) =&gt; normal.lock().unwrap().<span class="number">0</span>.len(),
@@ -670,7 +670,7 @@
 <a href=#670 id=670 data-nosnippet>670</a>            model_id: <span class="self">self</span>.model_id.clone(),
 <a href=#671 id=671 data-nosnippet>671</a>            metadata: Arc::new(GeneralMetadata {
 <a href=#672 id=672 data-nosnippet>672</a>                max_seq_len,
-<a href=#673 id=673 data-nosnippet>673</a>                tok_env: <span class="prelude-val">Some</span>(tok_env),
+<a href=#673 id=673 data-nosnippet>673</a>                llg_factory: <span class="prelude-val">Some</span>(llg_factory),
 <a href=#674 id=674 data-nosnippet>674</a>                is_xlora: <span class="bool-val">false</span>,
 <a href=#675 id=675 data-nosnippet>675</a>                num_hidden_layers,
 <a href=#676 id=676 data-nosnippet>676</a>                eos_tok: eos,

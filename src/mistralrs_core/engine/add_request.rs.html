@@ -394,7 +394,7 @@
 <a href=#394 id=394 data-nosnippet>394</a>            <span class="prelude-val">Some</span>(StopTokens::Ids(<span class="kw-2">ref </span>i)) =&gt; {
 <a href=#395 id=395 data-nosnippet>395</a>                <span class="kw">let </span>tok_env = {
 <a href=#396 id=396 data-nosnippet>396</a>                    <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-<a href=#397 id=397 data-nosnippet>397</a>                    pipeline.get_metadata().tok_env.clone()
+<a href=#397 id=397 data-nosnippet>397</a>                    pipeline.get_metadata().tok_env()
 <a href=#398 id=398 data-nosnippet>398</a>                };
 <a href=#399 id=399 data-nosnippet>399</a>                <span class="kw">for </span>id <span class="kw">in </span>i {
 <a href=#400 id=400 data-nosnippet>400</a>                    <span class="comment">// We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
@@ -420,7 +420,7 @@
 <a href=#420 id=420 data-nosnippet>420</a>
 <a href=#421 id=421 data-nosnippet>421</a>                <span class="kw">let </span>(tok_env, tokenizer) = {
 <a href=#422 id=422 data-nosnippet>422</a>                    <span class="kw">let </span>pipeline = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline);
-<a href=#423 id=423 data-nosnippet>423</a>                    <span class="kw">let </span>tok_env = pipeline.get_metadata().tok_env.clone();
+<a href=#423 id=423 data-nosnippet>423</a>                    <span class="kw">let </span>tok_env = pipeline.get_metadata().tok_env();
 <a href=#424 id=424 data-nosnippet>424</a>                    <span class="kw">let </span>tokenizer = pipeline.tokenizer();
 <a href=#425 id=425 data-nosnippet>425</a>                    (tok_env, tokenizer)
 <a href=#426 id=426 data-nosnippet>426</a>                };
@@ -496,11 +496,11 @@
 <a href=#496 id=496 data-nosnippet>496</a>
 <a href=#497 id=497 data-nosnippet>497</a>        <span class="comment">// Add sequences
 <a href=#498 id=498 data-nosnippet>498</a>        </span><span class="kw">for </span>response_index <span class="kw">in </span><span class="number">0</span>..request.sampling_params.n_choices {
-<a href=#499 id=499 data-nosnippet>499</a>            <span class="kw">let </span>trie = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
+<a href=#499 id=499 data-nosnippet>499</a>            <span class="kw">let </span>factory = <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.pipeline)
 <a href=#500 id=500 data-nosnippet>500</a>                .get_metadata()
-<a href=#501 id=501 data-nosnippet>501</a>                .tok_env
+<a href=#501 id=501 data-nosnippet>501</a>                .llg_factory
 <a href=#502 id=502 data-nosnippet>502</a>                .clone();
-<a href=#503 id=503 data-nosnippet>503</a>            <span class="kw">let </span>recognizer = <span class="kw">match </span><span class="self">Self</span>::build_sequence_recognizer(<span class="kw-2">&amp;</span>trie, <span class="kw-2">&amp;</span>request.constraint) {
+<a href=#503 id=503 data-nosnippet>503</a>            <span class="kw">let </span>recognizer = <span class="kw">match </span><span class="self">Self</span>::build_sequence_recognizer(<span class="kw-2">&amp;</span>factory, <span class="kw-2">&amp;</span>request.constraint) {
 <a href=#504 id=504 data-nosnippet>504</a>                <span class="prelude-val">Ok</span>(recognizer) =&gt; recognizer,
 <a href=#505 id=505 data-nosnippet>505</a>                <span class="prelude-val">Err</span>(err) =&gt; {
 <a href=#506 id=506 data-nosnippet>506</a>                    request

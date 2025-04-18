@@ -1,7 +1,7 @@
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `mistralrs-core/src/pipeline/normal.rs`."><title>normal.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-6c3ea77c.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="mistralrs_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.86.0 (05f9846f8 2025-03-31)" data-channel="1.86.0" data-search-js="search-581efc7a.js" data-settings-js="settings-6dad6058.js" ><script src="../../../static.files/storage-3a5871a4.js"></script><script defer src="../../../static.files/src-script-b8d3f215.js"></script><script defer src="../../../src-files.js"></script><script defer src="../../../static.files/main-4d63596a.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">mistralrs_core/pipeline/</div>normal.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-4"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span><span class="kw">super</span>::cache_manager::{FullCacheManager, NormalCacheManager};
 <a href=#2 id=2 data-nosnippet>2</a><span class="kw">use </span><span class="kw">super</span>::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span><span class="kw">super</span>::isq::ImatrixDataSource;
-<a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span><span class="kw">super</span>::llg::build_tok_env;
+<a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span><span class="kw">super</span>::llg::build_llg_factory;
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use super</span>::{
 <a href=#6 id=6 data-nosnippet>6</a>    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
 <a href=#7 id=7 data-nosnippet>7</a>    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
@@ -809,7 +809,7 @@
 <a href=#809 id=809 data-nosnippet>809</a>        };
 <a href=#810 id=810 data-nosnippet>810</a>
 <a href=#811 id=811 data-nosnippet>811</a>        <span class="kw">let </span>max_seq_len = model.max_seq_len();
-<a href=#812 id=812 data-nosnippet>812</a>        <span class="kw">let </span>tok_env = build_tok_env(tokenizer.clone());
+<a href=#812 id=812 data-nosnippet>812</a>        <span class="kw">let </span>llg_factory = build_llg_factory(tokenizer.clone())<span class="question-mark">?</span>;
 <a href=#813 id=813 data-nosnippet>813</a>        <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model.cache() {
 <a href=#814 id=814 data-nosnippet>814</a>            EitherCache::Full(full) =&gt; full.lock().len(),
 <a href=#815 id=815 data-nosnippet>815</a>            EitherCache::Normal(normal) =&gt; normal.lock().unwrap().<span class="number">0</span>.len(),
@@ -832,7 +832,7 @@
 <a href=#832 id=832 data-nosnippet>832</a>            model_id: <span class="self">self</span>.model_id.clone(),
 <a href=#833 id=833 data-nosnippet>833</a>            metadata: Arc::new(GeneralMetadata {
 <a href=#834 id=834 data-nosnippet>834</a>                max_seq_len,
-<a href=#835 id=835 data-nosnippet>835</a>                tok_env: <span class="prelude-val">Some</span>(tok_env),
+<a href=#835 id=835 data-nosnippet>835</a>                llg_factory: <span class="prelude-val">Some</span>(llg_factory),
 <a href=#836 id=836 data-nosnippet>836</a>                no_kv_cache: <span class="self">self</span>.no_kv_cache,
 <a href=#837 id=837 data-nosnippet>837</a>                no_prefix_cache: is_xlora,
 <a href=#838 id=838 data-nosnippet>838</a>                num_hidden_layers,

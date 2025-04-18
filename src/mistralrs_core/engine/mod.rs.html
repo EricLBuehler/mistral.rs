@@ -13,7 +13,7 @@
 <a href=#13 id=13 data-nosnippet>13</a>    CompletionResponse, SchedulerConfig, DEBUG,
 <a href=#14 id=14 data-nosnippet>14</a>};
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>interprocess::local_socket::{traits::Listener, ListenerOptions};
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>llguidance::toktrie::TokEnv;
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>llguidance::ParserFactory;
 <a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>logger::IntervalLogger;
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>once_cell::sync::Lazy;
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>rand::SeedableRng;
@@ -463,14 +463,14 @@
 <a href=#463 id=463 data-nosnippet>463</a>    }
 <a href=#464 id=464 data-nosnippet>464</a>
 <a href=#465 id=465 data-nosnippet>465</a>    <span class="kw">fn </span>build_sequence_recognizer(
-<a href=#466 id=466 data-nosnippet>466</a>        tok_env: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;TokEnv&gt;,
+<a href=#466 id=466 data-nosnippet>466</a>        factory: <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;Arc&lt;ParserFactory&gt;&gt;,
 <a href=#467 id=467 data-nosnippet>467</a>        constraint: <span class="kw-2">&amp;</span>Constraint,
 <a href=#468 id=468 data-nosnippet>468</a>    ) -&gt; anyhow::Result&lt;SequenceRecognizer&gt; {
 <a href=#469 id=469 data-nosnippet>469</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(grm) = llg_grammar_from_constraint(constraint)<span class="question-mark">? </span>{
-<a href=#470 id=470 data-nosnippet>470</a>            <span class="kw">let </span>tok_env = tok_env
+<a href=#470 id=470 data-nosnippet>470</a>            <span class="kw">let </span>factory = factory
 <a href=#471 id=471 data-nosnippet>471</a>                .as_ref()
-<a href=#472 id=472 data-nosnippet>472</a>                .ok_or_else(|| <span class="macro">anyhow::anyhow!</span>(<span class="string">"No token environment found."</span>))<span class="question-mark">?</span>;
-<a href=#473 id=473 data-nosnippet>473</a>            <span class="kw">let </span>llg = constraint_from_llg_grammar(tok_env.clone(), grm)<span class="question-mark">?</span>;
+<a href=#472 id=472 data-nosnippet>472</a>                .ok_or_else(|| <span class="macro">anyhow::anyhow!</span>(<span class="string">"No token environment (llg_factory) found."</span>))<span class="question-mark">?</span>;
+<a href=#473 id=473 data-nosnippet>473</a>            <span class="kw">let </span>llg = constraint_from_llg_grammar(factory, grm)<span class="question-mark">?</span>;
 <a href=#474 id=474 data-nosnippet>474</a>            <span class="prelude-val">Ok</span>(SequenceRecognizer::Llguidance(Box::new(llg)))
 <a href=#475 id=475 data-nosnippet>475</a>        } <span class="kw">else </span>{
 <a href=#476 id=476 data-nosnippet>476</a>            <span class="prelude-val">Ok</span>(SequenceRecognizer::None)
