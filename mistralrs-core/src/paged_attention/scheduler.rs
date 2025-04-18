@@ -67,7 +67,8 @@ impl PagedAttentionScheduler {
         // If there are no swapped seqs (they have higher priority), add seqs that are in the
         // waiting queue to the running queue.
         if self.swapped_out.is_empty() {
-            let mut scheduled = VecDeque::new();
+            let mut scheduled: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
+            let mut for_waiting_again: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
             let mut did_ignore = false;
             while !self.waiting.is_empty() {
                 let seq = self.waiting.front().unwrap().clone();
@@ -93,6 +94,15 @@ impl PagedAttentionScheduler {
                     _ => {}
                 }
 
+                let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
+                // Only add it if has_images matches either current or there are none.
+                if !scheduled.is_empty()
+                    && get_mut_arcmutex!(scheduled[0]).has_images() != new_seq_has_images
+                {
+                    let seq = self.waiting.pop_front().unwrap();
+                    for_waiting_again.push_back(seq.clone());
+                    continue;
+                }
                 if !did_ignore {
                     get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
                     let seq_handle = get_mut_arcmutex!(seq);
@@ -105,6 +115,7 @@ impl PagedAttentionScheduler {
                     scheduled.push_back(seq);
                 }
             }
+            self.waiting.extend(for_waiting_again);
 
             // If we did schedule, or we ignored sequences.
             if !scheduled.is_empty() || did_ignore {
@@ -130,7 +141,7 @@ impl PagedAttentionScheduler {
         // Sorts by creation time, in descending order so that earliest are latest (first come first serve).
         self.sort_running_by_priority_fcfs();
 
-        let mut running = VecDeque::new();
+        let mut running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         let mut did_preempt = false;
         while !self.running.is_empty() {
             let seq = self.running.pop_front().unwrap();
@@ -160,7 +171,15 @@ impl PagedAttentionScheduler {
                     let seq_handle = get_mut_arcmutex!(seq);
                     self._append_token_slot_to_seq(&seq_handle, &mut blocks_to_copy);
                 }
-                running.push_back(seq);
+                let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
+                // Only add it if has_images matches either current or there are none.
+                if running.is_empty()
+                    || get_mut_arcmutex!(running[0]).has_images() == new_seq_has_images
+                {
+                    running.push_back(seq);
+                } else {
+                    self.running.push_back(seq);
+                }
             }
         }
         self.running = running;
