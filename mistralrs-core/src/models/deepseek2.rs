@@ -252,6 +252,25 @@ impl Attention {
         })
     }
 
+    fn dot_qk(&self, q: &Tensor, k: &Tensor) -> Result<Tensor> {
+        dbg!(&q, &k);
+        let q = q.permute((0, 2, 1, 3))?;
+        let k = k.permute((0, 2, 3, 1))?;
+        q.broadcast_matmul(&k)?.permute((0, 2, 1, 3))
+    }
+
+    fn dot_s_kv(&self, s: &Tensor, kv: &Tensor) -> Result<Tensor> {
+        dbg!(&s, &kv);
+        let s = s.permute((0, 2, 1, 3))?.contiguous()?;
+        s.broadcast_matmul(&kv.unsqueeze(1)?)?.permute((0, 2, 1, 3))
+    }
+
+    fn matmul_qw(&self, q: &Tensor, w: &Tensor) -> Result<Tensor> {
+        dbg!(&q, &w);
+        let q = q.permute((0, 2, 1, 3))?;
+        q.broadcast_matmul(w)?.permute((0, 2, 1, 3))
+    }
+
     fn forward(
         &self,
         xs: &Tensor,
@@ -279,48 +298,42 @@ impl Attention {
             &[self.cfg.kv_lora_rank, self.cfg.qk_rope_head_dim],
             D::Minus1,
         )?;
-        compressed_kv = ckv_split[0].reshape((bs, seq_len, 1, self.cfg.kv_lora_rank))?;
-        let mut k_pe = ckv_split[1]
-            .reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
-            .transpose(1, 2)?;
+        compressed_kv = ckv_split[0].clone();
+        let mut k_pe = ckv_split[1].unsqueeze(2)?;
 
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
 
         let mut attn_out = {
-            let w_k_q = self
-                .kv_b_proj
-                .dequantize_w()?
-                .reshape((self.num_attention_heads, (), self.cfg.kv_lora_rank))?
-                .i((1, ..self.cfg.qk_nope_head_dim))?;
-            let q_nope = q_nope.broadcast_matmul(&w_k_q)?;
-
-            let (mut kv_mat, mut pe_mat) = kv_cache.append(
-                &self.kv_a_layernorm.forward(&compressed_kv)?,
-                &k_pe.squeeze(2)?,
-            )?;
-            kv_mat = kv_mat.t()?.unsqueeze(1)?;
-            pe_mat = pe_mat.t()?.unsqueeze(1)?;
-            let scores_k = q_nope.broadcast_matmul(&kv_mat)?;
-            let scores_p = q_pe.broadcast_matmul(&pe_mat)?;
-
-            let mut scores =
-                (scores_p.broadcast_add(&scores_k)? * self.sdpa_params.softmax_scale as f64)?;
-            if let Some(mask) = attention_mask {
-                scores = (scores + mask)?;
-            }
-            dbg!(&scores, &kv_mat);
-            scores = candle_nn::ops::softmax_last_dim(&scores)?;
-            let x = scores.broadcast_matmul(&kv_mat)?;
-
-            let mut w_v = self.kv_b_proj.dequantize_w()?.reshape((
+            let wkv_b = self.kv_b_proj.dequantize_w()?.reshape((
                 self.num_attention_heads,
                 (),
                 self.cfg.kv_lora_rank,
             ))?;
-            w_v = w_v
-                .i((.., (w_v.dim(1)? - self.cfg.v_head_dim)..))?
-                .permute((0, 2, 1))?;
-            x.broadcast_matmul(&w_v)?
+            let q_nope = self.matmul_qw(&q_nope, &wkv_b.i((.., ..self.cfg.qk_nope_head_dim))?)?;
+
+            dbg!(&k_pe);
+            let (mut kv_t, mut pe_t) = kv_cache.append(
+                &self.kv_a_layernorm.forward(&compressed_kv)?,
+                &dbg!(k_pe.squeeze(2)?),
+            )?;
+            kv_t = kv_t.unsqueeze(2)?;
+            pe_t = pe_t.unsqueeze(2)?;
+            dbg!(&kv_t, &pe_t);
+            dbg!(&q_nope, &q_pe);
+            let scores_nope = self.dot_qk(&q_nope, &kv_t)?;
+            let scores_pe = self.dot_qk(&q_pe, &pe_t)?;
+
+            let mut scores =
+                (scores_nope.broadcast_add(&scores_pe)? * self.sdpa_params.softmax_scale as f64)?;
+            if let Some(mask) = attention_mask {
+                scores = (scores + mask.unsqueeze(1)?)?;
+            }
+            scores = candle_nn::ops::softmax_last_dim(&scores)?;
+            dbg!(&scores, &kv_t);
+            let x = self.dot_s_kv(&scores, &kv_t.squeeze(2)?)?;
+
+            let w_v = wkv_b.i((.., (wkv_b.dim(1)? - self.cfg.qk_nope_head_dim)..))?.permute((0,2,1))?;
+            self.matmul_qw(&x, &w_v)?
         };
 
         // let mut kv = self
@@ -404,11 +417,9 @@ impl Attention {
         //     }
         // };
 
-        attn_out = if attention_mask.is_some() {
-            attn_out.transpose(1, 2)?.reshape((bs, seq_len, ()))?
-        } else {
-            attn_out.reshape((bs, seq_len, ()))?
-        };
+        dbg!(&attn_out);
+        attn_out = attn_out.reshape((bs, seq_len, ()))?;
+        dbg!(&attn_out);
 
         self.o_proj.forward_autocast(&attn_out)
     }
