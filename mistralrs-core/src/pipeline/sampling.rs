@@ -377,10 +377,11 @@ pub async fn sample_sequence(
 
     let bias_if_not_allowed = match &mut seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
-            if llg
-                .validate_tokens(&[first_lobprobs_response.token])
-                .unwrap_or(0)
-                == 1
+            if !llg.is_stopped()
+                && llg
+                    .validate_tokens(&[first_lobprobs_response.token])
+                    .unwrap_or(0)
+                    == 1
             {
                 None
             } else {
