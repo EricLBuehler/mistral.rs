@@ -928,9 +928,9 @@ dependencies = [
 
 [[package]]
 name = "derivre"
-version = "0.3.1"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a3c2606b3ffc46f91fd62d954d55659ba9fb391bb673311b70f50daf9c15e49"
+checksum = "4a605f30e6a1460a323cc4de7bc62dea81df1d9d67eb92194d3a983a8a9601c4"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1097,9 +1097,6 @@ name = "esaxx-rs"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d817e038c30374a4bcb22f94d0a8a0e216958d4c3dcde369b1439fec4bdda6e6"
-dependencies = [
- "cc",
-]
 
 [[package]]
 name = "exr"
@@ -2124,8 +2121,9 @@ checksum = "23fb14cb19457329c82206317a5663005a4d404783dc74f4252769b0d5f42856"
 
 [[package]]
 name = "llguidance"
-version = "0.7.0"
-source = "git+https://github.com/EricLBuehler/llguidance?rev=8d71957#8d7195774a209038ddfbb0d1a5348ed17b387386"
+version = "0.7.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5e83eefc7b98a59c1d46f7e50ec9d3b05865a0085961acf55a7cac9d17be6dc"
 dependencies = [
  "anyhow",
  "derivre",
@@ -4320,7 +4318,6 @@ dependencies = [
  "derive_builder",
  "esaxx-rs",
  "getrandom 0.2.15",
- "indicatif",
  "itertools 0.13.0",
  "lazy_static",
  "log",
@@ -4406,8 +4403,9 @@ dependencies = [
 
 [[package]]
 name = "toktrie"
-version = "0.7.0"
-source = "git+https://github.com/EricLBuehler/llguidance?rev=8d71957#8d7195774a209038ddfbb0d1a5348ed17b387386"
+version = "0.7.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "032073ff474d0701e31fdc7bfec2e1d3e772472e0bd3809f9a6e327a3c62b84f"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -4418,8 +4416,9 @@ dependencies = [
 
 [[package]]
 name = "toktrie_hf_tokenizers"
-version = "0.7.0"
-source = "git+https://github.com/EricLBuehler/llguidance?rev=8d71957#8d7195774a209038ddfbb0d1a5348ed17b387386"
+version = "0.7.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54351f50b331d38928d25b61747b70c5a78b19dba6d333e3b856ce5aa0d6b62c"
 dependencies = [
  "anyhow",
  "log",

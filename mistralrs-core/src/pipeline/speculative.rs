@@ -1,6 +1,5 @@
 use std::{
     any::Any,
-    iter::zip,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -19,7 +18,7 @@ use crate::{
         finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
     },
     prefix_cacher::PrefixCacheManagerV2,
-    sequence::{Sequence, SequenceRecognizer},
+    sequence::Sequence,
     DeviceMapSetting, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource, TryIntoDType,
 };
 
@@ -402,7 +401,6 @@ impl Pipeline for SpeculativePipeline {
                         seq.return_logprobs(),
                         rng.clone(),
                         false, // todo tune
-                        false, // do not add to tok trie yet
                         true,
                     )
                     .await?;
@@ -475,26 +473,21 @@ impl Pipeline for SpeculativePipeline {
 
                 // ======================= Rejection sampling. ============================
                 // Map from each target sample to corresponding in draft sample
+                // this will first rollback LLG state if any, and then advance for the accepted tokens only
                 let samples = sample_target_sequence_speculative(
                     logits.clone(),
                     seq,
                     seq.return_logprobs(),
                     rng.clone(),
-                    self.gamma,
+                    &draft_samples,
                 )
                 .await?;
 
-                let mut accepted_tokens = Vec::new();
-                for (target_sample, draft_sample) in zip(samples, draft_samples) {
-                    let tok = target_sample.sample.token;
-                    accepted_tokens.push(target_sample.sample);
-                    if draft_sample.sample.token != tok {
-                        break;
-                    }
-                }
+                let accepted_tokens = samples.into_iter().map(|s| s.sample).collect::<Vec<_>>();
 
                 // ======================= Narrow caches to account for rejections ============================
                 let n_not_accepted = self.gamma - accepted_tokens.len();
+
                 match get_mut_arcmutex!(self.draft).cache() {
                     EitherCache::Full(full) => {
                         for (k, v) in full.lock().iter_mut().flatten() {
@@ -573,13 +566,6 @@ impl Pipeline for SpeculativePipeline {
                         false,
                     )
                     .await?;
-                    match seq.recognizer {
-                        SequenceRecognizer::Llguidance(ref mut llg) => {
-                            llg.commit_token(Some(accepted.token))
-                                .map_err(candle_core::Error::msg)?;
-                        }
-                        SequenceRecognizer::None => {}
-                    }
                 }
 
                 // Trick to improve lower bounds. Sample last token in multinomial

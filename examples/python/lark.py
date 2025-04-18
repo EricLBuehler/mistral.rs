@@ -8,7 +8,7 @@ runner = Runner(
     num_device_layers=["500"],
 )
 
-# see llguidance.py for a better way of dealing with JSON and Lark together
+# see lark_llg.py for a better way of dealing with JSON and Lark together
 
 json_lark = r"""
 start: object # we only want objects

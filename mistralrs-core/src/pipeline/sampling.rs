@@ -36,8 +36,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     seq.add_token(
         logprobs.clone(),
         this.get_metadata()
-            .tok_env
-            .as_ref()
+            .tok_env()
             .ok_or(candle_core::Error::Msg(
                 "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie"
                     .to_string(),
@@ -317,7 +316,6 @@ pub async fn sample_and_add_toks(
                 return_logprobs,
                 rng.clone(),
                 use_async_pool,
-                true, // Append result to trie
                 false,
             )
         })
@@ -348,7 +346,6 @@ pub async fn sample_sequence(
     return_logprobs: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     use_async_pool: bool,
-    add_to_trie: bool,
     sample_speculative: bool,
 ) -> Result<Logprobs> {
     let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
@@ -380,9 +377,17 @@ pub async fn sample_sequence(
 
     let bias_if_not_allowed = match &mut seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
-            let step_res = llg.compute_mask().map_err(candle_core::Error::msg)?;
-            if let Some(mask) = &step_res.sample_mask {
+            if !llg.is_stopped()
+                && llg
+                    .validate_tokens(&[first_lobprobs_response.token])
+                    .unwrap_or(0)
+                    == 1
+            {
+                None
+            } else {
+                let mask = llg.compute_mask_or_eos().map_err(candle_core::Error::msg)?;
                 if mask.is_allowed(first_lobprobs_response.token) {
+                    // shouldn't really happen, except for EOS
                     None
                 } else {
                     let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
@@ -394,14 +399,6 @@ pub async fn sample_sequence(
 
                     Some(acc)
                 }
-            } else if step_res.is_stop() {
-                let mut acc = vec![-f32::INFINITY; logits.shape().dims1().unwrap()];
-                for eos_tok in seq.eos_tokens() {
-                    acc[*eos_tok as usize] = 0.0;
-                }
-                Some(acc)
-            } else {
-                None
             }
         }
         SequenceRecognizer::None => None,
@@ -437,15 +434,16 @@ pub async fn sample_sequence(
         None => first_lobprobs_response,
     };
 
-    if add_to_trie {
-        match seq.recognizer {
-            SequenceRecognizer::Llguidance(ref mut llg) => {
-                llg.commit_token(Some(second_logprobs_response.token))
+    match seq.recognizer {
+        SequenceRecognizer::Llguidance(ref mut llg) => {
+            if !llg.is_stopped() {
+                llg.consume_token(second_logprobs_response.token)
                     .map_err(candle_core::Error::msg)?;
             }
-            SequenceRecognizer::None => {}
         }
+        SequenceRecognizer::None => {}
     }
+
     Ok(second_logprobs_response)
 }
 
@@ -454,28 +452,44 @@ pub struct SpeculativeSample {
     pub sample: Logprobs,
 }
 
-/// Async sample without modifying sequence.
+/// Async sample without modifying sequence (except for the constraint).
 pub async fn sample_target_sequence_speculative(
     logits: Tensor,
     seq: &mut Sequence,
     return_logprobs: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    n_toks: usize,
+    draft_samples: &[SpeculativeSample],
 ) -> Result<Vec<SpeculativeSample>> {
+    let n_toks = draft_samples.len();
+
+    // first, rollback the llg
+    match &mut seq.recognizer {
+        SequenceRecognizer::Llguidance(ref mut llg) => {
+            llg.rollback(n_toks).map_err(candle_core::Error::msg)?;
+        }
+        SequenceRecognizer::None => {}
+    }
+
     let mut sampled = Vec::new();
-    for chunk in logits.chunk(n_toks, 1)? {
-        sampled.push(SpeculativeSample {
-            sample: sample_sequence(
-                chunk,
-                seq,
-                return_logprobs,
-                rng.clone(),
-                true,  // TODO(EricLBuehler): does this hurt perf?
-                false, // Do not append to trie (yet)
-                true,
-            )
-            .await?,
-        });
+    for (chunk, draft) in logits
+        .chunk(n_toks, 1)?
+        .into_iter()
+        .zip(draft_samples.iter())
+    {
+        let sample = sample_sequence(
+            chunk,
+            seq,
+            return_logprobs,
+            rng.clone(),
+            true, // TODO(EricLBuehler): does this hurt perf?
+            true,
+        )
+        .await?;
+        let sampled_token = sample.token;
+        sampled.push(SpeculativeSample { sample });
+        if sampled_token != draft.sample.token {
+            break;
+        }
     }
     Ok(sampled)
 }

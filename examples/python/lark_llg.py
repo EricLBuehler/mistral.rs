@@ -8,27 +8,20 @@ runner = Runner(
     num_device_layers=["500"],
 )
 
-# In fact, JSON object can be also defined in the grammar itself, see
-# lark_llg.py and https://github.com/guidance-ai/llguidance/blob/main/docs/syntax.md#inline-json-schemas
+# see https://github.com/guidance-ai/llguidance/blob/main/docs/syntax.md for docs on syntax
 
-# @myobj will reference the JSON schema defined below (see grammars = [ ... ])
 top_lark = r"""
-start: "Reasoning: " /.+/ "\nJSON: " @myobj
-"""
-
-answer_schema = {
+start: "Reasoning: " /.+/ "\nJSON: " answer
+answer: %json {
     "type": "object",
     "properties": {
-        "answer": {"type": "string", "enum": ["Yes", "No"]},
+        "answer": {"type": "string", "enum": ["Yes", "No"]}
     },
     "required": ["answer"],
-    "additionalProperties": False,
+    "additionalProperties": false
 }
+"""
 
-grammars = [
-    {"lark_grammar": top_lark},
-    {"name": "myobj", "json_schema": answer_schema},
-]
 
 res = runner.send_chat_completion_request(
     ChatCompletionRequest(
@@ -39,10 +32,10 @@ res = runner.send_chat_completion_request(
                 "content": "If all dogs are mammals, and all mammals are animals, are dogs animals?",
             }
         ],
-        max_tokens=30,
+        max_tokens=100,
         temperature=0.1,
-        grammar_type="llguidance",
-        grammar=dumps({"grammars": grammars}),
+        grammar_type="lark",
+        grammar=top_lark,
     )
 )
 print(res.choices[0].message.content)
