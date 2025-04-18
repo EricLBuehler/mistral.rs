@@ -473,6 +473,7 @@ impl Pipeline for SpeculativePipeline {
 
                 // ======================= Rejection sampling. ============================
                 // Map from each target sample to corresponding in draft sample
+                // this will first rollback LLG state if any, and then advance for the accepted tokens only
                 let samples = sample_target_sequence_speculative(
                     logits.clone(),
                     seq,
@@ -486,15 +487,6 @@ impl Pipeline for SpeculativePipeline {
 
                 // ======================= Narrow caches to account for rejections ============================
                 let n_not_accepted = self.gamma - accepted_tokens.len();
-
-                // rollback any tokens that were not accepted
-                match seq.recognizer {
-                    SequenceRecognizer::Llguidance(ref mut llg) => {
-                        llg.rollback(n_not_accepted)
-                            .map_err(candle_core::Error::msg)?;
-                    }
-                    SequenceRecognizer::None => {}
-                }
 
                 match get_mut_arcmutex!(self.draft).cache() {
                     EitherCache::Full(full) => {
