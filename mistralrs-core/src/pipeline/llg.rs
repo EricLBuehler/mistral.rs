@@ -6,13 +6,11 @@ use tokenizers::Tokenizer;
 
 use crate::Constraint;
 
-pub fn build_llg_factory(tokenizer: Tokenizer) -> Arc<ParserFactory> {
-    let env = toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(tokenizer)
-        .expect("Failed to create ByteTokenizer from Tokenizer")
-        .into_tok_env(None)
-        .expect("Failed to create ByteTokenizerEnv");
-    let factory = ParserFactory::new_simple(&env).expect("Failed to create ParserFactory");
-    Arc::new(factory)
+pub fn build_llg_factory(tokenizer: Tokenizer) -> Result<Arc<ParserFactory>> {
+    let env =
+        toktrie_hf_tokenizers::ByteTokenizer::from_tokenizer(tokenizer)?.into_tok_env(None)?;
+    let factory = ParserFactory::new_simple(&env)?;
+    Ok(Arc::new(factory))
 }
 
 pub fn llg_grammar_from_constraint(constraint: &Constraint) -> Result<Option<TopLevelGrammar>> {

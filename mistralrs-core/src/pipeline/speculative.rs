@@ -18,7 +18,7 @@ use crate::{
         finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
     },
     prefix_cacher::PrefixCacheManagerV2,
-    sequence::{Sequence, SequenceRecognizer},
+    sequence::Sequence,
     DeviceMapSetting, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource, TryIntoDType,
 };
 

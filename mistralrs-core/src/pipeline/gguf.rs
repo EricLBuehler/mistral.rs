@@ -511,7 +511,7 @@ impl Loader for GGUFLoader {
             Model::Starcoder2(ref p) => p.max_seq_len,
             Model::Qwen2(ref p) => p.max_seq_len,
         };
-        let llg_factory = build_llg_factory(tokenizer.clone());
+        let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.normal().0.len(),
             Model::Phi2(ref model) => model.cache.normal().0.len(),
