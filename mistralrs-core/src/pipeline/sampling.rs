@@ -457,8 +457,10 @@ pub async fn sample_target_sequence_speculative(
     seq: &mut Sequence,
     return_logprobs: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    n_toks: usize,
+    draft_samples: &Vec<SpeculativeSample>,
 ) -> Result<Vec<SpeculativeSample>> {
+    let n_toks = draft_samples.len();
+
     // first, rollback the llg
     match &mut seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
@@ -468,18 +470,25 @@ pub async fn sample_target_sequence_speculative(
     }
 
     let mut sampled = Vec::new();
-    for chunk in logits.chunk(n_toks, 1)? {
-        sampled.push(SpeculativeSample {
-            sample: sample_sequence(
-                chunk,
-                seq,
-                return_logprobs,
-                rng.clone(),
-                true, // TODO(EricLBuehler): does this hurt perf?
-                true,
-            )
-            .await?,
-        });
+    for (chunk, draft) in logits
+        .chunk(n_toks, 1)?
+        .into_iter()
+        .zip(draft_samples.iter())
+    {
+        let sample = sample_sequence(
+            chunk,
+            seq,
+            return_logprobs,
+            rng.clone(),
+            true, // TODO(EricLBuehler): does this hurt perf?
+            true,
+        )
+        .await?;
+        let sampled_token = sample.token;
+        sampled.push(SpeculativeSample { sample });
+        if sampled_token != draft.sample.token {
+            break;
+        }
     }
     Ok(sampled)
 }

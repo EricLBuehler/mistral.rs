@@ -1,6 +1,5 @@
 use std::{
     any::Any,
-    iter::zip,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -479,18 +478,11 @@ impl Pipeline for SpeculativePipeline {
                     seq,
                     seq.return_logprobs(),
                     rng.clone(),
-                    self.gamma,
+                    &draft_samples,
                 )
                 .await?;
 
-                let mut accepted_tokens = Vec::new();
-                for (target_sample, draft_sample) in zip(samples, draft_samples) {
-                    let tok = target_sample.sample.token;
-                    accepted_tokens.push(target_sample.sample);
-                    if draft_sample.sample.token != tok {
-                        break;
-                    }
-                }
+                let accepted_tokens = samples.into_iter().map(|s| s.sample).collect::<Vec<_>>();
 
                 // ======================= Narrow caches to account for rejections ============================
                 let n_not_accepted = self.gamma - accepted_tokens.len();
