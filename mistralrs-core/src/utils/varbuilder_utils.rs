@@ -74,16 +74,20 @@ pub(crate) fn from_mmaped_safetensors(
     predicate: impl Fn(String) -> bool + Send + Sync + Clone + 'static,
     get_device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>,
 ) -> Result<ShardedVarBuilder> {
-    // if base_device.is_cuda() {
-    //     return Ok(unsafe {
-    //         ShardedSafeTensors::sharded(
-    //             &paths,
-    //             dtype.unwrap_or(DType::F16),
-    //             base_device,
-    //             make_dummy_regexes,
-    //         )?
-    //     });
-    // }
+    if xlora_paths.is_empty() {
+        if !silent {
+            tracing::info!("Loading model using mmap strategy.");
+        }
+        return Ok(unsafe {
+            ShardedSafeTensors::sharded(
+                &paths,
+                dtype.unwrap_or(DType::F16),
+                base_device,
+                make_dummy_regexes,
+                Arc::new(predicate),
+            )?
+        });
+    }
 
     #[allow(clippy::type_complexity)]
     let mut handles: Vec<JoinHandle<Result<HashMap<String, Tensor>>>> = Vec::new();

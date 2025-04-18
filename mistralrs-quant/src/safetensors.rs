@@ -260,6 +260,7 @@ pub enum ShardedSafeTensors {
     Sharded {
         b: MmapedSafetensors,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
+        predicate: Arc<dyn Fn(String) -> bool + Send + Sync + 'static>,
     },
     SimpleBackend(Box<dyn SimpleBackend + 'static>),
 }
@@ -270,6 +271,9 @@ impl ShardedSafeTensors {
     /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
     /// files and make them usable in a sharded way.
     ///
+    /// - If `regexes` is specified, this will be used in `make_dummy_predicate` based on `.any`
+    /// - Only include keys for which predicate evaluates to true.
+    ///
     /// # Safety
     ///
     /// The unsafe is inherited from [`memmap2::MmapOptions`].
@@ -278,11 +282,13 @@ impl ShardedSafeTensors {
         dtype: DType,
         dev: &Device,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
+        predicate: Arc<dyn Fn(String) -> bool + Send + Sync + 'static>,
     ) -> Result<ShardedVarBuilder> {
         let tensors = MmapedSafetensors::multi(paths)?;
         let backend = ShardedSafeTensors::Sharded {
             b: tensors,
             make_dummy_regexes,
+            predicate,
         };
         Ok(VarBuilderArgs::new_with_args(backend, dtype, dev))
     }
@@ -351,6 +357,7 @@ impl Backend for ShardedSafeTensors {
                 Self::Sharded {
                     b,
                     make_dummy_regexes,
+                    predicate,
                 } => {
                     if let Some(make_dummy_regexes) = make_dummy_regexes {
                         if make_dummy_regexes.iter().any(|x| x.is_match(path)) {
@@ -359,6 +366,13 @@ impl Backend for ShardedSafeTensors {
                             });
                         }
                     }
+                    let should_include = predicate(path.to_string());
+                    if !should_include {
+                        return Err(Error::CannotFindTensor {
+                            path: path.to_string(),
+                        });
+                    }
+
                     return SimpleBackend::get(
                         b,
                         target_shape,
@@ -391,6 +405,7 @@ impl Backend for ShardedSafeTensors {
                     Self::Sharded {
                         b,
                         make_dummy_regexes,
+                        predicate,
                     } => {
                         use safetensors::slice::IndexOp;
 
@@ -400,6 +415,12 @@ impl Backend for ShardedSafeTensors {
                                     path: path.to_string(),
                                 });
                             }
+                        }
+                        let should_include = predicate(path.to_string());
+                        if !should_include {
+                            return Err(Error::CannotFindTensor {
+                                path: path.to_string(),
+                            });
                         }
 
                         let view = b.get(path)?;
@@ -484,6 +505,7 @@ impl Backend for ShardedSafeTensors {
                     Self::Sharded {
                         b,
                         make_dummy_regexes,
+                        predicate,
                     } => {
                         use safetensors::slice::IndexOp;
 
@@ -493,6 +515,12 @@ impl Backend for ShardedSafeTensors {
                                     path: path.to_string(),
                                 });
                             }
+                        }
+                        let should_include = predicate(path.to_string());
+                        if !should_include {
+                            return Err(Error::CannotFindTensor {
+                                path: path.to_string(),
+                            });
                         }
 
                         let view = b.get(path)?;
@@ -562,6 +590,7 @@ impl Backend for ShardedSafeTensors {
             Self::Sharded {
                 b,
                 make_dummy_regexes,
+                predicate,
             } => {
                 if let Some(make_dummy_regexes) = make_dummy_regexes {
                     if make_dummy_regexes.iter().any(|x| x.is_match(name)) {
@@ -569,6 +598,12 @@ impl Backend for ShardedSafeTensors {
                             path: name.to_string(),
                         });
                     }
+                }
+                let should_include = predicate(name.to_string());
+                if !should_include {
+                    return Err(Error::CannotFindTensor {
+                        path: name.to_string(),
+                    });
                 }
                 <MmapedSafetensors as SimpleBackend>::get_unchecked(b, name, dtype, dev)
             }
@@ -581,11 +616,16 @@ impl Backend for ShardedSafeTensors {
             Self::Sharded {
                 b,
                 make_dummy_regexes,
+                predicate,
             } => {
                 if let Some(make_dummy_regexes) = make_dummy_regexes {
                     if make_dummy_regexes.iter().any(|x| x.is_match(name)) {
                         return false;
                     }
+                }
+                let should_include = predicate(name.to_string());
+                if !should_include {
+                    return false;
                 }
                 b.get(name).is_ok()
             }
