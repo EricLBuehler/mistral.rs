@@ -595,6 +595,7 @@ impl Engine {
             } else {
                 None
             };
+            let seq_preallocated_cache = None;
 
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
