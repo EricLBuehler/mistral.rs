@@ -226,8 +226,11 @@ fn naive_sdpa(
             _ => candle_core::bail!("unsupported mask {mask:?}"),
         };
 
+        dbg!(&q, &k, &v);
+
         let mut att = MatMul.matmul(q, &k.t()?)?;
 
+        dbg!(&att, &mask);
         candle_nn::ops::inplace_attn_softmax_last_dim(
             &mut att,
             &mask.contiguous()?,
@@ -325,6 +328,7 @@ impl Sdpa {
             && all_head_dims_match
             && valid_head_dims.contains(&head_dim)
             && can_use_mask
+            && false
         {
             let mask = match mask {
                 Some(mask) => Some(mask.broadcast_as(tgt_mask_shape)?),
