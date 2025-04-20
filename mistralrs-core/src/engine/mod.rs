@@ -314,6 +314,7 @@ impl Engine {
                                 seq.len() as f32 / prompt_exec_time.as_secs_f32();
                             seq.prompt_tok_per_sec = prompt_tok_per_sec;
                             seq.prompt_timestamp = Some(now);
+                            seq.total_prompt_time = Some(prompt_exec_time.as_millis());
                         }
                         last_completion_ids = vec![];
                     }
@@ -452,6 +453,7 @@ impl Engine {
                                     seq.len() as f32 / (now - seq.timestamp()) as f32;
                                 seq.prompt_tok_per_sec = prompt_tok_per_sec * 1000.;
                                 seq.prompt_timestamp = Some(now);
+                                seq.total_prompt_time = Some(now - seq.timestamp());
                             }
                         }
                     }
