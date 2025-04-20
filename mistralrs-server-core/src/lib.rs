@@ -228,7 +228,7 @@ async fn re_isq(
     Ok(repr)
 }
 
-fn get_router(state: Arc<MistralRs>) -> Router {
+fn get_router(state: Arc<MistralRs>, base_path: Option<&str>) -> Router {
     #[derive(OpenApi)]
     #[openapi(
       paths(models, health, chatcompletions),
@@ -254,8 +254,14 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
         .allow_origin(allow_origin);
 
+    // Use the provided base path or default to ""
+    let prefix = base_path.unwrap_or("");
+
     Router::new()
-        .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", doc))
+        .merge(
+            SwaggerUi::new(format!("{prefix}/docs"))
+                .url(format!("{prefix}/api-doc/openapi.json"), doc),
+        )
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/completions", post(completions))
         .route("/v1/models", get(models))
@@ -268,7 +274,7 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .with_state(state)
 }
 
-pub async fn get_router_core(mut args: Args) -> Result<Router> {
+pub async fn get_router_core(mut args: Args, base_path: Option<&str>) -> Result<Router> {
     initialize_logging();
 
     let use_flash_attn = mistralrs_core::using_flash_attn();
@@ -500,7 +506,7 @@ pub async fn get_router_core(mut args: Args) -> Result<Router> {
     //     None
     // };
 
-    let app = get_router(mistralrs);
+    let app = get_router(mistralrs, base_path);
 
     Ok(app)
 }
