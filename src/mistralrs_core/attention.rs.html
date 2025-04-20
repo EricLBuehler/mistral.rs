@@ -316,107 +316,109 @@
 <a href=#316 id=316 data-nosnippet>316</a>            mask.layout().broadcast_as(tgt_mask_shape.clone()).is_ok()
 <a href=#317 id=317 data-nosnippet>317</a>                &amp;&amp; sdpa_params.softcap.is_none_or(|x| x == <span class="number">1.0</span>)
 <a href=#318 id=318 data-nosnippet>318</a>        });
-<a href=#319 id=319 data-nosnippet>319</a>        <span class="kw">let </span>valid_head_dims: <span class="kw-2">&amp;</span>[usize] = <span class="kw">if </span>can_use_mask &amp;&amp; mask.is_some() {
-<a href=#320 id=320 data-nosnippet>320</a>            <span class="kw-2">&amp;</span>[<span class="number">64</span>, <span class="number">80</span>, <span class="number">128</span>]
+<a href=#319 id=319 data-nosnippet>319</a>        <span class="kw">let </span>valid_head_dims: <span class="kw-2">&amp;</span>[usize] = <span class="kw">if </span>seq_len == <span class="number">1 </span>{
+<a href=#320 id=320 data-nosnippet>320</a>            <span class="kw-2">&amp;</span>[<span class="number">32</span>, <span class="number">64</span>, <span class="number">72</span>, <span class="number">80</span>, <span class="number">96</span>, <span class="number">128</span>, <span class="number">256</span>]
 <a href=#321 id=321 data-nosnippet>321</a>        } <span class="kw">else </span>{
-<a href=#322 id=322 data-nosnippet>322</a>            <span class="kw-2">&amp;</span>[<span class="number">32</span>, <span class="number">64</span>, <span class="number">96</span>, <span class="number">128</span>, <span class="number">256</span>]
-<a href=#323 id=323 data-nosnippet>323</a>        };
-<a href=#324 id=324 data-nosnippet>324</a>        <span class="kw">if </span>[q, k, v].into_iter().all(|x| x.device().is_metal())
-<a href=#325 id=325 data-nosnippet>325</a>            &amp;&amp; all_head_dims_match
-<a href=#326 id=326 data-nosnippet>326</a>            &amp;&amp; valid_head_dims.contains(<span class="kw-2">&amp;</span>head_dim)
-<a href=#327 id=327 data-nosnippet>327</a>            &amp;&amp; can_use_mask
-<a href=#328 id=328 data-nosnippet>328</a>        {
-<a href=#329 id=329 data-nosnippet>329</a>            <span class="kw">let </span>mask = <span class="kw">match </span>mask {
-<a href=#330 id=330 data-nosnippet>330</a>                <span class="prelude-val">Some</span>(mask) =&gt; <span class="prelude-val">Some</span>(mask.broadcast_as(tgt_mask_shape)<span class="question-mark">?</span>),
-<a href=#331 id=331 data-nosnippet>331</a>                <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#332 id=332 data-nosnippet>332</a>            };
-<a href=#333 id=333 data-nosnippet>333</a>            <span class="kw">return </span>candle_nn::ops::sdpa(
-<a href=#334 id=334 data-nosnippet>334</a>                q,
-<a href=#335 id=335 data-nosnippet>335</a>                k,
-<a href=#336 id=336 data-nosnippet>336</a>                v,
-<a href=#337 id=337 data-nosnippet>337</a>                mask.as_ref(),
-<a href=#338 id=338 data-nosnippet>338</a>                <span class="bool-val">false</span>,
-<a href=#339 id=339 data-nosnippet>339</a>                sdpa_params.softmax_scale,
-<a href=#340 id=340 data-nosnippet>340</a>                sdpa_params.softcap.unwrap_or(<span class="number">1.0</span>),
-<a href=#341 id=341 data-nosnippet>341</a>            );
-<a href=#342 id=342 data-nosnippet>342</a>        }
-<a href=#343 id=343 data-nosnippet>343</a>
-<a href=#344 id=344 data-nosnippet>344</a>        <span class="kw">let </span>k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
-<a href=#345 id=345 data-nosnippet>345</a>        <span class="kw">let </span>v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
-<a href=#346 id=346 data-nosnippet>346</a>
-<a href=#347 id=347 data-nosnippet>347</a>        <span class="kw">if </span>mask.is_some_and(|x| x.rank() == <span class="number">2</span>) || mistralrs_quant::distributed::use_nccl() {
-<a href=#348 id=348 data-nosnippet>348</a>            <span class="kw">return </span>naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params);
-<a href=#349 id=349 data-nosnippet>349</a>        }
-<a href=#350 id=350 data-nosnippet>350</a>
-<a href=#351 id=351 data-nosnippet>351</a>        <span class="comment">// TODO: bench?
-<a href=#352 id=352 data-nosnippet>352</a>        </span><span class="attr">#[allow(unused)]
-<a href=#353 id=353 data-nosnippet>353</a>        </span><span class="kw">if let </span>(Device::Cuda(<span class="kw">_</span>), <span class="prelude-val">Some</span>(cublaslt)) = (
-<a href=#354 id=354 data-nosnippet>354</a>            q.device(),
-<a href=#355 id=355 data-nosnippet>355</a>            <span class="kw-2">*</span>mistralrs_quant::cublaslt::CUBLASLT_HANDLE.lock().unwrap(),
-<a href=#356 id=356 data-nosnippet>356</a>        ) {
-<a href=#357 id=357 data-nosnippet>357</a>            <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
-<a href=#358 id=358 data-nosnippet>358</a>            </span>{
-<a href=#359 id=359 data-nosnippet>359</a>                maybe_synchronize(q.device())<span class="question-mark">?</span>;
-<a href=#360 id=360 data-nosnippet>360</a>
-<a href=#361 id=361 data-nosnippet>361</a>                <span class="comment">// cuBLASLt batch matmul implementation requires inputs to be dims3
-<a href=#362 id=362 data-nosnippet>362</a>                </span><span class="kw">let </span>k = k.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
-<a href=#363 id=363 data-nosnippet>363</a>                <span class="kw">let </span>q = q.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
-<a href=#364 id=364 data-nosnippet>364</a>                <span class="kw">let </span>v = v.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
-<a href=#365 id=365 data-nosnippet>365</a>                <span class="kw">let </span>attention_bias = <span class="kw">match </span>mask {
-<a href=#366 id=366 data-nosnippet>366</a>                    <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1 </span>=&gt; {
-<a href=#367 id=367 data-nosnippet>367</a>                        <span class="prelude-val">Some</span>(mask.repeat((n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>)
-<a href=#368 id=368 data-nosnippet>368</a>                    }
-<a href=#369 id=369 data-nosnippet>369</a>                    <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>=&gt; <span class="prelude-val">Some</span>(mask.clone()),
-<a href=#370 id=370 data-nosnippet>370</a>                    <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">4 </span>=&gt; <span class="prelude-val">Some</span>(mask.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>),
-<a href=#371 id=371 data-nosnippet>371</a>                    <span class="prelude-val">Some</span>(mask) =&gt; {
-<a href=#372 id=372 data-nosnippet>372</a>                        <span class="macro">candle_core::bail!</span>(<span class="string">"cublaslt attn mask: rank must be 3 or 4"</span>)
-<a href=#373 id=373 data-nosnippet>373</a>                    }
-<a href=#374 id=374 data-nosnippet>374</a>                    <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#375 id=375 data-nosnippet>375</a>                };
-<a href=#376 id=376 data-nosnippet>376</a>
-<a href=#377 id=377 data-nosnippet>377</a>                <span class="comment">// If attention_bias is set, we fuse the add by giving it as the output matrix
-<a href=#378 id=378 data-nosnippet>378</a>                // and setting beta to 1.0
-<a href=#379 id=379 data-nosnippet>379</a>                </span><span class="kw">let </span>beta = <span class="kw">match </span>attention_bias.is_some() {
-<a href=#380 id=380 data-nosnippet>380</a>                    <span class="bool-val">true </span>=&gt; <span class="prelude-val">Some</span>(<span class="number">1.0</span>),
-<a href=#381 id=381 data-nosnippet>381</a>                    <span class="bool-val">false </span>=&gt; <span class="prelude-val">None</span>,
-<a href=#382 id=382 data-nosnippet>382</a>                };
-<a href=#383 id=383 data-nosnippet>383</a>
-<a href=#384 id=384 data-nosnippet>384</a>                <span class="comment">// Batch matrix multiplication
-<a href=#385 id=385 data-nosnippet>385</a>                // Fuse softmax scale and attention_bias add
-<a href=#386 id=386 data-nosnippet>386</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>attention_scores = cublaslt.batch_matmul(
-<a href=#387 id=387 data-nosnippet>387</a>                    <span class="kw-2">&amp;</span>k,
-<a href=#388 id=388 data-nosnippet>388</a>                    <span class="kw-2">&amp;</span>q,
-<a href=#389 id=389 data-nosnippet>389</a>                    attention_bias.as_ref(),
-<a href=#390 id=390 data-nosnippet>390</a>                    <span class="prelude-val">Some</span>(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(<span class="number">1.0</span>)),
-<a href=#391 id=391 data-nosnippet>391</a>                    beta,
-<a href=#392 id=392 data-nosnippet>392</a>                    <span class="prelude-val">None</span>,
-<a href=#393 id=393 data-nosnippet>393</a>                    <span class="prelude-val">None</span>,
-<a href=#394 id=394 data-nosnippet>394</a>                )<span class="question-mark">?</span>;
-<a href=#395 id=395 data-nosnippet>395</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
-<a href=#396 id=396 data-nosnippet>396</a>                    attention_scores = (attention_scores.tanh()<span class="question-mark">? </span>* softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
-<a href=#397 id=397 data-nosnippet>397</a>                }
-<a href=#398 id=398 data-nosnippet>398</a>                candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>attention_scores)<span class="question-mark">?</span>;
-<a href=#399 id=399 data-nosnippet>399</a>
-<a href=#400 id=400 data-nosnippet>400</a>                <span class="kw">let </span>context_layer = cublaslt.batch_matmul(
-<a href=#401 id=401 data-nosnippet>401</a>                    <span class="kw-2">&amp;</span>v.t()<span class="question-mark">?</span>.contiguous().unwrap(),
-<a href=#402 id=402 data-nosnippet>402</a>                    <span class="kw-2">&amp;</span>attention_scores,
-<a href=#403 id=403 data-nosnippet>403</a>                    <span class="comment">// We save one allocation
-<a href=#404 id=404 data-nosnippet>404</a>                    </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>q),
-<a href=#405 id=405 data-nosnippet>405</a>                    <span class="prelude-val">None</span>,
-<a href=#406 id=406 data-nosnippet>406</a>                    <span class="prelude-val">None</span>,
+<a href=#322 id=322 data-nosnippet>322</a>            <span class="comment">// Not sure why the full kernel doesn't like 256.
+<a href=#323 id=323 data-nosnippet>323</a>            // [32, 64, 72, 80, 96, 128, 256]
+<a href=#324 id=324 data-nosnippet>324</a>            </span><span class="kw-2">&amp;</span>[<span class="number">32</span>, <span class="number">64</span>, <span class="number">72</span>, <span class="number">80</span>, <span class="number">96</span>, <span class="number">128</span>]
+<a href=#325 id=325 data-nosnippet>325</a>        };
+<a href=#326 id=326 data-nosnippet>326</a>        <span class="kw">if </span>[q, k, v].into_iter().all(|x| x.device().is_metal())
+<a href=#327 id=327 data-nosnippet>327</a>            &amp;&amp; all_head_dims_match
+<a href=#328 id=328 data-nosnippet>328</a>            &amp;&amp; valid_head_dims.contains(<span class="kw-2">&amp;</span>head_dim)
+<a href=#329 id=329 data-nosnippet>329</a>            &amp;&amp; can_use_mask
+<a href=#330 id=330 data-nosnippet>330</a>        {
+<a href=#331 id=331 data-nosnippet>331</a>            <span class="kw">let </span>mask = <span class="kw">match </span>mask {
+<a href=#332 id=332 data-nosnippet>332</a>                <span class="prelude-val">Some</span>(mask) =&gt; <span class="prelude-val">Some</span>(mask.broadcast_as(tgt_mask_shape)<span class="question-mark">?</span>),
+<a href=#333 id=333 data-nosnippet>333</a>                <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#334 id=334 data-nosnippet>334</a>            };
+<a href=#335 id=335 data-nosnippet>335</a>            <span class="kw">return </span>candle_nn::ops::sdpa(
+<a href=#336 id=336 data-nosnippet>336</a>                q,
+<a href=#337 id=337 data-nosnippet>337</a>                k,
+<a href=#338 id=338 data-nosnippet>338</a>                v,
+<a href=#339 id=339 data-nosnippet>339</a>                mask.as_ref(),
+<a href=#340 id=340 data-nosnippet>340</a>                <span class="bool-val">false</span>,
+<a href=#341 id=341 data-nosnippet>341</a>                sdpa_params.softmax_scale,
+<a href=#342 id=342 data-nosnippet>342</a>                sdpa_params.softcap.unwrap_or(<span class="number">1.0</span>),
+<a href=#343 id=343 data-nosnippet>343</a>            );
+<a href=#344 id=344 data-nosnippet>344</a>        }
+<a href=#345 id=345 data-nosnippet>345</a>
+<a href=#346 id=346 data-nosnippet>346</a>        <span class="kw">let </span>k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
+<a href=#347 id=347 data-nosnippet>347</a>        <span class="kw">let </span>v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)<span class="question-mark">?</span>;
+<a href=#348 id=348 data-nosnippet>348</a>
+<a href=#349 id=349 data-nosnippet>349</a>        <span class="kw">if </span>mask.is_some_and(|x| x.rank() == <span class="number">2</span>) || mistralrs_quant::distributed::use_nccl() {
+<a href=#350 id=350 data-nosnippet>350</a>            <span class="kw">return </span>naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params);
+<a href=#351 id=351 data-nosnippet>351</a>        }
+<a href=#352 id=352 data-nosnippet>352</a>
+<a href=#353 id=353 data-nosnippet>353</a>        <span class="comment">// TODO: bench?
+<a href=#354 id=354 data-nosnippet>354</a>        </span><span class="attr">#[allow(unused)]
+<a href=#355 id=355 data-nosnippet>355</a>        </span><span class="kw">if let </span>(Device::Cuda(<span class="kw">_</span>), <span class="prelude-val">Some</span>(cublaslt)) = (
+<a href=#356 id=356 data-nosnippet>356</a>            q.device(),
+<a href=#357 id=357 data-nosnippet>357</a>            <span class="kw-2">*</span>mistralrs_quant::cublaslt::CUBLASLT_HANDLE.lock().unwrap(),
+<a href=#358 id=358 data-nosnippet>358</a>        ) {
+<a href=#359 id=359 data-nosnippet>359</a>            <span class="attr">#[cfg(feature = <span class="string">"cuda"</span>)]
+<a href=#360 id=360 data-nosnippet>360</a>            </span>{
+<a href=#361 id=361 data-nosnippet>361</a>                maybe_synchronize(q.device())<span class="question-mark">?</span>;
+<a href=#362 id=362 data-nosnippet>362</a>
+<a href=#363 id=363 data-nosnippet>363</a>                <span class="comment">// cuBLASLt batch matmul implementation requires inputs to be dims3
+<a href=#364 id=364 data-nosnippet>364</a>                </span><span class="kw">let </span>k = k.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#365 id=365 data-nosnippet>365</a>                <span class="kw">let </span>q = q.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#366 id=366 data-nosnippet>366</a>                <span class="kw">let </span>v = v.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#367 id=367 data-nosnippet>367</a>                <span class="kw">let </span>attention_bias = <span class="kw">match </span>mask {
+<a href=#368 id=368 data-nosnippet>368</a>                    <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>&amp;&amp; mask.dims()[<span class="number">0</span>] == <span class="number">1 </span>=&gt; {
+<a href=#369 id=369 data-nosnippet>369</a>                        <span class="prelude-val">Some</span>(mask.repeat((n_attn_heads, <span class="number">1</span>, <span class="number">1</span>))<span class="question-mark">?</span>)
+<a href=#370 id=370 data-nosnippet>370</a>                    }
+<a href=#371 id=371 data-nosnippet>371</a>                    <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">3 </span>=&gt; <span class="prelude-val">Some</span>(mask.clone()),
+<a href=#372 id=372 data-nosnippet>372</a>                    <span class="prelude-val">Some</span>(mask) <span class="kw">if </span>mask.rank() == <span class="number">4 </span>=&gt; <span class="prelude-val">Some</span>(mask.flatten(<span class="number">0</span>, <span class="number">1</span>)<span class="question-mark">?</span>),
+<a href=#373 id=373 data-nosnippet>373</a>                    <span class="prelude-val">Some</span>(mask) =&gt; {
+<a href=#374 id=374 data-nosnippet>374</a>                        <span class="macro">candle_core::bail!</span>(<span class="string">"cublaslt attn mask: rank must be 3 or 4"</span>)
+<a href=#375 id=375 data-nosnippet>375</a>                    }
+<a href=#376 id=376 data-nosnippet>376</a>                    <span class="prelude-val">None </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#377 id=377 data-nosnippet>377</a>                };
+<a href=#378 id=378 data-nosnippet>378</a>
+<a href=#379 id=379 data-nosnippet>379</a>                <span class="comment">// If attention_bias is set, we fuse the add by giving it as the output matrix
+<a href=#380 id=380 data-nosnippet>380</a>                // and setting beta to 1.0
+<a href=#381 id=381 data-nosnippet>381</a>                </span><span class="kw">let </span>beta = <span class="kw">match </span>attention_bias.is_some() {
+<a href=#382 id=382 data-nosnippet>382</a>                    <span class="bool-val">true </span>=&gt; <span class="prelude-val">Some</span>(<span class="number">1.0</span>),
+<a href=#383 id=383 data-nosnippet>383</a>                    <span class="bool-val">false </span>=&gt; <span class="prelude-val">None</span>,
+<a href=#384 id=384 data-nosnippet>384</a>                };
+<a href=#385 id=385 data-nosnippet>385</a>
+<a href=#386 id=386 data-nosnippet>386</a>                <span class="comment">// Batch matrix multiplication
+<a href=#387 id=387 data-nosnippet>387</a>                // Fuse softmax scale and attention_bias add
+<a href=#388 id=388 data-nosnippet>388</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>attention_scores = cublaslt.batch_matmul(
+<a href=#389 id=389 data-nosnippet>389</a>                    <span class="kw-2">&amp;</span>k,
+<a href=#390 id=390 data-nosnippet>390</a>                    <span class="kw-2">&amp;</span>q,
+<a href=#391 id=391 data-nosnippet>391</a>                    attention_bias.as_ref(),
+<a href=#392 id=392 data-nosnippet>392</a>                    <span class="prelude-val">Some</span>(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(<span class="number">1.0</span>)),
+<a href=#393 id=393 data-nosnippet>393</a>                    beta,
+<a href=#394 id=394 data-nosnippet>394</a>                    <span class="prelude-val">None</span>,
+<a href=#395 id=395 data-nosnippet>395</a>                    <span class="prelude-val">None</span>,
+<a href=#396 id=396 data-nosnippet>396</a>                )<span class="question-mark">?</span>;
+<a href=#397 id=397 data-nosnippet>397</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(softcap) = sdpa_params.softcap {
+<a href=#398 id=398 data-nosnippet>398</a>                    attention_scores = (attention_scores.tanh()<span class="question-mark">? </span>* softcap <span class="kw">as </span>f64)<span class="question-mark">?</span>;
+<a href=#399 id=399 data-nosnippet>399</a>                }
+<a href=#400 id=400 data-nosnippet>400</a>                candle_nn::ops::inplace_softmax_last_dim(<span class="kw-2">&amp;mut </span>attention_scores)<span class="question-mark">?</span>;
+<a href=#401 id=401 data-nosnippet>401</a>
+<a href=#402 id=402 data-nosnippet>402</a>                <span class="kw">let </span>context_layer = cublaslt.batch_matmul(
+<a href=#403 id=403 data-nosnippet>403</a>                    <span class="kw-2">&amp;</span>v.t()<span class="question-mark">?</span>.contiguous().unwrap(),
+<a href=#404 id=404 data-nosnippet>404</a>                    <span class="kw-2">&amp;</span>attention_scores,
+<a href=#405 id=405 data-nosnippet>405</a>                    <span class="comment">// We save one allocation
+<a href=#406 id=406 data-nosnippet>406</a>                    </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>q),
 <a href=#407 id=407 data-nosnippet>407</a>                    <span class="prelude-val">None</span>,
 <a href=#408 id=408 data-nosnippet>408</a>                    <span class="prelude-val">None</span>,
-<a href=#409 id=409 data-nosnippet>409</a>                )<span class="question-mark">?</span>;
-<a href=#410 id=410 data-nosnippet>410</a>
-<a href=#411 id=411 data-nosnippet>411</a>                <span class="comment">// Reshape to dims4
-<a href=#412 id=412 data-nosnippet>412</a>                </span>context_layer.reshape((b_sz, n_attn_heads, seq_len, v_head_dim))
-<a href=#413 id=413 data-nosnippet>413</a>            }
-<a href=#414 id=414 data-nosnippet>414</a>            <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
-<a href=#415 id=415 data-nosnippet>415</a>            </span>{
-<a href=#416 id=416 data-nosnippet>416</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"`cuda` feature is not enabled"</span>)
-<a href=#417 id=417 data-nosnippet>417</a>            }
-<a href=#418 id=418 data-nosnippet>418</a>        } <span class="kw">else </span>{
-<a href=#419 id=419 data-nosnippet>419</a>            naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params)
-<a href=#420 id=420 data-nosnippet>420</a>        }
-<a href=#421 id=421 data-nosnippet>421</a>    }
-<a href=#422 id=422 data-nosnippet>422</a>}</code></pre></div></section></main></body></html>
+<a href=#409 id=409 data-nosnippet>409</a>                    <span class="prelude-val">None</span>,
+<a href=#410 id=410 data-nosnippet>410</a>                    <span class="prelude-val">None</span>,
+<a href=#411 id=411 data-nosnippet>411</a>                )<span class="question-mark">?</span>;
+<a href=#412 id=412 data-nosnippet>412</a>
+<a href=#413 id=413 data-nosnippet>413</a>                <span class="comment">// Reshape to dims4
+<a href=#414 id=414 data-nosnippet>414</a>                </span>context_layer.reshape((b_sz, n_attn_heads, seq_len, v_head_dim))
+<a href=#415 id=415 data-nosnippet>415</a>            }
+<a href=#416 id=416 data-nosnippet>416</a>            <span class="attr">#[cfg(not(feature = <span class="string">"cuda"</span>))]
+<a href=#417 id=417 data-nosnippet>417</a>            </span>{
+<a href=#418 id=418 data-nosnippet>418</a>                <span class="macro">candle_core::bail!</span>(<span class="string">"`cuda` feature is not enabled"</span>)
+<a href=#419 id=419 data-nosnippet>419</a>            }
+<a href=#420 id=420 data-nosnippet>420</a>        } <span class="kw">else </span>{
+<a href=#421 id=421 data-nosnippet>421</a>            naive_sdpa(q, <span class="kw-2">&amp;</span>k, <span class="kw-2">&amp;</span>v, mask, sdpa_params)
+<a href=#422 id=422 data-nosnippet>422</a>        }
+<a href=#423 id=423 data-nosnippet>423</a>    }
+<a href=#424 id=424 data-nosnippet>424</a>}</code></pre></div></section></main></body></html>
