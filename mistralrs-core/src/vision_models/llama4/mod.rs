@@ -112,6 +112,7 @@ impl Llama4Model {
                 .to_dtype(DType::U32)?;
 
             let mask_flat = special_image_mask.flatten_all()?;
+            // Nonzero before vision model to allow async processing all the way through logits.
             let indices = mask_flat.nonzero()?.squeeze(1)?;
 
             let image_features = self.vision_model.forward(&pixel_values)?;
