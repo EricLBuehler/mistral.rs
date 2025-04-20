@@ -418,15 +418,15 @@
 <a href=#418 id=418 data-nosnippet>418</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(exec_duration);
 <a href=#419 id=419 data-nosnippet>419</a>                }
 <a href=#420 id=420 data-nosnippet>420</a>
-<a href=#421 id=421 data-nosnippet>421</a>                <span class="kw">let </span>logits = logits
-<a href=#422 id=422 data-nosnippet>422</a>                    .into_iter()
-<a href=#423 id=423 data-nosnippet>423</a>                    .map(|l| {
-<a href=#424 id=424 data-nosnippet>424</a>                        l.expect(<span class="string">"Did not get any inputs. This is shocking."</span>)
-<a href=#425 id=425 data-nosnippet>425</a>                            .to_device(<span class="kw-2">&amp;</span>Device::Cpu)
-<a href=#426 id=426 data-nosnippet>426</a>                    })
-<a href=#427 id=427 data-nosnippet>427</a>                    .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#428 id=428 data-nosnippet>428</a>
-<a href=#429 id=429 data-nosnippet>429</a>                <span class="kw">let </span>start = Instant::now();
+<a href=#421 id=421 data-nosnippet>421</a>                <span class="kw">let </span>start = Instant::now();
+<a href=#422 id=422 data-nosnippet>422</a>                <span class="kw">let </span>logits = logits
+<a href=#423 id=423 data-nosnippet>423</a>                    .into_iter()
+<a href=#424 id=424 data-nosnippet>424</a>                    .map(|l| {
+<a href=#425 id=425 data-nosnippet>425</a>                        l.expect(<span class="string">"Did not get any inputs. This is shocking."</span>)
+<a href=#426 id=426 data-nosnippet>426</a>                            .to_device(<span class="kw-2">&amp;</span>Device::Cpu)
+<a href=#427 id=427 data-nosnippet>427</a>                    })
+<a href=#428 id=428 data-nosnippet>428</a>                    .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
+<a href=#429 id=429 data-nosnippet>429</a>
 <a href=#430 id=430 data-nosnippet>430</a>                <span class="kw">match </span><span class="kw-2">&amp;</span>logits[<span class="number">0</span>] {
 <a href=#431 id=431 data-nosnippet>431</a>                    ForwardInputsResult::RawLogits { .. } =&gt; <span class="macro">unreachable!</span>(),
 <a href=#432 id=432 data-nosnippet>432</a>                    ForwardInputsResult::CausalGeneration { .. } =&gt; {
@@ -562,15 +562,15 @@
 <a href=#562 id=562 data-nosnippet>562</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(exec_duration);
 <a href=#563 id=563 data-nosnippet>563</a>                }
 <a href=#564 id=564 data-nosnippet>564</a>
-<a href=#565 id=565 data-nosnippet>565</a>                <span class="kw">let </span>logits = logits
-<a href=#566 id=566 data-nosnippet>566</a>                    .into_iter()
-<a href=#567 id=567 data-nosnippet>567</a>                    .map(|l| {
-<a href=#568 id=568 data-nosnippet>568</a>                        l.expect(<span class="string">"Did not get any inputs. This is shocking."</span>)
-<a href=#569 id=569 data-nosnippet>569</a>                            .to_device(<span class="kw-2">&amp;</span>Device::Cpu)
-<a href=#570 id=570 data-nosnippet>570</a>                    })
-<a href=#571 id=571 data-nosnippet>571</a>                    .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#572 id=572 data-nosnippet>572</a>
-<a href=#573 id=573 data-nosnippet>573</a>                <span class="kw">let </span>start = Instant::now();
+<a href=#565 id=565 data-nosnippet>565</a>                <span class="kw">let </span>start = Instant::now();
+<a href=#566 id=566 data-nosnippet>566</a>                <span class="kw">let </span>logits = logits
+<a href=#567 id=567 data-nosnippet>567</a>                    .into_iter()
+<a href=#568 id=568 data-nosnippet>568</a>                    .map(|l| {
+<a href=#569 id=569 data-nosnippet>569</a>                        l.expect(<span class="string">"Did not get any inputs. This is shocking."</span>)
+<a href=#570 id=570 data-nosnippet>570</a>                            .to_device(<span class="kw-2">&amp;</span>Device::Cpu)
+<a href=#571 id=571 data-nosnippet>571</a>                    })
+<a href=#572 id=572 data-nosnippet>572</a>                    .collect::&lt;candle_core::Result&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;&gt;()<span class="question-mark">?</span>;
+<a href=#573 id=573 data-nosnippet>573</a>
 <a href=#574 id=574 data-nosnippet>574</a>                <span class="kw">match </span><span class="kw-2">&amp;</span>logits[<span class="number">0</span>] {
 <a href=#575 id=575 data-nosnippet>575</a>                    ForwardInputsResult::RawLogits { .. } =&gt; <span class="macro">unreachable!</span>(),
 <a href=#576 id=576 data-nosnippet>576</a>                    ForwardInputsResult::CausalGeneration { .. } =&gt; {
