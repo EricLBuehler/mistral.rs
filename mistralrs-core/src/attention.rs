@@ -316,7 +316,13 @@ impl Sdpa {
             mask.layout().broadcast_as(tgt_mask_shape.clone()).is_ok()
                 && sdpa_params.softcap.is_none_or(|x| x == 1.0)
         });
-        let valid_head_dims = [32, 64, 72, 80, 96, 128, 256];
+        let valid_head_dims: &[usize] = if seq_len == 1 {
+            &[32, 64, 72, 80, 96, 128, 256]
+        } else {
+            // Not sure why the full kernel doesn't like 256.
+            // [32, 64, 72, 80, 96, 128, 256]
+            &[32, 64, 72, 80, 96, 128]
+        };
         if [q, k, v].into_iter().all(|x| x.device().is_metal())
             && all_head_dims_match
             && valid_head_dims.contains(&head_dim)
