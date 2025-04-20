@@ -228,7 +228,7 @@ async fn re_isq(
     Ok(repr)
 }
 
-fn get_router(state: Arc<MistralRs>, base_path: Option<&str>) -> Router {
+pub fn get_openapi_doc() -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
       paths(models, health, chatcompletions),
@@ -246,8 +246,14 @@ fn get_router(state: Arc<MistralRs>, base_path: Option<&str>) -> Router {
   )]
     struct ApiDoc;
 
-    let doc = { ApiDoc::openapi() };
+    ApiDoc::openapi()
+}
 
+fn get_router(
+    state: Arc<MistralRs>,
+    include_swagger_routes: bool,
+    base_path: Option<&str>,
+) -> Router {
     let allow_origin = AllowOrigin::any();
     let cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
@@ -257,11 +263,7 @@ fn get_router(state: Arc<MistralRs>, base_path: Option<&str>) -> Router {
     // Use the provided base path or default to ""
     let prefix = base_path.unwrap_or("");
 
-    Router::new()
-        .merge(
-            SwaggerUi::new(format!("{prefix}/docs"))
-                .url(format!("{prefix}/api-doc/openapi.json"), doc),
-        )
+    let mut router = Router::new()
         .route("/v1/chat/completions", post(chatcompletions))
         .route("/v1/completions", post(completions))
         .route("/v1/models", get(models))
@@ -271,10 +273,25 @@ fn get_router(state: Arc<MistralRs>, base_path: Option<&str>) -> Router {
         .route("/v1/images/generations", post(image_generation))
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(N_INPUT_SIZE * MB_TO_B))
-        .with_state(state)
+        .with_state(state);
+
+    if include_swagger_routes {
+        let doc = get_openapi_doc();
+
+        router = router.merge(
+            SwaggerUi::new(format!("{prefix}/docs"))
+                .url(format!("{prefix}/api-doc/openapi.json"), doc),
+        );
+    }
+
+    router
 }
 
-pub async fn get_router_core(mut args: Args, base_path: Option<&str>) -> Result<Router> {
+pub async fn get_router_core(
+    mut args: Args,
+    include_swagger_routes: bool,
+    base_path: Option<&str>,
+) -> Result<Router> {
     initialize_logging();
 
     let use_flash_attn = mistralrs_core::using_flash_attn();
@@ -506,7 +523,7 @@ pub async fn get_router_core(mut args: Args, base_path: Option<&str>) -> Result<
     //     None
     // };
 
-    let app = get_router(mistralrs, base_path);
+    let app = get_router(mistralrs, include_swagger_routes, base_path);
 
     Ok(app)
 }
