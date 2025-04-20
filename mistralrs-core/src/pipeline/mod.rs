@@ -418,6 +418,7 @@ pub trait Pipeline:
                     return Ok(exec_duration);
                 }
 
+                let start = Instant::now();
                 let logits = logits
                     .into_iter()
                     .map(|l| {
@@ -426,7 +427,6 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
-                let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
@@ -562,6 +562,7 @@ pub trait Pipeline:
                     return Ok(exec_duration);
                 }
 
+                let start = Instant::now();
                 let logits = logits
                     .into_iter()
                     .map(|l| {
@@ -570,7 +571,6 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
-                let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
