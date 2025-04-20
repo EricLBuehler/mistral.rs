@@ -105,11 +105,6 @@ impl Llama4Model {
         let mut input_embeds = self.language_model.get_input_embeddings(input_ids)?;
 
         if let Some(pixel_values) = pixel_values {
-            let image_features = self.vision_model.forward(&pixel_values)?;
-
-            let vision_flat = image_features.reshape(((), image_features.dim(D::Minus1)?))?;
-            let projected_vision_flat = self.multi_modal_projector.forward(&vision_flat)?;
-
             let special_image_mask = input_ids
                 .eq(self.image_token_index as f64)?
                 .unsqueeze(D::Minus1)?
@@ -117,10 +112,17 @@ impl Llama4Model {
                 .to_dtype(DType::U32)?;
 
             let mask_flat = special_image_mask.flatten_all()?;
+            // Nonzero before vision model to allow async processing all the way through logits.
+            let indices = mask_flat.nonzero()?.squeeze(1)?;
+
+            let image_features = self.vision_model.forward(&pixel_values)?;
+
+            let vision_flat = image_features.reshape(((), image_features.dim(D::Minus1)?))?;
+            let projected_vision_flat = self.multi_modal_projector.forward(&vision_flat)?;
+
             let mut x_flat = input_embeds.flatten_all()?;
             let src_flat = projected_vision_flat.flatten_all()?;
 
-            let indices = mask_flat.nonzero()?.squeeze(1)?;
             let current_vals = x_flat.gather(&indices, 0)?;
             let diff = (src_flat - current_vals)?;
             x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
