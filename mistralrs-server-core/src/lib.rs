@@ -228,7 +228,7 @@ async fn re_isq(
     Ok(repr)
 }
 
-pub fn get_openapi_doc() -> utoipa::openapi::OpenApi {
+pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
       paths(models, health, chatcompletions),
@@ -246,7 +246,26 @@ pub fn get_openapi_doc() -> utoipa::openapi::OpenApi {
   )]
     struct ApiDoc;
 
-    ApiDoc::openapi()
+    let mut doc = ApiDoc::openapi();
+
+    if let Some(prefix) = base_path {
+        if !prefix.is_empty() {
+            let mut prefixed_paths = utoipa::openapi::Paths::default();
+
+            let original_paths = std::mem::take(&mut doc.paths.paths);
+
+            for (path, item) in original_paths {
+                let prefixed_path = format!("{}{}", prefix, path);
+                prefixed_paths.paths.insert(prefixed_path, item);
+            }
+
+            prefixed_paths.extensions = doc.paths.extensions.clone();
+
+            doc.paths = prefixed_paths;
+        }
+    }
+
+    doc
 }
 
 fn get_router(
@@ -276,7 +295,7 @@ fn get_router(
         .with_state(state);
 
     if include_swagger_routes {
-        let doc = get_openapi_doc();
+        let doc = get_openapi_doc(None);
 
         router = router.merge(
             SwaggerUi::new(format!("{prefix}/docs"))
