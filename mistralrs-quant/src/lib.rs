@@ -56,7 +56,7 @@ pub use lora::{
     MULTI_LORA_DELIMITER,
 };
 pub use unquantized::UnquantLinear;
-pub use utils::UQFF_QUANT_TYPE_OFFSET;
+pub use utils::{BitWiseOp, LeftshiftOp, NonZeroOp, UQFF_QUANT_TYPE_OFFSET};
 
 use candle_nn::{Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
