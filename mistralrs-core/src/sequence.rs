@@ -213,6 +213,7 @@ pub struct Sequence {
     // GPU things
     pub prompt_tok_per_sec: f32,
     pub prompt_timestamp: Option<u128>,
+    pub total_prompt_time: Option<u128>,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
 
@@ -352,6 +353,7 @@ impl Sequence {
             token_offset: 0,
             eos_tokens,
             has_changed_prompt: false,
+            total_prompt_time: None,
         }
     }
 
@@ -724,7 +726,7 @@ impl Sequence {
 
         if let Some(ts) = self.prompt_timestamp {
             get_mut_group!(self).total_completion_time = now - ts;
-            get_mut_group!(self).total_prompt_time = ts - self.timestamp;
+            get_mut_group!(self).total_prompt_time = self.total_prompt_time.unwrap();
         }
 
         get_mut_group!(self).total_time = now - self.timestamp;
