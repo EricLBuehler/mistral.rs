@@ -2716,6 +2716,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "mistralrs-server-core"
+version = "0.5.0"
+dependencies = [
+ "accelerate-src",
+ "anyhow",
+ "axum",
+ "candle-core",
+ "clap",
+ "ctrlc",
+ "data-url",
+ "either",
+ "futures",
+ "image",
+ "indexmap",
+ "intel-mkl-src",
+ "itertools 0.13.0",
+ "mistralrs-core",
+ "once_cell",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tower-http",
+ "tracing",
+ "url",
+ "utoipa",
+ "utoipa-swagger-ui",
+]
+
+[[package]]
 name = "mistralrs-vision"
 version = "0.6.0"
 dependencies = [

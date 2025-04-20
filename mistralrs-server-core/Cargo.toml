@@ -1,0 +1,49 @@
+[package]
+name = "mistralrs-server-core"
+readme = "README.md"
+authors = ["Eric Buehler"]
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+homepage.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+ctrlc = "3.4.4"
+candle-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum = { version = "0.7.4", features = ["tokio"] }
+tower-http = { version = "0.5.1", features = ["cors"] }
+utoipa = { version = "4.2", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "7.1.0", features = ["axum"] }
+mistralrs-core = { version = "0.5.0", path = "../mistralrs-core" }
+indexmap.workspace = true
+accelerate-src = { workspace = true, optional = true }
+intel-mkl-src = { workspace = true, optional = true }
+futures.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+either.workspace = true
+clap.workspace = true
+once_cell.workspace = true
+reqwest.workspace = true
+image.workspace = true
+url.workspace = true
+data-url.workspace = true
+regex.workspace = true
+toml.workspace = true
+itertools.workspace = true
+
+[features]
+cuda = ["mistralrs-core/cuda"]
+cudnn = ["mistralrs-core/cudnn"]
+metal = ["mistralrs-core/metal"]
+flash-attn = ["cuda", "mistralrs-core/flash-attn"]
+accelerate = ["mistralrs-core/accelerate"]
+mkl = ["mistralrs-core/mkl"]
+nccl = ["mistralrs-core/nccl"]
