@@ -30,12 +30,10 @@ fn terminate_handler() {
 static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
     Lazy::new(|| Mutex::new(&exit_handler));
 
-pub async fn interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_search: bool) {
+pub async fn interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
     match mistralrs.get_model_category() {
-        ModelCategory::Text => text_interactive_mode(mistralrs, throughput, do_search).await,
-        ModelCategory::Vision { .. } => {
-            vision_interactive_mode(mistralrs, throughput, do_search).await
-        }
+        ModelCategory::Text => text_interactive_mode(mistralrs, do_search).await,
+        ModelCategory::Vision { .. } => vision_interactive_mode(mistralrs, do_search).await,
         ModelCategory::Diffusion => diffusion_interactive_mode(mistralrs, do_search).await,
     }
 }
@@ -81,7 +79,7 @@ const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
 const IMAGE_CMD: &str = "\\image";
 
-async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_search: bool) {
+async fn text_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
 
@@ -231,11 +229,18 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_s
                 Response::Raw { .. } => unreachable!(),
             }
         }
-        if throughput && last_usage.is_some() {
+
+        if let Some(last_usage) = last_usage {
             println!();
-            info!(
-                "Completion T/s: {}",
-                last_usage.unwrap().avg_compl_tok_per_sec
+            println!();
+            println!("Stats:");
+            println!(
+                "Prompt: {} tokens, {:.2} T/s",
+                last_usage.prompt_tokens, last_usage.avg_prompt_tok_per_sec
+            );
+            println!(
+                "Decode: {} tokens, {:.2} T/s",
+                last_usage.completion_tokens, last_usage.avg_compl_tok_per_sec
             );
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
@@ -273,7 +278,7 @@ fn parse_image_path_and_message(input: &str) -> Option<(String, String)> {
     None
 }
 
-async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do_search: bool) {
+async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
@@ -463,11 +468,18 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, throughput: bool, do
                 Response::Raw { .. } => unreachable!(),
             }
         }
-        if throughput {
+
+        if let Some(last_usage) = last_usage {
             println!();
-            info!(
-                "Completion T/s: {}",
-                last_usage.unwrap().avg_compl_tok_per_sec
+            println!();
+            println!("Stats:");
+            println!(
+                "Prompt: {} tokens, {:.2} T/s",
+                last_usage.prompt_tokens, last_usage.avg_prompt_tok_per_sec
+            );
+            println!(
+                "Decode: {} tokens, {:.2} T/s",
+                last_usage.completion_tokens, last_usage.avg_compl_tok_per_sec
             );
         }
         let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
