@@ -52,128 +52,128 @@ fn parse_token_source(s: &str) -> Result<TokenSource, String> {
 pub struct Args {
     /// IP to serve on. Defaults to "0.0.0.0"
     #[arg(long)]
-    serve_ip: Option<String>,
+    pub serve_ip: Option<String>,
 
     /// Integer seed to ensure reproducible random number generation.
     #[arg(short, long)]
-    seed: Option<u64>,
+    pub seed: Option<u64>,
 
     /// Port to serve on.
     #[arg(short, long)]
-    port: Option<String>,
+    pub port: Option<String>,
 
     /// Log all responses and requests to this file
     #[clap(long, short)]
-    log: Option<String>,
+    pub log: Option<String>,
 
     /// If a sequence is larger than the maximum model length, truncate the number
     /// of tokens such that the sequence will fit at most the maximum length.
     /// If `max_tokens` is not specified in the request, space for 10 tokens will be reserved instead.
     #[clap(long, short, action)]
-    truncate_sequence: bool,
+    pub truncate_sequence: bool,
 
     /// Model selector
     #[clap(subcommand)]
-    model: ModelSelected,
+    pub model: ModelSelected,
 
     /// Maximum running sequences at any time. If the `tgt_non_granular_index` flag is set for X-LoRA models, this will be set to 1.
     #[arg(long, default_value_t = 16)]
-    max_seqs: usize,
+    pub max_seqs: usize,
 
     /// Use no KV cache.
     #[arg(long, default_value_t = false)]
-    no_kv_cache: bool,
+    pub no_kv_cache: bool,
 
     /// Chat template file with a JINJA file with `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
     /// Used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
     #[arg(short, long)]
-    chat_template: Option<String>,
+    pub chat_template: Option<String>,
 
     /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
     #[arg(short, long)]
-    jinja_explicit: Option<String>,
+    pub jinja_explicit: Option<String>,
 
     /// Source of the token for authentication.
     /// Can be in the formats: `literal:<value>`, `env:<value>`, `path:<value>`, `cache` to use a cached token, or `none` to use no token.
     /// Defaults to `cache`.
     #[arg(long, default_value_t = TokenSource::CacheToken, value_parser = parse_token_source)]
-    token_source: TokenSource,
+    pub token_source: TokenSource,
 
     /// Enter interactive mode instead of serving a chat server.
     #[clap(long, short, action)]
-    interactive_mode: bool,
+    pub interactive_mode: bool,
 
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
     #[arg(long, default_value_t = 16)]
-    prefix_cache_n: usize,
+    pub prefix_cache_n: usize,
 
     /// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
     /// If one GPU is used, then this value should be an integer. Otherwise, it follows the following pattern:
     /// ORD:NUM;... Where ORD is a unique device ordinal and NUM is the number of layers for that device.
     #[arg(short, long, value_parser, value_delimiter = ';')]
-    num_device_layers: Option<Vec<String>>,
+    pub num_device_layers: Option<Vec<String>>,
 
     /// In-situ quantization to apply.
     #[arg(long = "isq", value_parser = parse_isq_value)]
-    in_situ_quant: Option<IsqType>,
+    pub in_situ_quant: Option<IsqType>,
 
     /// GPU memory to allocate for KV cache with PagedAttention in MBs.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem")]
-    paged_attn_gpu_mem: Option<usize>,
+    pub paged_attn_gpu_mem: Option<usize>,
 
     /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
     /// If this is not set and the device is CUDA, it will default to `0.9`.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
     #[arg(long = "pa-gpu-mem-usage")]
-    paged_attn_gpu_mem_usage: Option<f32>,
+    pub paged_attn_gpu_mem_usage: Option<f32>,
 
     /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
     /// This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
     #[arg(long = "pa-ctxt-len")]
-    paged_ctxt_len: Option<usize>,
+    pub paged_ctxt_len: Option<usize>,
 
     /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     #[arg(long = "pa-blk-size")]
-    paged_attn_block_size: Option<usize>,
+    pub paged_attn_block_size: Option<usize>,
 
     /// Disable PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
     #[arg(long = "no-paged-attn", default_value_t = false)]
-    no_paged_attn: bool,
+    pub no_paged_attn: bool,
 
     /// Enable PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
     #[arg(long = "paged-attn", default_value_t = false)]
-    paged_attn: bool,
+    pub paged_attn: bool,
 
     /// Enable server throughput logging, supported in the server and with interactive mode
     #[arg(long = "throughput", default_value_t = false)]
-    throughput_log: bool,
+    pub throughput_log: bool,
 
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
-    prompt_chunksize: Option<usize>,
+    pub prompt_chunksize: Option<usize>,
 
     /// Use CPU only
     #[arg(long)]
-    cpu: bool,
+    pub cpu: bool,
 
     /// Enable web searching for interactive mode.
     #[arg(long = "interactive-search")]
-    interactive_search: bool,
+    pub interactive_search: bool,
 
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
     #[arg(long = "enable-search")]
-    enable_search: bool,
+    pub enable_search: bool,
 
     /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
     #[arg(long = "search-bert-model")]
-    search_bert_model: Option<String>,
+    pub search_bert_model: Option<String>,
 }
 
 #[utoipa::path(
