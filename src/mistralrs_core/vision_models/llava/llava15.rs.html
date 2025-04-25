@@ -10,20 +10,20 @@
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span><span class="kw">crate</span>::amoe::MlpLayer;
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">use </span><span class="kw">crate</span>::device_map::DeviceMapper;
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span><span class="kw">crate</span>::layers;
-<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span><span class="kw">crate</span>::ops::NonZeroOp;
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::FlashParams;
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::IsqModel;
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::NormalLoadingMetadata;
-<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::VisionModel;
-<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span><span class="kw">crate</span>::utils::unvarbuilder::UnVarBuilder;
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::clip::{ClipConfig, ClipVisionTransformer};
-<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::llava::config::Config;
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::AnyMoeConfig;
-<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span><span class="kw">crate</span>::AnyMoeExpertType;
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>candle_core::{bail, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>candle_nn::{Activation, Linear};
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span><span class="kw">crate</span>::paged_attention::{AttentionImplementation, ModelConfigMetadata};
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::FlashParams;
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+<a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::IsqModel;
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::NormalLoadingMetadata;
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::VisionModel;
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span><span class="kw">crate</span>::utils::unvarbuilder::UnVarBuilder;
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::clip::{ClipConfig, ClipVisionTransformer};
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::llava::config::Config;
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span><span class="kw">crate</span>::AnyMoeConfig;
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::AnyMoeExpertType;
+<a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>candle_core::{bail, DType, Device, IndexOp, <span class="prelude-ty">Result</span>, Tensor};
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>candle_nn::{Activation, Linear};
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>mistralrs_quant::NonZeroOp;
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>mistralrs_quant::ShardedVarBuilder;
 <a href=#28 id=28 data-nosnippet>28</a>
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">struct </span>LLaVAVisionSpecificArgs; <span class="comment">// only a dumb struct to satisfy the trait
