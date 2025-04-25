@@ -267,51 +267,33 @@ inline bfloat16_t uint16_to_bfloat16(const uint16_t x) {
 
 #endif
 
-template<typename TYPENAME>
-METAL_FUNC void masked_scatter(
-    constant size_t &dst_size,
-    constant size_t &src_dim_size,
-    constant size_t &right_size,
-    const device TYPENAME *input,
-    const device bool *mask,
-    device TYPENAME *output,
-    uint tid [[ thread_position_in_grid ]]
-) {
-    if (tid >= dst_size) {
-        return;
-    }
-    const size_t right_rank_i = tid % right_size;
-    const size_t left_rank_i = tid / right_size;
-    for (unsigned int j = 0; j < src_dim_size; ++j) {
-        const size_t src_i = (left_rank_i * src_dim_size + j) * right_size + right_rank_i;
-        if (!mask[src_i]) {
-            continue;
-        }
-        output[src_i] = input[src_i];
-    }
+template <typename T>
+kernel void masked_scatter_kernel(device const T *xs [[buffer(0)]],
+                                  device const uchar *m [[buffer(1)]],
+                                  device T *dst [[buffer(2)]],
+                                  device atomic_uint *ctr [[buffer(3)]],
+                                  constant uint &numel,
+                                  constant uint &dst_numel,
+                                  uint tid [[thread_position_in_grid]]) {
+  if (tid >= numel)
+    return;
+  if (!m[tid])
+    return; // skip masked-off entries
+
+  uint slot = atomic_fetch_add_explicit(ctr, 1, memory_order_relaxed);
+  assert(slot < dst_numel);
+  dst[slot] = xs[tid];
 }
 
-# define MASKED_SCATTER_OP(NAME, TYPENAME) \
-kernel void NAME( \
-    constant size_t &dst_size, \
-    constant size_t &src_dim_size, \
-    constant size_t &right_size, \
-    const device TYPENAME *input, \
-    const device bool *mask, \
-    device TYPENAME *output, \
-    uint tid [[ thread_position_in_grid ]] \
-) { \
-    masked_scatter<TYPENAME>(dst_size, src_dim_size, right_size, input, mask, output, tid); \
-}
+#define instantiate_masked_scatter(type)                                       \
+  template [[host_name("masked_scatter_" #type)]] [[kernel]] void              \
+  masked_scatter_kernel<type>(                                                 \
+      device const type *xs [[buffer(0)]],                                     \
+      device const uchar *m [[buffer(1)]], device type *dst [[buffer(2)]],     \
+      device atomic_uint *ctr [[buffer(3)]], constant uint &numel,             \
+      constant uint &dst_numel, uint tid [[thread_position_in_grid]]);
 
-MASKED_SCATTER_OP(ms_u32_f32, float)
-MASKED_SCATTER_OP(ms_u8_f32, float)
-MASKED_SCATTER_OP(ms_i64_f32, float)
-MASKED_SCATTER_OP(ms_u32_f16, half)
-MASKED_SCATTER_OP(ms_u8_f16, half)
-MASKED_SCATTER_OP(ms_i64_f16, half)
+instantiate_masked_scatter(float) instantiate_masked_scatter(half)
 #if defined(__HAVE_BFLOAT__)
-MASKED_SCATTER_OP(ms_u32_bf16, bfloat)
-MASKED_SCATTER_OP(ms_u8_bf16, bfloat)
-MASKED_SCATTER_OP(ms_i64_bf16, bfloat)
+    instantiate_masked_scatter(bfloat16_t)
 #endif

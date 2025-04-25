@@ -1009,45 +1009,31 @@ pub fn call_masked_scatter(
     name: &'static str,
     src_shape: &[usize],
     dst_shape: &[usize],
-    dim: usize,
     input: BufferOffset,
-    ids: BufferOffset,
     mask: BufferOffset,
-    output: &Buffer,
+    ctr: &Buffer,
+    output: BufferOffset,
 ) -> Result<(), MetalKernelError> {
-    let left_size: usize = src_shape[..dim].iter().product();
-    let right_size: usize = src_shape[dim + 1..].iter().product();
-    let src_dim_size = src_shape[dim];
-    let dst_el = left_size * right_size;
-    let dst_dim_size = dst_shape[dim];
-
     let pipeline = kernels.load_pipeline(device, Source::MaskedScatter, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
+    let numel: usize = src_shape.iter().product();
+    let dst_numel: usize = dst_shape.iter().product();
+
     set_params!(
         encoder,
-        (
-            dst_el,
-            left_size,
-            src_dim_size,
-            right_size,
-            dst_dim_size,
-            &input,
-            &ids,
-            &mask,
-            output
-        )
+        (&input, &mask, &output, ctr, numel as u32, dst_numel as u32)
     );
 
-    let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, numel);
 
-    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(mask.buffer, metal::MTLResourceUsage::Read);
-    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.use_resource(&input.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(&ctr, metal::MTLResourceUsage::Read);
+    encoder.use_resource(&mask.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(&output.buffer, metal::MTLResourceUsage::Write);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }

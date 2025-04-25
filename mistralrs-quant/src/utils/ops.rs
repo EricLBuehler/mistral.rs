@@ -1,6 +1,6 @@
 use candle_core::{
-    backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, DType, Error, Layout, Result, Shape,
-    Tensor, WithDType,
+    backend::BackendStorage, CpuStorage, CustomOp1, CustomOp2, CustomOp3, DType, Error, Layout,
+    Result, Shape, Tensor, WithDType,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
@@ -9,6 +9,7 @@ use std::{
     ops::{BitAnd, BitOr, BitXor, Shl},
 };
 
+use crate::metal_kernels::utils::BufferOffset;
 #[cfg(feature = "cuda")]
 use crate::utils::ffi;
 #[cfg(feature = "cuda")]
@@ -896,6 +897,124 @@ impl NonZeroOp for Tensor {
             return Err(candle_core::Error::RequiresContiguous { op: "nonzero" });
         }
         self.apply_op1_no_bwd(&NonZero)
+    }
+}
+
+pub struct MaskedScatter;
+
+impl CustomOp3 for MaskedScatter {
+    fn name(&self) -> &'static str {
+        "masked-scatter"
+    }
+
+    fn cpu_fwd(
+        &self,
+        _s1: &CpuStorage,
+        _l1: &Layout,
+        _s2: &CpuStorage,
+        _l2: &Layout,
+        _s3: &CpuStorage,
+        _l3: &Layout,
+    ) -> Result<(CpuStorage, Shape)> {
+        candle_core::bail!("No masked_scatter for cpu")
+    }
+
+    fn metal_fwd(
+        &self,
+        xs_s: &candle_core::MetalStorage,
+        xs_l: &Layout,
+        m_s: &candle_core::MetalStorage,
+        m_l: &Layout,
+        out_s: &candle_core::MetalStorage,
+        out_l: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        if xs_l.shape() != m_l.shape() || xs_l.stride() != m_l.stride() {
+            return Err(Error::ShapeMismatchBinaryOp {
+                lhs: xs_l.shape().clone(),
+                rhs: m_l.shape().clone(),
+                op: "masked-scatter-op",
+            });
+        }
+        if xs_s.dtype() != out_s.dtype() {
+            return Err(Error::DTypeMismatchBinaryOp {
+                lhs: xs_s.dtype(),
+                rhs: out_s.dtype(),
+                op: "masked-scatter-op",
+            });
+        }
+        if m_s.dtype() != DType::U8 {
+            return Err(Error::DTypeMismatchBinaryOp {
+                lhs: xs_s.dtype(),
+                rhs: out_s.dtype(),
+                op: "masked-scatter-op",
+            });
+        }
+        if !xs_l.is_contiguous() || !m_l.is_contiguous() || !out_l.is_contiguous() {
+            candle_core::bail!("Input tensors must be contiguous for masked-scatter");
+        }
+
+        let command_buffer = xs_s.device().command_buffer()?;
+        command_buffer.set_label("masked-scatter");
+
+        let device = xs_s.device();
+
+        let counter = device.new_buffer(1, DType::U32, "masked-scatter-counter")?;
+
+        let name = match xs_s.dtype() {
+            DType::BF16 => "masked_scatter_bfloat16_t",
+            DType::F16 => "masked_scatter_half",
+            DType::F32 => "masked_scatter_float",
+            _ => candle_core::bail!("Unexpected dtype for masked-scatter"),
+        };
+
+        crate::metal_kernels::call_masked_scatter(
+            device.device(),
+            &command_buffer,
+            &crate::metal_kernels::Kernels::new(),
+            name,
+            xs_l.dims(),
+            out_l.dims(),
+            BufferOffset {
+                buffer: xs_s.buffer(),
+                offset_in_bytes: xs_l.start_offset() * xs_s.dtype().size_in_bytes(),
+            },
+            BufferOffset {
+                buffer: m_s.buffer(),
+                offset_in_bytes: m_l.start_offset() * m_s.dtype().size_in_bytes(),
+            },
+            &counter,
+            BufferOffset {
+                buffer: out_s.buffer(),
+                offset_in_bytes: out_l.start_offset() * out_s.dtype().size_in_bytes(),
+            },
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        Ok((out_s.clone(), out_l.shape().clone()))
+    }
+}
+
+pub trait MaskedScatterOp {
+    fn masked_scatter(&self, src: &Tensor, mask: &Tensor) -> Result<Tensor>;
+}
+
+impl MaskedScatterOp for Tensor {
+    fn masked_scatter(&self, src: &Tensor, mask: &Tensor) -> Result<Tensor> {
+        if self.device().is_metal() {
+            src.apply_op3_no_bwd(mask, self, &MaskedScatter)
+        } else {
+            let mask_flat = mask.flatten_all()?;
+            let indices = mask_flat.nonzero()?.squeeze(1)?;
+
+            let mut x_flat = self.flatten_all()?;
+            let src_flat = src.flatten_all()?;
+
+            let current_vals = x_flat.gather(&indices, 0)?;
+            let diff = (src_flat - current_vals)?;
+            x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+
+            x_flat.reshape(self.shape())
+        }
     }
 }
 
