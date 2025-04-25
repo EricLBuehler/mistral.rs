@@ -31,32 +31,49 @@ impl CustomOp1 for Leftshift {
     }
 
     fn cpu_fwd(&self, s1: &CpuStorage, l1: &Layout) -> Result<(CpuStorage, Shape)> {
-        if !l1.is_contiguous() {
-            candle_core::bail!("Input tensor s1 must be contiguous");
-        }
         match s1 {
             CpuStorage::U8(vs1) => {
-                let result = self.leftshift(vs1);
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let result = self.leftshift(&vs1);
                 let result = CpuStorage::U8(result);
                 Ok((result, l1.shape().clone()))
             }
             CpuStorage::I16(vs1) => {
-                let result = self.leftshift(vs1);
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let result = self.leftshift(&vs1);
                 let result = CpuStorage::I16(result);
                 Ok((result, l1.shape().clone()))
             }
             CpuStorage::U32(vs1) => {
-                let result = self.leftshift(vs1);
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let result = self.leftshift(&vs1);
                 let result = CpuStorage::U32(result);
                 Ok((result, l1.shape().clone()))
             }
             CpuStorage::I64(vs1) => {
-                let result = self.leftshift(vs1);
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let result = self.leftshift(&vs1);
                 let result = CpuStorage::I64(result);
                 Ok((result, l1.shape().clone()))
             }
             CpuStorage::I32(vs1) => {
-                let result = self.leftshift(vs1);
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let result = self.leftshift(&vs1);
                 let result = CpuStorage::I32(result);
                 Ok((result, l1.shape().clone()))
             }
@@ -252,47 +269,94 @@ impl CustomOp2 for BitWise {
         s2: &CpuStorage,
         l2: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
-        if l1 != l2 {
+        if l1.shape() != l2.shape() || l1.stride() != l2.stride() {
             return Err(Error::ShapeMismatchBinaryOp {
                 lhs: l1.shape().clone(),
                 rhs: l2.shape().clone(),
-                op: "bitwise",
+                op: "bitwise-op",
             });
         }
         if s1.dtype() != s2.dtype() {
             return Err(Error::DTypeMismatchBinaryOp {
                 lhs: s1.dtype(),
                 rhs: s2.dtype(),
-                op: "bitwise",
+                op: "bitwise-op",
             });
         }
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+        if !l2.is_contiguous() {
+            candle_core::bail!("Input tensor s2 must be contiguous");
+        }
+
         match s1 {
             CpuStorage::U8(vs1) => {
                 let vs2 = s2.as_slice::<u8>().unwrap();
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let vs2 = match l2.contiguous_offsets() {
+                    Some((a, b)) => &vs2[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::U8(result);
                 Ok((result, l1.shape().clone()))
             }
             CpuStorage::U32(vs1) => {
                 let vs2 = s2.as_slice::<u32>().unwrap();
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let vs2 = match l2.contiguous_offsets() {
+                    Some((a, b)) => &vs2[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::U32(result);
                 Ok((result, l1.shape().clone()))
             }
             CpuStorage::I64(vs1) => {
                 let vs2 = s2.as_slice::<i64>().unwrap();
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let vs2 = match l2.contiguous_offsets() {
+                    Some((a, b)) => &vs2[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::I64(result);
                 Ok((result, l1.shape().clone()))
             }
             CpuStorage::I16(vs1) => {
                 let vs2 = s2.as_slice::<i16>().unwrap();
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let vs2 = match l2.contiguous_offsets() {
+                    Some((a, b)) => &vs2[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::I16(result);
                 Ok((result, l1.shape().clone()))
             }
             CpuStorage::I32(vs1) => {
                 let vs2 = s2.as_slice::<i32>().unwrap();
+                let vs1 = match l1.contiguous_offsets() {
+                    Some((a, b)) => &vs1[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
+                let vs2 = match l2.contiguous_offsets() {
+                    Some((a, b)) => &vs2[a..b],
+                    None => Err(Error::RequiresContiguous { op: "index-add" }.bt())?,
+                };
                 let result = self.bitwise(vs1, vs2);
                 let result = CpuStorage::I32(result);
                 Ok((result, l1.shape().clone()))
@@ -313,49 +377,86 @@ impl CustomOp2 for BitWise {
         s2: &CudaStorage,
         l2: &Layout,
     ) -> Result<(CudaStorage, Shape)> {
-        if l1 != l2 {
+        if l1.shape() != l2.shape() || l1.stride() != l2.stride() {
             return Err(Error::ShapeMismatchBinaryOp {
                 lhs: l1.shape().clone(),
                 rhs: l2.shape().clone(),
-                op: "bitwise",
+                op: "bitwise-op",
             });
         }
         if s1.dtype() != s2.dtype() {
             return Err(Error::DTypeMismatchBinaryOp {
                 lhs: s1.dtype(),
                 rhs: s2.dtype(),
-                op: "bitwise",
+                op: "bitwise-op",
             });
         }
+        if !l1.is_contiguous() {
+            candle_core::bail!("Input tensor s1 must be contiguous");
+        }
+        if !l2.is_contiguous() {
+            candle_core::bail!("Input tensor s2 must be contiguous");
+        }
+
         let dev = s1.device().clone();
         let (d_in1_ptr, d_in2_ptr, elem_count) = match s1.dtype() {
             DType::U8 => {
-                let d_in1_ptr = *s1.as_cuda_slice::<u8>()?.device_ptr() as *const c_void;
-                let d_in2_ptr = *s2.as_cuda_slice::<u8>()?.device_ptr() as *const c_void;
+                let d_in1_ptr = *s1
+                    .as_cuda_slice::<u8>()?
+                    .slice(l1.start_offset()..)
+                    .device_ptr() as *const c_void;
+                let d_in2_ptr = *s2
+                    .as_cuda_slice::<u8>()?
+                    .slice(l2.start_offset()..)
+                    .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
             }
             DType::U32 => {
-                let d_in1_ptr = *s1.as_cuda_slice::<u32>()?.device_ptr() as *const c_void;
-                let d_in2_ptr = *s2.as_cuda_slice::<u32>()?.device_ptr() as *const c_void;
+                let d_in1_ptr = *s1
+                    .as_cuda_slice::<u32>()?
+                    .slice(l1.start_offset()..)
+                    .device_ptr() as *const c_void;
+                let d_in2_ptr = *s2
+                    .as_cuda_slice::<u32>()?
+                    .slice(l2.start_offset()..)
+                    .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
             }
             DType::I64 => {
-                let d_in1_ptr = *s1.as_cuda_slice::<i64>()?.device_ptr() as *const c_void;
-                let d_in2_ptr = *s2.as_cuda_slice::<i64>()?.device_ptr() as *const c_void;
+                let d_in1_ptr = *s1
+                    .as_cuda_slice::<i64>()?
+                    .slice(l1.start_offset()..)
+                    .device_ptr() as *const c_void;
+                let d_in2_ptr = *s2
+                    .as_cuda_slice::<i64>()?
+                    .slice(l2.start_offset()..)
+                    .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
             }
             DType::I32 => {
-                let d_in1_ptr = *s1.as_cuda_slice::<i32>()?.device_ptr() as *const c_void;
-                let d_in2_ptr = *s2.as_cuda_slice::<i32>()?.device_ptr() as *const c_void;
+                let d_in1_ptr = *s1
+                    .as_cuda_slice::<i32>()?
+                    .slice(l1.start_offset()..)
+                    .device_ptr() as *const c_void;
+                let d_in2_ptr = *s2
+                    .as_cuda_slice::<i32>()?
+                    .slice(l2.start_offset()..)
+                    .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
             }
             DType::I16 => {
-                let d_in1_ptr = *s1.as_cuda_slice::<i16>()?.device_ptr() as *const c_void;
-                let d_in2_ptr = *s2.as_cuda_slice::<i16>()?.device_ptr() as *const c_void;
+                let d_in1_ptr = *s1
+                    .as_cuda_slice::<i16>()?
+                    .slice(l1.start_offset()..)
+                    .device_ptr() as *const c_void;
+                let d_in2_ptr = *s2
+                    .as_cuda_slice::<i16>()?
+                    .slice(l2.start_offset()..)
+                    .device_ptr() as *const c_void;
                 let elem_count = l1.shape().elem_count();
                 (d_in1_ptr, d_in2_ptr, elem_count)
             }
@@ -535,8 +636,8 @@ impl CustomOp2 for BitWise {
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
-                l1.start_offset(),
-                l2.start_offset(),
+                l1.start_offset() * s1.dtype().size_in_bytes(),
+                l2.start_offset() * s2.dtype().size_in_bytes(),
                 out_shape.elem_count(),
                 &output,
             )
