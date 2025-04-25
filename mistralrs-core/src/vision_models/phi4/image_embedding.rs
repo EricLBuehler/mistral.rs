@@ -5,11 +5,10 @@ use std::{
 
 use candle_core::{shape::ShapeWithOneHole, DType, Device, IndexOp, Result, Shape, Tensor, D};
 use candle_nn::Module;
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 
 use crate::{
     layers::{AvgPool2d, ReflectionPad2d},
-    ops::NonZeroOp,
     utils::unvarbuilder::UnVarBuilder,
     vision_models::{
         phi4::config::Phi4MMImgProcessorConfig,

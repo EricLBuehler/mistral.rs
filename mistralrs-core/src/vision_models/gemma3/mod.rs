@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use candle_core::{Context, DType, Device, Result, Tensor, D};
 use config::Gemma3Config;
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use mmproj::Gemma3MultiModalProjector;
 use text::TextModel;
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     device_map::DeviceMapper,
-    ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},

@@ -7,11 +7,10 @@ use std::any::Any;
 
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Activation, Linear};
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 
 use crate::amoe::{AnyMoeBaseModelMixin, MlpLayer};
 use crate::device_map::DeviceMapper;
-use crate::ops::NonZeroOp;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::IsqModel;
