@@ -2,12 +2,6 @@ use candle_core::{shape::Dim, DType, Result, Tensor, D};
 
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
-#[cfg(feature = "cuda")]
-use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage, WrapErr};
-#[cfg(feature = "cuda")]
-use half::{bf16, f16};
-#[cfg(feature = "cuda")]
-use std::ffi::c_void;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
