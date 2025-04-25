@@ -397,6 +397,82 @@ pub fn call_bitwise_or(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn call_bitwise_and(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    a: &Buffer,
+    b: &Buffer,
+    a_offset: usize,
+    b_offset: usize,
+    length: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::U8 => "bitwise_and_uint8_t",
+        DType::U32 => "bitwise_and_uint32_t",
+        DType::I64 => "bitwise_and_int64_t",
+        DType::I32 => "bitwise_and_int",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::U8, DType::U32, DType::I64, DType::I32],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::Bitwise, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, ((a, a_offset), (b, b_offset), output));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_bitwise_xor(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    a: &Buffer,
+    b: &Buffer,
+    a_offset: usize,
+    b_offset: usize,
+    length: usize,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::U8 => "bitwise_xor_uint8_t",
+        DType::U32 => "bitwise_xor_uint32_t",
+        DType::I64 => "bitwise_xor_int64_t",
+        DType::I32 => "bitwise_xor_int",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::U8, DType::U32, DType::I64, DType::I32],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::Bitwise, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(encoder, ((a, a_offset), (b, b_offset), output));
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn call_bitwise_leftshift(
     device: &Device,
     ep: impl EncoderProvider,

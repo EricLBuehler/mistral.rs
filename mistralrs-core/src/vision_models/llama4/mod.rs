@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 use text::TextModel;
 use vision::Llama4VisionModel;
 
@@ -14,7 +14,6 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::linear_no_bias,
-    ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},

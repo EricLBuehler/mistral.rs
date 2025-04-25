@@ -10,7 +10,6 @@ use crate::amoe::AnyMoeBaseModelMixin;
 use crate::amoe::MlpLayer;
 use crate::device_map::DeviceMapper;
 use crate::layers;
-use crate::ops::NonZeroOp;
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -24,6 +23,7 @@ use crate::AnyMoeConfig;
 use crate::AnyMoeExpertType;
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Activation, Linear};
+use mistralrs_quant::NonZeroOp;
 use mistralrs_quant::ShardedVarBuilder;
 
 pub(crate) struct LLaVAVisionSpecificArgs; // only a dumb struct to satisfy the trait

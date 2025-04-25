@@ -7,7 +7,7 @@ fn main() {
         use std::{path::PathBuf, vec};
         println!("cargo:rerun-if-changed=build.rs");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-        let lib_files = vec!["src/cuda/nonzero_bitwise.cu", "src/cuda/sort.cu"];
+        let lib_files = vec!["src/cuda/sort.cu"];
         for lib_file in lib_files.iter() {
             println!("cargo:rerun-if-changed={lib_file}");
         }
