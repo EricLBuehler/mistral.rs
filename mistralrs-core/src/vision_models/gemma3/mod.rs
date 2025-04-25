@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use candle_core::{Context, DType, Device, Result, Tensor, D};
+use candle_core::{Context, Device, Result, Tensor, D};
 use config::Gemma3Config;
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{MaskedScatterOp, QuantMethod, ShardedVarBuilder};
 use mmproj::Gemma3MultiModalProjector;
 use text::TextModel;
 
@@ -108,12 +108,7 @@ impl Gemma3Model {
             let special_image_mask = input_ids
                 .eq(*image_token_index as f64)?
                 .unsqueeze(D::Minus1)?
-                .broadcast_as(input_embeds.shape())?
-                .to_dtype(DType::U32)?;
-
-            let mask_flat = special_image_mask.flatten_all()?;
-            // Nonzero before vision model to allow async processing all the way through logits.
-            let indices = mask_flat.nonzero()?.squeeze(1)?;
+                .broadcast_as(input_embeds.shape())?;
 
             let vision_tower = self
                 .vision_tower
@@ -125,14 +120,10 @@ impl Gemma3Model {
                 vision_tower.forward(&pixel_values.to_dtype(dtype)?, None, None)?;
             let image_features = multi_modal_projector.forward(&vision_outputs)?;
 
-            let mut x_flat = input_embeds.flatten_all()?;
-            let src_flat = image_features.flatten_all()?;
-
-            let current_vals = x_flat.gather(&indices, 0)?;
-            let diff = (src_flat - current_vals)?;
-            x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
-
-            input_embeds = x_flat.reshape(input_embeds.shape())?;
+            input_embeds = input_embeds.contiguous()?.masked_scatter(
+                &image_features.contiguous()?,
+                &special_image_mask.contiguous()?,
+            )?;
         };
         self.language_model.forward_embeds(
             input_ids,

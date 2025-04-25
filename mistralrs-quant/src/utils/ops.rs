@@ -928,13 +928,6 @@ impl CustomOp3 for MaskedScatter {
         out_s: &candle_core::MetalStorage,
         out_l: &Layout,
     ) -> Result<(candle_core::MetalStorage, Shape)> {
-        if xs_l.shape() != m_l.shape() || xs_l.stride() != m_l.stride() {
-            return Err(Error::ShapeMismatchBinaryOp {
-                lhs: xs_l.shape().clone(),
-                rhs: m_l.shape().clone(),
-                op: "masked-scatter-op",
-            });
-        }
         if xs_s.dtype() != out_s.dtype() {
             return Err(Error::DTypeMismatchBinaryOp {
                 lhs: xs_s.dtype(),
@@ -944,8 +937,8 @@ impl CustomOp3 for MaskedScatter {
         }
         if m_s.dtype() != DType::U8 {
             return Err(Error::DTypeMismatchBinaryOp {
-                lhs: xs_s.dtype(),
-                rhs: out_s.dtype(),
+                lhs: m_s.dtype(),
+                rhs: DType::U8,
                 op: "masked-scatter-op",
             });
         }
