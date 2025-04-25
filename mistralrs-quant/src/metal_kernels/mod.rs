@@ -8,7 +8,7 @@ use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, sync::OnceLock};
 
 pub mod utils;
-use utils::{get_2d_grid_dims, linear_split, EncoderParam, EncoderProvider};
+use utils::{get_2d_grid_dims, linear_split, BufferOffset, EncoderParam, EncoderProvider};
 
 use crate::set_params;
 
@@ -16,6 +16,7 @@ const HQQ_DEQUANTIZE: &str = include_str!("hqq_dequantize.metal");
 const BNB_DEQUANTIZE: &str = include_str!("bnb_dequantize.metal");
 const BITWISE: &str = include_str!("bitwise.metal");
 const QUANTIZED: &str = include_str!("quantized.metal");
+const MASKED_SCATTER: &str = include_str!("masked_scatter.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
@@ -23,6 +24,7 @@ pub enum Source {
     BnbDequant,
     Bitwise,
     Quantized,
+    MaskedScatter,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -78,6 +80,7 @@ impl Kernels_ {
             Source::BnbDequant => BNB_DEQUANTIZE,
             Source::Bitwise => BITWISE,
             Source::Quantized => QUANTIZED,
+            Source::MaskedScatter => MASKED_SCATTER,
         }
     }
 
@@ -919,5 +922,56 @@ pub fn call_afq_qmm(
     }
 
     encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_masked_scatter(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    name: &'static str,
+    src_shape: &[usize],
+    dst_shape: &[usize],
+    dim: usize,
+    input: BufferOffset,
+    ids: BufferOffset,
+    mask: BufferOffset,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let left_size: usize = src_shape[..dim].iter().product();
+    let right_size: usize = src_shape[dim + 1..].iter().product();
+    let src_dim_size = src_shape[dim];
+    let dst_el = left_size * right_size;
+    let dst_dim_size = dst_shape[dim];
+
+    let pipeline = kernels.load_pipeline(device, Source::MaskedScatter, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            dst_el,
+            left_size,
+            src_dim_size,
+            right_size,
+            dst_dim_size,
+            &input,
+            &ids,
+            &mask,
+            output
+        )
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, dst_el);
+
+    encoder.use_resource(input.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(ids.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(mask.buffer, metal::MTLResourceUsage::Read);
+    encoder.use_resource(output, metal::MTLResourceUsage::Write);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
 }
