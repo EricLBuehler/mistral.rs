@@ -517,12 +517,40 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 }
             }
             new_k_cache.push(Some(if k_vec.len() > 1 {
-                Tensor::cat(&k_vec, 0).unwrap()
+                // Manual batch concatenation to avoid expensive Tensor::cat
+                let buf = Tensor::zeros(
+                    {
+                        let mut d = k_vec[0].dims().to_vec();
+                        d[0] = k_vec.len();
+                        d
+                    },
+                    k_vec[0].dtype(),
+                    k_vec[0].device(),
+                )
+                .unwrap();
+                for (i, t) in k_vec.iter().enumerate() {
+                    buf.slice_set(t, 0, i).unwrap();
+                }
+                buf
             } else {
                 k_vec[0].clone()
             }));
             new_v_cache.push(Some(if v_vec.len() > 1 {
-                Tensor::cat(&v_vec, 0).unwrap()
+                // Manual batch concatenation for v cache
+                let buf = Tensor::zeros(
+                    {
+                        let mut d = v_vec[0].dims().to_vec();
+                        d[0] = v_vec.len();
+                        d
+                    },
+                    v_vec[0].dtype(),
+                    v_vec[0].device(),
+                )
+                .unwrap();
+                for (i, t) in v_vec.iter().enumerate() {
+                    buf.slice_set(t, 0, i).unwrap();
+                }
+                buf
             } else {
                 v_vec[0].clone()
             }));
@@ -593,85 +621,54 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         *pipeline.cache().normal() = NormalCache(caches);
     }
     fn clone_out_cache(&self, pipeline: &T, seqs: &mut [&mut Sequence], modify_draft_cache: bool) {
-        let all_cache = pipeline.cache().normal();
-        for layer in 0..pipeline.get_metadata().num_hidden_layers {
-            let cache = all_cache.0.get(layer).unwrap();
-            // This case for llama 3.2 vision cross attn
-            if cache.k().unwrap().is_none() {
-                continue;
-            }
-
-            let (k_cache, v_cache) = match cache {
-                KvCache::Normal { k, v } => {
-                    (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+        let normal_cache = pipeline.cache().normal();
+        let caches = &normal_cache.0;
+        for (layer_idx, cache) in caches
+            .iter()
+            .enumerate()
+            .take(pipeline.get_metadata().num_hidden_layers)
+        {
+            // Only handle Normal caches in optimized path.
+            if let KvCache::Normal {
+                k: k_cache,
+                v: v_cache,
+            } = cache
+            {
+                let batch_k = k_cache.all_data.as_ref().unwrap();
+                let batch_v = v_cache.all_data.as_ref().unwrap();
+                // Slice out each sequence's portion and write to the sequence cache
+                let template_dim = k_cache.dim;
+                let template_csl = k_cache.current_seq_len;
+                let template_msl = k_cache.max_seq_len;
+                let template_capsl = k_cache.capacity_seq_len;
+                for (i, seq) in seqs.iter_mut().enumerate() {
+                    let output = if modify_draft_cache {
+                        seq.normal_draft_cache()
+                    } else {
+                        seq.normal_cache()
+                    };
+                    // Extract the i-th slice along batch dimension 0
+                    let k_slice = batch_k.narrow(0, i, 1).unwrap().contiguous().unwrap();
+                    let v_slice = batch_v.narrow(0, i, 1).unwrap().contiguous().unwrap();
+                    // Assign per-sequence cache using the pipeline template params
+                    *output.get_mut(layer_idx).unwrap() = Some(KvCache::Normal {
+                        k: SingleCache {
+                            all_data: Some(k_slice),
+                            dim: template_dim,
+                            current_seq_len: template_csl,
+                            max_seq_len: template_msl,
+                            capacity_seq_len: template_capsl,
+                        },
+                        v: SingleCache {
+                            all_data: Some(v_slice),
+                            dim: template_dim,
+                            current_seq_len: template_csl,
+                            max_seq_len: template_msl,
+                            capacity_seq_len: template_capsl,
+                        },
+                    });
                 }
-                KvCache::Rotating { k, v } => {
-                    (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
-                }
-            };
-
-            let k_caches = k_cache.chunk(seqs.len(), 0).unwrap();
-            debug_assert_eq!(k_caches.len(), seqs.len());
-            let v_caches = v_cache.chunk(seqs.len(), 0).unwrap();
-            debug_assert_eq!(v_caches.len(), seqs.len());
-
-            for (seq_i, seq) in seqs.iter_mut().enumerate() {
-                let output_cache = if modify_draft_cache {
-                    seq.normal_draft_cache()
-                } else {
-                    seq.normal_cache()
-                };
-                let seq_cache = &mut output_cache[layer];
-                let k = k_caches.get(seq_i).unwrap().clone();
-                let v = v_caches.get(seq_i).unwrap().clone();
-
-                match cache {
-                    KvCache::Normal {
-                        k: cache_k,
-                        v: cache_v,
-                    } => {
-                        *seq_cache = Some(KvCache::Normal {
-                            k: SingleCache {
-                                all_data: Some(k),
-                                dim: cache_k.dim,
-                                current_seq_len: cache_k.current_seq_len,
-                                max_seq_len: cache_k.max_seq_len,
-                                capacity_seq_len: cache_k.capacity_seq_len,
-                            },
-                            v: SingleCache {
-                                all_data: Some(v),
-                                dim: cache_v.dim,
-                                current_seq_len: cache_v.current_seq_len,
-                                max_seq_len: cache_v.max_seq_len,
-                                capacity_seq_len: cache_v.capacity_seq_len,
-                            },
-                        });
-                    }
-                    KvCache::Rotating {
-                        k: cache_k,
-                        v: cache_v,
-                    } => {
-                        *seq_cache = Some(KvCache::Rotating {
-                            k: RotatingCache {
-                                all_data: Some(k),
-                                dim: cache_k.dim,
-                                current_seq_len: cache_k.current_seq_len,
-                                max_seq_len: cache_k.max_seq_len,
-                                offset: cache_k.offset,
-                                capacity_seq_len: cache_k.capacity_seq_len,
-                            },
-                            v: RotatingCache {
-                                all_data: Some(v),
-                                dim: cache_v.dim,
-                                current_seq_len: cache_v.current_seq_len,
-                                max_seq_len: cache_v.max_seq_len,
-                                offset: cache_v.offset,
-                                capacity_seq_len: cache_v.capacity_seq_len,
-                            },
-                        });
-                    }
-                }
-            }
+            } // Rotating caches skip optimized path
         }
     }
     fn set_none_cache(
