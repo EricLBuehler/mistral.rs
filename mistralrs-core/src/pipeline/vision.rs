@@ -1,4 +1,3 @@
-use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::ImatrixDataSource;
 use super::isq::UqffFullSer;
 use super::{
@@ -12,6 +11,7 @@ use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
     Qwen2_5VLLoader, VisionLoaderType,
 };
+use crate::cache_manager::{FullCacheManager, NormalCacheManager};
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};

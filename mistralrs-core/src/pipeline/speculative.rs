@@ -23,11 +23,12 @@ use crate::{
 };
 
 use super::{
-    cache_manager::NormalCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
-    AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction, CacheManager, CacheManagerMixin,
-    EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, MetadataMixin,
-    ModelCategory, ModelPaths, PreProcessingMixin,
+    chat_template::ChatTemplate, sampling::SpeculativeSample, AnyMoePipelineMixin,
+    CacheBackendMetadata, CacheInstruction, CacheManager, CacheManagerMixin, EitherCache,
+    ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, MetadataMixin, ModelCategory,
+    ModelPaths, PreProcessingMixin,
 };
+use crate::cache_manager::NormalCacheManager;
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.
 pub struct SpeculativeLoader {

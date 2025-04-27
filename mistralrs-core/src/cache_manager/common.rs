@@ -4,7 +4,7 @@ use candle_core::{Result, Tensor, D};
 
 use crate::{get_mut_arcmutex, sequence::Sequence};
 
-use super::{CacheManagerMixin, MetadataMixin};
+use crate::pipeline::{CacheManagerMixin, MetadataMixin};
 
 pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
     fn clone_in_cache(
