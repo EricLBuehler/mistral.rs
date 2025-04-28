@@ -475,7 +475,7 @@
 <a href=#475 id=475 data-nosnippet>475</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.lm_head.quantized_act_type() {
 <a href=#476 id=476 data-nosnippet>476</a>            xs = xs.to_dtype(t)<span class="question-mark">?</span>;
 <a href=#477 id=477 data-nosnippet>477</a>        }
-<a href=#478 id=478 data-nosnippet>478</a>        <span class="self">self</span>.lm_head.forward(<span class="kw-2">&amp;</span>extract_logits(<span class="kw-2">&amp;</span>xs, context_lens)<span class="question-mark">?</span>)
+<a href=#478 id=478 data-nosnippet>478</a>        extract_logits(<span class="kw-2">&amp;</span><span class="self">self</span>.lm_head.forward(<span class="kw-2">&amp;</span>xs)<span class="question-mark">?</span>, context_lens)
 <a href=#479 id=479 data-nosnippet>479</a>    }
 <a href=#480 id=480 data-nosnippet>480</a>}
 <a href=#481 id=481 data-nosnippet>481</a>
