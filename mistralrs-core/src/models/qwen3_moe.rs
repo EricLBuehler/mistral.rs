@@ -94,11 +94,14 @@ struct Attention {
 }
 
 impl Attention {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
         vb: ShardedVarBuilder,
+        mapper: &dyn DeviceMapper,
         layer_idx: usize,
+        loading_isq: bool,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
@@ -112,7 +115,7 @@ impl Attention {
             &cfg.quantization_config,
             false,
             comm,
-            vb.pp("q_proj"),
+            mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
         )?;
         let kv_shard = mistralrs_quant::compute_kv_shard(
             cfg.num_key_value_heads,
@@ -126,7 +129,7 @@ impl Attention {
             false,
             comm,
             kv_shard,
-            vb.pp("k_proj"),
+            mapper.set_device(layer_idx, vb.pp("k_proj"), loading_isq),
         )?;
         let v_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
@@ -135,7 +138,7 @@ impl Attention {
             false,
             comm,
             kv_shard,
-            vb.pp("v_proj"),
+            mapper.set_device(layer_idx, vb.pp("v_proj"), loading_isq),
         )?;
         let o_proj = RowParallelLayer::new(
             num_heads * head_dim,
@@ -143,16 +146,26 @@ impl Attention {
             &cfg.quantization_config,
             false,
             comm,
-            vb.pp("o_proj"),
+            mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
         let sliding_window = sliding_window!(layer_idx, cfg);
+        let q_norm = RmsNorm::new(
+            cfg.head_dim(),
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("q_norm"), false),
+        )?;
+        let k_norm = RmsNorm::new(
+            cfg.head_dim(),
+            cfg.rms_norm_eps,
+            mapper.set_device(layer_idx, vb.pp("k_norm"), false),
+        )?;
         Ok(Self {
             q_proj,
             k_proj,
             v_proj,
             o_proj,
-            q_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("q_norm"))?,
-            k_norm: RmsNorm::new(cfg.head_dim(), cfg.rms_norm_eps, vb.pp("k_norm"))?,
+            q_norm,
+            k_norm,
             num_heads: num_heads / comm.world_size(),
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
@@ -492,7 +505,9 @@ impl DecoderLayer {
             rotary_emb,
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            mapper,
             layer_idx,
+            loading_isq,
             paged_attn,
             comm,
         )?;
