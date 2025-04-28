@@ -240,11 +240,11 @@ impl InputsProcessor for Qwen2VLImageProcessor {
 
             for seq in input_seqs.iter_mut() {
                 let (pixel_values, image_grid_thw, video_grid_thw) =
-                    if let Some(cached_pixel_values) = &seq.cached_pixel_values {
+                    if let Some(cached_pixel_values) = &seq.multimodal.cached_pixel_values {
                         (
                             cached_pixel_values.clone(),
-                            seq.cached_img_thw.clone(),
-                            seq.cached_vid_thw.clone(),
+                            seq.multimodal.cached_img_thw.clone(),
+                            seq.multimodal.cached_vid_thw.clone(),
                         )
                     } else {
                         let PreprocessedImages {
@@ -274,9 +274,9 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                             )
                             .expect("Preprocessing failed");
 
-                        seq.cached_pixel_values = Some(pixel_values.clone());
-                        seq.cached_img_thw = image_grid_thw.clone();
-                        seq.cached_vid_thw = video_grid_thw.clone();
+                        seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
+                        seq.multimodal.cached_img_thw = image_grid_thw.clone();
+                        seq.multimodal.cached_vid_thw = video_grid_thw.clone();
                         (pixel_values, image_grid_thw, video_grid_thw)
                     };
 
@@ -372,11 +372,11 @@ impl InputsProcessor for Qwen2VLImageProcessor {
                     .expect("Detokenization failed!");
                 let ids = toks.get_ids().to_vec();
 
-                if !seq.has_changed_prompt {
+                if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(detok.clone());
 
                     seq.set_toks_and_reallocate(ids.clone(), paged_attn_metadata.as_mut());
-                    seq.has_changed_prompt = true;
+                    seq.multimodal.has_changed_prompt = true;
                 }
                 all_ids.push(ids.clone());
 

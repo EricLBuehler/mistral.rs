@@ -268,7 +268,7 @@ impl InputsProcessor for Llama4ImageProcessor {
                 }
                 let prompt = new_prompt.join("");
 
-                if !seq.has_changed_prompt {
+                if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(prompt.clone());
                     let toks = tokenizer
                         .encode_fast(prompt, false)
@@ -276,7 +276,7 @@ impl InputsProcessor for Llama4ImageProcessor {
 
                     let ids = toks.get_ids().to_vec();
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
-                    seq.has_changed_prompt = true;
+                    seq.multimodal.has_changed_prompt = true;
                 }
             }
 

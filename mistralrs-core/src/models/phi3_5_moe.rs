@@ -5,8 +5,8 @@
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::LayerNorm;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    ColumnParallelLayer, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -19,7 +19,6 @@ use crate::{
         PhiRotaryEmbedding, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
-    ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,

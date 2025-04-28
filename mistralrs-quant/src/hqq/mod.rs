@@ -173,8 +173,10 @@ impl HqqBits {
                 let i = wq.narrow(0, step * 8, step)?;
                 let j = wq.narrow(0, step * 9, step)?;
 
-                a.leftshift(27)?
-                    .bitwise_or(&b.leftshift(24)?)?
+                a.leftshift(27)
+                    .unwrap()
+                    .bitwise_or(&b.leftshift(24).unwrap())
+                    .unwrap()
                     .bitwise_or(&c.leftshift(21)?)?
                     .bitwise_or(&d.leftshift(18)?)?
                     .bitwise_or(&e.leftshift(15)?)?

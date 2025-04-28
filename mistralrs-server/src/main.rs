@@ -153,10 +153,6 @@ struct Args {
     #[arg(long = "paged-attn", default_value_t = false)]
     paged_attn: bool,
 
-    /// Enable server throughput logging, supported in the server and with interactive mode
-    #[arg(long = "throughput", default_value_t = false)]
-    throughput_log: bool,
-
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
     prompt_chunksize: Option<usize>,
@@ -488,7 +484,7 @@ async fn main() -> Result<()> {
     .build();
 
     if args.interactive_mode {
-        interactive_mode(mistralrs, args.throughput_log, args.interactive_search).await;
+        interactive_mode(mistralrs, args.interactive_search).await;
         return Ok(());
     }
 

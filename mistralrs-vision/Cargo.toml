@@ -14,3 +14,4 @@ homepage.workspace = true
 [dependencies]
 candle-core.workspace = true
 image.workspace = true
+rayon.workspace = true
