@@ -194,7 +194,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     sample.push_str(&format!("{image_prompt_string}{}", split_sample[i]));
                 }
 
-                if !seq.has_changed_prompt {
+                if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(sample.clone());
                     let toks = tokenizer
                         .encode_fast(sample, false)
@@ -202,7 +202,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
 
                     let ids = toks.get_ids().to_vec();
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
-                    seq.has_changed_prompt = true;
+                    seq.multimodal.has_changed_prompt = true;
                 }
             }
 

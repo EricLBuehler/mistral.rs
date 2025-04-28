@@ -223,11 +223,11 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                     .get_ids()
                     .to_vec();
 
-                if !seq.has_changed_prompt {
+                if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(final_text.clone());
 
                     seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
-                    seq.has_changed_prompt = true;
+                    seq.multimodal.has_changed_prompt = true;
                 }
 
                 let image_bounds = {
