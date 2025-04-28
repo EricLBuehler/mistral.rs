@@ -168,6 +168,8 @@ pub enum NormalLoaderType {
     DeepSeekV3,
     #[serde(rename = "qwen3")]
     Qwen3,
+    #[serde(rename = "qwen3moe")]
+    Qwen3Moe,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -188,6 +190,7 @@ impl NormalLoaderType {
             "DeepseekV2ForCausalLM" => Ok(Self::DeepSeekV2),
             "DeepseekV3ForCausalLM" => Ok(Self::DeepSeekV3),
             "Qwen3ForCausalLM" => Ok(Self::Qwen3),
+            "Qwen3MoeForCausalLM" => Ok(Self::Qwen3Moe),
             other => anyhow::bail!(
                 "Unsupported Huggging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -212,7 +215,8 @@ impl FromStr for NormalLoaderType {
             "deepseekv2" => Ok(Self::DeepSeekV2),
             "deepseekv3" => Ok(Self::DeepSeekV3),
             "qwen3" => Ok(Self::DeepSeekV3),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`.")),
+            "qwen3moe" => Ok(Self::Qwen3Moe),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `qwen3moe`.")),
         }
     }
 }
@@ -233,6 +237,7 @@ impl Display for NormalLoaderType {
             Self::DeepSeekV2 => write!(f, "deepseekv2"),
             Self::DeepSeekV3 => write!(f, "deepseekv3"),
             Self::Qwen3 => write!(f, "qwen3"),
+            Self::Qwen3Moe => write!(f, "qwen3moe"),
         }
     }
 }
@@ -282,6 +287,7 @@ impl AutoLoader {
             NormalLoaderType::DeepSeekV2 => Ok(Box::new(DeepSeekV2Loader)),
             NormalLoaderType::DeepSeekV3 => Ok(Box::new(DeepSeekV3Loader)),
             NormalLoaderType::Qwen3 => Ok(Box::new(Qwen3Loader)),
+            NormalLoaderType::Qwen3Moe => Ok(Box::new(Qwen3MoELoader)),
         }
     }
 }
@@ -3504,6 +3510,188 @@ impl DeviceMappedModelLoader for Qwen3Loader {
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
         let cfg: models::qwen3::Config = serde_json::from_str(config)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+        };
+
+        Ok(Box::new(cfg))
+    }
+}
+
+/// [`NormalLoader`] for a Qwen 3 MoE model.
+///
+/// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
+pub struct Qwen3MoELoader;
+
+impl NormalModelLoader for Qwen3MoELoader {
+    fn load(
+        &self,
+        config: &str,
+        use_flash_attn: bool,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let mut cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
+        cfg.use_flash_attn = use_flash_attn;
+
+        Ok(Box::new(models::qwen3_moe::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _use_flash_attn: bool,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+        let mut cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
+        cfg.use_flash_attn = use_flash_attn;
+
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for Qwen3MoELoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.dense\.(weight|bias)$")?,
+            // MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+}
+
+impl DeviceMappedModelLoader for Qwen3MoELoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+        prompt_chunksize: usize,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len: _,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
+
+        Ok(max_batch_size * cfg.num_attention_heads * prompt_chunksize * prompt_chunksize)
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<usize> {
+        let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+    ) -> Result<Vec<usize>> {
+        let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
+        let per_layer_elems = {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_attention_heads;
+            let size_kv = (cfg.hidden_size / cfg.num_attention_heads) * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor + size_q;
+            let k_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let v_proj = size_in * size_kv / weight_pack_factor + size_kv;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let h_size = cfg.hidden_size;
+            let i_size = cfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            let q_norm = cfg.head_dim();
+            let k_norm = cfg.head_dim();
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+                + q_norm
+                + k_norm
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
 
         let cfg = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
