@@ -3588,6 +3588,10 @@ impl IsqModelLoader for Qwen3MoELoader {
             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            // MLP MoE
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
         ])
     }
 }
@@ -3646,7 +3650,8 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
         weight_pack_factor: usize,
     ) -> Result<Vec<usize>> {
         let cfg: models::qwen3_moe::Config = serde_json::from_str(config)?;
-        let per_layer_elems = {
+        let mut layer_sizes_in_bytes = Vec::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
             let input_layernorm = cfg.hidden_size;
             let post_attention_layernorm = cfg.hidden_size;
 
@@ -3658,31 +3663,45 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
             let v_proj = size_in * size_kv / weight_pack_factor + size_kv;
             let o_proj = size_q * size_in / weight_pack_factor;
 
-            let h_size = cfg.hidden_size;
-            let i_size = cfg.intermediate_size;
-            let gate_proj = h_size * i_size / weight_pack_factor;
-            let up_proj = h_size * i_size / weight_pack_factor;
-            let down_proj = i_size * h_size / weight_pack_factor;
+            let mlp_size = if !cfg.mlp_only_layers.contains(&layer_idx)
+                && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0)
+            {
+                let expert_size = {
+                    let h_size = cfg.hidden_size;
+                    let i_size = cfg.moe_intermediate_size;
+                    let gate_proj = h_size * i_size / weight_pack_factor;
+                    let up_proj = h_size * i_size / weight_pack_factor;
+                    let down_proj = i_size * h_size / weight_pack_factor;
+                    gate_proj + up_proj + down_proj
+                };
+                expert_size * cfg.num_experts
+            } else {
+                let h_size = cfg.hidden_size;
+                let i_size = cfg.intermediate_size;
+                let gate_proj = h_size * i_size / weight_pack_factor;
+                let up_proj = h_size * i_size / weight_pack_factor;
+                let down_proj = i_size * h_size / weight_pack_factor;
+                gate_proj + up_proj + down_proj
+            };
 
             let q_norm = cfg.head_dim();
             let k_norm = cfg.head_dim();
 
-            input_layernorm
+            let size_elems = input_layernorm
                 + post_attention_layernorm
                 + q_proj
                 + k_proj
                 + v_proj
                 + o_proj
-                + gate_proj
-                + up_proj
-                + down_proj
+                + mlp_size
                 + q_norm
-                + k_norm
-        };
-        Ok(vec![
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
+                + k_norm;
+                
+            let size_in_bytes = size_elems * dtype.size_in_bytes();
+            layer_sizes_in_bytes.push(size_in_bytes);
+        }
+
+        Ok(layer_sizes_in_bytes)
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {

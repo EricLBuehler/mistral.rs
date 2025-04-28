@@ -1,21 +1,20 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-/// Mistral LLM, https://github.com/mistralai/mistral-src
-use candle_core::{Device, Module, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    ColumnParallelLayer, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
+    amoe::AnyMoeBaseModelMixin,
     attention::SdpaParams,
     device_map::DeviceMapper,
-    get_delta_from_lora_ab,
-    layers::{embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{self, embedding, Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
+    ops::{TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -64,6 +63,12 @@ pub struct Config {
     pub(crate) tie_word_embeddings: bool,
     pub(crate) max_window_layers: usize,
     pub(crate) use_sliding_window: bool,
+    pub(crate) moe_intermediate_size: usize,
+    pub(crate) num_experts: usize,
+    pub(crate) mlp_only_layers: Vec<usize>,
+    pub(crate) decoder_sparse_step: usize,
+    pub(crate) norm_topk_prob: bool,
+    pub(crate) num_experts_per_tok: usize,
 }
 
 impl Config {
@@ -277,10 +282,194 @@ impl Attention {
     }
 }
 
+#[derive(Clone)]
+struct Mlp {
+    gate_proj: Arc<dyn QuantMethod>,
+    up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
+    act_fn: Activation,
+}
+
+impl Mlp {
+    fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+        i_size: usize,
+    ) -> Result<Self> {
+        let hidden_size = cfg.hidden_size;
+
+        let gate_proj = ColumnParallelLayer::new(
+            hidden_size,
+            i_size,
+            &cfg.quantization_config,
+            false,
+            comm,
+            vb.pp("gate_proj"),
+        )?;
+        let up_proj = RowParallelLayer::new(
+            i_size,
+            hidden_size,
+            &cfg.quantization_config,
+            false,
+            comm,
+            vb.pp("up_proj"),
+        )?;
+        let down_proj = ColumnParallelLayer::new(
+            hidden_size,
+            i_size,
+            &cfg.quantization_config,
+            false,
+            comm,
+            vb.pp("down_proj"),
+        )?;
+
+        Ok(Self {
+            gate_proj,
+            up_proj,
+            down_proj,
+            act_fn: cfg.hidden_act,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let original_dtype = xs.dtype();
+        let mut xs = xs.clone();
+        if let Some(t) = self.gate_proj.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let mut current_hidden_states = MatMul
+            .qmethod_matmul(&xs, &*self.gate_proj)?
+            .apply(&self.act_fn)?;
+        let rhs = MatMul.qmethod_matmul(&xs, &*self.up_proj)?;
+        current_hidden_states = current_hidden_states.broadcast_mul(&rhs)?;
+        let mut res = MatMul.qmethod_matmul(&current_hidden_states, &*self.down_proj)?;
+        if self.gate_proj.quantized_act_type().is_some() {
+            res = res.to_dtype(original_dtype)?;
+        }
+        Ok(res)
+    }
+}
+
+struct MoeMlp {
+    gate: candle_nn::Linear,
+    experts: Vec<Mlp>,
+    norm_topk_prob: bool,
+    num_experts_per_tok: usize,
+    num_experts: usize,
+}
+
+impl MoeMlp {
+    fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        layer_device: Device,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let num_experts = cfg.num_experts;
+        let gate = layers::linear_no_bias(
+            cfg.hidden_size,
+            num_experts,
+            vb.pp("gate").set_device(layer_device),
+        )?;
+
+        let experts_vb = vb.pp("experts");
+        let mut experts = Vec::with_capacity(num_experts);
+        for i in 0..num_experts {
+            experts.push(Mlp::new(
+                cfg,
+                experts_vb.pp(i),
+                comm,
+                cfg.moe_intermediate_size,
+            )?);
+        }
+
+        Ok(Self {
+            gate,
+            experts,
+            num_experts,
+            norm_topk_prob: cfg.norm_topk_prob,
+            num_experts_per_tok: cfg.num_experts_per_tok,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (bs, seq, hidden) = xs.dims3()?;
+        let xs = xs.reshape(((), hidden))?;
+
+        let router_logits = self.gate.forward(&xs)?;
+        let routing_weights =
+            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
+        let TopKOutput {
+            values: mut routing_weights,
+            indices: selected_experts,
+        } = routing_weights.topk(self.num_experts_per_tok)?;
+        if self.norm_topk_prob {
+            routing_weights =
+                routing_weights.broadcast_div(&routing_weights.sum_keepdim(D::Minus1)?)?;
+        }
+        routing_weights = routing_weights.to_dtype(router_logits.dtype())?;
+
+        let mut final_hidden_states = Tensor::zeros((bs * seq, hidden), xs.dtype(), xs.device())?;
+
+        // One hot encode the selected experts to create an expert mask
+        // this will be used to easily index which expert to activate
+        let experts_mask =
+            candle_nn::encoding::one_hot(selected_experts, self.num_experts, 1u8, 0u8)?
+                .permute((2, 1, 0))?;
+
+        // Loop over all avail experts in the model and perform the computation on each expert
+        for expert_idx in 0..self.num_experts {
+            let expert = &self.experts[expert_idx];
+            let expert_mask = experts_mask.i(expert_idx)?;
+            assert_eq!(expert_mask.rank(), 2);
+            let nonzero_mask = expert_mask.contiguous()?.nonzero()?;
+            let idx = nonzero_mask.i((.., 0))?;
+            let top_x = nonzero_mask.i((.., 1))?;
+
+            if top_x.dim(0)? == 0 {
+                continue;
+            }
+
+            // Index the correct hidden staters and compute the expert hidden state
+            // for the current expert, we need to make sure to multiply the output hidden
+            // states by `routing_weights` on the corresponding tokens (top-1, top-2)
+            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden))?;
+            let current_routing_weights = routing_weights
+                .index_select(&top_x, 0)?
+                .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
+            let exp_out = expert.forward(&current_state)?;
+
+            let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
+
+            final_hidden_states = final_hidden_states.index_add(
+                &top_x.contiguous()?,
+                &current_hidden_states.to_dtype(xs.dtype())?,
+                0,
+            )?;
+        }
+
+        final_hidden_states.reshape((bs, seq, hidden))
+    }
+}
+
+enum MoeOrMlp {
+    Moe(MoeMlp),
+    Mlp(Mlp),
+}
+
+impl MoeOrMlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Mlp(m) => m.forward(xs),
+            Self::Moe(m) => m.forward(xs),
+        }
+    }
+}
 
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: Box<dyn MlpLayer>,
+    mlp: MoeOrMlp,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
 }
@@ -295,6 +484,7 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        real_device: Device,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
@@ -305,14 +495,26 @@ impl DecoderLayer {
             paged_attn,
             comm,
         )?;
-        let mlp = Mlp::new(
-            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-            cfg.hidden_size,
-            cfg.intermediate_size,
-            &cfg.quantization_config,
-            cfg.hidden_act,
-            comm,
-        )?;
+        let mlp = if !cfg.mlp_only_layers.contains(&layer_idx)
+            && (cfg.num_experts > 0 && (layer_idx + 1) % cfg.decoder_sparse_step == 0)
+        {
+            MoeOrMlp::Moe(MoeMlp::new(
+                cfg,
+                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                mapper
+                    .device_for(layer_idx, false)
+                    .cloned()
+                    .unwrap_or(real_device),
+                comm,
+            )?)
+        } else {
+            MoeOrMlp::Mlp(Mlp::new(
+                cfg,
+                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                comm,
+                cfg.intermediate_size,
+            )?)
+        };
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -325,7 +527,7 @@ impl DecoderLayer {
         )?;
         Ok(Self {
             self_attn,
-            mlp: Box::new(mlp),
+            mlp,
             input_layernorm,
             post_attention_layernorm,
         })
@@ -465,6 +667,7 @@ impl Model {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
+                normal_loading_metadata.real_device.clone(),
                 &comm,
             )?;
             layers.push(layer)
@@ -610,14 +813,20 @@ impl IsqModel for Model {
             tensors.push((&mut layer.self_attn.k_proj, Some(i)));
             tensors.push((&mut layer.self_attn.v_proj, Some(i)));
             tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
+            match &mut layer.mlp {
+                MoeOrMlp::Mlp(layer) => {
+                    tensors.push((&mut layer.gate_proj, Some(i)));
+                    tensors.push((&mut layer.up_proj, Some(i)));
+                    tensors.push((&mut layer.down_proj, Some(i)));
+                }
+                MoeOrMlp::Moe(layer) => {
+                    for layer in &mut layer.experts {
+                        tensors.push((&mut layer.gate_proj, Some(i)));
+                        tensors.push((&mut layer.up_proj, Some(i)));
+                        tensors.push((&mut layer.down_proj, Some(i)));
+                    }
+                }
+            }
         }
         (tensors, &*self.mapper)
     }
@@ -643,26 +852,12 @@ impl IsqModel for Model {
                 .pp("self_attn")
                 .pp("k_norm")
                 .add(&layer.self_attn.k_norm);
+            if let MoeOrMlp::Moe(layer) = &layer.mlp {
+                uvb_l.pp("mlp").pp("gate").add(&layer.gate);
+            }
         }
 
         uvb.to_safetensors()
-    }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        // NOTE: dependant on the exact implementation in get_layers!
-        let mut names = Vec::new();
-        // lm_head
-        names.push(None);
-        for i in 0..self.layers.len() {
-            names.push(Some(format!("blk.{i}.attn_q.weight")));
-            names.push(Some(format!("blk.{i}.attn_k.weight")));
-            names.push(Some(format!("blk.{i}.attn_v.weight")));
-            names.push(Some(format!("blk.{i}.attn_output.weight")));
-            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
-            names.push(Some(format!("blk.{i}.ffn_up.weight")));
-            names.push(Some(format!("blk.{i}.ffn_down.weight")));
-        }
-        Ok(names)
     }
 }
 
@@ -719,122 +914,4 @@ impl NormalModel for Model {
     }
 }
 
-impl AnyMoeBaseModelMixin for Model {
-    fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
-        let mut mlps = Vec::new();
-        for layer in &self.layers {
-            mlps.push(&*layer.mlp);
-        }
-        mlps
-    }
-    fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
-        let mut mlps = Vec::new();
-        for layer in &mut self.layers {
-            mlps.push(&mut layer.mlp);
-        }
-        mlps
-    }
-    fn create_anymoe_layers(
-        &mut self,
-        additional_vbs: Vec<ShardedVarBuilder>,
-        config: AnyMoeConfig,
-        (prefix, mlp): (String, String),
-        mut layers: Vec<usize>,
-        expert_type: AnyMoeExpertType,
-        gate_vb: Option<ShardedVarBuilder>,
-    ) -> Result<()> {
-        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
-        if layers.is_empty() {
-            layers = (0..self.layers.len()).collect::<Vec<_>>();
-        }
-        for _ in 0..layers.len() {
-            experts.push(Vec::new());
-        }
-        for vb in additional_vbs {
-            let vb = vb.pp(&prefix);
-            for (layer, row) in experts.iter_mut().enumerate() {
-                if !layers.contains(&layer) {
-                    continue;
-                }
-
-                let intermediate_size = self.layers[layer].mlp.get_params()[1];
-                let hidden_size = self.layers[layer].mlp.get_params()[0];
-                match expert_type {
-                    AnyMoeExpertType::FineTuned => {
-                        let (dtype, device) = self.layers[layer].mlp.dtype_device();
-                        row.push(Box::new(Mlp::replicate(
-                            self.layers[layer].mlp.get_params(),
-                            vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
-                            self.layers[layer].mlp.hidden_act(),
-                            &self.mapper.get_comm_for(layer)?,
-                        )?));
-                    }
-                    AnyMoeExpertType::LoraAdapter {
-                        rank,
-                        alpha,
-                        ref target_modules,
-                    } => {
-                        let vb_mlp = vb.pp(layer).pp(&mlp);
-
-                        let gate_proj_delta = if target_modules.contains(&"gate_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (hidden_size, intermediate_size),
-                                "gate_proj"
-                            ))
-                        } else {
-                            None
-                        };
-                        let up_proj_delta = if target_modules.contains(&"up_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (hidden_size, intermediate_size),
-                                "up_proj"
-                            ))
-                        } else {
-                            None
-                        };
-                        let down_proj_delta = if target_modules.contains(&"down_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (intermediate_size, hidden_size),
-                                "down_proj"
-                            ))
-                        } else {
-                            None
-                        };
-
-                        row.push(self.layers[layer].mlp.new_added_delta(vec![
-                            gate_proj_delta,
-                            up_proj_delta,
-                            down_proj_delta,
-                        ])?);
-                    }
-                }
-            }
-        }
-        for (layer, expert) in layers.into_iter().zip(experts) {
-            let mut experts_all = vec![self.layers[layer].mlp.clone()];
-            experts_all.extend(expert);
-            let (dtype, device) = self.layers[layer].mlp.dtype_device();
-            self.layers[layer].mlp = Box::new(MoeMlp::new(
-                experts_all,
-                config.clone(),
-                dtype,
-                &device,
-                layer,
-                gate_vb.as_ref(),
-            )?);
-        }
-        Ok(())
-    }
-    fn amoe_supported(&self) -> bool {
-        true
-    }
-}
+impl AnyMoeBaseModelMixin for Model {}
