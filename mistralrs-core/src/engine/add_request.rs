@@ -91,7 +91,11 @@ impl Engine {
                             }
                         };
 
-                        let RequestMessage::Chat(messages) = &mut second_request.messages else {
+                        let RequestMessage::Chat {
+                            messages,
+                            enable_thinking: _,
+                        } = &mut second_request.messages
+                        else {
                             unreachable!()
                         };
 
@@ -221,7 +225,7 @@ impl Engine {
     async fn add_request(&self, request: NormalRequest) {
         let is_chat = matches!(
             request.messages,
-            RequestMessage::Chat(_) | RequestMessage::VisionChat { .. }
+            RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
         );
         let echo_prompt = matches!(
             request.messages,
@@ -233,7 +237,7 @@ impl Engine {
 
         let best_of = match request.messages {
             RequestMessage::Completion { best_of, .. } => best_of,
-            RequestMessage::Chat(_)
+            RequestMessage::Chat { .. }
             | RequestMessage::CompletionTokens(_)
             | RequestMessage::VisionChat { .. }
             | RequestMessage::ImageGeneration { .. } => None,
@@ -256,6 +260,7 @@ impl Engine {
             RequestMessage::VisionChat {
                 ref images,
                 messages: _,
+                enable_thinking: _,
             } => Some(images.clone()),
             _ => None,
         };
@@ -283,16 +288,25 @@ impl Engine {
         };
 
         let (mut prompt_tokens, prompt_text) = match request.messages {
-            RequestMessage::Chat(messages)
+            RequestMessage::Chat {
+                messages,
+                enable_thinking,
+            }
             | RequestMessage::VisionChat {
                 images: _,
                 messages,
+                enable_thinking,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
                 let tools = request.tools.unwrap_or_default();
-                let template = pipeline
-                    .get_processor()
-                    .process(pipeline, messages, true, true, tools);
+                let template = pipeline.get_processor().process(
+                    pipeline,
+                    messages,
+                    true,
+                    true,
+                    enable_thinking,
+                    tools,
+                );
                 handle_seq_error!(template, request.response)
             }
             RequestMessage::Completion { text, .. } => {
@@ -683,6 +697,7 @@ impl Engine {
                     messages,
                     request.add_generation_prompt,
                     request.add_special_tokens,
+                    request.enable_thinking,
                     tools,
                 );
                 let toks = match template {

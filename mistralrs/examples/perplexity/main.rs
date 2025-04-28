@@ -92,10 +92,10 @@ async fn main() -> Result<()> {
 
     let text = read_to_string(&args.file)?;
     let tokens = model
-        .tokenize(Either::Right(text), None, false, false)
+        .tokenize(Either::Right(text), None, false, false, false)
         .await?;
     let bos_token = model
-        .tokenize(Either::Right(" ".to_string()), None, true, false)
+        .tokenize(Either::Right(" ".to_string()), None, true, false, false)
         .await?[0];
     let inner = model.inner();
 

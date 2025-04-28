@@ -410,6 +410,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                             ])],
                             true,
                             true,
+                            false,
                             Vec::new(),
                         )
                         .map_err(candle_core::Error::msg)?;

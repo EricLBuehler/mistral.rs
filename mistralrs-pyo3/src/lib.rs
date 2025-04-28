@@ -971,9 +971,13 @@ impl Runner {
                         RequestMessage::VisionChat {
                             messages: messages_vec,
                             images,
+                            enable_thinking: request.enable_thinking,
                         }
                     } else {
-                        RequestMessage::Chat(messages_vec)
+                        RequestMessage::Chat {
+                            messages: messages_vec,
+                            enable_thinking: request.enable_thinking,
+                        }
                     }
                 }
                 Either::Right(ref prompt) => {
@@ -985,7 +989,10 @@ impl Runner {
                     message_map.insert("role".to_string(), Either::Left("user".to_string()));
                     message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
                     messages.push(message_map);
-                    RequestMessage::Chat(messages)
+                    RequestMessage::Chat {
+                        messages,
+                        enable_thinking: request.enable_thinking,
+                    }
                 }
             };
 
@@ -1225,7 +1232,12 @@ impl Runner {
     }
 
     /// Tokenize some text, returning raw tokens.
-    fn tokenize_text(&self, text: String, add_special_tokens: bool) -> PyApiResult<Vec<u32>> {
+    fn tokenize_text(
+        &self,
+        text: String,
+        add_special_tokens: bool,
+        enable_thinking: Option<bool>,
+    ) -> PyApiResult<Vec<u32>> {
         let (tx, mut rx) = channel(1);
         let request = _Request::Tokenize(TokenizationRequest {
             text: Either::Right(text),
@@ -1233,6 +1245,7 @@ impl Runner {
             add_generation_prompt: true,
             add_special_tokens,
             response: tx,
+            enable_thinking: enable_thinking.unwrap_or(false),
         });
 
         self.runner.get_sender()?.blocking_send(request).unwrap();

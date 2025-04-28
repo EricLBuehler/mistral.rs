@@ -61,6 +61,7 @@ class ChatCompletionRequest:
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
     web_search_options: WebSearchOptions | None = None
+    enable_thinking: bool = False
 
 @dataclass
 class CompletionRequest:
@@ -401,9 +402,13 @@ class Runner:
         Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
         """
 
-    def tokenize_text(self, text: str, add_special_tokens: bool) -> list[int]:
+    def tokenize_text(
+        self, text: str, add_special_tokens: bool, enable_thinking: bool = False
+    ) -> list[int]:
         """
         Tokenize some text, returning raw tokens.
+
+        `enable_thinking` enables thinking for models that support this configuration.
         """
 
     def detokenize_text(self, tokens: list[int], skip_special_tokens: bool) -> str:

@@ -172,6 +172,10 @@ struct Args {
     /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
     #[arg(long = "search-bert-model")]
     search_bert_model: Option<String>,
+
+    /// Enable thinking for interactive mode and models that support it.
+    #[arg(long = "enable-thinking")]
+    enable_thinking: bool,
 }
 
 #[utoipa::path(
@@ -484,7 +488,7 @@ async fn main() -> Result<()> {
     .build();
 
     if args.interactive_mode {
-        interactive_mode(mistralrs, args.interactive_search).await;
+        interactive_mode(mistralrs, args.interactive_search, args.enable_thinking).await;
         return Ok(());
     }
 

@@ -244,6 +244,7 @@ impl Model {
         tools: Option<Vec<Tool>>,
         add_special_tokens: bool,
         add_generation_prompt: bool,
+        enable_thinking: bool,
     ) -> anyhow::Result<Vec<u32>> {
         let (tx, mut rx) = channel(1);
         let request = Request::Tokenize(TokenizationRequest {
@@ -252,6 +253,7 @@ impl Model {
             add_special_tokens,
             add_generation_prompt,
             response: tx,
+            enable_thinking,
         });
         self.runner.get_sender()?.send(request).await?;
 
