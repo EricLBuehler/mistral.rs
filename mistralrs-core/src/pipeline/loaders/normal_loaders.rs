@@ -3696,7 +3696,7 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
                 + mlp_size
                 + q_norm
                 + k_norm;
-                
+
             let size_in_bytes = size_elems * dtype.size_in_bytes();
             layer_sizes_in_bytes.push(size_in_bytes);
         }
