@@ -523,7 +523,8 @@ impl Phi4MMModel {
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        extract_logits(&MatMul.qmethod_matmul(&xs, &*self.lm_head)?, context_lens)
+        xs = extract_logits(&xs, context_lens)?;
+        MatMul.qmethod_matmul(&xs, &*self.lm_head)
     }
 }
 

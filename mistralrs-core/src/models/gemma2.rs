@@ -565,7 +565,8 @@ impl Model {
             xs = xs.to_dtype(t)?;
         }
 
-        let mut xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
+        xs = extract_logits(&xs, context_lens)?;
+        xs = MatMul.qmethod_matmul(&xs, &*self.lm_head)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             xs = (xs / final_logit_softcapping)?;
@@ -573,7 +574,7 @@ impl Model {
             xs = (xs * final_logit_softcapping)?;
         }
 
-        extract_logits(&xs, context_lens)
+        Ok(xs)
     }
 }
 

@@ -545,8 +545,8 @@ impl Llama {
         if let Some(t) = self.lm_head.quantized_act_type() {
             x = x.to_dtype(t)?;
         }
-        let xs = MatMul.qmethod_matmul(&x, &*self.lm_head)?;
-        extract_logits(&xs, context_lens)
+        x = extract_logits(&x, context_lens)?;
+        MatMul.qmethod_matmul(&x, &*self.lm_head)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {

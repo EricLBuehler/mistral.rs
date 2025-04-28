@@ -639,6 +639,10 @@ pub(crate) fn extract_logits(
     logits: &Tensor,
     context_lens: Vec<(usize, usize)>,
 ) -> candle_core::Result<Tensor> {
+    if context_lens.len() == 1 {
+        return logits.narrow(1, context_lens[0].0, context_lens[0].1);
+    }
+
     let mut toks = Vec::new();
     for (dim, (start, len)) in logits.chunk(logits.dims()[0], 0)?.iter().zip(context_lens) {
         toks.push(dim.narrow(1, start, len)?);

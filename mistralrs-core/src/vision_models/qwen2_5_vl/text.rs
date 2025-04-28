@@ -475,7 +475,7 @@ impl Qwen2_5VLTextModel {
         if let Some(t) = self.lm_head.quantized_act_type() {
             xs = xs.to_dtype(t)?;
         }
-        extract_logits(&self.lm_head.forward(&xs)?, context_lens)
+        self.lm_head.forward(&extract_logits(&xs, context_lens)?)
     }
 }
 

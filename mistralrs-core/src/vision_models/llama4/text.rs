@@ -777,8 +777,8 @@ impl TextModel {
         }
         let mut x = x.to_device(&self.device)?;
         x = self.ln_f.forward(&x)?;
-        x = self.lm_head.forward_autocast(&x)?;
-        extract_logits(&x, context_lens)
+        x = extract_logits(&x, context_lens)?;
+        self.lm_head.forward_autocast(&x)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {
