@@ -777,8 +777,8 @@
 <a href=#777 id=777 data-nosnippet>777</a>        }
 <a href=#778 id=778 data-nosnippet>778</a>        <span class="kw">let </span><span class="kw-2">mut </span>x = x.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
 <a href=#779 id=779 data-nosnippet>779</a>        x = <span class="self">self</span>.ln_f.forward(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
-<a href=#780 id=780 data-nosnippet>780</a>        x = <span class="self">self</span>.lm_head.forward_autocast(<span class="kw-2">&amp;</span>x)<span class="question-mark">?</span>;
-<a href=#781 id=781 data-nosnippet>781</a>        extract_logits(<span class="kw-2">&amp;</span>x, context_lens)
+<a href=#780 id=780 data-nosnippet>780</a>        x = extract_logits(<span class="kw-2">&amp;</span>x, context_lens)<span class="question-mark">?</span>;
+<a href=#781 id=781 data-nosnippet>781</a>        <span class="self">self</span>.lm_head.forward_autocast(<span class="kw-2">&amp;</span>x)
 <a href=#782 id=782 data-nosnippet>782</a>    }
 <a href=#783 id=783 data-nosnippet>783</a>
 <a href=#784 id=784 data-nosnippet>784</a>    <span class="kw">pub fn </span>residual_tensors_m(<span class="kw-2">&amp;</span><span class="self">self</span>, uvb_m: UnVarBuilder) -&gt; Vec&lt;(String, Tensor)&gt; {

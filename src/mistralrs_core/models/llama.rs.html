@@ -545,8 +545,8 @@
 <a href=#545 id=545 data-nosnippet>545</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(t) = <span class="self">self</span>.lm_head.quantized_act_type() {
 <a href=#546 id=546 data-nosnippet>546</a>            x = x.to_dtype(t)<span class="question-mark">?</span>;
 <a href=#547 id=547 data-nosnippet>547</a>        }
-<a href=#548 id=548 data-nosnippet>548</a>        <span class="kw">let </span>xs = MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>x, <span class="kw-2">&amp;*</span><span class="self">self</span>.lm_head)<span class="question-mark">?</span>;
-<a href=#549 id=549 data-nosnippet>549</a>        extract_logits(<span class="kw-2">&amp;</span>xs, context_lens)
+<a href=#548 id=548 data-nosnippet>548</a>        x = extract_logits(<span class="kw-2">&amp;</span>x, context_lens)<span class="question-mark">?</span>;
+<a href=#549 id=549 data-nosnippet>549</a>        MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>x, <span class="kw-2">&amp;*</span><span class="self">self</span>.lm_head)
 <a href=#550 id=550 data-nosnippet>550</a>    }
 <a href=#551 id=551 data-nosnippet>551</a>
 <a href=#552 id=552 data-nosnippet>552</a>    <span class="kw">pub fn </span>residual_tensors_m(<span class="kw-2">&amp;</span><span class="self">self</span>, uvb_m: UnVarBuilder) -&gt; Vec&lt;(String, Tensor)&gt; {

@@ -701,9 +701,7 @@
 <a href=#701 id=701 data-nosnippet>701</a>        }
 <a href=#702 id=702 data-nosnippet>702</a>        <span class="kw">let </span>layer_in = layer_in.to_device(<span class="kw-2">&amp;</span><span class="self">self</span>.device)<span class="question-mark">?</span>;
 <a href=#703 id=703 data-nosnippet>703</a>        <span class="kw">let </span>x = <span class="self">self</span>.norm.forward(<span class="kw-2">&amp;</span>layer_in)<span class="question-mark">?</span>;
-<a href=#704 id=704 data-nosnippet>704</a>        extract_logits(
-<a href=#705 id=705 data-nosnippet>705</a>            <span class="kw-2">&amp;</span>MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>x.contiguous()<span class="question-mark">?</span>, <span class="kw-2">&amp;*</span><span class="self">self</span>.output)<span class="question-mark">?</span>,
-<a href=#706 id=706 data-nosnippet>706</a>            context_lens,
-<a href=#707 id=707 data-nosnippet>707</a>        )
-<a href=#708 id=708 data-nosnippet>708</a>    }
-<a href=#709 id=709 data-nosnippet>709</a>}</code></pre></div></section></main></body></html>
+<a href=#704 id=704 data-nosnippet>704</a>        <span class="kw">let </span>x = extract_logits(<span class="kw-2">&amp;</span>x, context_lens)<span class="question-mark">?</span>;
+<a href=#705 id=705 data-nosnippet>705</a>        MatMul.qmethod_matmul(<span class="kw-2">&amp;</span>x, <span class="kw-2">&amp;*</span><span class="self">self</span>.output)
+<a href=#706 id=706 data-nosnippet>706</a>    }
+<a href=#707 id=707 data-nosnippet>707</a>}</code></pre></div></section></main></body></html>
