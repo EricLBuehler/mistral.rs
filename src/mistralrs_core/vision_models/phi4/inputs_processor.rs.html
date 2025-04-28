@@ -240,7 +240,7 @@
 <a href=#240 id=240 data-nosnippet>240</a>                .replace_all(<span class="kw-2">&amp;</span>detokenized, IMAGE_SPECIAL_TOKEN)
 <a href=#241 id=241 data-nosnippet>241</a>                .to_string();
 <a href=#242 id=242 data-nosnippet>242</a>
-<a href=#243 id=243 data-nosnippet>243</a>            <span class="kw">let </span>has_changed_prompt = seq.has_changed_prompt;
+<a href=#243 id=243 data-nosnippet>243</a>            <span class="kw">let </span>has_changed_prompt = seq.multimodal.has_changed_prompt;
 <a href=#244 id=244 data-nosnippet>244</a>            <span class="kw">if </span>!has_changed_prompt {
 <a href=#245 id=245 data-nosnippet>245</a>                seq.set_toks_and_reallocate(
 <a href=#246 id=246 data-nosnippet>246</a>                    tokenizer
@@ -274,7 +274,7 @@
 <a href=#274 id=274 data-nosnippet>274</a>                i += token_count;
 <a href=#275 id=275 data-nosnippet>275</a>            }
 <a href=#276 id=276 data-nosnippet>276</a>            <span class="kw">if </span>!has_changed_prompt {
-<a href=#277 id=277 data-nosnippet>277</a>                seq.has_changed_prompt = <span class="bool-val">true</span>;
+<a href=#277 id=277 data-nosnippet>277</a>                seq.multimodal.has_changed_prompt = <span class="bool-val">true</span>;
 <a href=#278 id=278 data-nosnippet>278</a>            }
 <a href=#279 id=279 data-nosnippet>279</a>            toks.push(seq.get_toks().to_vec());
 <a href=#280 id=280 data-nosnippet>280</a>        }

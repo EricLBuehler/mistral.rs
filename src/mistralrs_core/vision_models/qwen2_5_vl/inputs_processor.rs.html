@@ -191,11 +191,11 @@
 <a href=#191 id=191 data-nosnippet>191</a>
 <a href=#192 id=192 data-nosnippet>192</a>            <span class="kw">for </span>seq <span class="kw">in </span>input_seqs.iter_mut() {
 <a href=#193 id=193 data-nosnippet>193</a>                <span class="kw">let </span>(pixel_values, image_grid_thw, video_grid_thw) =
-<a href=#194 id=194 data-nosnippet>194</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(cached_pixel_values) = <span class="kw-2">&amp;</span>seq.cached_pixel_values {
+<a href=#194 id=194 data-nosnippet>194</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(cached_pixel_values) = <span class="kw-2">&amp;</span>seq.multimodal.cached_pixel_values {
 <a href=#195 id=195 data-nosnippet>195</a>                        (
 <a href=#196 id=196 data-nosnippet>196</a>                            cached_pixel_values.clone(),
-<a href=#197 id=197 data-nosnippet>197</a>                            seq.cached_img_thw.clone(),
-<a href=#198 id=198 data-nosnippet>198</a>                            seq.cached_vid_thw.clone(),
+<a href=#197 id=197 data-nosnippet>197</a>                            seq.multimodal.cached_img_thw.clone(),
+<a href=#198 id=198 data-nosnippet>198</a>                            seq.multimodal.cached_vid_thw.clone(),
 <a href=#199 id=199 data-nosnippet>199</a>                        )
 <a href=#200 id=200 data-nosnippet>200</a>                    } <span class="kw">else </span>{
 <a href=#201 id=201 data-nosnippet>201</a>                        <span class="kw">let </span>PreprocessedImages {
@@ -225,9 +225,9 @@
 <a href=#225 id=225 data-nosnippet>225</a>                            </span>)
 <a href=#226 id=226 data-nosnippet>226</a>                            .expect(<span class="string">"Preprocessing failed"</span>);
 <a href=#227 id=227 data-nosnippet>227</a>
-<a href=#228 id=228 data-nosnippet>228</a>                        seq.cached_pixel_values = <span class="prelude-val">Some</span>(pixel_values.clone());
-<a href=#229 id=229 data-nosnippet>229</a>                        seq.cached_img_thw = image_grid_thw.clone();
-<a href=#230 id=230 data-nosnippet>230</a>                        seq.cached_vid_thw = video_grid_thw.clone();
+<a href=#228 id=228 data-nosnippet>228</a>                        seq.multimodal.cached_pixel_values = <span class="prelude-val">Some</span>(pixel_values.clone());
+<a href=#229 id=229 data-nosnippet>229</a>                        seq.multimodal.cached_img_thw = image_grid_thw.clone();
+<a href=#230 id=230 data-nosnippet>230</a>                        seq.multimodal.cached_vid_thw = video_grid_thw.clone();
 <a href=#231 id=231 data-nosnippet>231</a>                        (pixel_values, image_grid_thw, video_grid_thw)
 <a href=#232 id=232 data-nosnippet>232</a>                    };
 <a href=#233 id=233 data-nosnippet>233</a>
@@ -327,11 +327,11 @@
 <a href=#327 id=327 data-nosnippet>327</a>                    .expect(<span class="string">"Detokenization failed!"</span>);
 <a href=#328 id=328 data-nosnippet>328</a>                <span class="kw">let </span>ids = toks.get_ids().to_vec();
 <a href=#329 id=329 data-nosnippet>329</a>
-<a href=#330 id=330 data-nosnippet>330</a>                <span class="kw">if </span>!seq.has_changed_prompt {
+<a href=#330 id=330 data-nosnippet>330</a>                <span class="kw">if </span>!seq.multimodal.has_changed_prompt {
 <a href=#331 id=331 data-nosnippet>331</a>                    seq.set_initial_prompt(detok.clone());
 <a href=#332 id=332 data-nosnippet>332</a>
 <a href=#333 id=333 data-nosnippet>333</a>                    seq.set_toks_and_reallocate(ids.clone(), paged_attn_metadata.as_mut());
-<a href=#334 id=334 data-nosnippet>334</a>                    seq.has_changed_prompt = <span class="bool-val">true</span>;
+<a href=#334 id=334 data-nosnippet>334</a>                    seq.multimodal.has_changed_prompt = <span class="bool-val">true</span>;
 <a href=#335 id=335 data-nosnippet>335</a>                }
 <a href=#336 id=336 data-nosnippet>336</a>                all_ids.push(ids.clone());
 <a href=#337 id=337 data-nosnippet>337</a>

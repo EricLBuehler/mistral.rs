@@ -268,7 +268,7 @@
 <a href=#268 id=268 data-nosnippet>268</a>                }
 <a href=#269 id=269 data-nosnippet>269</a>                <span class="kw">let </span>prompt = new_prompt.join(<span class="string">""</span>);
 <a href=#270 id=270 data-nosnippet>270</a>
-<a href=#271 id=271 data-nosnippet>271</a>                <span class="kw">if </span>!seq.has_changed_prompt {
+<a href=#271 id=271 data-nosnippet>271</a>                <span class="kw">if </span>!seq.multimodal.has_changed_prompt {
 <a href=#272 id=272 data-nosnippet>272</a>                    seq.set_initial_prompt(prompt.clone());
 <a href=#273 id=273 data-nosnippet>273</a>                    <span class="kw">let </span>toks = tokenizer
 <a href=#274 id=274 data-nosnippet>274</a>                        .encode_fast(prompt, <span class="bool-val">false</span>)
@@ -276,7 +276,7 @@
 <a href=#276 id=276 data-nosnippet>276</a>
 <a href=#277 id=277 data-nosnippet>277</a>                    <span class="kw">let </span>ids = toks.get_ids().to_vec();
 <a href=#278 id=278 data-nosnippet>278</a>                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
-<a href=#279 id=279 data-nosnippet>279</a>                    seq.has_changed_prompt = <span class="bool-val">true</span>;
+<a href=#279 id=279 data-nosnippet>279</a>                    seq.multimodal.has_changed_prompt = <span class="bool-val">true</span>;
 <a href=#280 id=280 data-nosnippet>280</a>                }
 <a href=#281 id=281 data-nosnippet>281</a>            }
 <a href=#282 id=282 data-nosnippet>282</a>

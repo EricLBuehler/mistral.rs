@@ -264,12 +264,12 @@
 <a href=#264 id=264 data-nosnippet>264</a>                .iter()
 <a href=#265 id=265 data-nosnippet>265</a>                .map(|x| <span class="kw">if </span><span class="kw-2">*</span>x &lt; <span class="number">0 </span>{ <span class="number">0u32 </span>} <span class="kw">else </span>{ <span class="kw-2">*</span>x <span class="kw">as </span>u32 })
 <a href=#266 id=266 data-nosnippet>266</a>                .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
-<a href=#267 id=267 data-nosnippet>267</a>            <span class="kw">if </span>!seq.has_changed_prompt {
+<a href=#267 id=267 data-nosnippet>267</a>            <span class="kw">if </span>!seq.multimodal.has_changed_prompt {
 <a href=#268 id=268 data-nosnippet>268</a>                <span class="kw">let </span>new_prompt = tokenizer.decode(<span class="kw-2">&amp;</span>new_ids, <span class="bool-val">false</span>).unwrap();
 <a href=#269 id=269 data-nosnippet>269</a>                seq.set_initial_prompt(new_prompt);
 <a href=#270 id=270 data-nosnippet>270</a>                <span class="comment">// NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
 <a href=#271 id=271 data-nosnippet>271</a>                </span>seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
-<a href=#272 id=272 data-nosnippet>272</a>                seq.has_changed_prompt = <span class="bool-val">true</span>;
+<a href=#272 id=272 data-nosnippet>272</a>                seq.multimodal.has_changed_prompt = <span class="bool-val">true</span>;
 <a href=#273 id=273 data-nosnippet>273</a>            }
 <a href=#274 id=274 data-nosnippet>274</a>
 <a href=#275 id=275 data-nosnippet>275</a>            toks.push(input_ids);

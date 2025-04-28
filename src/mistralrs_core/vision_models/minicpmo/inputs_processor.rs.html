@@ -223,11 +223,11 @@
 <a href=#223 id=223 data-nosnippet>223</a>                    .get_ids()
 <a href=#224 id=224 data-nosnippet>224</a>                    .to_vec();
 <a href=#225 id=225 data-nosnippet>225</a>
-<a href=#226 id=226 data-nosnippet>226</a>                <span class="kw">if </span>!seq.has_changed_prompt {
+<a href=#226 id=226 data-nosnippet>226</a>                <span class="kw">if </span>!seq.multimodal.has_changed_prompt {
 <a href=#227 id=227 data-nosnippet>227</a>                    seq.set_initial_prompt(final_text.clone());
 <a href=#228 id=228 data-nosnippet>228</a>
 <a href=#229 id=229 data-nosnippet>229</a>                    seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
-<a href=#230 id=230 data-nosnippet>230</a>                    seq.has_changed_prompt = <span class="bool-val">true</span>;
+<a href=#230 id=230 data-nosnippet>230</a>                    seq.multimodal.has_changed_prompt = <span class="bool-val">true</span>;
 <a href=#231 id=231 data-nosnippet>231</a>                }
 <a href=#232 id=232 data-nosnippet>232</a>
 <a href=#233 id=233 data-nosnippet>233</a>                <span class="kw">let </span>image_bounds = {
