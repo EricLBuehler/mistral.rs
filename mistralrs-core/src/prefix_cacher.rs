@@ -237,27 +237,35 @@ impl PrefixCacheManagerV2 {
 
         let toks = Tokens(toks.to_vec());
 
-        let mut longest_match = (0, None);
+        let mut longest_match = (0, None, 0);
         for (k, v) in self.caches.iter() {
             let match_len = toks.find_max_index(k);
             if let Some(match_len) = match_len {
+                // Hashes must match
+                let images_match_until = match image_hashes {
+                    Some(input_hashes) => match &v.image_hashes {
+                        Some(cached_hashes) => input_hashes
+                            .iter()
+                            .zip(cached_hashes)
+                            .enumerate()
+                            .take_while(|(_, (a, b))| a == b)
+                            .map(|(index, _)| index + 1)
+                            .last()
+                            .unwrap_or(0),
+                        None => 0,
+                    },
+                    None => 0,
+                };
                 if match_len > longest_match.0 {
-                    longest_match = (match_len, Some(v));
+                    longest_match = (match_len, Some(v), images_match_until);
                 }
             }
         }
-        if let (match_len, Some(longest_match)) = longest_match {
+        if let (match_len, Some(longest_match), images_match_until) = longest_match {
             let mut cache = longest_match.clone();
             // Count how many input images are not already cached
             let images_to_keep = if let Some(input_hashes) = image_hashes {
-                if let Some(cached_hashes) = &cache.image_hashes {
-                    input_hashes
-                        .iter()
-                        .filter(|h| !cached_hashes.contains(h))
-                        .count()
-                } else {
-                    input_hashes.len()
-                }
+                input_hashes.len() - images_match_until
             } else {
                 0
             };

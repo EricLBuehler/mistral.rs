@@ -188,7 +188,6 @@ impl SequenceImages {
         if self.images.len() > images_to_keep {
             let start = self.images.len() - images_to_keep;
             self.images = self.images[start..].to_vec();
-            self.hashes = self.hashes[start..].to_vec();
         }
     }
 }
@@ -866,9 +865,9 @@ impl Sequence {
 
     /// Keep these last n images
     pub fn keep_num_images(&mut self, images_to_keep: usize) {
-        self.input_images
-            .as_mut()
-            .map(|x| x.keep_num_images(images_to_keep));
+        if let Some(x) = self.input_images.as_mut() {
+            x.keep_num_images(images_to_keep)
+        }
     }
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {

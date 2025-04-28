@@ -649,7 +649,7 @@ impl Engine {
 
             let prefill_cache = handle_seq_error!(
                 get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
-                    &seq.get_toks(),
+                    seq.get_toks(),
                     seq.image_hashes(),
                     images.as_ref().is_some_and(|x| !x.is_empty())
                 ),
