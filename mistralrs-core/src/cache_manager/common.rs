@@ -332,13 +332,13 @@ impl KvCache {
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
         let (out_k, out_v) = match self {
             Self::Normal { k: kc, v: vc } => {
-                kc.append(&k)?;
-                vc.append(&v)?;
+                kc.append(k)?;
+                vc.append(v)?;
                 (kc.current_data()?, vc.current_data()?)
             }
             Self::Rotating { k: kc, v: vc } => {
-                let out_k = kc.append(&k)?;
-                let out_v = vc.append(&v)?;
+                let out_k = kc.append(k)?;
+                let out_v = vc.append(v)?;
                 (Some(out_k), Some(out_v))
             }
         };
@@ -482,13 +482,16 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         seqs: &mut [&mut crate::sequence::Sequence],
         modify_draft_cache: bool,
     ) {
-        let mut new_k_cache = Vec::new();
-        let mut new_v_cache = Vec::new();
+        // Prepare metadata and buffers
+        let metadata = pipeline.get_metadata();
+        let num_layers = metadata.num_hidden_layers;
+        let mut new_k_cache = Vec::with_capacity(num_layers);
+        let mut new_v_cache = Vec::with_capacity(num_layers);
 
-        'outer: for layer in 0..pipeline.get_metadata().num_hidden_layers {
-            let mut k_vec = Vec::new();
-            let mut v_vec = Vec::new();
-            for seq in &mut *seqs {
+        'outer: for layer in 0..num_layers {
+            let mut k_vec = Vec::with_capacity(seqs.len());
+            let mut v_vec = Vec::with_capacity(seqs.len());
+            for seq in seqs.iter_mut() {
                 let src_cache = if modify_draft_cache {
                     seq.normal_draft_cache()
                 } else {
