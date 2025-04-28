@@ -237,10 +237,10 @@
 <a href=#237 id=237 data-nosnippet>237</a>    }
 <a href=#238 id=238 data-nosnippet>238</a>}
 <a href=#239 id=239 data-nosnippet>239</a>
-<a href=#240 id=240 data-nosnippet>240</a><span class="doccomment">/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at
+<a href=#240 id=240 data-nosnippet>240</a><span class="doccomment">/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at 0.
 <a href=#241 id=241 data-nosnippet>241</a></span><span class="kw">pub trait </span>VisionPromptPrefixer: Send + Sync {
 <a href=#242 id=242 data-nosnippet>242</a>    <span class="doccomment">/// Prefix for inclusion in messages (may do nothing if the chat template handles it).
-<a href=#243 id=243 data-nosnippet>243</a>    </span><span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, image_index: usize, prompt: <span class="kw-2">&amp;</span>str) -&gt; String;
+<a href=#243 id=243 data-nosnippet>243</a>    </span><span class="kw">fn </span>prefix_image(<span class="kw-2">&amp;</span><span class="self">self</span>, image_indees: Vec&lt;usize&gt;, prompt: <span class="kw-2">&amp;</span>str) -&gt; String;
 <a href=#244 id=244 data-nosnippet>244</a>}
 <a href=#245 id=245 data-nosnippet>245</a>
 <a href=#246 id=246 data-nosnippet>246</a><span class="kw">pub enum </span>CacheBackendMetadata&lt;<span class="lifetime">'a</span>&gt; {
