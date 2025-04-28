@@ -309,16 +309,16 @@ impl Mlp {
             vb.pp("gate_proj"),
         )?;
         let up_proj = RowParallelLayer::new(
-            i_size,
             hidden_size,
+            i_size,
             &cfg.quantization_config,
             false,
             comm,
             vb.pp("up_proj"),
         )?;
         let down_proj = ColumnParallelLayer::new(
-            hidden_size,
             i_size,
+            hidden_size,
             &cfg.quantization_config,
             false,
             comm,
