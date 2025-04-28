@@ -138,7 +138,8 @@ impl SingleCache {
 
         let ad = self.all_data.as_mut().unwrap();
 
-        ad.slice_set(src, self.dim, self.current_seq_len)?;
+        let src = src.contiguous()?;
+        ad.slice_set(&src, self.dim, self.current_seq_len)?;
         self.current_seq_len += seq_len;
         Ok(())
     }
@@ -329,8 +330,6 @@ impl KvCache {
     }
 
     pub fn append(&mut self, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
-        let k = k.contiguous()?;
-        let v = v.contiguous()?;
         let (out_k, out_v) = match self {
             Self::Normal { k: kc, v: vc } => {
                 kc.append(&k)?;
@@ -575,14 +574,14 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
 
                     caches.push(KvCache::Normal {
                         k: SingleCache {
-                            all_data: k_cache.map(|x| x.contiguous().unwrap()),
+                            all_data: k_cache,
                             dim: template_cache_dim,
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
                         },
                         v: SingleCache {
-                            all_data: v_cache.map(|x| x.contiguous().unwrap()),
+                            all_data: v_cache,
                             dim: template_cache_dim,
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
@@ -648,8 +647,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                         seq.normal_cache()
                     };
                     // Extract the i-th slice along batch dimension 0
-                    let k_slice = batch_k.narrow(0, i, 1).unwrap().contiguous().unwrap();
-                    let v_slice = batch_v.narrow(0, i, 1).unwrap().contiguous().unwrap();
+                    let k_slice = batch_k.narrow(0, i, 1).unwrap();
+                    let v_slice = batch_v.narrow(0, i, 1).unwrap();
                     // Assign per-sequence cache using the pipeline template params
                     *output.get_mut(layer_idx).unwrap() = Some(KvCache::Normal {
                         k: SingleCache {
