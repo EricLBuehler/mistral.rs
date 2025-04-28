@@ -156,7 +156,7 @@ Mistral.rs supports several model categories:
 **Advanced features**:
 - [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching (CUDA and Metal support)
 - [FlashAttention](docs/FLASH_ATTENTION.md) V2/V3
-- Prefix caching
+- Prefix caching, including support for multimodal prefix caching
 - [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
 - [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 - Speculative Decoding: Mix supported models as the draft model or the target model
