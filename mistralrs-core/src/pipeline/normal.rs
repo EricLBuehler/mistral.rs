@@ -997,38 +997,6 @@ impl Pipeline for NormalPipeline {
             }
             (None, None) => None,
         };
-        #[cfg(feature = "metal")]
-        let logits = objc::rc::autoreleasepool(|| -> candle_core::Result<Tensor> {
-            match self.model.is_xlora() {
-                false => {
-                    let paged_attn_meta = paged_attn_meta
-                        .as_ref()
-                        .map(|meta| (meta.0.get_kv_cache().clone(), meta.1.clone()));
-
-                    self.model.forward(
-                        &input_ids,
-                        &seqlen_offsets,
-                        context_lens,
-                        position_ids,
-                        paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                        &flash_meta,
-                    )
-                }
-                true => self.model.xlora_forward(
-                    &input_ids,
-                    input_ids_full.as_ref().unwrap_or(&input_ids),
-                    &seqlen_offsets,
-                    seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                    self.no_kv_cache,
-                    &self.non_granular_state,
-                    context_lens,
-                    position_ids,
-                    &flash_meta,
-                    flash_meta_full.as_ref().unwrap_or(&flash_meta),
-                ),
-            }
-        })?;
-        #[cfg(not(feature = "metal"))]
         let logits = match self.model.is_xlora() {
             false => {
                 let paged_attn_meta = paged_attn_meta
