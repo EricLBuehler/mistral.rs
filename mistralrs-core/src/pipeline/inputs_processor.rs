@@ -65,20 +65,21 @@ pub mod text_models_inputs_processor {
 
     use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
 
+    #[inline(always)]
     fn _make_tensor_with_pad<D: WithDType>(
         x: Vec<Vec<D>>,
         max_len: usize,
         pad: D,
         device: &Device,
     ) -> Result<Tensor> {
-        let mut padded_x = Vec::new();
+        let bs = x.len();
+        let mut padded_x = Vec::with_capacity(x.len() * max_len);
         for mut x_i in x {
             assert!(x_i.len() <= max_len);
-            x_i.extend([pad].repeat(max_len - x_i.len()));
-            let shape = (x_i.len(),);
-            padded_x.push(Tensor::from_vec(x_i, shape, device)?);
+            x_i.extend(std::iter::repeat(pad).take(max_len.saturating_sub(x_i.len())));
+            padded_x.extend(x_i);
         }
-        Tensor::cat(&padded_x[..], 0).map_err(anyhow::Error::msg)
+        Tensor::from_vec(padded_x, (bs, max_len), device).map_err(anyhow::Error::msg)
     }
 
     pub struct PagedAttentionMeta<'a> {
