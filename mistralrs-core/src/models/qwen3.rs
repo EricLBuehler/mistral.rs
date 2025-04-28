@@ -192,10 +192,8 @@ impl Attention {
             k = k.to_dtype(original_dtype)?;
             v = v.to_dtype(original_dtype)?;
         }
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
 
-        let (q, k, v) = if q_len != 1 {
+        (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
                 .transpose(1, 2)?;
@@ -213,7 +211,10 @@ impl Attention {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        q = q.apply(&self.q_norm)?;
+        k = k.apply(&self.k_norm)?;
+
+        (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
