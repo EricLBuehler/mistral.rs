@@ -77,7 +77,7 @@ pub mod text_models_inputs_processor {
         let mut padded_x = Vec::with_capacity(x.len() * max_len);
         for mut x_i in x {
             assert!(x_i.len() <= max_len);
-            x_i.extend(std::iter::repeat(pad).take(max_len.saturating_sub(x_i.len())));
+            x_i.extend(std::iter::repeat_n(pad, max_len.saturating_sub(x_i.len())));
             padded_x.extend(x_i);
         }
         Tensor::from_vec(padded_x, (bs, max_len), device).map_err(anyhow::Error::msg)
