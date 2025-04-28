@@ -172,7 +172,8 @@ impl VisionMessages {
                         (
                             "text".to_string(),
                             Value::String(
-                                prefixer.prefix_image(self.images.len() - 1, &text.to_string()),
+                                prefixer
+                                    .prefix_image(vec![self.images.len() - 1], &text.to_string()),
                             ),
                         ),
                     ]),

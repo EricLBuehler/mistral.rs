@@ -77,7 +77,6 @@ Commands:
 const HELP_CMD: &str = "\\help";
 const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
-const IMAGE_CMD: &str = "\\image";
 
 async fn text_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
     let sender = mistralrs.get_sender().unwrap();
@@ -252,30 +251,17 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
     }
 }
 
-fn parse_image_path_and_message(input: &str) -> Option<(String, String)> {
-    // Regex to capture the image path and the following message
-    let re = Regex::new(r#"\\image\s+"([^"]+)"\s*(.*)|\\image\s+(\S+)\s*(.*)"#).unwrap();
-
-    if let Some(captures) = re.captures(input) {
-        // Capture either the quoted or unquoted path and the message
-        if let Some(path) = captures.get(1) {
-            if let Some(message) = captures.get(2) {
-                return Some((
-                    path.as_str().trim().to_string(),
-                    message.as_str().trim().to_string(),
-                ));
-            }
-        } else if let Some(path) = captures.get(3) {
-            if let Some(message) = captures.get(4) {
-                return Some((
-                    path.as_str().trim().to_string(),
-                    message.as_str().trim().to_string(),
-                ));
-            }
-        }
-    }
-
-    None
+fn parse_image_urls_and_message(input: &str) -> (Vec<String>, String) {
+    // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
+    let re = Regex::new(r#"((?:https?://|file://)?\S+\.(?:png|jpe?g|bmp|gif|webp))"#).unwrap();
+    // Collect all URLs
+    let urls: Vec<String> = re
+        .captures_iter(input)
+        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+        .collect();
+    // Remove the URLs from the input to get the message text
+    let text = re.replace_all(input, "").trim().to_string();
+    (urls, text)
 }
 
 async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
@@ -360,37 +346,53 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
                 messages.push(user_message);
                 continue;
             }
-            prompt if prompt.trim().starts_with(IMAGE_CMD) => {
-                let Some((url, message)) = parse_image_path_and_message(prompt.trim()) else {
-                    println!("Error: Adding an image message should be done with this format: `{IMAGE_CMD} path/to/image.jpg Describe what is in this image.`");
-                    continue;
-                };
-                let message = prefixer.prefix_image(images.len(), &message);
-
-                let image = util::parse_image_url(&url)
-                    .await
-                    .expect("Failed to read image from URL/path");
-                images.push(image);
-
-                let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
-                user_message.insert("role".to_string(), Either::Left("user".to_string()));
-                user_message.insert(
-                    "content".to_string(),
-                    Either::Right(vec![
-                        IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
-                        IndexMap::from([
-                            ("type".to_string(), Value::String("text".to_string())),
-                            ("text".to_string(), Value::String(message)),
-                        ]),
-                    ]),
-                );
-                messages.push(user_message);
-            }
-            message => {
-                let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
-                user_message.insert("role".to_string(), Either::Left("user".to_string()));
-                user_message.insert("content".to_string(), Either::Left(message.to_string()));
-                messages.push(user_message);
+            // Extract any image URLs and the remaining text
+            _ => {
+                let (urls, text) = parse_image_urls_and_message(prompt.trim());
+                if !urls.is_empty() {
+                    let mut image_indexes = Vec::new();
+                    // Load all images first
+                    for url in &urls {
+                        match util::parse_image_url(url).await {
+                            Ok(image) => {
+                                image_indexes.push(images.len());
+                                images.push(image);
+                            }
+                            Err(e) => {
+                                error!("Failed to read image from URL/path {}: {}", url, e);
+                                continue 'outer;
+                            }
+                        }
+                    }
+                    // Build a single user message with multiple images and then the text
+                    let mut content_vec: Vec<IndexMap<String, Value>> = Vec::new();
+                    // Add one image part per URL
+                    for _ in &urls {
+                        content_vec.push(IndexMap::from([(
+                            "type".to_string(),
+                            Value::String("image".to_string()),
+                        )]));
+                    }
+                    // Add the text part once
+                    let text = prefixer.prefix_image(image_indexes, &text);
+                    content_vec.push(IndexMap::from([
+                        ("type".to_string(), Value::String("text".to_string())),
+                        ("text".to_string(), Value::String(text.clone())),
+                    ]));
+                    let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
+                    user_message.insert("role".to_string(), Either::Left("user".to_string()));
+                    user_message.insert("content".to_string(), Either::Right(content_vec));
+                    messages.push(user_message);
+                } else {
+                    // Default: handle as text-only prompt
+                    let mut user_message: IndexMap<String, MessageContent> = IndexMap::new();
+                    user_message.insert("role".to_string(), Either::Left("user".to_string()));
+                    user_message.insert(
+                        "content".to_string(),
+                        Either::Left(prompt.trim().to_string()),
+                    );
+                    messages.push(user_message);
+                }
             }
         };
 
@@ -578,98 +580,5 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
         );
 
         println!();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_image_path_and_message;
-
-    #[test]
-    fn test_parse_image_with_unquoted_path_and_message() {
-        let input = r#"\image image.jpg What is this"#;
-        let result = parse_image_path_and_message(input);
-        assert_eq!(
-            result,
-            Some(("image.jpg".to_string(), "What is this".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_parse_image_with_quoted_path_and_message() {
-        let input = r#"\image "image name.jpg" What is this?"#;
-        let result = parse_image_path_and_message(input);
-        assert_eq!(
-            result,
-            Some(("image name.jpg".to_string(), "What is this?".to_string()))
-        );
-    }
-
-    #[test]
-    fn test_parse_image_with_only_unquoted_path() {
-        let input = r#"\image image.jpg"#;
-        let result = parse_image_path_and_message(input);
-        assert_eq!(result, Some(("image.jpg".to_string(), "".to_string())));
-    }
-
-    #[test]
-    fn test_parse_image_with_only_quoted_path() {
-        let input = r#"\image "image name.jpg""#;
-        let result = parse_image_path_and_message(input);
-        assert_eq!(result, Some(("image name.jpg".to_string(), "".to_string())));
-    }
-
-    #[test]
-    fn test_parse_image_with_extra_spaces() {
-        let input = r#"\image    "image with spaces.jpg"    This is a test message with spaces  "#;
-        let result = parse_image_path_and_message(input);
-        assert_eq!(
-            result,
-            Some((
-                "image with spaces.jpg".to_string(),
-                "This is a test message with spaces".to_string()
-            ))
-        );
-    }
-
-    #[test]
-    fn test_parse_image_with_no_message() {
-        let input = r#"\image "image.jpg""#;
-        let result = parse_image_path_and_message(input);
-        assert_eq!(result, Some(("image.jpg".to_string(), "".to_string())));
-    }
-
-    #[test]
-    fn test_parse_image_missing_path() {
-        let input = r#"\image"#;
-        let result = parse_image_path_and_message(input);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_parse_image_invalid_command() {
-        let input = r#"\img "image.jpg" This should fail"#;
-        let result = parse_image_path_and_message(input);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_parse_image_with_non_image_text() {
-        let input = r#"Some random text without command"#;
-        let result = parse_image_path_and_message(input);
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_parse_image_with_path_and_message_special_chars() {
-        let input = r#"\image "path with special chars @#$%^&*().jpg" This is a message with special chars !@#$%^&*()"#;
-        let result = parse_image_path_and_message(input);
-        assert_eq!(
-            result,
-            Some((
-                "path with special chars @#$%^&*().jpg".to_string(),
-                "This is a message with special chars !@#$%^&*()".to_string()
-            ))
-        );
     }
 }
