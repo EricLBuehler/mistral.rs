@@ -16,6 +16,7 @@ use crate::{
 use candle_core::Tensor;
 use std::{
     fmt::Display,
+    hash::{DefaultHasher, Hash, Hasher},
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -149,6 +150,49 @@ pub enum SeqStepType {
     OneShot,
 }
 
+pub struct SequenceImages {
+    images: Vec<image::DynamicImage>,
+    hashes: Vec<u64>,
+}
+
+impl SequenceImages {
+    fn new(input_images: Vec<image::DynamicImage>) -> Self {
+        let hashes = input_images.iter().map(|x| {
+            let mut hasher = DefaultHasher::new();
+            x.as_bytes().hash(&mut hasher);
+            hasher.finish()
+        });
+        Self {
+            hashes: hashes.collect(),
+            images: input_images,
+        }
+    }
+
+    fn clone_images(&self) -> Vec<image::DynamicImage> {
+        self.images.clone()
+    }
+
+    fn images(&self) -> &[image::DynamicImage] {
+        &self.images
+    }
+
+    fn images_mut(&mut self) -> &mut Vec<image::DynamicImage> {
+        &mut self.images
+    }
+
+    fn hashes(&self) -> &[u64] {
+        &self.hashes
+    }
+
+    fn keep_num_images(&mut self, images_to_keep: usize) {
+        if self.images.len() > images_to_keep {
+            let start = self.images.len() - images_to_keep;
+            self.images = self.images[start..].to_vec();
+            self.hashes = self.hashes[start..].to_vec();
+        }
+    }
+}
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -204,7 +248,7 @@ pub struct Sequence {
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
-    input_images: Option<Vec<image::DynamicImage>>,
+    input_images: Option<SequenceImages>,
     pub cached_pixel_values: Option<Tensor>,
     pub cached_img_thw: Option<Tensor>,
     pub cached_vid_thw: Option<Tensor>,
@@ -340,7 +384,7 @@ impl Sequence {
             last_is_done: None,
             is_tmp: false,
             scheduling_urgency: 0,
-            input_images,
+            input_images: input_images.map(SequenceImages::new),
             custom_metadata,
             tools,
             image_gen_response_format,
@@ -787,25 +831,44 @@ impl Sequence {
         // So that we don't keep having an image after the actual prompt
         if self.has_changed_prompt {
             // Actual prompt
-            self.input_images.take()
+            if let Some(input_images) = self.input_images.as_mut() {
+                let mut images = Vec::new();
+                std::mem::swap(input_images.images_mut(), &mut images);
+                Some(images)
+            } else {
+                None
+            }
         } else {
             // Dummy inputs processing
-            self.input_images.clone()
+            self.input_images
+                .as_ref()
+                .map(|images| images.clone_images())
         }
     }
 
-    pub fn clone_images(&mut self) -> Option<Vec<image::DynamicImage>> {
-        self.input_images.clone()
+    pub fn clone_images(&self) -> Option<Vec<image::DynamicImage>> {
+        self.input_images.as_ref().map(|x| x.clone_images())
     }
 
     pub fn images(&self) -> Option<&[image::DynamicImage]> {
-        self.input_images.as_deref()
+        self.input_images.as_ref().map(|x| x.images())
+    }
+
+    pub fn image_hashes(&self) -> Option<&[u64]> {
+        self.input_images.as_ref().map(|x| x.hashes())
     }
 
     pub fn has_images(&self) -> bool {
         self.input_images
             .as_ref()
-            .is_some_and(|images| !images.is_empty())
+            .is_some_and(|images| !images.images().is_empty())
+    }
+
+    /// Keep these last n images
+    pub fn keep_num_images(&mut self, images_to_keep: usize) {
+        self.input_images
+            .as_mut()
+            .map(|x| x.keep_num_images(images_to_keep));
     }
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {

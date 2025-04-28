@@ -35,6 +35,7 @@ impl From<Vec<u32>> for Tokens {
 #[derive(Clone)]
 struct CacheElement {
     cache: Vec<Option<KvCache>>,
+    image_hashes: Option<Vec<u64>>,
     devices: Vec<Option<Device>>,
 }
 
@@ -47,6 +48,7 @@ pub struct PrefixCacheManagerV2 {
 #[derive(Clone)]
 pub struct MatchingCache {
     pub normal: Vec<Option<KvCache>>,
+    pub images_to_keep: usize,
     pub toks: Vec<u32>,
     pub offset: usize,
 }
@@ -65,7 +67,8 @@ impl PrefixCacheManagerV2 {
 
     /// This always keeps the cache on the device.
     pub fn add_sequence(&mut self, seq: &mut Sequence) {
-        if self.no_prefix_cache || seq.has_images() {
+        // Do not cache if prefix caching disabled
+        if self.no_prefix_cache {
             return;
         }
         let cache = seq.normal_cache().to_vec();
@@ -75,7 +78,11 @@ impl PrefixCacheManagerV2 {
             .collect::<Vec<_>>();
         self.caches.insert(
             seq.get_toks().to_vec().into(),
-            CacheElement { cache, devices },
+            CacheElement {
+                cache,
+                devices,
+                image_hashes: seq.image_hashes().map(|x| x.to_vec()),
+            },
         );
     }
 
@@ -216,13 +223,15 @@ impl PrefixCacheManagerV2 {
         Ok(self.caches.len())
     }
 
-    /// Search for a matching cache given some toks
+    /// Search for a matching cache given some tokens. Image-containing sequences are now cached too.
     pub fn search_for_matching_cache(
         &mut self,
         toks: &[u32],
-        contains_images: bool,
+        image_hashes: Option<&[u64]>,
+        _contains_images: bool,
     ) -> Result<Option<MatchingCache>> {
-        if self.no_prefix_cache || toks.is_empty() || contains_images {
+        // Do not search if prefix caching disabled or no tokens
+        if self.no_prefix_cache || toks.is_empty() {
             return Ok(None);
         }
 
@@ -239,6 +248,19 @@ impl PrefixCacheManagerV2 {
         }
         if let (match_len, Some(longest_match)) = longest_match {
             let mut cache = longest_match.clone();
+            // Count how many input images are not already cached
+            let images_to_keep = if let Some(input_hashes) = image_hashes {
+                if let Some(cached_hashes) = &cache.image_hashes {
+                    input_hashes
+                        .iter()
+                        .filter(|h| !cached_hashes.contains(h))
+                        .count()
+                } else {
+                    input_hashes.len()
+                }
+            } else {
+                0
+            };
             Self::cache_to(&mut cache.cache, Either::Right(&cache.devices))?;
             for layer in cache.cache.iter_mut().flatten() {
                 match layer.set_len(match_len) {
@@ -248,6 +270,7 @@ impl PrefixCacheManagerV2 {
             }
             Ok(Some(MatchingCache {
                 normal: cache.cache,
+                images_to_keep,
                 toks: toks.0[match_len..].to_vec(),
                 offset: match_len,
             }))

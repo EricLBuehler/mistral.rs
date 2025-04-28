@@ -370,13 +370,6 @@ impl Engine {
                 warn!("Prompt for request {} was {} tokens over the model maximum length. The last {} tokens were truncated to make space for generation.", request.id, currently_over, prompt_len - prompt_tokens.len());
             }
         }
-        let prefill_cache = handle_seq_error!(
-            get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
-                &prompt_tokens,
-                images.as_ref().is_some_and(|x| !x.is_empty())
-            ),
-            request.response
-        );
 
         let topk = request
             .sampling_params
@@ -632,18 +625,8 @@ impl Engine {
                 request.return_raw_logits,
                 eos_toks,
             );
-            self.logger.add_new_sequence();
-            seq = if let Some(prefill_cache) = prefill_cache.clone() {
-                self.logger.add_prefix_cache_hit();
 
-                seq.prefill_v2(
-                    prefill_cache.normal,
-                    prefill_cache.toks,
-                    prefill_cache.offset,
-                )
-            } else {
-                seq
-            };
+            self.logger.add_new_sequence();
 
             // Run the inputs processor to update the prompt for multimodal models.
             if images.is_some() {
@@ -663,6 +646,27 @@ impl Engine {
                     pipeline.device_mapper(),
                 );
             }
+
+            let prefill_cache = handle_seq_error!(
+                get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
+                    &seq.get_toks(),
+                    seq.image_hashes(),
+                    images.as_ref().is_some_and(|x| !x.is_empty())
+                ),
+                request.response
+            );
+            seq = if let Some(prefill_cache) = prefill_cache.clone() {
+                self.logger.add_prefix_cache_hit();
+
+                seq.keep_num_images(prefill_cache.images_to_keep);
+                seq.prefill_v2(
+                    prefill_cache.normal,
+                    prefill_cache.toks,
+                    prefill_cache.offset,
+                )
+            } else {
+                seq
+            };
 
             *get_mut_arcmutex!(self.id) += 1;
             get_mut_arcmutex!(self.scheduler).add_seq(seq);
