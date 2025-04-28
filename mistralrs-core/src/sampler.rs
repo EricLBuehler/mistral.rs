@@ -15,6 +15,7 @@ use rand::distr::{weighted::WeightedIndex, Distribution};
 use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use tokenizers::Tokenizer;
 
 static DRY_SEQUENCE_BREAKERS: Lazy<Vec<String>> =
@@ -458,25 +459,33 @@ impl Sampler {
     fn sample_top_kp_min_p(
         &self,
         probs: &mut Vec<f32>,
-        logits: &Tensor,
         top_k: i64,
         top_p: f32,
         min_p: f32,
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
-        let argsort_indices: Vec<u32> = logits.arg_sort_last_dim(false)?.to_vec1()?;
-
+        // Prepare argsort indices vector for top-p and min-p by sorting on CPU
+        let n = probs.len();
+        let mut idxs: Vec<usize> = (0..n).collect();
+        // Sort idxs by descending prob
+        idxs.sort_unstable_by(|&i, &j| probs[j].partial_cmp(&probs[i]).unwrap_or(Ordering::Equal));
+        // Top-k: zero out probabilities below the k-th largest
         if top_k > 0 {
-            // Clamp smaller probabilities to zero.
-            for (index, val) in argsort_indices.iter().enumerate() {
-                if index >= top_k as usize {
-                    probs[*val as usize] = 0.0;
+            let k = top_k as usize;
+            if k <= n {
+                // threshold is the k-th largest probability
+                let threshold = probs[idxs[k - 1]];
+                for p in probs.iter_mut() {
+                    if *p < threshold {
+                        *p = 0.0;
+                    }
                 }
             }
         }
 
         if top_p <= 0.0 || top_p >= 1.0 {
+            let argsort_indices = idxs.iter().map(|&i| i as u32).collect();
             return self.sample_multinomial(probs, argsort_indices, return_logprobs, rng);
         }
 
@@ -488,19 +497,22 @@ impl Sampler {
 
         // Clamp smaller probabilities to zero.
         let mut cumsum = 0.;
-        for index in &argsort_indices {
+        // top-p filtering: zero out after cumulative probability exceeds top_p
+        for &i in &idxs {
             if cumsum >= top_p {
-                probs[*index as usize] = 0.0;
+                probs[i] = 0.0;
             } else {
-                cumsum += probs[*index as usize];
+                cumsum += probs[i];
             }
         }
 
         if min_p <= 0.0 || min_p >= 1.0 {
+            let argsort_indices = idxs.iter().map(|&i| i as u32).collect();
             return self.sample_multinomial(probs, argsort_indices, return_logprobs, rng);
         }
 
-        let max_p = probs[argsort_indices[0] as usize];
+        // min-p filtering based on max probability
+        let max_p = probs[idxs[0]];
 
         // MIN P
 
@@ -508,13 +520,14 @@ impl Sampler {
         // (max prob of token in dist) * min_p
 
         // Clamp smaller probabilities to zero.
-        for index in &argsort_indices {
-            if max_p * min_p >= probs[*index as usize] {
-                probs[*index as usize] = 0.0;
+        for &i in &idxs {
+            if max_p * min_p >= probs[i] {
+                probs[i] = 0.0;
             }
         }
 
         // Sample with clamped probabilities.
+        let argsort_indices = idxs.into_iter().map(|i| i as u32).collect();
         self.sample_multinomial(probs, argsort_indices, return_logprobs, rng)
     }
 
@@ -680,7 +693,6 @@ impl Sampler {
 
                     self.sample_top_kp_min_p(
                         &mut probs,
-                        &logits,
                         self.top_k,
                         self.top_p as f32,
                         self.min_p as f32,

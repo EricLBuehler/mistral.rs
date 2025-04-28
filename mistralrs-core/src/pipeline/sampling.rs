@@ -32,7 +32,10 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     eos_tok: Option<&[u32]>,
     use_prefix_cacher: bool,
 ) -> Result<()> {
-    let mut is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
+    // Cache metadata lookup
+    let meta = this.get_metadata();
+    let max_len = meta.max_seq_len;
+    let mut is_done = seq.is_done(logprobs.token, eos_tok, max_len);
     seq.add_token(
         logprobs.clone(),
         this.get_metadata()

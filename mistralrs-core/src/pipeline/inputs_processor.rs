@@ -61,24 +61,26 @@ pub mod text_models_inputs_processor {
         device_map::DeviceMapper,
         paged_attention::{BlockEngine, _PAD_SLOT_ID},
         sequence::Sequence,
+        using_flash_attn,
     };
 
     use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
 
+    #[inline(always)]
     fn _make_tensor_with_pad<D: WithDType>(
         x: Vec<Vec<D>>,
         max_len: usize,
         pad: D,
         device: &Device,
     ) -> Result<Tensor> {
-        let mut padded_x = Vec::new();
+        let bs = x.len();
+        let mut padded_x = Vec::with_capacity(x.len() * max_len);
         for mut x_i in x {
             assert!(x_i.len() <= max_len);
-            x_i.extend([pad].repeat(max_len - x_i.len()));
-            let shape = (x_i.len(),);
-            padded_x.push(Tensor::from_vec(x_i, shape, device)?);
+            x_i.extend(std::iter::repeat_n(pad, max_len.saturating_sub(x_i.len())));
+            padded_x.extend(x_i);
         }
-        Tensor::cat(&padded_x[..], 0).map_err(anyhow::Error::msg)
+        Tensor::from_vec(padded_x, (bs, max_len), device).map_err(anyhow::Error::msg)
     }
 
     pub struct PagedAttentionMeta<'a> {
@@ -246,22 +248,25 @@ pub mod text_models_inputs_processor {
 
         let max_q = *seqlens_q.iter().max().unwrap();
         let max_k = *seqlens_k.iter().max().unwrap();
-        let seqlens_q = Tensor::new(seqlens_q, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
-        let seqlens_k = Tensor::new(seqlens_k, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
 
         let mut seqlens_q_map = HashMap::new();
         let mut seqlens_k_map = HashMap::new();
 
-        let devices = mapper.unwrap().get_unique_devices();
-        for device in devices {
-            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
-            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+        if using_flash_attn() {
+            let seqlens_q = Tensor::new(seqlens_q, device)?
+                .to_dtype(DType::F32)?
+                .cumsum(0)?
+                .to_dtype(DType::U32)?;
+            let seqlens_k = Tensor::new(seqlens_k, device)?
+                .to_dtype(DType::F32)?
+                .cumsum(0)?
+                .to_dtype(DType::U32)?;
+
+            let devices = mapper.unwrap().get_unique_devices();
+            for device in devices {
+                seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
+                seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+            }
         }
 
         let input = Tensor::cat(&seqs_tensors, 0).unwrap();
@@ -419,22 +424,25 @@ pub mod text_models_inputs_processor {
 
         let max_q = *seqlens_q.iter().max().unwrap();
         let max_k = *seqlens_k.iter().max().unwrap();
-        let seqlens_q = Tensor::new(seqlens_q, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
-        let seqlens_k = Tensor::new(seqlens_k, device)?
-            .to_dtype(DType::F32)?
-            .cumsum(0)?
-            .to_dtype(DType::U32)?;
 
         let mut seqlens_q_map = HashMap::new();
         let mut seqlens_k_map = HashMap::new();
 
-        let devices = mapper.unwrap().get_unique_devices();
-        for device in devices {
-            seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
-            seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+        if using_flash_attn() {
+            let seqlens_q = Tensor::new(seqlens_q, device)?
+                .to_dtype(DType::F32)?
+                .cumsum(0)?
+                .to_dtype(DType::U32)?;
+            let seqlens_k = Tensor::new(seqlens_k, device)?
+                .to_dtype(DType::F32)?
+                .cumsum(0)?
+                .to_dtype(DType::U32)?;
+
+            let devices = mapper.unwrap().get_unique_devices();
+            for device in devices {
+                seqlens_q_map.insert(device.location(), seqlens_q.to_device(&device)?);
+                seqlens_k_map.insert(device.location(), seqlens_k.to_device(&device)?);
+            }
         }
 
         let paged_attn_meta = if paged_attn_metadata.is_some() {

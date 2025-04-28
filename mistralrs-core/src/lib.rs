@@ -59,6 +59,7 @@ mod paged_attention;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 use dummy_paged_attention as paged_attention;
 mod attention;
+mod cache_manager;
 mod diffusion_models;
 pub mod distributed;
 mod pipeline;
@@ -312,23 +313,47 @@ impl MistralRs {
         };
 
         let engine_handler = thread::spawn(move || {
-            let rt = Runtime::new().unwrap();
-            rt.block_on(async move {
-                let engine = Engine::new(
-                    rx,
-                    pipeline,
-                    method,
-                    truncate_sequence,
-                    no_kv_cache,
-                    no_prefix_cache,
-                    prefix_cache_n,
-                    disable_eos_stop,
-                    throughput_logging_enabled,
-                    search_embedding_model,
-                )
-                .expect("Engine creation failed.");
-                Arc::new(engine).run().await;
+            #[cfg(feature = "metal")]
+            objc::rc::autoreleasepool(move || {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let engine = Engine::new(
+                        rx,
+                        pipeline,
+                        method,
+                        truncate_sequence,
+                        no_kv_cache,
+                        no_prefix_cache,
+                        prefix_cache_n,
+                        disable_eos_stop,
+                        throughput_logging_enabled,
+                        search_embedding_model,
+                    )
+                    .expect("Engine creation failed.");
+                    Arc::new(engine).run().await;
+                })
             });
+
+            #[cfg(not(feature = "metal"))]
+            {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let engine = Engine::new(
+                        rx,
+                        pipeline,
+                        method,
+                        truncate_sequence,
+                        no_kv_cache,
+                        no_prefix_cache,
+                        prefix_cache_n,
+                        disable_eos_stop,
+                        throughput_logging_enabled,
+                        search_embedding_model,
+                    )
+                    .expect("Engine creation failed.");
+                    Arc::new(engine).run().await;
+                })
+            }
         });
 
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
