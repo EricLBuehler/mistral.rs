@@ -17,7 +17,6 @@ pub trait FcfsBacker: Default {
     fn add(&mut self, item: Sequence);
     fn into_iter(self) -> impl Iterator<Item = Sequence>;
     fn len(&self) -> usize;
-    fn sort_ascending_ids(&mut self);
 }
 
 impl FcfsBacker for VecDeque<Sequence> {
@@ -29,10 +28,6 @@ impl FcfsBacker for VecDeque<Sequence> {
     }
     fn into_iter(self) -> impl Iterator<Item = Sequence> {
         <Self as IntoIterator>::into_iter(self)
-    }
-    fn sort_ascending_ids(&mut self) {
-        let slice = self.make_contiguous();
-        slice.sort_by_key(|seq| *seq.id());
     }
     fn len(&self) -> usize {
         VecDeque::len(self)
@@ -206,7 +201,7 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
     pub fn schedule(&mut self) -> DefaultSchedulerOutput {
         // Filter out all done sequences
         let running = std::mem::take(&mut self.running);
-        let mut waiting = std::mem::take(&mut self.waiting);
+        let waiting = std::mem::take(&mut self.waiting);
         let mut running = running
             .into_iter()
             .filter(|seq| seq.is_running())
@@ -249,8 +244,8 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
             _ => {}
         }
 
-        // Sort the waiting seqs
-        waiting.sort_ascending_ids();
+        // Skip sorting waiting sequences by id for performance
+        // waiting.sort_ascending_ids();
 
         // If the waiting sequence will fit, add it. Otherwise remove it
         let mut new_waiting = Backer::new();
