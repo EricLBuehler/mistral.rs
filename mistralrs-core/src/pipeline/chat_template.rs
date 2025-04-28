@@ -292,6 +292,7 @@ pub fn apply_chat_template_to(
             template
         }
     };
+    let template = template.replace("[::-1]", "|reverse");
 
     env.add_template("chat_template", &template)?;
     env.add_function("raise_exception", raise_exception);
