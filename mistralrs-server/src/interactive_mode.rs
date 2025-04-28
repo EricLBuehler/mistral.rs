@@ -47,12 +47,16 @@ Commands:
 - `\system <system message here>`:
     Add a system message to the chat without running the model.
     Ex: `\system Always respond as a pirate.`
+- `\clear`: Clear the chat history.
 "#;
 
 const VISION_INTERACTIVE_HELP: &str = r#"
 Welcome to interactive mode! Because this model is a vision model, you can enter prompts and chat with the model.
 
-To specify a message with an image, use the `\image` command detailed below.
+To specify a message with one or more images, simply include the image URL or path:
+
+- `Please describe this image: path/to/image1.jpg path/to/image2.png`
+- `What is in this image: <url here>`
 
 Commands:
 - `\help`: Display this message.
@@ -60,10 +64,7 @@ Commands:
 - `\system <system message here>`:
     Add a system message to the chat without running the model.
     Ex: `\system Always respond as a pirate.`
-- `\image <image URL or local path here> <message here>`:
-    Add a message paired with an image. The image will be fed to the model as if it were the first item in this prompt.
-    You do not need to modify your prompt for specific models.
-    Ex: `\image path/to/image.jpg Describe what is in this image.`
+- `\clear`: Clear the chat history.
 "#;
 
 const DIFFUSION_INTERACTIVE_HELP: &str = r#"
@@ -77,6 +78,7 @@ Commands:
 const HELP_CMD: &str = "\\help";
 const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
+const CLEAR_CMD: &str = "\\clear";
 
 async fn text_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
     let sender = mistralrs.get_sender().unwrap();
@@ -133,6 +135,11 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             }
             EXIT_CMD => {
                 break;
+            }
+            CLEAR_CMD => {
+                messages.clear();
+                info!("Cleared chat history.");
+                continue;
             }
             prompt if prompt.trim().starts_with(SYSTEM_CMD) => {
                 let parsed = match &prompt.split(SYSTEM_CMD).collect::<Vec<_>>()[..] {
@@ -330,6 +337,11 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
             }
             EXIT_CMD => {
                 break;
+            }
+            CLEAR_CMD => {
+                messages.clear();
+                info!("Cleared chat history.");
+                continue;
             }
             prompt if prompt.trim().starts_with(SYSTEM_CMD) => {
                 let parsed = match &prompt.split(SYSTEM_CMD).collect::<Vec<_>>()[..] {
