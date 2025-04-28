@@ -192,6 +192,81 @@ impl SequenceImages {
     }
 }
 
+// Holds all multimodal (vision/diffusion) data for a Sequence.
+pub struct MultimodalData {
+    pub input_images: Option<SequenceImages>,
+    pub cached_pixel_values: Option<Tensor>,
+    pub cached_img_thw: Option<Tensor>,
+    pub cached_vid_thw: Option<Tensor>,
+    pub has_changed_prompt: bool,
+    pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
+    pub diffusion_params: Option<DiffusionGenerationParams>,
+}
+
+impl MultimodalData {
+    pub fn new(
+        input_images: Option<Vec<image::DynamicImage>>,
+        image_gen_response_format: Option<ImageGenerationResponseFormat>,
+        diffusion_params: Option<DiffusionGenerationParams>,
+    ) -> Self {
+        MultimodalData {
+            input_images: input_images.map(SequenceImages::new),
+            cached_pixel_values: None,
+            cached_img_thw: None,
+            cached_vid_thw: None,
+            has_changed_prompt: false,
+            image_gen_response_format,
+            diffusion_params,
+        }
+    }
+
+    pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
+        if self.has_changed_prompt {
+            if let Some(input_images) = self.input_images.as_mut() {
+                let mut images = Vec::new();
+                std::mem::swap(&mut images, input_images.images_mut());
+                Some(images)
+            } else {
+                None
+            }
+        } else {
+            self.input_images.as_ref().map(|imgs| imgs.clone_images())
+        }
+    }
+
+    pub fn clone_images(&self) -> Option<Vec<image::DynamicImage>> {
+        self.input_images.as_ref().map(|imgs| imgs.clone_images())
+    }
+
+    pub fn images(&self) -> Option<&[image::DynamicImage]> {
+        self.input_images.as_ref().map(|imgs| imgs.images())
+    }
+
+    pub fn image_hashes(&self) -> Option<&[u64]> {
+        self.input_images.as_ref().map(|imgs| imgs.hashes())
+    }
+
+    pub fn has_images(&self) -> bool {
+        self.input_images
+            .as_ref()
+            .is_some_and(|imgs| !imgs.images().is_empty())
+    }
+
+    pub fn keep_num_images(&mut self, images_to_keep: usize) {
+        if let Some(imgs) = self.input_images.as_mut() {
+            imgs.keep_num_images(images_to_keep)
+        }
+    }
+
+    pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
+        self.image_gen_response_format
+    }
+
+    pub fn diffusion_params(&self) -> Option<DiffusionGenerationParams> {
+        self.diffusion_params.clone()
+    }
+}
+
 pub struct Sequence {
     // Metadata, const
     id: usize,
@@ -211,9 +286,8 @@ pub struct Sequence {
     token_offset: usize,
     eos_tokens: Vec<u32>,
 
-    // Image generation
-    image_gen_response_format: Option<ImageGenerationResponseFormat>,
-    diffusion_params: Option<DiffusionGenerationParams>,
+    // Multimodal data (images, diffusion settings, pixel caches)
+    pub multimodal: MultimodalData,
 
     // Completion requests
     suffix: Option<String>,
@@ -247,11 +321,6 @@ pub struct Sequence {
     stream_idx: usize,
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
-    input_images: Option<SequenceImages>,
-    pub cached_pixel_values: Option<Tensor>,
-    pub cached_img_thw: Option<Tensor>,
-    pub cached_vid_thw: Option<Tensor>,
-    pub has_changed_prompt: bool,
 
     // GPU things
     pub prompt_tok_per_sec: f32,
@@ -383,19 +452,18 @@ impl Sequence {
             last_is_done: None,
             is_tmp: false,
             scheduling_urgency: 0,
-            input_images: input_images.map(SequenceImages::new),
+            // Multimodal data
+            multimodal: MultimodalData::new(
+                input_images,
+                image_gen_response_format,
+                diffusion_params,
+            ),
             custom_metadata,
             tools,
-            image_gen_response_format,
             sequence_stepping_type,
-            diffusion_params,
-            cached_pixel_values: None,
-            cached_img_thw: None,
-            cached_vid_thw: None,
             return_raw_logits,
             token_offset: 0,
             eos_tokens,
-            has_changed_prompt: false,
             total_prompt_time: None,
         }
     }
@@ -827,51 +895,32 @@ impl Sequence {
     }
 
     pub fn take_images(&mut self) -> Option<Vec<image::DynamicImage>> {
-        // So that we don't keep having an image after the actual prompt
-        if self.has_changed_prompt {
-            // Actual prompt
-            if let Some(input_images) = self.input_images.as_mut() {
-                let mut images = Vec::new();
-                std::mem::swap(input_images.images_mut(), &mut images);
-                Some(images)
-            } else {
-                None
-            }
-        } else {
-            // Dummy inputs processing
-            self.input_images
-                .as_ref()
-                .map(|images| images.clone_images())
-        }
+        self.multimodal.take_images()
     }
 
     pub fn clone_images(&self) -> Option<Vec<image::DynamicImage>> {
-        self.input_images.as_ref().map(|x| x.clone_images())
+        self.multimodal.clone_images()
     }
 
     pub fn images(&self) -> Option<&[image::DynamicImage]> {
-        self.input_images.as_ref().map(|x| x.images())
+        self.multimodal.images()
     }
 
     pub fn image_hashes(&self) -> Option<&[u64]> {
-        self.input_images.as_ref().map(|x| x.hashes())
+        self.multimodal.image_hashes()
     }
 
     pub fn has_images(&self) -> bool {
-        self.input_images
-            .as_ref()
-            .is_some_and(|images| !images.images().is_empty())
+        self.multimodal.has_images()
     }
 
     /// Keep these last n images
     pub fn keep_num_images(&mut self, images_to_keep: usize) {
-        if let Some(x) = self.input_images.as_mut() {
-            x.keep_num_images(images_to_keep)
-        }
+        self.multimodal.keep_num_images(images_to_keep)
     }
 
     pub fn image_gen_response_format(&self) -> Option<ImageGenerationResponseFormat> {
-        self.image_gen_response_format
+        self.multimodal.image_gen_response_format()
     }
 
     pub fn sequence_stepping_type(&self) -> &SeqStepType {
@@ -879,7 +928,7 @@ impl Sequence {
     }
 
     pub fn get_diffusion_diffusion_params(&self) -> Option<DiffusionGenerationParams> {
-        self.diffusion_params.clone()
+        self.multimodal.diffusion_params()
     }
 
     pub fn eos_tokens(&self) -> &[u32] {

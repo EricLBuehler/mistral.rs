@@ -240,7 +240,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
                 .to_string();
 
-            let has_changed_prompt = seq.has_changed_prompt;
+            let has_changed_prompt = seq.multimodal.has_changed_prompt;
             if !has_changed_prompt {
                 seq.set_toks_and_reallocate(
                     tokenizer
@@ -274,7 +274,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 i += token_count;
             }
             if !has_changed_prompt {
-                seq.has_changed_prompt = true;
+                seq.multimodal.has_changed_prompt = true;
             }
             toks.push(seq.get_toks().to_vec());
         }

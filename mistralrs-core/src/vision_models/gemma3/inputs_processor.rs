@@ -181,7 +181,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
 
                 prompt = prompt.replace(BOI_TOKEN, &self.full_image_sequence);
 
-                if !seq.has_changed_prompt {
+                if !seq.multimodal.has_changed_prompt {
                     seq.set_initial_prompt(prompt.clone());
                     let toks = tokenizer
                         .encode_fast(prompt, false)
@@ -189,7 +189,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
 
                     let ids = toks.get_ids().to_vec();
                     seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
-                    seq.has_changed_prompt = true;
+                    seq.multimodal.has_changed_prompt = true;
                 }
             }
 
