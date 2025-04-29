@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub mod rag;
 
 use anyhow::Result;
 use html2text::{config, render::PlainDecorator};
+use rayon::prelude::*;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -96,51 +98,58 @@ pub fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<SearchRe
     let snippet_selector = Selector::parse(".result__snippet").unwrap();
     let url_selector = Selector::parse(".result__url").unwrap();
 
-    let mut results = Vec::new();
-
-    for element in document.select(&result_selector) {
-        let title = element
-            .select(&title_selector)
-            .next()
-            .map(|e| e.text().collect::<String>().trim().to_string())
-            .unwrap_or_default();
-
-        let description = element
-            .select(&snippet_selector)
-            .next()
-            .map(|e| e.text().collect::<String>().trim().to_string())
-            .unwrap_or_default();
-
-        let mut url = element
-            .select(&url_selector)
-            .next()
-            .map(|e| e.text().collect::<String>().trim().to_string())
-            .unwrap_or_default();
-
-        if !title.is_empty() && !description.is_empty() && !url.is_empty() {
+    // Phase 1: collect title, description, and url serially into a Vec of tuples
+    let partials: Vec<(String, String, String)> = document
+        .select(&result_selector)
+        .filter_map(|element| {
+            let title = element
+                .select(&title_selector)
+                .next()
+                .map(|e| e.text().collect::<String>().trim().to_string())
+                .unwrap_or_default();
+            let description = element
+                .select(&snippet_selector)
+                .next()
+                .map(|e| e.text().collect::<String>().trim().to_string())
+                .unwrap_or_default();
+            let mut url = element
+                .select(&url_selector)
+                .next()
+                .map(|e| e.text().collect::<String>().trim().to_string())
+                .unwrap_or_default();
+            if title.is_empty() || description.is_empty() || url.is_empty() {
+                return None;
+            }
             if !url.starts_with("http") {
                 url = format!("https://{}", url);
             }
+            Some((title, description, url))
+        })
+        .collect();
 
+    // Phase 2: fetch content in parallel using Rayon
+    let client = Arc::new(client);
+    let results: Vec<SearchResult> = partials
+        .into_par_iter()
+        .filter_map(|(title, description, url)| {
             let content = match client.get(&url).header("User-Agent", &user_agent).send() {
                 Ok(response) => {
-                    let html = response.text()?;
-
+                    let html = response.text().ok()?;
                     config::with_decorator(PlainDecorator::new())
                         .do_decorate()
-                        .string_from_read(html.as_bytes(), 80)?
+                        .string_from_read(html.as_bytes(), 80)
+                        .ok()?
                 }
-                Err(_) => "".to_string(),
+                Err(_) => return None,
             };
-
-            results.push(SearchResult {
+            Some(SearchResult {
                 title,
                 description,
                 url,
                 content,
-            });
-        }
-    }
+            })
+        })
+        .collect();
 
     Ok(results)
 }

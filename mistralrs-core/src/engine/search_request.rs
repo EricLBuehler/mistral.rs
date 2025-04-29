@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, sync::Arc, time::Instant};
 
 use either::Either;
 use indexmap::IndexMap;
@@ -50,6 +50,7 @@ async fn do_search(
         tool_call_params.query
     );
 
+    let start = Instant::now();
     // Add tool response
     {
         let tokenizer = get_mut_arcmutex!(this.pipeline)
@@ -69,6 +70,7 @@ async fn do_search(
                 (result, len)
             })
             .collect::<Vec<_>>();
+
         // Sort increasing by tokenized length, if it fails, put it at the end.
         results.sort_by_key(|(_, len)| *len);
 
@@ -121,8 +123,10 @@ async fn do_search(
             .replace("\\n", "\n")
             .replace("\\\"", "\"")
             .replace("\\\\", "\\");
+        let end = Instant::now();
         info!(
-            "Web search executed, using {used_len} tokens of {} search results.",
+            "Web search executed in {:.2}s, using {used_len} tokens of {} search results.",
+            (end - start).as_secs_f32(),
             used_results.len()
         );
 
