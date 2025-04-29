@@ -654,7 +654,9 @@ template <typename OutT, typename InT> struct TransformAxpby {
   }
 };
 
-template <typename T> struct AccumHelper { typedef float accum_type; };
+template <typename T> struct AccumHelper {
+  typedef float accum_type;
+};
 
 struct BlockSwizzle {
   static METAL_FUNC int2 swizzle(uint3 tid [[threadgroup_position_in_grid]],
@@ -714,7 +716,9 @@ template <typename T> struct is_empty : metal::bool_constant<__is_empty(T)> {};
 template <typename T> constexpr constant bool is_empty_v = is_empty<T>::value;
 #endif
 
-template <typename... Ts> struct make_void { typedef void type; };
+template <typename... Ts> struct make_void {
+  typedef void type;
+};
 
 template <typename... Ts> using void_t = typename make_void<Ts...>::type;
 
