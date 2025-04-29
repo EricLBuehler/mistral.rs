@@ -7,7 +7,9 @@ This works with all models that support [tool calling](TOOL_CALLING.md). However
 - Hermes 3 3b/8b
 - Mistral 3 24b
 - Llama 4 Scout/Maverick
-- Qwen 3
+- Qwen 3 (⭐ Recommended!)
+
+Web search is supported both in streaming and completion responses! This makes it easy to integrate and test out in interactive mode!
 
 Besides tool calling and parsing of web content, we also use an embedding model to select the most relevant search results.
 
@@ -24,13 +26,18 @@ Internally, we use a BERT model (Snowflake/snowflake-arctic-embed-l-v2.0)[https:
 ## HTTP server
 **Be sure to add `--enable-search`!**
 
-Here are some examples using various models:
+Here are some examples using various models. Note that this works for both streaming and completion requests, so interactive mode is featured here!
+
 ```
-./mistralrs-server --enable-search --port 1234 --isq q4k --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3
+./mistralrs-server --enable-search -i --isq 4 plain -m Qwen/Qwen3-4B
 ```
 
 ```
-./mistralrs-server --enable-search --port 1234 --isq q4k plain -m NousResearch/Hermes-3-Llama-3.1-8B
+./mistralrs-server --enable-search --port 1234 --isq 4 --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3
+```
+
+```
+./mistralrs-server --enable-search -i --isq 4 plain -m NousResearch/Hermes-3-Llama-3.1-8B
 ```
 
 ```py

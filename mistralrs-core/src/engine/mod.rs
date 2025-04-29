@@ -44,6 +44,7 @@ use crate::{
 
 mod add_request;
 mod logger;
+mod search_request;
 
 pub enum EngineInstruction {
     Terminate,

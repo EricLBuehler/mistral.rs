@@ -1,22 +1,18 @@
 use crate::{
     pipeline::NormalCache,
-    request::{DetokenizationRequest, NormalRequest, SearchContextSize, TokenizationRequest},
-    search::{self, SearchFunctionParameters, SearchResult},
+    request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
     tools::{ToolCallingMatcher, ToolChoice},
-    MessageContent, RequestMessage, Response, ResponseOk,
+    RequestMessage, Response,
 };
 use candle_core::Tensor;
 use either::Either;
-use indexmap::IndexMap;
 use std::{
-    borrow::Cow,
     ops::Deref,
     sync::{atomic::Ordering, Arc},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokenizers::InputSequence;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::{
     get_mut_arcmutex, handle_seq_error,
@@ -26,7 +22,7 @@ use crate::{
     StopTokens,
 };
 
-use super::{Engine, TERMINATE_ALL_NEXT_STEP};
+use super::{search_request, Engine, TERMINATE_ALL_NEXT_STEP};
 
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
@@ -36,174 +32,9 @@ impl Engine {
                     request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
                 ) && request.web_search_options.is_some()
-                    && !request.is_streaming
                     && get_mut_arcmutex!(self.bert_pipeline).is_some()
                 {
-                    let Some(web_search_options) = request.web_search_options.clone() else {
-                        unreachable!()
-                    };
-                    let mut first_request = request.clone();
-                    // Actually add the search tool here
-                    first_request
-                        .tools
-                        .get_or_insert_with(Vec::new)
-                        .push(search::get_search_tool(&web_search_options).unwrap());
-
-                    let mut second_request = first_request.clone();
-                    first_request.web_search_options = None;
-                    second_request.web_search_options = None;
-
-                    let this = self.clone();
-                    let handle = tokio::spawn(async move {
-                        let (new_sender, mut first_receiver) = tokio::sync::mpsc::channel(1);
-                        second_request.response = new_sender;
-                        std::mem::swap(&mut first_request.response, &mut second_request.response);
-
-                        this.add_request(first_request).await;
-                        let ResponseOk::Done(done) =
-                            first_receiver.recv().await.unwrap().as_result().unwrap()
-                        else {
-                            unreachable!()
-                        };
-
-                        let tool_calls = match &done.choices[0].message.tool_calls {
-                            Some(tool_calls)
-                                if tool_calls.len() == 1
-                                    && tool_calls[0].function.name == search::SEARCH_TOOL_NAME =>
-                            {
-                                &tool_calls[0]
-                            }
-                            None => {
-                                second_request
-                                    .response
-                                    .send(Response::Done(done))
-                                    .await
-                                    .unwrap();
-                                return;
-                            }
-                            Some(_) => {
-                                second_request
-                                    .response
-                                    .send(Response::Done(done))
-                                    .await
-                                    .unwrap();
-                                return;
-                            }
-                        };
-
-                        let RequestMessage::Chat {
-                            messages,
-                            enable_thinking: _,
-                        } = &mut second_request.messages
-                        else {
-                            unreachable!()
-                        };
-
-                        // Add assistant call message
-                        {
-                            let mut message: IndexMap<String, MessageContent> = IndexMap::new();
-                            message
-                                .insert("role".to_string(), Either::Left("assistant".to_string()));
-                            message.insert(
-                                "content".to_string(),
-                                Either::Left(format!(
-                                    "{{\"name\":\"{}\",\"arguments\":\"{}\"}}",
-                                    tool_calls.function.name, tool_calls.function.arguments
-                                )),
-                            );
-                            messages.push(message);
-                        }
-                        let tool_call_params: SearchFunctionParameters =
-                            serde_json::from_str(&tool_calls.function.arguments).unwrap();
-
-                        // Add tool response
-                        {
-                            let tokenizer = get_mut_arcmutex!(this.pipeline)
-                                .tokenizer()
-                                .expect("A tokenizer is expected for non-diffusion models.");
-                            let mut results = search::run_search_tool(&tool_call_params)
-                                .unwrap()
-                                .into_iter()
-                                .map(|result| {
-                                    let len = {
-                                        let inp = InputSequence::Raw(Cow::from(&result.content));
-                                        tokenizer
-                                            .encode_fast(inp, false)
-                                            .map(|x| x.len())
-                                            .unwrap_or(usize::MAX)
-                                    };
-                                    (result, len)
-                                })
-                                .collect::<Vec<_>>();
-                            // Sort increasing by tokenized length, if it fails, put it at the end.
-                            results.sort_by_key(|(_, len)| *len);
-
-                            {
-                                let device = get_mut_arcmutex!(this.pipeline).device();
-
-                                let Some(bert_pipeline) =
-                                    &mut *get_mut_arcmutex!(this.bert_pipeline)
-                                else {
-                                    unreachable!()
-                                };
-
-                                let decreasing_indexes = search::rag::compute_most_similar(
-                                    &device,
-                                    &tool_call_params.query,
-                                    results.iter().map(|(res, _)| res).collect::<Vec<_>>(),
-                                    bert_pipeline,
-                                )
-                                .unwrap();
-
-                                // Rerank the results
-                                let mut results_old = Vec::new();
-                                std::mem::swap(&mut results_old, &mut results);
-                                for &index in &decreasing_indexes {
-                                    let mut current_result: (SearchResult, usize) =
-                                        Default::default();
-                                    std::mem::swap(&mut current_result, &mut results_old[index]);
-
-                                    results.push(current_result);
-                                }
-                            }
-
-                            // Manage context size by # of tokens. Apply default here.
-                            let max_results_budget_toks =
-                                match web_search_options.search_context_size.unwrap_or_default() {
-                                    SearchContextSize::High => 10000_usize,
-                                    SearchContextSize::Medium => 7500_usize,
-                                    SearchContextSize::Low => 3000_usize,
-                                };
-                            let mut used_results = Vec::new();
-                            let mut used_len = 0;
-                            for (item, len) in results {
-                                if used_len + len >= max_results_budget_toks {
-                                    break;
-                                }
-                                // So the info! below gets the correct value
-                                used_len += len;
-                                used_results.push(item);
-                            }
-
-                            let tool_result = serde_json::to_string(&used_results)
-                                .unwrap()
-                                .replace("\\n", "\n")
-                                .replace("\\\"", "\"")
-                                .replace("\\\\", "\\");
-                            info!("Web search executed, using {used_len} tokens of {} search results.", used_results.len());
-
-                            let mut message: IndexMap<String, MessageContent> = IndexMap::new();
-                            message.insert("role".to_string(), Either::Left("tool".to_string()));
-                            message.insert(
-                                "content".to_string(),
-                                Either::Left(format!("{{\"output\": \"{tool_result}\"}}")),
-                            );
-                            messages.push(message);
-                        }
-
-                        this.add_request(second_request).await;
-                    });
-                    get_mut_arcmutex!(self.handles).push(handle);
+                    search_request::search_request(self.clone(), request).await;
                 } else {
                     self.add_request(request).await
                 }
@@ -222,7 +53,7 @@ impl Engine {
         }
     }
 
-    async fn add_request(&self, request: NormalRequest) {
+    pub(super) async fn add_request(&self, request: NormalRequest) {
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat { .. } | RequestMessage::VisionChat { .. }
