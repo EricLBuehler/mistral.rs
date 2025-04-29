@@ -1,9 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
+use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{
-    ColumnParallelLayer, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -14,7 +14,6 @@ use crate::{
     device_map::DeviceMapper,
     layers::{self, embedding, Activation, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
-    ops::{TopKLastDimOp, TopKOutput},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -370,7 +369,6 @@ struct MoeMlp {
     experts: Vec<Mlp>,
     norm_topk_prob: bool,
     num_experts_per_tok: usize,
-    num_experts: usize,
 }
 
 impl MoeMlp {
@@ -401,69 +399,68 @@ impl MoeMlp {
         Ok(Self {
             gate,
             experts,
-            num_experts,
             norm_topk_prob: cfg.norm_topk_prob,
             num_experts_per_tok: cfg.num_experts_per_tok,
         })
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let (bs, seq, hidden) = xs.dims3()?;
-        let xs = xs.reshape(((), hidden))?;
+        let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+        let xs = xs.reshape(((), hidden_dim))?;
+        let router_logits = xs.apply(&self.gate)?;
+        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
 
-        let router_logits = self.gate.forward(&xs)?;
-        let routing_weights =
-            candle_nn::ops::softmax_last_dim(&router_logits.to_dtype(DType::F32)?)?;
-        let TopKOutput {
-            values: mut routing_weights,
-            indices: selected_experts,
-        } = routing_weights.topk(self.num_experts_per_tok)?;
-        if self.norm_topk_prob {
-            routing_weights =
-                routing_weights.broadcast_div(&routing_weights.sum_keepdim(D::Minus1)?)?;
+        // In order to extract topk, we extract the data from the tensor and manipulate it
+        // directly. Maybe we will want to use some custom ops instead at some point.
+        let experts_per_tok = routing_weights
+            .arg_sort_last_dim(false)?
+            .narrow(D::Minus1, 0, self.num_experts_per_tok)?
+            .contiguous()?;
+        let routing_weights = routing_weights.gather(&experts_per_tok, D::Minus1)?;
+
+        // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
+        // top_x contains the row indexes to evaluate for each expert.
+        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        let experts_per_tok = experts_per_tok.to_vec2::<u32>()?;
+        let mut top_x = vec![vec![]; self.experts.len()];
+        let mut selected_experts = vec![vec![]; self.experts.len()];
+        for (row_idx, (rw, expert_idxs)) in routing_weights
+            .iter()
+            .zip(experts_per_tok.iter())
+            .enumerate()
+        {
+            let sum_rw = rw.iter().sum::<f32>();
+            for (&rw, &expert_idx) in rw.iter().zip(expert_idxs.iter()) {
+                top_x[expert_idx as usize].push(row_idx as u32);
+                let rw = if self.norm_topk_prob { rw / sum_rw } else { rw };
+                selected_experts[expert_idx as usize].push(rw)
+            }
         }
-        routing_weights = routing_weights.to_dtype(router_logits.dtype())?;
 
-        let mut final_hidden_states = Tensor::zeros((bs * seq, hidden), xs.dtype(), xs.device())?;
-
-        // One hot encode the selected experts to create an expert mask
-        // this will be used to easily index which expert to activate
-        let experts_mask =
-            candle_nn::encoding::one_hot(selected_experts, self.num_experts, 1u8, 0u8)?
-                .permute((2, 1, 0))?;
-
-        // Loop over all avail experts in the model and perform the computation on each expert
-        for expert_idx in 0..self.num_experts {
-            let expert = &self.experts[expert_idx];
-            let expert_mask = experts_mask.i(expert_idx)?;
-            assert_eq!(expert_mask.rank(), 2);
-            let nonzero_mask = expert_mask.contiguous()?.nonzero()?;
-            let idx = nonzero_mask.i((.., 0))?;
-            let top_x = nonzero_mask.i((.., 1))?;
-
-            if top_x.dim(0)? == 0 {
+        let mut ys = xs.zeros_like()?;
+        for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
+            let top_x = &top_x[expert_idx];
+            if top_x.is_empty() {
                 continue;
             }
-
-            // Index the correct hidden staters and compute the expert hidden state
-            // for the current expert, we need to make sure to multiply the output hidden
-            // states by `routing_weights` on the corresponding tokens (top-1, top-2)
-            let current_state = xs.index_select(&top_x, 0)?.reshape((1, (), hidden))?;
-            let current_routing_weights = routing_weights
-                .index_select(&top_x, 0)?
-                .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
-            let exp_out = expert.forward(&current_state)?;
-
-            let current_hidden_states = exp_out.broadcast_mul(&current_routing_weights)?;
-
-            final_hidden_states = final_hidden_states.index_add(
-                &top_x.contiguous()?,
-                &current_hidden_states.squeeze(0)?.to_dtype(xs.dtype())?,
-                0,
-            )?;
+            let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
+            let selected_experts =
+                Tensor::new(selected_experts[expert_idx].as_slice(), xs.device())?
+                    .reshape(((), 1))?
+                    .to_dtype(xs.dtype())?;
+            // Index the correct hidden states and compute the expert hidden state for
+            // the current expert. We need to make sure to multiply the output hidden
+            // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
+            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
+            // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
+            let current_hidden_states = expert_layer
+                .forward(&current_state.unsqueeze(0)?)?
+                .squeeze(0)?;
+            let current_hidden_states = current_hidden_states.broadcast_mul(&selected_experts)?;
+            ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
         }
-
-        final_hidden_states.reshape((bs, seq, hidden))
+        let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
+        Ok(ys)
     }
 }
 
