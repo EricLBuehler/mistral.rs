@@ -7,7 +7,7 @@ The Qwen 3 family is a collection of hybrid reasoning MoE and non-MoE models ran
 ./mistralrs-server --isq 4 -i plain -m Qwen/Qwen3-30B-A3B
 ```
 
-> Note: mistral.rs can load the [FP8 pre-quantized versions](Qwen/Qwen3-8B-FP8) natively! Simply replace the model ID.
+> Note: mistral.rs can load all [FP8 pre-quantized versions]([Qwen/Qwen3-8B-FP8](https://huggingface.co/Qwen/Qwen3-14B-FP8)) natively! Simply replace the model ID.
 
 > Note: tool calling support is fully implemented for the Qwen 3 models, including agentic web search.
 
