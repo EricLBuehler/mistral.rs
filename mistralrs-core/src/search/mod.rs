@@ -30,7 +30,7 @@ You should expect output like this:
         ...
     ]
 }
-YOU SHOULD NOT CALL THE SEARCH TOOL CONSECUTIVELY!"#;
+"#;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct SearchResult {

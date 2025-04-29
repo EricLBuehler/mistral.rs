@@ -3,6 +3,7 @@ use std::{borrow::Cow, sync::Arc, time::Instant};
 use either::Either;
 use indexmap::IndexMap;
 use tokenizers::InputSequence;
+use tracing::{level_filters::LevelFilter, Dispatch};
 
 use crate::{
     get_mut_arcmutex,
@@ -55,20 +56,29 @@ async fn do_search(
         let tokenizer = get_mut_arcmutex!(this.pipeline)
             .tokenizer()
             .expect("A tokenizer is expected for non-diffusion models.");
-        let mut results = search::run_search_tool(&tool_call_params)
-            .unwrap()
-            .into_iter()
-            .map(|result| {
-                let len = {
-                    let inp = InputSequence::Raw(Cow::from(&result.content));
-                    tokenizer
-                        .encode_fast(inp, false)
-                        .map(|x| x.len())
-                        .unwrap_or(usize::MAX)
-                };
-                (result, len)
-            })
-            .collect::<Vec<_>>();
+
+        // Allow `info` and below; suppress `warn`
+        let subscriber = tracing_subscriber::fmt::Subscriber::builder()
+            .with_max_level(LevelFilter::INFO)
+            .finish();
+        let dispatch = Dispatch::new(subscriber);
+
+        let mut results = tracing::dispatcher::with_default(&dispatch, || {
+            search::run_search_tool(&tool_call_params)
+                .unwrap()
+                .into_iter()
+                .map(|result| {
+                    let len = {
+                        let inp = InputSequence::Raw(Cow::from(&result.content));
+                        tokenizer
+                            .encode_fast(inp, false)
+                            .map(|x| x.len())
+                            .unwrap_or(usize::MAX)
+                    };
+                    (result, len)
+                })
+                .collect::<Vec<_>>()
+        });
 
         // Sort increasing by tokenized length, if it fails, put it at the end.
         results.sort_by_key(|(_, len)| *len);
@@ -138,9 +148,19 @@ async fn do_search(
         messages.push(message);
     }
 
+    // Recursion is enabled here!
+    second_request.web_search_options = Some(web_search_options.clone());
+
     this.add_request(second_request).await;
 }
 
+/// The strategy is:
+/// - Send the first request to allow a tool call
+///     - If no, tool call, early return
+/// - Proceed to `do_search`
+///     1) Execute search
+///     2) Rank by relevance
+/// - Send final tool call, which is allowed to have web search for repeated queries.
 pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
     let Some(web_search_options) = request.web_search_options.clone() else {
         unreachable!()
