@@ -61,7 +61,7 @@ class ChatCompletionRequest:
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
     web_search_options: WebSearchOptions | None = None
-    enable_thinking: bool = False
+    enable_thinking: bool | None = None
 
 @dataclass
 class CompletionRequest:
@@ -403,7 +403,7 @@ class Runner:
         """
 
     def tokenize_text(
-        self, text: str, add_special_tokens: bool, enable_thinking: bool = False
+        self, text: str, add_special_tokens: bool, enable_thinking: bool | None = None
     ) -> list[int]:
         """
         Tokenize some text, returning raw tokens.

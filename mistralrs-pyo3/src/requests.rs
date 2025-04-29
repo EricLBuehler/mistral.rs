@@ -163,7 +163,7 @@ pub struct ChatCompletionRequest {
     pub(crate) dry_allowed_length: Option<usize>,
     pub(crate) dry_sequence_breakers: Option<Vec<String>>,
     pub(crate) web_search_options: Option<WebSearchOptions>,
-    pub(crate) enable_thinking: bool,
+    pub(crate) enable_thinking: Option<bool>,
 }
 
 #[pymethods]
@@ -221,7 +221,7 @@ impl ChatCompletionRequest {
         dry_allowed_length: Option<usize>,
         dry_sequence_breakers: Option<Vec<String>>,
         web_search_options: Option<WebSearchOptions>,
-        enable_thinking: bool,
+        enable_thinking: Option<bool>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {

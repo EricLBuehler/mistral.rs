@@ -488,7 +488,12 @@ async fn main() -> Result<()> {
     .build();
 
     if args.interactive_mode {
-        interactive_mode(mistralrs, args.interactive_search, args.enable_thinking).await;
+        interactive_mode(
+            mistralrs,
+            args.interactive_search,
+            args.enable_thinking.then_some(true),
+        )
+        .await;
         return Ok(());
     }
 

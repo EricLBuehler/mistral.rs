@@ -173,9 +173,8 @@ pub struct ChatCompletionRequest {
     pub dry_allowed_length: Option<usize>,
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
-    #[schema(example = json!(false))]
-    #[serde(default = "default_false")]
-    pub enable_thinking: bool,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub enable_thinking: Option<bool>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

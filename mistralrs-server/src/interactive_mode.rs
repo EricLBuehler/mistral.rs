@@ -30,7 +30,11 @@ fn terminate_handler() {
 static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
     Lazy::new(|| Mutex::new(&exit_handler));
 
-pub async fn interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, enable_thinking: bool) {
+pub async fn interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+) {
     match mistralrs.get_model_category() {
         ModelCategory::Text => text_interactive_mode(mistralrs, do_search, enable_thinking).await,
         ModelCategory::Vision { .. } => {
@@ -82,7 +86,11 @@ const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
 const CLEAR_CMD: &str = "\\clear";
 
-async fn text_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool, enable_thinking: bool) {
+async fn text_interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
 
@@ -279,7 +287,7 @@ fn parse_image_urls_and_message(input: &str) -> (Vec<String>, String) {
 async fn vision_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
-    enable_thinking: bool,
+    enable_thinking: Option<bool>,
 ) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();

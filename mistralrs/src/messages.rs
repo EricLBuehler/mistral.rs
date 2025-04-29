@@ -13,7 +13,7 @@ pub trait RequestLike {
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>>;
     fn take_adapters(&mut self) -> Option<Vec<String>>;
     fn return_logprobs(&self) -> bool;
-    fn enable_search(&self) -> bool;
+    fn enable_search(&self) -> Option<bool>;
     fn take_constraint(&mut self) -> Constraint;
     fn take_tools(&mut self) -> Option<(Vec<Tool>, ToolChoice)>;
     fn take_sampling_params(&mut self) -> SamplingParams;
@@ -92,8 +92,8 @@ impl RequestLike for TextMessages {
             enable_thinking: self.enable_search(),
         }
     }
-    fn enable_search(&self) -> bool {
-        false
+    fn enable_search(&self) -> Option<bool> {
+        None
     }
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>> {
         None
@@ -213,8 +213,8 @@ impl RequestLike for VisionMessages {
             enable_thinking: self.enable_search(),
         }
     }
-    fn enable_search(&self) -> bool {
-        false
+    fn enable_search(&self) -> Option<bool> {
+        None
     }
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>> {
         None
@@ -260,7 +260,7 @@ pub struct RequestBuilder {
     tool_choice: ToolChoice,
     sampling_params: SamplingParams,
     web_search_options: Option<WebSearchOptions>,
-    enable_thinking: bool,
+    enable_thinking: Option<bool>,
 }
 
 impl Default for RequestBuilder {
@@ -282,7 +282,7 @@ impl From<TextMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
-            enable_thinking: false,
+            enable_thinking: None,
         }
     }
 }
@@ -300,7 +300,7 @@ impl From<VisionMessages> for RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
-            enable_thinking: false,
+            enable_thinking: None,
         }
     }
 }
@@ -318,7 +318,7 @@ impl RequestBuilder {
             tool_choice: ToolChoice::Auto,
             sampling_params: SamplingParams::deterministic(),
             web_search_options: None,
-            enable_thinking: false,
+            enable_thinking: None,
         }
     }
 
@@ -510,7 +510,7 @@ impl RequestBuilder {
     }
 
     pub fn enable_thinking(mut self, enable_thinking: bool) -> Self {
-        self.enable_thinking = enable_thinking;
+        self.enable_thinking = Some(enable_thinking);
         self
     }
 }
@@ -541,7 +541,7 @@ impl RequestLike for RequestBuilder {
         }
     }
 
-    fn enable_search(&self) -> bool {
+    fn enable_search(&self) -> Option<bool> {
         self.enable_thinking
     }
 

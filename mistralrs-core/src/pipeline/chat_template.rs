@@ -225,7 +225,7 @@ fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
 pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
-    enable_thinking: bool,
+    enable_thinking: Option<bool>,
     template: &ChatTemplateValue,
     bos_tok: Option<String>,
     eos_tok: Option<String>,

@@ -693,7 +693,7 @@ mod tests {
                     inputs.clone()
                 },
                 true,
-                false,
+                None,
                 &ChatTemplateValue(Either::Left(template.to_string())),
                 Some(bos.to_string()),
                 Some(eos.to_string()),

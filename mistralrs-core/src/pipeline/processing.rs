@@ -37,7 +37,7 @@ pub trait Processor {
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
         add_special_tokens: bool,
-        enable_thinking: bool,
+        enable_thinking: Option<bool>,
         tools: Vec<Tool>,
     ) -> Result<(Vec<u32>, String)> {
         // for message in messages.iter_mut() {
@@ -76,7 +76,7 @@ pub(crate) fn apply_chat_template(
     pipeline: &dyn Pipeline,
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
-    enable_thinking: bool,
+    enable_thinking: Option<bool>,
     action: MessagesAction,
     tools: Vec<Tool>,
 ) -> Result<String> {

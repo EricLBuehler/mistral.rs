@@ -244,7 +244,7 @@ impl Model {
         tools: Option<Vec<Tool>>,
         add_special_tokens: bool,
         add_generation_prompt: bool,
-        enable_thinking: bool,
+        enable_thinking: Option<bool>,
     ) -> anyhow::Result<Vec<u32>> {
         let (tx, mut rx) = channel(1);
         let request = Request::Tokenize(TokenizationRequest {

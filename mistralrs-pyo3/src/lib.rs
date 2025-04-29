@@ -1245,7 +1245,7 @@ impl Runner {
             add_generation_prompt: true,
             add_special_tokens,
             response: tx,
-            enable_thinking: enable_thinking.unwrap_or(false),
+            enable_thinking,
         });
 
         self.runner.get_sender()?.blocking_send(request).unwrap();

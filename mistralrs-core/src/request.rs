@@ -40,7 +40,7 @@ pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 pub enum RequestMessage {
     Chat {
         messages: Vec<IndexMap<String, MessageContent>>,
-        enable_thinking: bool,
+        enable_thinking: Option<bool>,
     },
     Completion {
         text: String,
@@ -52,7 +52,7 @@ pub enum RequestMessage {
         #[serde(skip)] // TODO!!!!
         images: Vec<image::DynamicImage>,
         messages: Vec<IndexMap<String, MessageContent>>,
-        enable_thinking: bool,
+        enable_thinking: Option<bool>,
     },
     ImageGeneration {
         prompt: String,
@@ -176,7 +176,7 @@ pub struct TokenizationRequest {
     pub tools: Option<Vec<Tool>>,
     pub add_generation_prompt: bool,
     pub add_special_tokens: bool,
-    pub enable_thinking: bool,
+    pub enable_thinking: Option<bool>,
     #[serde(default = "default_responder")]
     #[serde(skip)]
     pub response: Sender<anyhow::Result<Vec<u32>>>,
