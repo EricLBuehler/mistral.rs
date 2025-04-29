@@ -16,6 +16,8 @@ use crate::{Function, Tool, ToolType, WebSearchOptions, WebSearchUserLocation};
 pub(crate) const SEARCH_TOOL_NAME: &str = "search_the_web";
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DESCRIPTION: &str = r#"This tool is used to search the web given a query. If you call this tool, then you MUST complete your answer using the output.
+The input can be a query or it can also be a URL. Either is fine.
+
 You should expect output like this:
 {
     "output": [
@@ -49,7 +51,7 @@ pub fn get_search_tool(web_search_options: &WebSearchOptions) -> Result<Tool> {
         "properties": {
             "query": {
                 "type": "string",
-                "description": "A query for web searching.",
+                "description": "A query for web searching. This can also be a URL.",
             },
         },
         "required": ["query"],

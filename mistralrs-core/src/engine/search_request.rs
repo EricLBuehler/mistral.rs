@@ -2,7 +2,6 @@ use std::{borrow::Cow, sync::Arc, time::Instant};
 
 use either::Either;
 use indexmap::IndexMap;
-use metal::log::info;
 use tokenizers::InputSequence;
 
 use crate::{
@@ -45,7 +44,7 @@ async fn do_search(
     let tool_call_params: SearchFunctionParameters =
         serde_json::from_str(&tool_calls.function.arguments).unwrap();
     println!();
-    info!(
+    tracing::info!(
         "Called search tool with query `{}`.",
         tool_call_params.query
     );
@@ -124,7 +123,7 @@ async fn do_search(
             .replace("\\\"", "\"")
             .replace("\\\\", "\\");
         let end = Instant::now();
-        info!(
+        tracing::info!(
             "Web search executed in {:.2}s, using {used_len} tokens of {} search results.",
             (end - start).as_secs_f32(),
             used_results.len()
