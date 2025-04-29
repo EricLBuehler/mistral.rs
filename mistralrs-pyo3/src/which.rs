@@ -21,6 +21,8 @@ pub enum Architecture {
     Phi3_5MoE,
     DeepseekV2,
     DeepseekV3,
+    Qwen3,
+    Qwen3Moe,
 }
 
 impl From<Architecture> for NormalLoaderType {
@@ -38,6 +40,8 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::Phi3_5MoE => Self::Phi3_5MoE,
             Architecture::DeepseekV2 => Self::DeepSeekV2,
             Architecture::DeepseekV3 => Self::DeepSeekV3,
+            Architecture::Qwen3 => Self::Qwen3,
+            Architecture::Qwen3Moe => Self::Qwen3Moe,
         }
     }
 }

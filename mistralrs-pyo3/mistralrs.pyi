@@ -103,6 +103,8 @@ class Architecture(Enum):
     Phi3_5MoE = "phi3.5moe"
     DeepseekV2 = "deepseekv2"
     DeepseekV3 = "deepseekv3"
+    Qwen3 = "qwen3"
+    Qwen3Moe = "qwen3moe"
 
 @dataclass
 class VisionArchitecture(Enum):
