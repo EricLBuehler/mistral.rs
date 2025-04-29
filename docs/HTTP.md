@@ -11,7 +11,7 @@ To support additional features, we have extended the completion and chat complet
 - `top_k`: `int` | `null`. If non null, it is only relevant if positive.
 - `grammar`: `{"type" : "regex" | "lark" | "json_schema" | "llguidance", "value": string}` or `null`. Grammar to use. This is mutually exclusive to the OpenAI-compatible `response_format`.
 - `min_p`: `float` | `null`. If non null, it is only relevant if 1 >= min_p >= 0.
-- `enable_thinking`: `bool`, default to `false`. Enable thinking for models that do not support it.
+- `enable_thinking`: `bool`, default to `false`. Enable thinking for models that support it.
 
 
 ## `POST`: `/v1/chat/completions`
