@@ -49,6 +49,12 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
     ./mistralrs-server -i --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct -a llama4
     ```
 
+- Run the **Qwen 3** hybrid reasoning models with full tool calling support: [documentation](docs/QWEN3.md)
+
+    ```
+    ./mistralrs-server -i --isq 4 plain -m Qwen/Qwen3-8B
+    ```
+
 
 - 💎💎💎 Run the entire **Gemma 3** Model family (1b, 4b, 12b, 27b) with 128k context length and vision support: [documentation](docs/GEMMA3.md)
 
@@ -203,6 +209,7 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Gemma 3|✅| |✅|✅|
 |Mistral 3|✅| |✅|✅|
 |Llama 4|✅| |✅| |
+|Qwen 3|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -459,6 +466,8 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `starcoder2`
 - `deepseekv2`
 - `deepseekv3`
+- `qwen3`
+- `qwen3moe`
 
 ### Architecture for vision models
 
@@ -570,6 +579,7 @@ Please submit more benchmarks via raising an issue!
 |Gemma 3| | |✅|
 |Mistral 3| | |✅|
 |Llama 4| | |✅|
+|Qwen 3| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -605,6 +615,7 @@ Please submit more benchmarks via raising an issue!
 |Gemma 3| | | |
 |Mistral 3| | | |
 |Llama 4| | | |
+|Qwen 3| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -633,6 +644,7 @@ Please submit more benchmarks via raising an issue!
 |Gemma 3|✅|
 |Mistral 3|✅|
 |Llama 4| |
+|Qwen 3| |
 
 ### Using derivative model
 

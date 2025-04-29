@@ -848,26 +848,28 @@ impl CustomOp1 for NonZero {
             count_nonzero_cuda(storage.dtype(), d_in, u32::try_from(n)?, *dev.cu_stream());
         let d_out = unsafe { dev.alloc::<u32>(num_nonzero as usize * layout.dims().len()) }
             .map_err(|_| Error::Msg("Failed to allocate memory for nonzero result".to_string()))?;
-        let d_out_ptr = *d_out.device_ptr() as *mut c_void;
-        let dims = layout
-            .dims()
-            .iter()
-            .map(|&x| u32::try_from(x).unwrap())
-            .collect::<Vec<u32>>();
-        let d_dims = dev
-            .htod_copy(dims)
-            .map_err(|_| Error::Msg("Failed to copy dims to device".to_string()))?;
-        let d_dims_ptr = *d_dims.device_ptr() as *const c_void;
-        nonzero_cuda(
-            storage.dtype(),
-            d_in,
-            u32::try_from(n)?,
-            num_nonzero,
-            d_dims_ptr,
-            u32::try_from(layout.dims().len())?,
-            d_out_ptr,
-            *dev.cu_stream(),
-        );
+        if num_nonzero != 0 {
+            let d_out_ptr = *d_out.device_ptr() as *mut c_void;
+            let dims = layout
+                .dims()
+                .iter()
+                .map(|&x| u32::try_from(x).unwrap())
+                .collect::<Vec<u32>>();
+            let d_dims = dev
+                .htod_copy(dims)
+                .map_err(|_| Error::Msg("Failed to copy dims to device".to_string()))?;
+            let d_dims_ptr = *d_dims.device_ptr() as *const c_void;
+            nonzero_cuda(
+                storage.dtype(),
+                d_in,
+                u32::try_from(n)?,
+                num_nonzero,
+                d_dims_ptr,
+                u32::try_from(layout.dims().len())?,
+                d_out_ptr,
+                *dev.cu_stream(),
+            );
+        }
         let shape = Shape::from_dims(&[num_nonzero as usize, layout.dims().len()]);
         let dst = candle_core::CudaStorage::wrap_cuda_slice(d_out, dev);
         Ok((dst, shape))

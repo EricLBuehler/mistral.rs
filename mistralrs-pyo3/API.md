@@ -56,6 +56,8 @@ If you do not specify the architecture, an attempt will be made to use the model
 
 > Note: `from_uqff` specified a UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
 
+> Note: `enable_thinking` enables thinking for models that support the configuration.
+
 ```py
 class Which(Enum):
     @dataclass

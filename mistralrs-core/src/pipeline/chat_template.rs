@@ -221,9 +221,11 @@ fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
     Ok(date_string)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
+    enable_thinking: Option<bool>,
     template: &ChatTemplateValue,
     bos_tok: Option<String>,
     eos_tok: Option<String>,
@@ -290,6 +292,7 @@ pub fn apply_chat_template_to(
             template
         }
     };
+    let template = template.replace("[::-1]", "|reverse");
 
     env.add_template("chat_template", &template)?;
     env.add_function("raise_exception", raise_exception);
@@ -308,6 +311,7 @@ pub fn apply_chat_template_to(
             eos_token => eos_tok,
             unk_token => unk_tok,
             date_string => date_string,
+            enable_thinking => enable_thinking,
         })?)
     } else {
         Ok(tmpl.render(context! {
@@ -318,6 +322,7 @@ pub fn apply_chat_template_to(
             unk_token => unk_tok,
             tools => tools,
             date_string => date_string,
+            enable_thinking => enable_thinking,
         })?)
     }
 }

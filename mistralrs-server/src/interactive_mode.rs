@@ -30,10 +30,16 @@ fn terminate_handler() {
 static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
     Lazy::new(|| Mutex::new(&exit_handler));
 
-pub async fn interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
+pub async fn interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+) {
     match mistralrs.get_model_category() {
-        ModelCategory::Text => text_interactive_mode(mistralrs, do_search).await,
-        ModelCategory::Vision { .. } => vision_interactive_mode(mistralrs, do_search).await,
+        ModelCategory::Text => text_interactive_mode(mistralrs, do_search, enable_thinking).await,
+        ModelCategory::Vision { .. } => {
+            vision_interactive_mode(mistralrs, do_search, enable_thinking).await
+        }
         ModelCategory::Diffusion => diffusion_interactive_mode(mistralrs, do_search).await,
     }
 }
@@ -80,7 +86,11 @@ const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
 const CLEAR_CMD: &str = "\\clear";
 
-async fn text_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
+async fn text_interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
 
@@ -167,7 +177,10 @@ async fn text_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
         // Set the handler to terminate all seqs, so allowing cancelling running
         *CTRLC_HANDLER.lock().unwrap() = &terminate_handler;
 
-        let request_messages = RequestMessage::Chat(messages.clone());
+        let request_messages = RequestMessage::Chat {
+            messages: messages.clone(),
+            enable_thinking,
+        };
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(NormalRequest {
@@ -271,7 +284,11 @@ fn parse_image_urls_and_message(input: &str) -> (Vec<String>, String) {
     (urls, text)
 }
 
-async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
+async fn vision_interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+) {
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
@@ -414,6 +431,7 @@ async fn vision_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
         let request_messages = RequestMessage::VisionChat {
             images: images.clone(),
             messages: messages.clone(),
+            enable_thinking,
         };
 
         let (tx, mut rx) = channel(10_000);

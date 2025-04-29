@@ -276,15 +276,31 @@ struct Float8_ {
   float4 y;
 };
 
-template <> struct Vec<float, 1> { using Type = float; };
-template <> struct Vec<float, 2> { using Type = float2; };
-template <> struct Vec<float, 4> { using Type = float4; };
-template <> struct Vec<float, 8> { using Type = Float8_; };
+template <> struct Vec<float, 1> {
+  using Type = float;
+};
+template <> struct Vec<float, 2> {
+  using Type = float2;
+};
+template <> struct Vec<float, 4> {
+  using Type = float4;
+};
+template <> struct Vec<float, 8> {
+  using Type = Float8_;
+};
 
-template <> struct FloatVec<float> { using Type = float; };
-template <> struct FloatVec<float2> { using Type = float2; };
-template <> struct FloatVec<float4> { using Type = float4; };
-template <> struct FloatVec<Float8_> { using Type = Float8_; };
+template <> struct FloatVec<float> {
+  using Type = float;
+};
+template <> struct FloatVec<float2> {
+  using Type = float2;
+};
+template <> struct FloatVec<float4> {
+  using Type = float4;
+};
+template <> struct FloatVec<Float8_> {
+  using Type = Float8_;
+};
 
 template <> inline float mul(float a, float b) { return a * b; }
 
@@ -487,15 +503,31 @@ struct Bfloat8_ {
   Bfloat4_ y;
 };
 
-template <> struct Vec<bfloat16_t, 1> { using Type = bfloat16_t; };
-template <> struct Vec<bfloat16_t, 2> { using Type = Bfloat2_; };
-template <> struct Vec<bfloat16_t, 4> { using Type = Bfloat4_; };
-template <> struct Vec<bfloat16_t, 8> { using Type = Bfloat8_; };
+template <> struct Vec<bfloat16_t, 1> {
+  using Type = bfloat16_t;
+};
+template <> struct Vec<bfloat16_t, 2> {
+  using Type = Bfloat2_;
+};
+template <> struct Vec<bfloat16_t, 4> {
+  using Type = Bfloat4_;
+};
+template <> struct Vec<bfloat16_t, 8> {
+  using Type = Bfloat8_;
+};
 
-template <> struct FloatVec<bfloat16_t> { using Type = float; };
-template <> struct FloatVec<Bfloat2_> { using Type = float2; };
-template <> struct FloatVec<Bfloat4_> { using Type = float4; };
-template <> struct FloatVec<Bfloat8_> { using Type = Float8_; };
+template <> struct FloatVec<bfloat16_t> {
+  using Type = float;
+};
+template <> struct FloatVec<Bfloat2_> {
+  using Type = float2;
+};
+template <> struct FloatVec<Bfloat4_> {
+  using Type = float4;
+};
+template <> struct FloatVec<Bfloat8_> {
+  using Type = Float8_;
+};
 
 template <> inline float mul(bfloat16_t a, bfloat16_t b) {
   return (float)a * (float)b;
@@ -631,15 +663,31 @@ struct Half8_ {
   half4 y;
 };
 
-template <> struct Vec<half, 1> { using Type = half; };
-template <> struct Vec<half, 2> { using Type = half2; };
-template <> struct Vec<half, 4> { using Type = half4; };
-template <> struct Vec<half, 8> { using Type = Half8_; };
+template <> struct Vec<half, 1> {
+  using Type = half;
+};
+template <> struct Vec<half, 2> {
+  using Type = half2;
+};
+template <> struct Vec<half, 4> {
+  using Type = half4;
+};
+template <> struct Vec<half, 8> {
+  using Type = Half8_;
+};
 
-template <> struct FloatVec<half> { using Type = float; };
-template <> struct FloatVec<half2> { using Type = float2; };
-template <> struct FloatVec<half4> { using Type = float4; };
-template <> struct FloatVec<Half8_> { using Type = Float8_; };
+template <> struct FloatVec<half> {
+  using Type = float;
+};
+template <> struct FloatVec<half2> {
+  using Type = float2;
+};
+template <> struct FloatVec<half4> {
+  using Type = float4;
+};
+template <> struct FloatVec<Half8_> {
+  using Type = Float8_;
+};
 
 template <> inline float mul(half a, half b) { return (float)a * (float)b; }
 template <> inline half mul(half a, half b) { return a * b; }
@@ -793,7 +841,7 @@ inline float block_sum(threadgroup float *red_smem, float sum, uint simd_tid,
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define DIVIDE_ROUND_UP(a, b) (((a) + (b)-1) / (b))
+#define DIVIDE_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
 
 constant bool use_partitioning [[function_constant(10)]];
 constant bool use_alibi [[function_constant(20)]];

@@ -61,6 +61,7 @@ class ChatCompletionRequest:
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
     web_search_options: WebSearchOptions | None = None
+    enable_thinking: bool | None = None
 
 @dataclass
 class CompletionRequest:
@@ -102,6 +103,8 @@ class Architecture(Enum):
     Phi3_5MoE = "phi3.5moe"
     DeepseekV2 = "deepseekv2"
     DeepseekV3 = "deepseekv3"
+    Qwen3 = "qwen3"
+    Qwen3Moe = "qwen3moe"
 
 @dataclass
 class VisionArchitecture(Enum):
@@ -401,9 +404,13 @@ class Runner:
         Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
         """
 
-    def tokenize_text(self, text: str, add_special_tokens: bool) -> list[int]:
+    def tokenize_text(
+        self, text: str, add_special_tokens: bool, enable_thinking: bool | None = None
+    ) -> list[int]:
         """
         Tokenize some text, returning raw tokens.
+
+        `enable_thinking` enables thinking for models that support this configuration.
         """
 
     def detokenize_text(self, tokens: list[int], skip_special_tokens: bool) -> str:

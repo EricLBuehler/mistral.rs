@@ -4,6 +4,7 @@ use metal::{
     FunctionConstantValues, Library, MTLSize,
 };
 use std::ops::Deref;
+use std::os::raw::c_void;
 use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, sync::OnceLock};
 
@@ -16,6 +17,7 @@ const HQQ_DEQUANTIZE: &str = include_str!("hqq_dequantize.metal");
 const BNB_DEQUANTIZE: &str = include_str!("bnb_dequantize.metal");
 const BITWISE: &str = include_str!("bitwise.metal");
 const QUANTIZED: &str = include_str!("quantized.metal");
+const BLOCKWISE_FP8: &str = include_str!("blockwise_fp8.metal");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
@@ -23,6 +25,7 @@ pub enum Source {
     BnbDequant,
     Bitwise,
     Quantized,
+    BlockwiseFp8,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -78,6 +81,7 @@ impl Kernels_ {
             Source::BnbDequant => BNB_DEQUANTIZE,
             Source::Bitwise => BITWISE,
             Source::Quantized => QUANTIZED,
+            Source::BlockwiseFp8 => BLOCKWISE_FP8,
         }
     }
 
@@ -995,5 +999,84 @@ pub fn call_afq_qmm(
     }
 
     encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_dequant_blockwise_fp8(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    weight: &Buffer,
+    scales: &Buffer,
+    output: &Buffer,
+    weight_height: u32,
+    weight_width: u32,
+    weight_row_stride: u32,
+    scale_stride: u32,
+    block_size_y: u32,
+    block_size_x: u32,
+) -> Result<(), MetalKernelError> {
+    #[repr(C)]
+    struct DequantParams {
+        weight_height: u32,
+        weight_width: u32,
+        weight_row_stride: u32,
+        scale_stride: u32,
+        block_size_y: u32,
+        block_size_x: u32,
+    }
+
+    let name = match ty {
+        DType::F32 => "dequant_fp8_blockwise_float",
+        DType::BF16 => "dequant_fp8_blockwise_bfloat16_t",
+        DType::F16 => "dequant_fp8_blockwise_half",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, Source::BlockwiseFp8, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let dequant_params = DequantParams {
+        weight_height,
+        weight_width,
+        weight_row_stride,
+        scale_stride,
+        block_size_y,
+        block_size_x,
+    };
+
+    impl EncoderParam for &DequantParams {
+        fn set_param(encoder: &ComputeCommandEncoderRef, position: u64, data: Self) {
+            encoder.set_bytes(
+                position,
+                core::mem::size_of_val(data) as u64,
+                &data as *const _ as *const c_void,
+            );
+        }
+    }
+
+    set_params!(encoder, (weight, scales, output, &dequant_params));
+
+    let tg = MTLSize {
+        width: 32,
+        height: 32,
+        depth: 1,
+    };
+    let blocks = MTLSize {
+        width: weight_width.div_ceil(dequant_params.block_size_x) as u64,
+        height: weight_height.div_ceil(dequant_params.block_size_y) as u64,
+        depth: 1,
+    };
+
+    encoder.dispatch_thread_groups(blocks, tg);
     Ok(())
 }
