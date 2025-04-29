@@ -63,11 +63,21 @@ async fn do_search(
             .finish();
         let dispatch = Dispatch::new(subscriber);
 
+        // Manage context size by # of tokens. Apply default here.
+        let max_results_budget_toks =
+            match web_search_options.search_context_size.unwrap_or_default() {
+                SearchContextSize::High => 10000_usize,
+                SearchContextSize::Medium => 7500_usize,
+                SearchContextSize::Low => 3000_usize,
+            };
         let mut results = tracing::dispatcher::with_default(&dispatch, || {
             search::run_search_tool(&tool_call_params)
                 .unwrap()
                 .into_iter()
-                .map(|result| {
+                .map(|mut result| {
+                    result = result
+                        .cap_content_len(&tokenizer, max_results_budget_toks)
+                        .unwrap();
                     let len = {
                         let inp = InputSequence::Raw(Cow::from(&result.content));
                         tokenizer
@@ -109,13 +119,6 @@ async fn do_search(
             }
         }
 
-        // Manage context size by # of tokens. Apply default here.
-        let max_results_budget_toks =
-            match web_search_options.search_context_size.unwrap_or_default() {
-                SearchContextSize::High => 10000_usize,
-                SearchContextSize::Medium => 7500_usize,
-                SearchContextSize::Low => 3000_usize,
-            };
         let mut used_results = Vec::new();
         let mut used_len = 0;
         for (item, len) in results {

@@ -10,6 +10,7 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env::consts::{ARCH, FAMILY, OS};
+use tokenizers::Tokenizer;
 
 use crate::{Function, Tool, ToolType, WebSearchOptions, WebSearchUserLocation};
 
@@ -39,6 +40,25 @@ pub struct SearchResult {
     pub description: String,
     pub url: String,
     pub content: String,
+}
+
+impl SearchResult {
+    pub fn cap_content_len(self, tokenizer: &Tokenizer, size: usize) -> Result<Self> {
+        let tokenized_content = tokenizer
+            .encode_fast(self.content, false)
+            .map_err(anyhow::Error::msg)?;
+        let ids = tokenized_content.get_ids();
+        let content = tokenizer
+            .decode(&ids[..size.min(ids.len())], false)
+            .map_err(anyhow::Error::msg)?;
+
+        Ok(Self {
+            title: self.title,
+            description: self.description,
+            url: self.url,
+            content,
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

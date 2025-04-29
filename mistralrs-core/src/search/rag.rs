@@ -85,11 +85,11 @@ fn compute_similarities(
         .map(|s| InputSequence::Raw(Cow::from(s)))
         .collect::<Vec<_>>();
 
+    let tokens = tokenizer
+        .encode_batch(sentences_batched.to_vec(), true)
+        .map_err(E::msg)?;
     let mut embeddings_all = Vec::new();
-    for sentences_batched in sentences_batched.chunks(2) {
-        let tokens = tokenizer
-            .encode_batch(sentences_batched.to_vec(), true)
-            .map_err(E::msg)?;
+    for tokens in tokens.chunks(2) {
         let token_ids = tokens
             .iter()
             .map(|tokens| {
