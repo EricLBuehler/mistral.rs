@@ -161,10 +161,6 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
-    /// Enable web searching for interactive mode.
-    #[arg(long = "interactive-search")]
-    interactive_search: bool,
-
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
     #[arg(long = "enable-search")]
     enable_search: bool,
@@ -479,7 +475,7 @@ async fn main() -> Result<()> {
         pipeline,
         scheduler_config,
         !args.interactive_mode,
-        bert_model,
+        bert_model.clone(),
     )
     .with_opt_log(args.log)
     .with_truncate_sequence(args.truncate_sequence)
@@ -490,7 +486,7 @@ async fn main() -> Result<()> {
     if args.interactive_mode {
         interactive_mode(
             mistralrs,
-            args.interactive_search,
+            bert_model.is_some(),
             args.enable_thinking.then_some(true),
         )
         .await;
