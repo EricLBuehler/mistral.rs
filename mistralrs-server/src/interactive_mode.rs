@@ -357,6 +357,7 @@ async fn vision_interactive_mode(
             }
             CLEAR_CMD => {
                 messages.clear();
+                images.clear();
                 info!("Cleared chat history.");
                 continue;
             }
