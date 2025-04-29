@@ -21,12 +21,11 @@ async fn do_search(
     tool_calls: &ToolCallResponse,
     web_search_options: &WebSearchOptions,
 ) {
-    let RequestMessage::Chat {
-        messages,
-        enable_thinking: _,
-    } = &mut second_request.messages
-    else {
-        unreachable!()
+    let messages = match &mut second_request.messages {
+        RequestMessage::Chat { messages, .. } | RequestMessage::VisionChat { messages, .. } => {
+            messages
+        }
+        _ => unreachable!(),
     };
 
     // Add assistant call message
