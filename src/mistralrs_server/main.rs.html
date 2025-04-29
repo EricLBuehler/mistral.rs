@@ -161,17 +161,17 @@
 <a href=#161 id=161 data-nosnippet>161</a>    </span><span class="attr">#[arg(long)]
 <a href=#162 id=162 data-nosnippet>162</a>    </span>cpu: bool,
 <a href=#163 id=163 data-nosnippet>163</a>
-<a href=#164 id=164 data-nosnippet>164</a>    <span class="doccomment">/// Enable web searching for interactive mode.
-<a href=#165 id=165 data-nosnippet>165</a>    </span><span class="attr">#[arg(long = <span class="string">"interactive-search"</span>)]
-<a href=#166 id=166 data-nosnippet>166</a>    </span>interactive_search: bool,
+<a href=#164 id=164 data-nosnippet>164</a>    <span class="doccomment">/// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
+<a href=#165 id=165 data-nosnippet>165</a>    </span><span class="attr">#[arg(long = <span class="string">"enable-search"</span>)]
+<a href=#166 id=166 data-nosnippet>166</a>    </span>enable_search: bool,
 <a href=#167 id=167 data-nosnippet>167</a>
-<a href=#168 id=168 data-nosnippet>168</a>    <span class="doccomment">/// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
-<a href=#169 id=169 data-nosnippet>169</a>    </span><span class="attr">#[arg(long = <span class="string">"enable-search"</span>)]
-<a href=#170 id=170 data-nosnippet>170</a>    </span>enable_search: bool,
+<a href=#168 id=168 data-nosnippet>168</a>    <span class="doccomment">/// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
+<a href=#169 id=169 data-nosnippet>169</a>    </span><span class="attr">#[arg(long = <span class="string">"search-bert-model"</span>)]
+<a href=#170 id=170 data-nosnippet>170</a>    </span>search_bert_model: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#171 id=171 data-nosnippet>171</a>
-<a href=#172 id=172 data-nosnippet>172</a>    <span class="doccomment">/// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
-<a href=#173 id=173 data-nosnippet>173</a>    </span><span class="attr">#[arg(long = <span class="string">"search-bert-model"</span>)]
-<a href=#174 id=174 data-nosnippet>174</a>    </span>search_bert_model: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#172 id=172 data-nosnippet>172</a>    <span class="doccomment">/// Enable thinking for interactive mode and models that support it.
+<a href=#173 id=173 data-nosnippet>173</a>    </span><span class="attr">#[arg(long = <span class="string">"enable-thinking"</span>)]
+<a href=#174 id=174 data-nosnippet>174</a>    </span>enable_thinking: bool,
 <a href=#175 id=175 data-nosnippet>175</a>}
 <a href=#176 id=176 data-nosnippet>176</a>
 <a href=#177 id=177 data-nosnippet>177</a><span class="attr">#[utoipa::path(
@@ -475,7 +475,7 @@
 <a href=#475 id=475 data-nosnippet>475</a>        pipeline,
 <a href=#476 id=476 data-nosnippet>476</a>        scheduler_config,
 <a href=#477 id=477 data-nosnippet>477</a>        !args.interactive_mode,
-<a href=#478 id=478 data-nosnippet>478</a>        bert_model,
+<a href=#478 id=478 data-nosnippet>478</a>        bert_model.clone(),
 <a href=#479 id=479 data-nosnippet>479</a>    )
 <a href=#480 id=480 data-nosnippet>480</a>    .with_opt_log(args.log)
 <a href=#481 id=481 data-nosnippet>481</a>    .with_truncate_sequence(args.truncate_sequence)
@@ -484,27 +484,32 @@
 <a href=#484 id=484 data-nosnippet>484</a>    .build();
 <a href=#485 id=485 data-nosnippet>485</a>
 <a href=#486 id=486 data-nosnippet>486</a>    <span class="kw">if </span>args.interactive_mode {
-<a href=#487 id=487 data-nosnippet>487</a>        interactive_mode(mistralrs, args.interactive_search).<span class="kw">await</span>;
-<a href=#488 id=488 data-nosnippet>488</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#489 id=489 data-nosnippet>489</a>    }
-<a href=#490 id=490 data-nosnippet>490</a>
-<a href=#491 id=491 data-nosnippet>491</a>    <span class="comment">// Needs to be after the .build call as that is where the daemon waits.
-<a href=#492 id=492 data-nosnippet>492</a>    </span><span class="kw">let </span>setting_server = <span class="kw">if </span>!args.interactive_mode {
-<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">let </span>port = args.port.expect(<span class="string">"Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?"</span>);
-<a href=#494 id=494 data-nosnippet>494</a>        <span class="kw">let </span>ip = args.serve_ip.unwrap_or_else(|| <span class="string">"0.0.0.0"</span>.to_string());
+<a href=#487 id=487 data-nosnippet>487</a>        interactive_mode(
+<a href=#488 id=488 data-nosnippet>488</a>            mistralrs,
+<a href=#489 id=489 data-nosnippet>489</a>            bert_model.is_some(),
+<a href=#490 id=490 data-nosnippet>490</a>            args.enable_thinking.then_some(<span class="bool-val">true</span>),
+<a href=#491 id=491 data-nosnippet>491</a>        )
+<a href=#492 id=492 data-nosnippet>492</a>        .<span class="kw">await</span>;
+<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#494 id=494 data-nosnippet>494</a>    }
 <a href=#495 id=495 data-nosnippet>495</a>
-<a href=#496 id=496 data-nosnippet>496</a>        <span class="comment">// Create listener early to validate address before model loading
-<a href=#497 id=497 data-nosnippet>497</a>        </span><span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{port}"</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#498 id=498 data-nosnippet>498</a>        <span class="prelude-val">Some</span>((listener, ip, port))
-<a href=#499 id=499 data-nosnippet>499</a>    } <span class="kw">else </span>{
-<a href=#500 id=500 data-nosnippet>500</a>        <span class="prelude-val">None
-<a href=#501 id=501 data-nosnippet>501</a>    </span>};
-<a href=#502 id=502 data-nosnippet>502</a>
-<a href=#503 id=503 data-nosnippet>503</a>    <span class="kw">let </span>app = get_router(mistralrs);
-<a href=#504 id=504 data-nosnippet>504</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>((listener, ip, port)) = setting_server {
-<a href=#505 id=505 data-nosnippet>505</a>        <span class="macro">info!</span>(<span class="string">"Serving on http://{ip}:{}."</span>, port);
-<a href=#506 id=506 data-nosnippet>506</a>        axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#507 id=507 data-nosnippet>507</a>    };
-<a href=#508 id=508 data-nosnippet>508</a>
-<a href=#509 id=509 data-nosnippet>509</a>    <span class="prelude-val">Ok</span>(())
-<a href=#510 id=510 data-nosnippet>510</a>}</code></pre></div></section></main></body></html>
+<a href=#496 id=496 data-nosnippet>496</a>    <span class="comment">// Needs to be after the .build call as that is where the daemon waits.
+<a href=#497 id=497 data-nosnippet>497</a>    </span><span class="kw">let </span>setting_server = <span class="kw">if </span>!args.interactive_mode {
+<a href=#498 id=498 data-nosnippet>498</a>        <span class="kw">let </span>port = args.port.expect(<span class="string">"Interactive mode was not specified, so expected port to be specified. Perhaps you forgot `-i` or `--port`?"</span>);
+<a href=#499 id=499 data-nosnippet>499</a>        <span class="kw">let </span>ip = args.serve_ip.unwrap_or_else(|| <span class="string">"0.0.0.0"</span>.to_string());
+<a href=#500 id=500 data-nosnippet>500</a>
+<a href=#501 id=501 data-nosnippet>501</a>        <span class="comment">// Create listener early to validate address before model loading
+<a href=#502 id=502 data-nosnippet>502</a>        </span><span class="kw">let </span>listener = tokio::net::TcpListener::bind(<span class="macro">format!</span>(<span class="string">"{ip}:{port}"</span>)).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#503 id=503 data-nosnippet>503</a>        <span class="prelude-val">Some</span>((listener, ip, port))
+<a href=#504 id=504 data-nosnippet>504</a>    } <span class="kw">else </span>{
+<a href=#505 id=505 data-nosnippet>505</a>        <span class="prelude-val">None
+<a href=#506 id=506 data-nosnippet>506</a>    </span>};
+<a href=#507 id=507 data-nosnippet>507</a>
+<a href=#508 id=508 data-nosnippet>508</a>    <span class="kw">let </span>app = get_router(mistralrs);
+<a href=#509 id=509 data-nosnippet>509</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>((listener, ip, port)) = setting_server {
+<a href=#510 id=510 data-nosnippet>510</a>        <span class="macro">info!</span>(<span class="string">"Serving on http://{ip}:{}."</span>, port);
+<a href=#511 id=511 data-nosnippet>511</a>        axum::serve(listener, app).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#512 id=512 data-nosnippet>512</a>    };
+<a href=#513 id=513 data-nosnippet>513</a>
+<a href=#514 id=514 data-nosnippet>514</a>    <span class="prelude-val">Ok</span>(())
+<a href=#515 id=515 data-nosnippet>515</a>}</code></pre></div></section></main></body></html>

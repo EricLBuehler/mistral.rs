@@ -221,103 +221,108 @@
 <a href=#221 id=221 data-nosnippet>221</a>    <span class="prelude-val">Ok</span>(date_string)
 <a href=#222 id=222 data-nosnippet>222</a>}
 <a href=#223 id=223 data-nosnippet>223</a>
-<a href=#224 id=224 data-nosnippet>224</a><span class="kw">pub fn </span>apply_chat_template_to(
-<a href=#225 id=225 data-nosnippet>225</a>    messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
-<a href=#226 id=226 data-nosnippet>226</a>    add_generation_prompt: bool,
-<a href=#227 id=227 data-nosnippet>227</a>    template: <span class="kw-2">&amp;</span>ChatTemplateValue,
-<a href=#228 id=228 data-nosnippet>228</a>    bos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#229 id=229 data-nosnippet>229</a>    eos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#230 id=230 data-nosnippet>230</a>    unk_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#231 id=231 data-nosnippet>231</a>    tools: Vec&lt;Tool&gt;,
-<a href=#232 id=232 data-nosnippet>232</a>) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
-<a href=#233 id=233 data-nosnippet>233</a>    <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
-<a href=#234 id=234 data-nosnippet>234</a>
-<a href=#235 id=235 data-nosnippet>235</a>    <span class="comment">// enable python methods such as .strip()
-<a href=#236 id=236 data-nosnippet>236</a>    </span>env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
-<a href=#237 id=237 data-nosnippet>237</a>
-<a href=#238 id=238 data-nosnippet>238</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
-<a href=#239 id=239 data-nosnippet>239</a>    </span>env.set_lstrip_blocks(<span class="bool-val">true</span>);
-<a href=#240 id=240 data-nosnippet>240</a>    env.set_trim_blocks(<span class="bool-val">true</span>);
-<a href=#241 id=241 data-nosnippet>241</a>
-<a href=#242 id=242 data-nosnippet>242</a>    <span class="attr">#[derive(Serialize, Deserialize)]
-<a href=#243 id=243 data-nosnippet>243</a>    </span><span class="kw">struct </span>UntaggedContent(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span>MessageContent);
-<a href=#244 id=244 data-nosnippet>244</a>    <span class="kw">let </span><span class="kw-2">mut </span>new_messages = Vec::new();
-<a href=#245 id=245 data-nosnippet>245</a>    <span class="kw">for </span>message <span class="kw">in </span>messages {
-<a href=#246 id=246 data-nosnippet>246</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_message = IndexMap::new();
-<a href=#247 id=247 data-nosnippet>247</a>        <span class="kw">for </span>(k, v) <span class="kw">in </span>message {
-<a href=#248 id=248 data-nosnippet>248</a>            new_message.insert(k, UntaggedContent(v));
-<a href=#249 id=249 data-nosnippet>249</a>        }
-<a href=#250 id=250 data-nosnippet>250</a>        new_messages.push(new_message);
-<a href=#251 id=251 data-nosnippet>251</a>    }
-<a href=#252 id=252 data-nosnippet>252</a>
-<a href=#253 id=253 data-nosnippet>253</a>    <span class="kw">let </span>template = <span class="kw">match </span><span class="kw-2">&amp;</span>template.<span class="number">0 </span>{
-<a href=#254 id=254 data-nosnippet>254</a>        Either::Left(x) =&gt; x.clone(),
-<a href=#255 id=255 data-nosnippet>255</a>        Either::Right(map) =&gt; {
-<a href=#256 id=256 data-nosnippet>256</a>            <span class="kw">let </span><span class="kw-2">mut </span>template = <span class="prelude-val">None</span>;
-<a href=#257 id=257 data-nosnippet>257</a>            <span class="kw">let </span>has_tool_use = map.iter().any(|t| {
-<a href=#258 id=258 data-nosnippet>258</a>                t.get(<span class="string">"name"</span>).is_some_and(|name| name == <span class="string">"tool_use"</span>) || t.contains_key(<span class="string">"tool_use"</span>)
-<a href=#259 id=259 data-nosnippet>259</a>            });
-<a href=#260 id=260 data-nosnippet>260</a>            <span class="kw">let </span>must_use_tool_template = !tools.is_empty();
-<a href=#261 id=261 data-nosnippet>261</a>
-<a href=#262 id=262 data-nosnippet>262</a>            <span class="kw">if </span>must_use_tool_template &amp;&amp; !has_tool_use {
-<a href=#263 id=263 data-nosnippet>263</a>                <span class="macro">anyhow::bail!</span>(
-<a href=#264 id=264 data-nosnippet>264</a>                    <span class="string">"Tools were provided but this chat template does not handle tool usage"
-<a href=#265 id=265 data-nosnippet>265</a>                </span>);
-<a href=#266 id=266 data-nosnippet>266</a>            }
-<a href=#267 id=267 data-nosnippet>267</a>
-<a href=#268 id=268 data-nosnippet>268</a>            <span class="kw">for </span>t <span class="kw">in </span>map {
-<a href=#269 id=269 data-nosnippet>269</a>                <span class="kw">let </span>name = t.get(<span class="string">"name"</span>);
-<a href=#270 id=270 data-nosnippet>270</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(name) = name {
-<a href=#271 id=271 data-nosnippet>271</a>                    template = <span class="prelude-val">Some</span>(t[<span class="string">"template"</span>].clone());
-<a href=#272 id=272 data-nosnippet>272</a>                    <span class="attr">#[allow(clippy::if_same_then_else)]
-<a href=#273 id=273 data-nosnippet>273</a>                    </span><span class="kw">if </span>name == <span class="string">"tool_use" </span>&amp;&amp; !tools.is_empty() {
-<a href=#274 id=274 data-nosnippet>274</a>                        <span class="kw">break</span>;
-<a href=#275 id=275 data-nosnippet>275</a>                    } <span class="kw">else if </span>name == <span class="string">"default" </span>&amp;&amp; !must_use_tool_template {
+<a href=#224 id=224 data-nosnippet>224</a><span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#225 id=225 data-nosnippet>225</a></span><span class="kw">pub fn </span>apply_chat_template_to(
+<a href=#226 id=226 data-nosnippet>226</a>    messages: Vec&lt;IndexMap&lt;String, MessageContent&gt;&gt;,
+<a href=#227 id=227 data-nosnippet>227</a>    add_generation_prompt: bool,
+<a href=#228 id=228 data-nosnippet>228</a>    enable_thinking: <span class="prelude-ty">Option</span>&lt;bool&gt;,
+<a href=#229 id=229 data-nosnippet>229</a>    template: <span class="kw-2">&amp;</span>ChatTemplateValue,
+<a href=#230 id=230 data-nosnippet>230</a>    bos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#231 id=231 data-nosnippet>231</a>    eos_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#232 id=232 data-nosnippet>232</a>    unk_tok: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#233 id=233 data-nosnippet>233</a>    tools: Vec&lt;Tool&gt;,
+<a href=#234 id=234 data-nosnippet>234</a>) -&gt; <span class="prelude-ty">Result</span>&lt;String&gt; {
+<a href=#235 id=235 data-nosnippet>235</a>    <span class="kw">let </span><span class="kw-2">mut </span>env = Environment::new();
+<a href=#236 id=236 data-nosnippet>236</a>
+<a href=#237 id=237 data-nosnippet>237</a>    <span class="comment">// enable python methods such as .strip()
+<a href=#238 id=238 data-nosnippet>238</a>    </span>env.set_unknown_method_callback(minijinja_contrib::pycompat::unknown_method_callback);
+<a href=#239 id=239 data-nosnippet>239</a>
+<a href=#240 id=240 data-nosnippet>240</a>    <span class="comment">// https://github.com/huggingface/transformers/blob/76a33a10923ccc1074917f6b6a1e719e626b7dc9/src/transformers/tokenization_utils_base.py#L1842
+<a href=#241 id=241 data-nosnippet>241</a>    </span>env.set_lstrip_blocks(<span class="bool-val">true</span>);
+<a href=#242 id=242 data-nosnippet>242</a>    env.set_trim_blocks(<span class="bool-val">true</span>);
+<a href=#243 id=243 data-nosnippet>243</a>
+<a href=#244 id=244 data-nosnippet>244</a>    <span class="attr">#[derive(Serialize, Deserialize)]
+<a href=#245 id=245 data-nosnippet>245</a>    </span><span class="kw">struct </span>UntaggedContent(<span class="attr">#[serde(with = <span class="string">"either::serde_untagged"</span>)] </span>MessageContent);
+<a href=#246 id=246 data-nosnippet>246</a>    <span class="kw">let </span><span class="kw-2">mut </span>new_messages = Vec::new();
+<a href=#247 id=247 data-nosnippet>247</a>    <span class="kw">for </span>message <span class="kw">in </span>messages {
+<a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_message = IndexMap::new();
+<a href=#249 id=249 data-nosnippet>249</a>        <span class="kw">for </span>(k, v) <span class="kw">in </span>message {
+<a href=#250 id=250 data-nosnippet>250</a>            new_message.insert(k, UntaggedContent(v));
+<a href=#251 id=251 data-nosnippet>251</a>        }
+<a href=#252 id=252 data-nosnippet>252</a>        new_messages.push(new_message);
+<a href=#253 id=253 data-nosnippet>253</a>    }
+<a href=#254 id=254 data-nosnippet>254</a>
+<a href=#255 id=255 data-nosnippet>255</a>    <span class="kw">let </span>template = <span class="kw">match </span><span class="kw-2">&amp;</span>template.<span class="number">0 </span>{
+<a href=#256 id=256 data-nosnippet>256</a>        Either::Left(x) =&gt; x.clone(),
+<a href=#257 id=257 data-nosnippet>257</a>        Either::Right(map) =&gt; {
+<a href=#258 id=258 data-nosnippet>258</a>            <span class="kw">let </span><span class="kw-2">mut </span>template = <span class="prelude-val">None</span>;
+<a href=#259 id=259 data-nosnippet>259</a>            <span class="kw">let </span>has_tool_use = map.iter().any(|t| {
+<a href=#260 id=260 data-nosnippet>260</a>                t.get(<span class="string">"name"</span>).is_some_and(|name| name == <span class="string">"tool_use"</span>) || t.contains_key(<span class="string">"tool_use"</span>)
+<a href=#261 id=261 data-nosnippet>261</a>            });
+<a href=#262 id=262 data-nosnippet>262</a>            <span class="kw">let </span>must_use_tool_template = !tools.is_empty();
+<a href=#263 id=263 data-nosnippet>263</a>
+<a href=#264 id=264 data-nosnippet>264</a>            <span class="kw">if </span>must_use_tool_template &amp;&amp; !has_tool_use {
+<a href=#265 id=265 data-nosnippet>265</a>                <span class="macro">anyhow::bail!</span>(
+<a href=#266 id=266 data-nosnippet>266</a>                    <span class="string">"Tools were provided but this chat template does not handle tool usage"
+<a href=#267 id=267 data-nosnippet>267</a>                </span>);
+<a href=#268 id=268 data-nosnippet>268</a>            }
+<a href=#269 id=269 data-nosnippet>269</a>
+<a href=#270 id=270 data-nosnippet>270</a>            <span class="kw">for </span>t <span class="kw">in </span>map {
+<a href=#271 id=271 data-nosnippet>271</a>                <span class="kw">let </span>name = t.get(<span class="string">"name"</span>);
+<a href=#272 id=272 data-nosnippet>272</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(name) = name {
+<a href=#273 id=273 data-nosnippet>273</a>                    template = <span class="prelude-val">Some</span>(t[<span class="string">"template"</span>].clone());
+<a href=#274 id=274 data-nosnippet>274</a>                    <span class="attr">#[allow(clippy::if_same_then_else)]
+<a href=#275 id=275 data-nosnippet>275</a>                    </span><span class="kw">if </span>name == <span class="string">"tool_use" </span>&amp;&amp; !tools.is_empty() {
 <a href=#276 id=276 data-nosnippet>276</a>                        <span class="kw">break</span>;
-<a href=#277 id=277 data-nosnippet>277</a>                    }
-<a href=#278 id=278 data-nosnippet>278</a>                } <span class="kw">else if </span>t.contains_key(<span class="string">"tool_use"</span>) &amp;&amp; !tools.is_empty() {
-<a href=#279 id=279 data-nosnippet>279</a>                    template = <span class="prelude-val">Some</span>(t[<span class="string">"tool_use"</span>].clone());
-<a href=#280 id=280 data-nosnippet>280</a>                    <span class="kw">break</span>;
-<a href=#281 id=281 data-nosnippet>281</a>                } <span class="kw">else if </span>t.contains_key(<span class="string">"default"</span>) &amp;&amp; !must_use_tool_template {
-<a href=#282 id=282 data-nosnippet>282</a>                    template = <span class="prelude-val">Some</span>(t[<span class="string">"default"</span>].clone());
-<a href=#283 id=283 data-nosnippet>283</a>                    <span class="kw">break</span>;
-<a href=#284 id=284 data-nosnippet>284</a>                }
-<a href=#285 id=285 data-nosnippet>285</a>            }
-<a href=#286 id=286 data-nosnippet>286</a>
-<a href=#287 id=287 data-nosnippet>287</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(template) = template <span class="kw">else </span>{
-<a href=#288 id=288 data-nosnippet>288</a>                <span class="macro">anyhow::bail!</span>(<span class="string">"Chat template does not contain a `tool_use` or `default` key. Please ensure it contains at least a `default` key, although `tool_use` should be specified for using tools."</span>);
-<a href=#289 id=289 data-nosnippet>289</a>            };
-<a href=#290 id=290 data-nosnippet>290</a>            template
-<a href=#291 id=291 data-nosnippet>291</a>        }
-<a href=#292 id=292 data-nosnippet>292</a>    };
-<a href=#293 id=293 data-nosnippet>293</a>
-<a href=#294 id=294 data-nosnippet>294</a>    env.add_template(<span class="string">"chat_template"</span>, <span class="kw-2">&amp;</span>template)<span class="question-mark">?</span>;
-<a href=#295 id=295 data-nosnippet>295</a>    env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
-<a href=#296 id=296 data-nosnippet>296</a>    env.add_filter(<span class="string">"tojson"</span>, tojson);
-<a href=#297 id=297 data-nosnippet>297</a>    env.add_function(<span class="string">"strftime_now"</span>, strftime_now);
-<a href=#298 id=298 data-nosnippet>298</a>    <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
-<a href=#299 id=299 data-nosnippet>299</a>
-<a href=#300 id=300 data-nosnippet>300</a>    <span class="kw">let </span>date = chrono::Utc::now();
-<a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">let </span>date_string = date.format(<span class="string">"%d, %B, %Y"</span>).to_string();
+<a href=#277 id=277 data-nosnippet>277</a>                    } <span class="kw">else if </span>name == <span class="string">"default" </span>&amp;&amp; !must_use_tool_template {
+<a href=#278 id=278 data-nosnippet>278</a>                        <span class="kw">break</span>;
+<a href=#279 id=279 data-nosnippet>279</a>                    }
+<a href=#280 id=280 data-nosnippet>280</a>                } <span class="kw">else if </span>t.contains_key(<span class="string">"tool_use"</span>) &amp;&amp; !tools.is_empty() {
+<a href=#281 id=281 data-nosnippet>281</a>                    template = <span class="prelude-val">Some</span>(t[<span class="string">"tool_use"</span>].clone());
+<a href=#282 id=282 data-nosnippet>282</a>                    <span class="kw">break</span>;
+<a href=#283 id=283 data-nosnippet>283</a>                } <span class="kw">else if </span>t.contains_key(<span class="string">"default"</span>) &amp;&amp; !must_use_tool_template {
+<a href=#284 id=284 data-nosnippet>284</a>                    template = <span class="prelude-val">Some</span>(t[<span class="string">"default"</span>].clone());
+<a href=#285 id=285 data-nosnippet>285</a>                    <span class="kw">break</span>;
+<a href=#286 id=286 data-nosnippet>286</a>                }
+<a href=#287 id=287 data-nosnippet>287</a>            }
+<a href=#288 id=288 data-nosnippet>288</a>
+<a href=#289 id=289 data-nosnippet>289</a>            <span class="kw">let </span><span class="prelude-val">Some</span>(template) = template <span class="kw">else </span>{
+<a href=#290 id=290 data-nosnippet>290</a>                <span class="macro">anyhow::bail!</span>(<span class="string">"Chat template does not contain a `tool_use` or `default` key. Please ensure it contains at least a `default` key, although `tool_use` should be specified for using tools."</span>);
+<a href=#291 id=291 data-nosnippet>291</a>            };
+<a href=#292 id=292 data-nosnippet>292</a>            template
+<a href=#293 id=293 data-nosnippet>293</a>        }
+<a href=#294 id=294 data-nosnippet>294</a>    };
+<a href=#295 id=295 data-nosnippet>295</a>    <span class="kw">let </span>template = template.replace(<span class="string">"[::-1]"</span>, <span class="string">"|reverse"</span>);
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a>    env.add_template(<span class="string">"chat_template"</span>, <span class="kw-2">&amp;</span>template)<span class="question-mark">?</span>;
+<a href=#298 id=298 data-nosnippet>298</a>    env.add_function(<span class="string">"raise_exception"</span>, raise_exception);
+<a href=#299 id=299 data-nosnippet>299</a>    env.add_filter(<span class="string">"tojson"</span>, tojson);
+<a href=#300 id=300 data-nosnippet>300</a>    env.add_function(<span class="string">"strftime_now"</span>, strftime_now);
+<a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">let </span>tmpl = env.get_template(<span class="string">"chat_template"</span>).unwrap();
 <a href=#302 id=302 data-nosnippet>302</a>
-<a href=#303 id=303 data-nosnippet>303</a>    <span class="kw">if </span>tools.is_empty() {
-<a href=#304 id=304 data-nosnippet>304</a>        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
-<a href=#305 id=305 data-nosnippet>305</a>            messages =&gt; new_messages,
-<a href=#306 id=306 data-nosnippet>306</a>            add_generation_prompt =&gt; add_generation_prompt,
-<a href=#307 id=307 data-nosnippet>307</a>            bos_token =&gt; bos_tok,
-<a href=#308 id=308 data-nosnippet>308</a>            eos_token =&gt; eos_tok,
-<a href=#309 id=309 data-nosnippet>309</a>            unk_token =&gt; unk_tok,
-<a href=#310 id=310 data-nosnippet>310</a>            date_string =&gt; date_string,
-<a href=#311 id=311 data-nosnippet>311</a>        })<span class="question-mark">?</span>)
-<a href=#312 id=312 data-nosnippet>312</a>    } <span class="kw">else </span>{
-<a href=#313 id=313 data-nosnippet>313</a>        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
-<a href=#314 id=314 data-nosnippet>314</a>            messages =&gt; new_messages,
-<a href=#315 id=315 data-nosnippet>315</a>            add_generation_prompt =&gt; add_generation_prompt,
-<a href=#316 id=316 data-nosnippet>316</a>            bos_token =&gt; bos_tok,
-<a href=#317 id=317 data-nosnippet>317</a>            eos_token =&gt; eos_tok,
-<a href=#318 id=318 data-nosnippet>318</a>            unk_token =&gt; unk_tok,
-<a href=#319 id=319 data-nosnippet>319</a>            tools =&gt; tools,
-<a href=#320 id=320 data-nosnippet>320</a>            date_string =&gt; date_string,
-<a href=#321 id=321 data-nosnippet>321</a>        })<span class="question-mark">?</span>)
-<a href=#322 id=322 data-nosnippet>322</a>    }
-<a href=#323 id=323 data-nosnippet>323</a>}</code></pre></div></section></main></body></html>
+<a href=#303 id=303 data-nosnippet>303</a>    <span class="kw">let </span>date = chrono::Utc::now();
+<a href=#304 id=304 data-nosnippet>304</a>    <span class="kw">let </span>date_string = date.format(<span class="string">"%d, %B, %Y"</span>).to_string();
+<a href=#305 id=305 data-nosnippet>305</a>
+<a href=#306 id=306 data-nosnippet>306</a>    <span class="kw">if </span>tools.is_empty() {
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
+<a href=#308 id=308 data-nosnippet>308</a>            messages =&gt; new_messages,
+<a href=#309 id=309 data-nosnippet>309</a>            add_generation_prompt =&gt; add_generation_prompt,
+<a href=#310 id=310 data-nosnippet>310</a>            bos_token =&gt; bos_tok,
+<a href=#311 id=311 data-nosnippet>311</a>            eos_token =&gt; eos_tok,
+<a href=#312 id=312 data-nosnippet>312</a>            unk_token =&gt; unk_tok,
+<a href=#313 id=313 data-nosnippet>313</a>            date_string =&gt; date_string,
+<a href=#314 id=314 data-nosnippet>314</a>            enable_thinking =&gt; enable_thinking,
+<a href=#315 id=315 data-nosnippet>315</a>        })<span class="question-mark">?</span>)
+<a href=#316 id=316 data-nosnippet>316</a>    } <span class="kw">else </span>{
+<a href=#317 id=317 data-nosnippet>317</a>        <span class="prelude-val">Ok</span>(tmpl.render(<span class="macro">context!</span> {
+<a href=#318 id=318 data-nosnippet>318</a>            messages =&gt; new_messages,
+<a href=#319 id=319 data-nosnippet>319</a>            add_generation_prompt =&gt; add_generation_prompt,
+<a href=#320 id=320 data-nosnippet>320</a>            bos_token =&gt; bos_tok,
+<a href=#321 id=321 data-nosnippet>321</a>            eos_token =&gt; eos_tok,
+<a href=#322 id=322 data-nosnippet>322</a>            unk_token =&gt; unk_tok,
+<a href=#323 id=323 data-nosnippet>323</a>            tools =&gt; tools,
+<a href=#324 id=324 data-nosnippet>324</a>            date_string =&gt; date_string,
+<a href=#325 id=325 data-nosnippet>325</a>            enable_thinking =&gt; enable_thinking,
+<a href=#326 id=326 data-nosnippet>326</a>        })<span class="question-mark">?</span>)
+<a href=#327 id=327 data-nosnippet>327</a>    }
+<a href=#328 id=328 data-nosnippet>328</a>}</code></pre></div></section></main></body></html>

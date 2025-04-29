@@ -19,752 +19,753 @@
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">pub use </span>normal_loaders::{
 <a href=#20 id=20 data-nosnippet>20</a>    AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
 <a href=#21 id=21 data-nosnippet>21</a>    MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
-<a href=#22 id=22 data-nosnippet>22</a>    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
-<a href=#23 id=23 data-nosnippet>23</a>};
-<a href=#24 id=24 data-nosnippet>24</a>
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>tracing::{info, warn};
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">pub use </span>vision_loaders::{
-<a href=#27 id=27 data-nosnippet>27</a>    Gemma3Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader,
-<a href=#28 id=28 data-nosnippet>28</a>    Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, VLlama4Loader,
-<a href=#29 id=29 data-nosnippet>29</a>    VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
-<a href=#30 id=30 data-nosnippet>30</a>};
-<a href=#31 id=31 data-nosnippet>31</a>
-<a href=#32 id=32 data-nosnippet>32</a><span class="kw">pub use </span>diffusion_loaders::{
-<a href=#33 id=33 data-nosnippet>33</a>    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DiffusionModelPaths,
-<a href=#34 id=34 data-nosnippet>34</a>    DiffusionModelPathsInner, FluxLoader,
-<a href=#35 id=35 data-nosnippet>35</a>};
-<a href=#36 id=36 data-nosnippet>36</a>
-<a href=#37 id=37 data-nosnippet>37</a><span class="kw">use crate</span>::{
-<a href=#38 id=38 data-nosnippet>38</a>    paged_attention::{
-<a href=#39 id=39 data-nosnippet>39</a>        calculate_cache_config, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
-<a href=#40 id=40 data-nosnippet>40</a>    },
-<a href=#41 id=41 data-nosnippet>41</a>    utils::debug::DeviceRepr,
-<a href=#42 id=42 data-nosnippet>42</a>    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryUsage, PagedAttentionConfig,
-<a href=#43 id=43 data-nosnippet>43</a>    TryIntoDType,
-<a href=#44 id=44 data-nosnippet>44</a>};
-<a href=#45 id=45 data-nosnippet>45</a>
-<a href=#46 id=46 data-nosnippet>46</a><span class="kw">use super</span>::{paths::AdapterPaths, Pipeline};
-<a href=#47 id=47 data-nosnippet>47</a>
-<a href=#48 id=48 data-nosnippet>48</a><span class="doccomment">/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
-<a href=#49 id=49 data-nosnippet>49</a>/// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
-<a href=#50 id=50 data-nosnippet>50</a></span><span class="kw">pub trait </span>ModelPaths: AsAny + Debug + Send + Sync {
-<a href=#51 id=51 data-nosnippet>51</a>    <span class="doccomment">/// Model weights files (multiple files supported).
-<a href=#52 id=52 data-nosnippet>52</a>    </span><span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf];
-<a href=#53 id=53 data-nosnippet>53</a>
-<a href=#54 id=54 data-nosnippet>54</a>    <span class="doccomment">/// Retrieve the [`PretrainedConfig`] file.
-<a href=#55 id=55 data-nosnippet>55</a>    ///
-<a href=#56 id=56 data-nosnippet>56</a>    /// [`PretrainedConfig`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
-<a href=#57 id=57 data-nosnippet>57</a>    </span><span class="kw">fn </span>get_config_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
-<a href=#58 id=58 data-nosnippet>58</a>
-<a href=#59 id=59 data-nosnippet>59</a>    <span class="doccomment">/// A serialised [`tokenizers.Tokenizer`] HuggingFace object.
-<a href=#60 id=60 data-nosnippet>60</a>    ///
-<a href=#61 id=61 data-nosnippet>61</a>    /// [`tokenizers.Tokenizer`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
-<a href=#62 id=62 data-nosnippet>62</a>    </span><span class="kw">fn </span>get_tokenizer_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
-<a href=#63 id=63 data-nosnippet>63</a>
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="doccomment">/// File where the content is expected to deserialize to [`ChatTemplate`].
-<a href=#65 id=65 data-nosnippet>65</a>    ///
-<a href=#66 id=66 data-nosnippet>66</a>    /// [`ChatTemplate`]: crate::ChatTemplate
-<a href=#67 id=67 data-nosnippet>67</a>    </span><span class="kw">fn </span>get_template_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
-<a href=#68 id=68 data-nosnippet>68</a>
-<a href=#69 id=69 data-nosnippet>69</a>    <span class="doccomment">/// Filepath for general model configuration.
-<a href=#70 id=70 data-nosnippet>70</a>    </span><span class="kw">fn </span>get_gen_conf_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PathBuf&gt;;
-<a href=#71 id=71 data-nosnippet>71</a>
-<a href=#72 id=72 data-nosnippet>72</a>    <span class="doccomment">/// Get the preprocessor config (for the vision models). This is used to pre process images.
-<a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">fn </span>get_preprocessor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
-<a href=#74 id=74 data-nosnippet>74</a>
-<a href=#75 id=75 data-nosnippet>75</a>    <span class="doccomment">/// Get the processor config (for the vision models). This is primarily used for the chat template.
-<a href=#76 id=76 data-nosnippet>76</a>    </span><span class="kw">fn </span>get_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
-<a href=#77 id=77 data-nosnippet>77</a>
-<a href=#78 id=78 data-nosnippet>78</a>    <span class="doccomment">/// Get the explicit chat template.
-<a href=#79 id=79 data-nosnippet>79</a>    </span><span class="kw">fn </span>get_chat_template_explicit(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
-<a href=#80 id=80 data-nosnippet>80</a>
-<a href=#81 id=81 data-nosnippet>81</a>    <span class="doccomment">/// Get adapter paths.
-<a href=#82 id=82 data-nosnippet>82</a>    </span><span class="kw">fn </span>get_adapter_paths(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>AdapterPaths;
-<a href=#83 id=83 data-nosnippet>83</a>}
-<a href=#84 id=84 data-nosnippet>84</a>
-<a href=#85 id=85 data-nosnippet>85</a><span class="attr">#[derive(Clone, Debug)]
-<a href=#86 id=86 data-nosnippet>86</a></span><span class="doccomment">/// All local paths and metadata necessary to load a model.
-<a href=#87 id=87 data-nosnippet>87</a></span><span class="kw">pub struct </span>LocalModelPaths&lt;P: Debug&gt; {
-<a href=#88 id=88 data-nosnippet>88</a>    <span class="kw">pub </span>tokenizer_filename: P,
-<a href=#89 id=89 data-nosnippet>89</a>    <span class="kw">pub </span>config_filename: P,
-<a href=#90 id=90 data-nosnippet>90</a>    <span class="kw">pub </span>template_filename: <span class="prelude-ty">Option</span>&lt;P&gt;,
-<a href=#91 id=91 data-nosnippet>91</a>    <span class="kw">pub </span>filenames: Vec&lt;P&gt;,
-<a href=#92 id=92 data-nosnippet>92</a>    <span class="kw">pub </span>adapter_paths: AdapterPaths,
-<a href=#93 id=93 data-nosnippet>93</a>    <span class="kw">pub </span>gen_conf: <span class="prelude-ty">Option</span>&lt;P&gt;,
-<a href=#94 id=94 data-nosnippet>94</a>    <span class="kw">pub </span>preprocessor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
-<a href=#95 id=95 data-nosnippet>95</a>    <span class="kw">pub </span>processor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
-<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">pub </span>chat_template_json_filename: <span class="prelude-ty">Option</span>&lt;P&gt;,
-<a href=#97 id=97 data-nosnippet>97</a>}
-<a href=#98 id=98 data-nosnippet>98</a>
-<a href=#99 id=99 data-nosnippet>99</a><span class="kw">impl</span>&lt;P: Debug&gt; LocalModelPaths&lt;P&gt; {
-<a href=#100 id=100 data-nosnippet>100</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#101 id=101 data-nosnippet>101</a>    </span><span class="kw">pub fn </span>new(
-<a href=#102 id=102 data-nosnippet>102</a>        tokenizer_filename: P,
-<a href=#103 id=103 data-nosnippet>103</a>        config_filename: P,
-<a href=#104 id=104 data-nosnippet>104</a>        template_filename: P,
-<a href=#105 id=105 data-nosnippet>105</a>        filenames: Vec&lt;P&gt;,
-<a href=#106 id=106 data-nosnippet>106</a>        adapter_paths: AdapterPaths,
-<a href=#107 id=107 data-nosnippet>107</a>        gen_conf: <span class="prelude-ty">Option</span>&lt;P&gt;,
-<a href=#108 id=108 data-nosnippet>108</a>        preprocessor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
-<a href=#109 id=109 data-nosnippet>109</a>        processor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
-<a href=#110 id=110 data-nosnippet>110</a>        chat_template_json_filename: <span class="prelude-ty">Option</span>&lt;P&gt;,
-<a href=#111 id=111 data-nosnippet>111</a>    ) -&gt; <span class="self">Self </span>{
-<a href=#112 id=112 data-nosnippet>112</a>        <span class="self">Self </span>{
-<a href=#113 id=113 data-nosnippet>113</a>            tokenizer_filename,
-<a href=#114 id=114 data-nosnippet>114</a>            config_filename,
-<a href=#115 id=115 data-nosnippet>115</a>            template_filename: <span class="prelude-val">Some</span>(template_filename),
-<a href=#116 id=116 data-nosnippet>116</a>            filenames,
-<a href=#117 id=117 data-nosnippet>117</a>            adapter_paths,
-<a href=#118 id=118 data-nosnippet>118</a>            gen_conf,
-<a href=#119 id=119 data-nosnippet>119</a>            preprocessor_config,
-<a href=#120 id=120 data-nosnippet>120</a>            processor_config,
-<a href=#121 id=121 data-nosnippet>121</a>            chat_template_json_filename,
-<a href=#122 id=122 data-nosnippet>122</a>        }
-<a href=#123 id=123 data-nosnippet>123</a>    }
-<a href=#124 id=124 data-nosnippet>124</a>}
-<a href=#125 id=125 data-nosnippet>125</a>
-<a href=#126 id=126 data-nosnippet>126</a><span class="kw">impl </span>ModelPaths <span class="kw">for </span>LocalModelPaths&lt;PathBuf&gt; {
-<a href=#127 id=127 data-nosnippet>127</a>    <span class="kw">fn </span>get_config_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf {
-<a href=#128 id=128 data-nosnippet>128</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.config_filename
-<a href=#129 id=129 data-nosnippet>129</a>    }
-<a href=#130 id=130 data-nosnippet>130</a>    <span class="kw">fn </span>get_tokenizer_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf {
-<a href=#131 id=131 data-nosnippet>131</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer_filename
-<a href=#132 id=132 data-nosnippet>132</a>    }
-<a href=#133 id=133 data-nosnippet>133</a>    <span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf] {
-<a href=#134 id=134 data-nosnippet>134</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.filenames
-<a href=#135 id=135 data-nosnippet>135</a>    }
-<a href=#136 id=136 data-nosnippet>136</a>    <span class="kw">fn </span>get_template_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
-<a href=#137 id=137 data-nosnippet>137</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.template_filename
-<a href=#138 id=138 data-nosnippet>138</a>    }
-<a href=#139 id=139 data-nosnippet>139</a>    <span class="kw">fn </span>get_gen_conf_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PathBuf&gt; {
-<a href=#140 id=140 data-nosnippet>140</a>        <span class="self">self</span>.gen_conf.as_ref()
-<a href=#141 id=141 data-nosnippet>141</a>    }
-<a href=#142 id=142 data-nosnippet>142</a>    <span class="kw">fn </span>get_preprocessor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
-<a href=#143 id=143 data-nosnippet>143</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.preprocessor_config
-<a href=#144 id=144 data-nosnippet>144</a>    }
-<a href=#145 id=145 data-nosnippet>145</a>    <span class="kw">fn </span>get_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
-<a href=#146 id=146 data-nosnippet>146</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.processor_config
-<a href=#147 id=147 data-nosnippet>147</a>    }
-<a href=#148 id=148 data-nosnippet>148</a>    <span class="kw">fn </span>get_chat_template_explicit(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
-<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template_json_filename
-<a href=#150 id=150 data-nosnippet>150</a>    }
-<a href=#151 id=151 data-nosnippet>151</a>    <span class="kw">fn </span>get_adapter_paths(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>AdapterPaths {
-<a href=#152 id=152 data-nosnippet>152</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.adapter_paths
-<a href=#153 id=153 data-nosnippet>153</a>    }
-<a href=#154 id=154 data-nosnippet>154</a>}
-<a href=#155 id=155 data-nosnippet>155</a>
-<a href=#156 id=156 data-nosnippet>156</a><span class="attr">#[derive(Debug, Clone)]
-<a href=#157 id=157 data-nosnippet>157</a></span><span class="doccomment">/// The source of the HF token.
-<a href=#158 id=158 data-nosnippet>158</a></span><span class="kw">pub enum </span>TokenSource {
-<a href=#159 id=159 data-nosnippet>159</a>    Literal(String),
-<a href=#160 id=160 data-nosnippet>160</a>    EnvVar(String),
-<a href=#161 id=161 data-nosnippet>161</a>    Path(String),
-<a href=#162 id=162 data-nosnippet>162</a>    CacheToken,
-<a href=#163 id=163 data-nosnippet>163</a>    <span class="prelude-val">None</span>,
-<a href=#164 id=164 data-nosnippet>164</a>}
-<a href=#165 id=165 data-nosnippet>165</a>
-<a href=#166 id=166 data-nosnippet>166</a><span class="kw">impl </span>FromStr <span class="kw">for </span>TokenSource {
-<a href=#167 id=167 data-nosnippet>167</a>    <span class="kw">type </span><span class="prelude-val">Err </span>= String;
-<a href=#168 id=168 data-nosnippet>168</a>
-<a href=#169 id=169 data-nosnippet>169</a>    <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Err&gt; {
-<a href=#170 id=170 data-nosnippet>170</a>        <span class="kw">let </span>parts: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = s.splitn(<span class="number">2</span>, <span class="string">':'</span>).collect();
-<a href=#171 id=171 data-nosnippet>171</a>        <span class="kw">match </span>parts[<span class="number">0</span>] {
-<a href=#172 id=172 data-nosnippet>172</a>            <span class="string">"literal" </span>=&gt; parts
-<a href=#173 id=173 data-nosnippet>173</a>                .get(<span class="number">1</span>)
-<a href=#174 id=174 data-nosnippet>174</a>                .map(|<span class="kw-2">&amp;</span>value| TokenSource::Literal(value.to_string()))
-<a href=#175 id=175 data-nosnippet>175</a>                .ok_or_else(|| <span class="string">"Expected a value for 'literal'"</span>.to_string()),
-<a href=#176 id=176 data-nosnippet>176</a>            <span class="string">"env" </span>=&gt; <span class="prelude-val">Ok</span>(TokenSource::EnvVar(
-<a href=#177 id=177 data-nosnippet>177</a>                parts
-<a href=#178 id=178 data-nosnippet>178</a>                    .get(<span class="number">1</span>)
-<a href=#179 id=179 data-nosnippet>179</a>                    .unwrap_or(<span class="kw-2">&amp;</span><span class="string">"HUGGING_FACE_HUB_TOKEN"</span>)
-<a href=#180 id=180 data-nosnippet>180</a>                    .to_string(),
-<a href=#181 id=181 data-nosnippet>181</a>            )),
-<a href=#182 id=182 data-nosnippet>182</a>            <span class="string">"path" </span>=&gt; parts
-<a href=#183 id=183 data-nosnippet>183</a>                .get(<span class="number">1</span>)
-<a href=#184 id=184 data-nosnippet>184</a>                .map(|<span class="kw-2">&amp;</span>value| TokenSource::Path(value.to_string()))
-<a href=#185 id=185 data-nosnippet>185</a>                .ok_or_else(|| <span class="string">"Expected a value for 'path'"</span>.to_string()),
-<a href=#186 id=186 data-nosnippet>186</a>            <span class="string">"cache" </span>=&gt; <span class="prelude-val">Ok</span>(TokenSource::CacheToken),
-<a href=#187 id=187 data-nosnippet>187</a>            <span class="string">"none" </span>=&gt; <span class="prelude-val">Ok</span>(TokenSource::None),
-<a href=#188 id=188 data-nosnippet>188</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="string">"Invalid token source format"</span>.to_string()),
-<a href=#189 id=189 data-nosnippet>189</a>        }
-<a href=#190 id=190 data-nosnippet>190</a>    }
-<a href=#191 id=191 data-nosnippet>191</a>}
-<a href=#192 id=192 data-nosnippet>192</a>
-<a href=#193 id=193 data-nosnippet>193</a><span class="kw">impl </span>fmt::Display <span class="kw">for </span>TokenSource {
-<a href=#194 id=194 data-nosnippet>194</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-<a href=#195 id=195 data-nosnippet>195</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#196 id=196 data-nosnippet>196</a>            TokenSource::Literal(value) =&gt; <span class="macro">write!</span>(f, <span class="string">"literal:{}"</span>, value),
-<a href=#197 id=197 data-nosnippet>197</a>            TokenSource::EnvVar(value) =&gt; <span class="macro">write!</span>(f, <span class="string">"env:{}"</span>, value),
-<a href=#198 id=198 data-nosnippet>198</a>            TokenSource::Path(value) =&gt; <span class="macro">write!</span>(f, <span class="string">"path:{}"</span>, value),
-<a href=#199 id=199 data-nosnippet>199</a>            TokenSource::CacheToken =&gt; <span class="macro">write!</span>(f, <span class="string">"cache"</span>),
-<a href=#200 id=200 data-nosnippet>200</a>            TokenSource::None =&gt; <span class="macro">write!</span>(f, <span class="string">"none"</span>),
-<a href=#201 id=201 data-nosnippet>201</a>        }
-<a href=#202 id=202 data-nosnippet>202</a>    }
-<a href=#203 id=203 data-nosnippet>203</a>}
-<a href=#204 id=204 data-nosnippet>204</a>
-<a href=#205 id=205 data-nosnippet>205</a><span class="doccomment">/// The kind of model to build.
-<a href=#206 id=206 data-nosnippet>206</a></span><span class="attr">#[derive(Clone, Default, derive_more::From, strum::Display)]
-<a href=#207 id=207 data-nosnippet>207</a></span><span class="kw">pub enum </span>ModelKind {
-<a href=#208 id=208 data-nosnippet>208</a>    <span class="attr">#[default]
-<a href=#209 id=209 data-nosnippet>209</a>    #[strum(to_string = <span class="string">"normal (no adapters)"</span>)]
-<a href=#210 id=210 data-nosnippet>210</a>    </span>Normal,
-<a href=#211 id=211 data-nosnippet>211</a>
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="attr">#[strum(to_string = <span class="string">"gguf quantized from {quant} (no adapters)"</span>)]
-<a href=#213 id=213 data-nosnippet>213</a>    </span>GgufQuantized { quant: QuantizationKind },
-<a href=#214 id=214 data-nosnippet>214</a>
-<a href=#215 id=215 data-nosnippet>215</a>    <span class="attr">#[strum(to_string = <span class="string">"{adapter}"</span>)]
-<a href=#216 id=216 data-nosnippet>216</a>    </span>Adapter { adapter: AdapterKind },
-<a href=#217 id=217 data-nosnippet>217</a>
-<a href=#218 id=218 data-nosnippet>218</a>    <span class="attr">#[strum(to_string = <span class="string">"{adapter}, gguf quantized from {quant}"</span>)]
-<a href=#219 id=219 data-nosnippet>219</a>    </span>GgufAdapter {
-<a href=#220 id=220 data-nosnippet>220</a>        adapter: AdapterKind,
-<a href=#221 id=221 data-nosnippet>221</a>        quant: QuantizationKind,
-<a href=#222 id=222 data-nosnippet>222</a>    },
-<a href=#223 id=223 data-nosnippet>223</a>
-<a href=#224 id=224 data-nosnippet>224</a>    <span class="attr">#[strum(to_string = <span class="string">"speculative: target: `{target}`, draft: `{draft}`"</span>)]
-<a href=#225 id=225 data-nosnippet>225</a>    </span>Speculative {
-<a href=#226 id=226 data-nosnippet>226</a>        target: Box&lt;ModelKind&gt;,
-<a href=#227 id=227 data-nosnippet>227</a>        draft: Box&lt;ModelKind&gt;,
-<a href=#228 id=228 data-nosnippet>228</a>    },
-<a href=#229 id=229 data-nosnippet>229</a>
-<a href=#230 id=230 data-nosnippet>230</a>    <span class="attr">#[strum(to_string = <span class="string">"anymoe: target: `{target}`"</span>)]
-<a href=#231 id=231 data-nosnippet>231</a>    </span>AnyMoe { target: Box&lt;ModelKind&gt; },
-<a href=#232 id=232 data-nosnippet>232</a>}
-<a href=#233 id=233 data-nosnippet>233</a>
-<a href=#234 id=234 data-nosnippet>234</a><span class="attr">#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
-<a href=#235 id=235 data-nosnippet>235</a>#[strum(serialize_all = <span class="string">"kebab-case"</span>)]
-<a href=#236 id=236 data-nosnippet>236</a></span><span class="kw">pub enum </span>QuantizationKind {
-<a href=#237 id=237 data-nosnippet>237</a>    <span class="doccomment">/// GGML
-<a href=#238 id=238 data-nosnippet>238</a>    </span>Ggml,
-<a href=#239 id=239 data-nosnippet>239</a>    <span class="doccomment">/// GGUF
-<a href=#240 id=240 data-nosnippet>240</a>    </span>Gguf,
-<a href=#241 id=241 data-nosnippet>241</a>    <span class="doccomment">/// GPTQ
-<a href=#242 id=242 data-nosnippet>242</a>    </span>Gptq,
-<a href=#243 id=243 data-nosnippet>243</a>}
-<a href=#244 id=244 data-nosnippet>244</a>
-<a href=#245 id=245 data-nosnippet>245</a><span class="attr">#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
-<a href=#246 id=246 data-nosnippet>246</a>#[strum(serialize_all = <span class="string">"kebab-case"</span>)]
-<a href=#247 id=247 data-nosnippet>247</a></span><span class="kw">pub enum </span>AdapterKind {
-<a href=#248 id=248 data-nosnippet>248</a>    <span class="doccomment">/// LoRA
-<a href=#249 id=249 data-nosnippet>249</a>    </span>Lora,
-<a href=#250 id=250 data-nosnippet>250</a>    <span class="doccomment">/// X-LoRA
-<a href=#251 id=251 data-nosnippet>251</a>    </span>XLora,
-<a href=#252 id=252 data-nosnippet>252</a>}
-<a href=#253 id=253 data-nosnippet>253</a>
-<a href=#254 id=254 data-nosnippet>254</a><span class="comment">// For the proper name as formatted via doc comment for a variant
-<a href=#255 id=255 data-nosnippet>255</a></span><span class="kw">pub trait </span>PrettyName: strum::EnumMessage + ToString {
-<a href=#256 id=256 data-nosnippet>256</a>    <span class="kw">fn </span>pretty_name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#257 id=257 data-nosnippet>257</a>        <span class="kw">match </span><span class="self">self</span>.get_documentation() {
-<a href=#258 id=258 data-nosnippet>258</a>            <span class="prelude-val">Some</span>(s) =&gt; s.to_string(),
-<a href=#259 id=259 data-nosnippet>259</a>            <span class="comment">// Instead of panic via expect(),
-<a href=#260 id=260 data-nosnippet>260</a>            // fallback to default kebab-case:
-<a href=#261 id=261 data-nosnippet>261</a>            </span><span class="prelude-val">None </span>=&gt; <span class="self">self</span>.to_string(),
-<a href=#262 id=262 data-nosnippet>262</a>        }
-<a href=#263 id=263 data-nosnippet>263</a>    }
-<a href=#264 id=264 data-nosnippet>264</a>}
-<a href=#265 id=265 data-nosnippet>265</a>
-<a href=#266 id=266 data-nosnippet>266</a><span class="kw">impl </span>PrettyName <span class="kw">for </span>AdapterKind {}
-<a href=#267 id=267 data-nosnippet>267</a><span class="kw">impl </span>PrettyName <span class="kw">for </span>QuantizationKind {}
-<a href=#268 id=268 data-nosnippet>268</a>
-<a href=#269 id=269 data-nosnippet>269</a><span class="kw">impl </span>ModelKind {
-<a href=#270 id=270 data-nosnippet>270</a>    <span class="comment">// Quantized helpers:
-<a href=#271 id=271 data-nosnippet>271</a>    </span><span class="kw">pub fn </span>is_quantized(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#272 id=272 data-nosnippet>272</a>        <span class="self">self</span>.quantized_kind().iter().any(|q| q.is_some())
-<a href=#273 id=273 data-nosnippet>273</a>    }
-<a href=#274 id=274 data-nosnippet>274</a>
-<a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">pub fn </span>is_quantized_and(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>f: <span class="kw">impl </span>FnMut(QuantizationKind) -&gt; bool) -&gt; bool {
-<a href=#276 id=276 data-nosnippet>276</a>        <span class="self">self</span>.quantized_kind().iter().any(|q| q.is_some_and(<span class="kw-2">&amp;mut </span>f))
-<a href=#277 id=277 data-nosnippet>277</a>    }
-<a href=#278 id=278 data-nosnippet>278</a>
-<a href=#279 id=279 data-nosnippet>279</a>    <span class="kw">pub fn </span>quantized_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;<span class="prelude-ty">Option</span>&lt;QuantizationKind&gt;&gt; {
-<a href=#280 id=280 data-nosnippet>280</a>        <span class="kw">use </span>ModelKind::<span class="kw-2">*</span>;
-<a href=#281 id=281 data-nosnippet>281</a>
-<a href=#282 id=282 data-nosnippet>282</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#283 id=283 data-nosnippet>283</a>            Normal | Adapter { .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
-<a href=#284 id=284 data-nosnippet>284</a>            GgufQuantized { quant } | GgufAdapter { quant, .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">*</span>quant)],
-<a href=#285 id=285 data-nosnippet>285</a>            Speculative { target, draft } =&gt; {
-<a href=#286 id=286 data-nosnippet>286</a>                <span class="kw">let </span>t = <span class="kw-2">*</span>target.clone();
-<a href=#287 id=287 data-nosnippet>287</a>                <span class="kw">let </span>d = <span class="kw-2">*</span>draft.clone();
-<a href=#288 id=288 data-nosnippet>288</a>
-<a href=#289 id=289 data-nosnippet>289</a>                [t.quantized_kind(), d.quantized_kind()].concat()
-<a href=#290 id=290 data-nosnippet>290</a>            }
-<a href=#291 id=291 data-nosnippet>291</a>            AnyMoe { target } =&gt; target.quantized_kind(),
-<a href=#292 id=292 data-nosnippet>292</a>        }
-<a href=#293 id=293 data-nosnippet>293</a>    }
-<a href=#294 id=294 data-nosnippet>294</a>
-<a href=#295 id=295 data-nosnippet>295</a>    <span class="comment">// Adapter helpers:
-<a href=#296 id=296 data-nosnippet>296</a>    </span><span class="kw">pub fn </span>is_adapted(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#297 id=297 data-nosnippet>297</a>        <span class="self">self</span>.adapted_kind().iter().any(|a| a.is_some())
-<a href=#298 id=298 data-nosnippet>298</a>    }
-<a href=#299 id=299 data-nosnippet>299</a>
-<a href=#300 id=300 data-nosnippet>300</a>    <span class="kw">pub fn </span>is_adapted_and(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>f: <span class="kw">impl </span>FnMut(AdapterKind) -&gt; bool) -&gt; bool {
-<a href=#301 id=301 data-nosnippet>301</a>        <span class="self">self</span>.adapted_kind().iter().any(|a| a.is_some_and(<span class="kw-2">&amp;mut </span>f))
-<a href=#302 id=302 data-nosnippet>302</a>    }
-<a href=#303 id=303 data-nosnippet>303</a>
-<a href=#304 id=304 data-nosnippet>304</a>    <span class="kw">pub fn </span>adapted_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;<span class="prelude-ty">Option</span>&lt;AdapterKind&gt;&gt; {
-<a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">use </span>ModelKind::<span class="kw-2">*</span>;
-<a href=#306 id=306 data-nosnippet>306</a>
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#308 id=308 data-nosnippet>308</a>            Normal | GgufQuantized { .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
-<a href=#309 id=309 data-nosnippet>309</a>            Adapter { adapter } | GgufAdapter { adapter, .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">*</span>adapter)],
-<a href=#310 id=310 data-nosnippet>310</a>            Speculative { target, draft } =&gt; {
-<a href=#311 id=311 data-nosnippet>311</a>                <span class="kw">let </span>t = <span class="kw-2">*</span>target.clone();
-<a href=#312 id=312 data-nosnippet>312</a>                <span class="kw">let </span>d = <span class="kw-2">*</span>draft.clone();
-<a href=#313 id=313 data-nosnippet>313</a>
-<a href=#314 id=314 data-nosnippet>314</a>                [t.adapted_kind(), d.adapted_kind()].concat()
-<a href=#315 id=315 data-nosnippet>315</a>            }
-<a href=#316 id=316 data-nosnippet>316</a>            AnyMoe { target } =&gt; target.adapted_kind(),
-<a href=#317 id=317 data-nosnippet>317</a>        }
-<a href=#318 id=318 data-nosnippet>318</a>    }
-<a href=#319 id=319 data-nosnippet>319</a>}
-<a href=#320 id=320 data-nosnippet>320</a>
-<a href=#321 id=321 data-nosnippet>321</a><span class="macro">macro_rules!</span> b_to_mb {
-<a href=#322 id=322 data-nosnippet>322</a>    (<span class="macro-nonterminal">$x</span>:expr) =&gt; {
-<a href=#323 id=323 data-nosnippet>323</a>        <span class="macro-nonterminal">$x </span>/ (<span class="number">1024 </span>* <span class="number">1024</span>)
-<a href=#324 id=324 data-nosnippet>324</a>    };
-<a href=#325 id=325 data-nosnippet>325</a>}
-<a href=#326 id=326 data-nosnippet>326</a>
-<a href=#327 id=327 data-nosnippet>327</a><span class="attr">#[derive(Debug, Clone)]
-<a href=#328 id=328 data-nosnippet>328</a></span><span class="kw">pub enum </span>AutoDeviceMapParams {
-<a href=#329 id=329 data-nosnippet>329</a>    Text {
-<a href=#330 id=330 data-nosnippet>330</a>        max_seq_len: usize,
-<a href=#331 id=331 data-nosnippet>331</a>        max_batch_size: usize,
-<a href=#332 id=332 data-nosnippet>332</a>    },
-<a href=#333 id=333 data-nosnippet>333</a>    Vision {
-<a href=#334 id=334 data-nosnippet>334</a>        max_seq_len: usize,
-<a href=#335 id=335 data-nosnippet>335</a>        max_batch_size: usize,
-<a href=#336 id=336 data-nosnippet>336</a>        max_image_shape: (usize, usize),
-<a href=#337 id=337 data-nosnippet>337</a>        max_num_images: usize,
-<a href=#338 id=338 data-nosnippet>338</a>    },
-<a href=#339 id=339 data-nosnippet>339</a>}
-<a href=#340 id=340 data-nosnippet>340</a>
-<a href=#341 id=341 data-nosnippet>341</a><span class="kw">impl </span>AutoDeviceMapParams {
-<a href=#342 id=342 data-nosnippet>342</a>    <span class="kw">pub fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#343 id=343 data-nosnippet>343</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#344 id=344 data-nosnippet>344</a>            <span class="self">Self</span>::Text { max_seq_len, .. } | <span class="self">Self</span>::Vision { max_seq_len, .. } =&gt; <span class="kw-2">*</span>max_seq_len,
-<a href=#345 id=345 data-nosnippet>345</a>        }
-<a href=#346 id=346 data-nosnippet>346</a>    }
-<a href=#347 id=347 data-nosnippet>347</a>}
-<a href=#348 id=348 data-nosnippet>348</a>
-<a href=#349 id=349 data-nosnippet>349</a><span class="kw">impl </span>Display <span class="kw">for </span>AutoDeviceMapParams {
-<a href=#350 id=350 data-nosnippet>350</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-<a href=#351 id=351 data-nosnippet>351</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#352 id=352 data-nosnippet>352</a>            <span class="self">Self</span>::Text {
-<a href=#353 id=353 data-nosnippet>353</a>                max_seq_len,
-<a href=#354 id=354 data-nosnippet>354</a>                max_batch_size,
-<a href=#355 id=355 data-nosnippet>355</a>            } =&gt; <span class="macro">write!</span>(
-<a href=#356 id=356 data-nosnippet>356</a>                f,
-<a href=#357 id=357 data-nosnippet>357</a>                <span class="string">"text[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}]"
-<a href=#358 id=358 data-nosnippet>358</a>            </span>),
-<a href=#359 id=359 data-nosnippet>359</a>            <span class="self">Self</span>::Vision {
-<a href=#360 id=360 data-nosnippet>360</a>                max_seq_len,
-<a href=#361 id=361 data-nosnippet>361</a>                max_batch_size,
-<a href=#362 id=362 data-nosnippet>362</a>                max_image_shape,
-<a href=#363 id=363 data-nosnippet>363</a>                max_num_images
-<a href=#364 id=364 data-nosnippet>364</a>            } =&gt; <span class="macro">write!</span>(
-<a href=#365 id=365 data-nosnippet>365</a>                f,
-<a href=#366 id=366 data-nosnippet>366</a>                <span class="string">"vision[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}, max_image_shape: {max_image_shape:?}, max_num_images: {max_num_images}]"
-<a href=#367 id=367 data-nosnippet>367</a>            </span>),
-<a href=#368 id=368 data-nosnippet>368</a>        }
-<a href=#369 id=369 data-nosnippet>369</a>    }
-<a href=#370 id=370 data-nosnippet>370</a>}
-<a href=#371 id=371 data-nosnippet>371</a>
-<a href=#372 id=372 data-nosnippet>372</a><span class="kw">impl </span>AutoDeviceMapParams {
-<a href=#373 id=373 data-nosnippet>373</a>    <span class="kw">pub const </span>DEFAULT_MAX_SEQ_LEN: usize = <span class="number">4 </span>* <span class="number">1024</span>;
-<a href=#374 id=374 data-nosnippet>374</a>    <span class="kw">pub const </span>DEFAULT_MAX_BATCH_SIZE: usize = <span class="number">1</span>;
-<a href=#375 id=375 data-nosnippet>375</a>    <span class="kw">pub const </span>DEFAULT_MAX_NUM_IMAGES: usize = <span class="number">1</span>;
-<a href=#376 id=376 data-nosnippet>376</a>    <span class="kw">pub const </span>DEFAULT_MAX_IMAGE_LENGTH: usize = <span class="number">1024</span>;
-<a href=#377 id=377 data-nosnippet>377</a>
-<a href=#378 id=378 data-nosnippet>378</a>    <span class="kw">pub fn </span>default_text() -&gt; <span class="self">Self </span>{
-<a href=#379 id=379 data-nosnippet>379</a>        <span class="self">Self</span>::Text {
-<a href=#380 id=380 data-nosnippet>380</a>            max_seq_len: <span class="self">Self</span>::DEFAULT_MAX_SEQ_LEN,
-<a href=#381 id=381 data-nosnippet>381</a>            max_batch_size: <span class="self">Self</span>::DEFAULT_MAX_BATCH_SIZE,
-<a href=#382 id=382 data-nosnippet>382</a>        }
-<a href=#383 id=383 data-nosnippet>383</a>    }
-<a href=#384 id=384 data-nosnippet>384</a>
-<a href=#385 id=385 data-nosnippet>385</a>    <span class="kw">pub fn </span>default_vision() -&gt; <span class="self">Self </span>{
-<a href=#386 id=386 data-nosnippet>386</a>        <span class="self">Self</span>::Vision {
-<a href=#387 id=387 data-nosnippet>387</a>            max_seq_len: <span class="self">Self</span>::DEFAULT_MAX_SEQ_LEN,
-<a href=#388 id=388 data-nosnippet>388</a>            max_batch_size: <span class="self">Self</span>::DEFAULT_MAX_BATCH_SIZE,
-<a href=#389 id=389 data-nosnippet>389</a>            max_num_images: <span class="self">Self</span>::DEFAULT_MAX_NUM_IMAGES,
-<a href=#390 id=390 data-nosnippet>390</a>            max_image_shape: (
-<a href=#391 id=391 data-nosnippet>391</a>                <span class="self">Self</span>::DEFAULT_MAX_IMAGE_LENGTH,
+<a href=#22 id=22 data-nosnippet>22</a>    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
+<a href=#23 id=23 data-nosnippet>23</a>    Qwen3MoELoader, Starcoder2Loader,
+<a href=#24 id=24 data-nosnippet>24</a>};
+<a href=#25 id=25 data-nosnippet>25</a>
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>tracing::{info, warn};
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">pub use </span>vision_loaders::{
+<a href=#28 id=28 data-nosnippet>28</a>    Gemma3Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader,
+<a href=#29 id=29 data-nosnippet>29</a>    Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, VLlama4Loader,
+<a href=#30 id=30 data-nosnippet>30</a>    VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
+<a href=#31 id=31 data-nosnippet>31</a>};
+<a href=#32 id=32 data-nosnippet>32</a>
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">pub use </span>diffusion_loaders::{
+<a href=#34 id=34 data-nosnippet>34</a>    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DiffusionModelPaths,
+<a href=#35 id=35 data-nosnippet>35</a>    DiffusionModelPathsInner, FluxLoader,
+<a href=#36 id=36 data-nosnippet>36</a>};
+<a href=#37 id=37 data-nosnippet>37</a>
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use crate</span>::{
+<a href=#39 id=39 data-nosnippet>39</a>    paged_attention::{
+<a href=#40 id=40 data-nosnippet>40</a>        calculate_cache_config, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+<a href=#41 id=41 data-nosnippet>41</a>    },
+<a href=#42 id=42 data-nosnippet>42</a>    utils::debug::DeviceRepr,
+<a href=#43 id=43 data-nosnippet>43</a>    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryUsage, PagedAttentionConfig,
+<a href=#44 id=44 data-nosnippet>44</a>    TryIntoDType,
+<a href=#45 id=45 data-nosnippet>45</a>};
+<a href=#46 id=46 data-nosnippet>46</a>
+<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use super</span>::{paths::AdapterPaths, Pipeline};
+<a href=#48 id=48 data-nosnippet>48</a>
+<a href=#49 id=49 data-nosnippet>49</a><span class="doccomment">/// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
+<a href=#50 id=50 data-nosnippet>50</a>/// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
+<a href=#51 id=51 data-nosnippet>51</a></span><span class="kw">pub trait </span>ModelPaths: AsAny + Debug + Send + Sync {
+<a href=#52 id=52 data-nosnippet>52</a>    <span class="doccomment">/// Model weights files (multiple files supported).
+<a href=#53 id=53 data-nosnippet>53</a>    </span><span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf];
+<a href=#54 id=54 data-nosnippet>54</a>
+<a href=#55 id=55 data-nosnippet>55</a>    <span class="doccomment">/// Retrieve the [`PretrainedConfig`] file.
+<a href=#56 id=56 data-nosnippet>56</a>    ///
+<a href=#57 id=57 data-nosnippet>57</a>    /// [`PretrainedConfig`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/configuration#transformers.PretrainedConfig
+<a href=#58 id=58 data-nosnippet>58</a>    </span><span class="kw">fn </span>get_config_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
+<a href=#59 id=59 data-nosnippet>59</a>
+<a href=#60 id=60 data-nosnippet>60</a>    <span class="doccomment">/// A serialised [`tokenizers.Tokenizer`] HuggingFace object.
+<a href=#61 id=61 data-nosnippet>61</a>    ///
+<a href=#62 id=62 data-nosnippet>62</a>    /// [`tokenizers.Tokenizer`]: https://huggingface.co/docs/transformers/v4.40.2/en/main_classes/tokenizer
+<a href=#63 id=63 data-nosnippet>63</a>    </span><span class="kw">fn </span>get_tokenizer_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf;
+<a href=#64 id=64 data-nosnippet>64</a>
+<a href=#65 id=65 data-nosnippet>65</a>    <span class="doccomment">/// File where the content is expected to deserialize to [`ChatTemplate`].
+<a href=#66 id=66 data-nosnippet>66</a>    ///
+<a href=#67 id=67 data-nosnippet>67</a>    /// [`ChatTemplate`]: crate::ChatTemplate
+<a href=#68 id=68 data-nosnippet>68</a>    </span><span class="kw">fn </span>get_template_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
+<a href=#69 id=69 data-nosnippet>69</a>
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// Filepath for general model configuration.
+<a href=#71 id=71 data-nosnippet>71</a>    </span><span class="kw">fn </span>get_gen_conf_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PathBuf&gt;;
+<a href=#72 id=72 data-nosnippet>72</a>
+<a href=#73 id=73 data-nosnippet>73</a>    <span class="doccomment">/// Get the preprocessor config (for the vision models). This is used to pre process images.
+<a href=#74 id=74 data-nosnippet>74</a>    </span><span class="kw">fn </span>get_preprocessor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
+<a href=#75 id=75 data-nosnippet>75</a>
+<a href=#76 id=76 data-nosnippet>76</a>    <span class="doccomment">/// Get the processor config (for the vision models). This is primarily used for the chat template.
+<a href=#77 id=77 data-nosnippet>77</a>    </span><span class="kw">fn </span>get_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
+<a href=#78 id=78 data-nosnippet>78</a>
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="doccomment">/// Get the explicit chat template.
+<a href=#80 id=80 data-nosnippet>80</a>    </span><span class="kw">fn </span>get_chat_template_explicit(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt;;
+<a href=#81 id=81 data-nosnippet>81</a>
+<a href=#82 id=82 data-nosnippet>82</a>    <span class="doccomment">/// Get adapter paths.
+<a href=#83 id=83 data-nosnippet>83</a>    </span><span class="kw">fn </span>get_adapter_paths(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>AdapterPaths;
+<a href=#84 id=84 data-nosnippet>84</a>}
+<a href=#85 id=85 data-nosnippet>85</a>
+<a href=#86 id=86 data-nosnippet>86</a><span class="attr">#[derive(Clone, Debug)]
+<a href=#87 id=87 data-nosnippet>87</a></span><span class="doccomment">/// All local paths and metadata necessary to load a model.
+<a href=#88 id=88 data-nosnippet>88</a></span><span class="kw">pub struct </span>LocalModelPaths&lt;P: Debug&gt; {
+<a href=#89 id=89 data-nosnippet>89</a>    <span class="kw">pub </span>tokenizer_filename: P,
+<a href=#90 id=90 data-nosnippet>90</a>    <span class="kw">pub </span>config_filename: P,
+<a href=#91 id=91 data-nosnippet>91</a>    <span class="kw">pub </span>template_filename: <span class="prelude-ty">Option</span>&lt;P&gt;,
+<a href=#92 id=92 data-nosnippet>92</a>    <span class="kw">pub </span>filenames: Vec&lt;P&gt;,
+<a href=#93 id=93 data-nosnippet>93</a>    <span class="kw">pub </span>adapter_paths: AdapterPaths,
+<a href=#94 id=94 data-nosnippet>94</a>    <span class="kw">pub </span>gen_conf: <span class="prelude-ty">Option</span>&lt;P&gt;,
+<a href=#95 id=95 data-nosnippet>95</a>    <span class="kw">pub </span>preprocessor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
+<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">pub </span>processor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
+<a href=#97 id=97 data-nosnippet>97</a>    <span class="kw">pub </span>chat_template_json_filename: <span class="prelude-ty">Option</span>&lt;P&gt;,
+<a href=#98 id=98 data-nosnippet>98</a>}
+<a href=#99 id=99 data-nosnippet>99</a>
+<a href=#100 id=100 data-nosnippet>100</a><span class="kw">impl</span>&lt;P: Debug&gt; LocalModelPaths&lt;P&gt; {
+<a href=#101 id=101 data-nosnippet>101</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#102 id=102 data-nosnippet>102</a>    </span><span class="kw">pub fn </span>new(
+<a href=#103 id=103 data-nosnippet>103</a>        tokenizer_filename: P,
+<a href=#104 id=104 data-nosnippet>104</a>        config_filename: P,
+<a href=#105 id=105 data-nosnippet>105</a>        template_filename: P,
+<a href=#106 id=106 data-nosnippet>106</a>        filenames: Vec&lt;P&gt;,
+<a href=#107 id=107 data-nosnippet>107</a>        adapter_paths: AdapterPaths,
+<a href=#108 id=108 data-nosnippet>108</a>        gen_conf: <span class="prelude-ty">Option</span>&lt;P&gt;,
+<a href=#109 id=109 data-nosnippet>109</a>        preprocessor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
+<a href=#110 id=110 data-nosnippet>110</a>        processor_config: <span class="prelude-ty">Option</span>&lt;P&gt;,
+<a href=#111 id=111 data-nosnippet>111</a>        chat_template_json_filename: <span class="prelude-ty">Option</span>&lt;P&gt;,
+<a href=#112 id=112 data-nosnippet>112</a>    ) -&gt; <span class="self">Self </span>{
+<a href=#113 id=113 data-nosnippet>113</a>        <span class="self">Self </span>{
+<a href=#114 id=114 data-nosnippet>114</a>            tokenizer_filename,
+<a href=#115 id=115 data-nosnippet>115</a>            config_filename,
+<a href=#116 id=116 data-nosnippet>116</a>            template_filename: <span class="prelude-val">Some</span>(template_filename),
+<a href=#117 id=117 data-nosnippet>117</a>            filenames,
+<a href=#118 id=118 data-nosnippet>118</a>            adapter_paths,
+<a href=#119 id=119 data-nosnippet>119</a>            gen_conf,
+<a href=#120 id=120 data-nosnippet>120</a>            preprocessor_config,
+<a href=#121 id=121 data-nosnippet>121</a>            processor_config,
+<a href=#122 id=122 data-nosnippet>122</a>            chat_template_json_filename,
+<a href=#123 id=123 data-nosnippet>123</a>        }
+<a href=#124 id=124 data-nosnippet>124</a>    }
+<a href=#125 id=125 data-nosnippet>125</a>}
+<a href=#126 id=126 data-nosnippet>126</a>
+<a href=#127 id=127 data-nosnippet>127</a><span class="kw">impl </span>ModelPaths <span class="kw">for </span>LocalModelPaths&lt;PathBuf&gt; {
+<a href=#128 id=128 data-nosnippet>128</a>    <span class="kw">fn </span>get_config_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf {
+<a href=#129 id=129 data-nosnippet>129</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.config_filename
+<a href=#130 id=130 data-nosnippet>130</a>    }
+<a href=#131 id=131 data-nosnippet>131</a>    <span class="kw">fn </span>get_tokenizer_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PathBuf {
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer_filename
+<a href=#133 id=133 data-nosnippet>133</a>    }
+<a href=#134 id=134 data-nosnippet>134</a>    <span class="kw">fn </span>get_weight_filenames(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>[PathBuf] {
+<a href=#135 id=135 data-nosnippet>135</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.filenames
+<a href=#136 id=136 data-nosnippet>136</a>    }
+<a href=#137 id=137 data-nosnippet>137</a>    <span class="kw">fn </span>get_template_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
+<a href=#138 id=138 data-nosnippet>138</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.template_filename
+<a href=#139 id=139 data-nosnippet>139</a>    }
+<a href=#140 id=140 data-nosnippet>140</a>    <span class="kw">fn </span>get_gen_conf_filename(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PathBuf&gt; {
+<a href=#141 id=141 data-nosnippet>141</a>        <span class="self">self</span>.gen_conf.as_ref()
+<a href=#142 id=142 data-nosnippet>142</a>    }
+<a href=#143 id=143 data-nosnippet>143</a>    <span class="kw">fn </span>get_preprocessor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
+<a href=#144 id=144 data-nosnippet>144</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.preprocessor_config
+<a href=#145 id=145 data-nosnippet>145</a>    }
+<a href=#146 id=146 data-nosnippet>146</a>    <span class="kw">fn </span>get_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
+<a href=#147 id=147 data-nosnippet>147</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.processor_config
+<a href=#148 id=148 data-nosnippet>148</a>    }
+<a href=#149 id=149 data-nosnippet>149</a>    <span class="kw">fn </span>get_chat_template_explicit(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="prelude-ty">Option</span>&lt;PathBuf&gt; {
+<a href=#150 id=150 data-nosnippet>150</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template_json_filename
+<a href=#151 id=151 data-nosnippet>151</a>    }
+<a href=#152 id=152 data-nosnippet>152</a>    <span class="kw">fn </span>get_adapter_paths(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>AdapterPaths {
+<a href=#153 id=153 data-nosnippet>153</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.adapter_paths
+<a href=#154 id=154 data-nosnippet>154</a>    }
+<a href=#155 id=155 data-nosnippet>155</a>}
+<a href=#156 id=156 data-nosnippet>156</a>
+<a href=#157 id=157 data-nosnippet>157</a><span class="attr">#[derive(Debug, Clone)]
+<a href=#158 id=158 data-nosnippet>158</a></span><span class="doccomment">/// The source of the HF token.
+<a href=#159 id=159 data-nosnippet>159</a></span><span class="kw">pub enum </span>TokenSource {
+<a href=#160 id=160 data-nosnippet>160</a>    Literal(String),
+<a href=#161 id=161 data-nosnippet>161</a>    EnvVar(String),
+<a href=#162 id=162 data-nosnippet>162</a>    Path(String),
+<a href=#163 id=163 data-nosnippet>163</a>    CacheToken,
+<a href=#164 id=164 data-nosnippet>164</a>    <span class="prelude-val">None</span>,
+<a href=#165 id=165 data-nosnippet>165</a>}
+<a href=#166 id=166 data-nosnippet>166</a>
+<a href=#167 id=167 data-nosnippet>167</a><span class="kw">impl </span>FromStr <span class="kw">for </span>TokenSource {
+<a href=#168 id=168 data-nosnippet>168</a>    <span class="kw">type </span><span class="prelude-val">Err </span>= String;
+<a href=#169 id=169 data-nosnippet>169</a>
+<a href=#170 id=170 data-nosnippet>170</a>    <span class="kw">fn </span>from_str(s: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>, <span class="self">Self</span>::Err&gt; {
+<a href=#171 id=171 data-nosnippet>171</a>        <span class="kw">let </span>parts: Vec&lt;<span class="kw-2">&amp;</span>str&gt; = s.splitn(<span class="number">2</span>, <span class="string">':'</span>).collect();
+<a href=#172 id=172 data-nosnippet>172</a>        <span class="kw">match </span>parts[<span class="number">0</span>] {
+<a href=#173 id=173 data-nosnippet>173</a>            <span class="string">"literal" </span>=&gt; parts
+<a href=#174 id=174 data-nosnippet>174</a>                .get(<span class="number">1</span>)
+<a href=#175 id=175 data-nosnippet>175</a>                .map(|<span class="kw-2">&amp;</span>value| TokenSource::Literal(value.to_string()))
+<a href=#176 id=176 data-nosnippet>176</a>                .ok_or_else(|| <span class="string">"Expected a value for 'literal'"</span>.to_string()),
+<a href=#177 id=177 data-nosnippet>177</a>            <span class="string">"env" </span>=&gt; <span class="prelude-val">Ok</span>(TokenSource::EnvVar(
+<a href=#178 id=178 data-nosnippet>178</a>                parts
+<a href=#179 id=179 data-nosnippet>179</a>                    .get(<span class="number">1</span>)
+<a href=#180 id=180 data-nosnippet>180</a>                    .unwrap_or(<span class="kw-2">&amp;</span><span class="string">"HUGGING_FACE_HUB_TOKEN"</span>)
+<a href=#181 id=181 data-nosnippet>181</a>                    .to_string(),
+<a href=#182 id=182 data-nosnippet>182</a>            )),
+<a href=#183 id=183 data-nosnippet>183</a>            <span class="string">"path" </span>=&gt; parts
+<a href=#184 id=184 data-nosnippet>184</a>                .get(<span class="number">1</span>)
+<a href=#185 id=185 data-nosnippet>185</a>                .map(|<span class="kw-2">&amp;</span>value| TokenSource::Path(value.to_string()))
+<a href=#186 id=186 data-nosnippet>186</a>                .ok_or_else(|| <span class="string">"Expected a value for 'path'"</span>.to_string()),
+<a href=#187 id=187 data-nosnippet>187</a>            <span class="string">"cache" </span>=&gt; <span class="prelude-val">Ok</span>(TokenSource::CacheToken),
+<a href=#188 id=188 data-nosnippet>188</a>            <span class="string">"none" </span>=&gt; <span class="prelude-val">Ok</span>(TokenSource::None),
+<a href=#189 id=189 data-nosnippet>189</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="string">"Invalid token source format"</span>.to_string()),
+<a href=#190 id=190 data-nosnippet>190</a>        }
+<a href=#191 id=191 data-nosnippet>191</a>    }
+<a href=#192 id=192 data-nosnippet>192</a>}
+<a href=#193 id=193 data-nosnippet>193</a>
+<a href=#194 id=194 data-nosnippet>194</a><span class="kw">impl </span>fmt::Display <span class="kw">for </span>TokenSource {
+<a href=#195 id=195 data-nosnippet>195</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
+<a href=#196 id=196 data-nosnippet>196</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#197 id=197 data-nosnippet>197</a>            TokenSource::Literal(value) =&gt; <span class="macro">write!</span>(f, <span class="string">"literal:{}"</span>, value),
+<a href=#198 id=198 data-nosnippet>198</a>            TokenSource::EnvVar(value) =&gt; <span class="macro">write!</span>(f, <span class="string">"env:{}"</span>, value),
+<a href=#199 id=199 data-nosnippet>199</a>            TokenSource::Path(value) =&gt; <span class="macro">write!</span>(f, <span class="string">"path:{}"</span>, value),
+<a href=#200 id=200 data-nosnippet>200</a>            TokenSource::CacheToken =&gt; <span class="macro">write!</span>(f, <span class="string">"cache"</span>),
+<a href=#201 id=201 data-nosnippet>201</a>            TokenSource::None =&gt; <span class="macro">write!</span>(f, <span class="string">"none"</span>),
+<a href=#202 id=202 data-nosnippet>202</a>        }
+<a href=#203 id=203 data-nosnippet>203</a>    }
+<a href=#204 id=204 data-nosnippet>204</a>}
+<a href=#205 id=205 data-nosnippet>205</a>
+<a href=#206 id=206 data-nosnippet>206</a><span class="doccomment">/// The kind of model to build.
+<a href=#207 id=207 data-nosnippet>207</a></span><span class="attr">#[derive(Clone, Default, derive_more::From, strum::Display)]
+<a href=#208 id=208 data-nosnippet>208</a></span><span class="kw">pub enum </span>ModelKind {
+<a href=#209 id=209 data-nosnippet>209</a>    <span class="attr">#[default]
+<a href=#210 id=210 data-nosnippet>210</a>    #[strum(to_string = <span class="string">"normal (no adapters)"</span>)]
+<a href=#211 id=211 data-nosnippet>211</a>    </span>Normal,
+<a href=#212 id=212 data-nosnippet>212</a>
+<a href=#213 id=213 data-nosnippet>213</a>    <span class="attr">#[strum(to_string = <span class="string">"gguf quantized from {quant} (no adapters)"</span>)]
+<a href=#214 id=214 data-nosnippet>214</a>    </span>GgufQuantized { quant: QuantizationKind },
+<a href=#215 id=215 data-nosnippet>215</a>
+<a href=#216 id=216 data-nosnippet>216</a>    <span class="attr">#[strum(to_string = <span class="string">"{adapter}"</span>)]
+<a href=#217 id=217 data-nosnippet>217</a>    </span>Adapter { adapter: AdapterKind },
+<a href=#218 id=218 data-nosnippet>218</a>
+<a href=#219 id=219 data-nosnippet>219</a>    <span class="attr">#[strum(to_string = <span class="string">"{adapter}, gguf quantized from {quant}"</span>)]
+<a href=#220 id=220 data-nosnippet>220</a>    </span>GgufAdapter {
+<a href=#221 id=221 data-nosnippet>221</a>        adapter: AdapterKind,
+<a href=#222 id=222 data-nosnippet>222</a>        quant: QuantizationKind,
+<a href=#223 id=223 data-nosnippet>223</a>    },
+<a href=#224 id=224 data-nosnippet>224</a>
+<a href=#225 id=225 data-nosnippet>225</a>    <span class="attr">#[strum(to_string = <span class="string">"speculative: target: `{target}`, draft: `{draft}`"</span>)]
+<a href=#226 id=226 data-nosnippet>226</a>    </span>Speculative {
+<a href=#227 id=227 data-nosnippet>227</a>        target: Box&lt;ModelKind&gt;,
+<a href=#228 id=228 data-nosnippet>228</a>        draft: Box&lt;ModelKind&gt;,
+<a href=#229 id=229 data-nosnippet>229</a>    },
+<a href=#230 id=230 data-nosnippet>230</a>
+<a href=#231 id=231 data-nosnippet>231</a>    <span class="attr">#[strum(to_string = <span class="string">"anymoe: target: `{target}`"</span>)]
+<a href=#232 id=232 data-nosnippet>232</a>    </span>AnyMoe { target: Box&lt;ModelKind&gt; },
+<a href=#233 id=233 data-nosnippet>233</a>}
+<a href=#234 id=234 data-nosnippet>234</a>
+<a href=#235 id=235 data-nosnippet>235</a><span class="attr">#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
+<a href=#236 id=236 data-nosnippet>236</a>#[strum(serialize_all = <span class="string">"kebab-case"</span>)]
+<a href=#237 id=237 data-nosnippet>237</a></span><span class="kw">pub enum </span>QuantizationKind {
+<a href=#238 id=238 data-nosnippet>238</a>    <span class="doccomment">/// GGML
+<a href=#239 id=239 data-nosnippet>239</a>    </span>Ggml,
+<a href=#240 id=240 data-nosnippet>240</a>    <span class="doccomment">/// GGUF
+<a href=#241 id=241 data-nosnippet>241</a>    </span>Gguf,
+<a href=#242 id=242 data-nosnippet>242</a>    <span class="doccomment">/// GPTQ
+<a href=#243 id=243 data-nosnippet>243</a>    </span>Gptq,
+<a href=#244 id=244 data-nosnippet>244</a>}
+<a href=#245 id=245 data-nosnippet>245</a>
+<a href=#246 id=246 data-nosnippet>246</a><span class="attr">#[derive(Clone, Copy, strum::Display, strum::EnumIs, strum::EnumMessage)]
+<a href=#247 id=247 data-nosnippet>247</a>#[strum(serialize_all = <span class="string">"kebab-case"</span>)]
+<a href=#248 id=248 data-nosnippet>248</a></span><span class="kw">pub enum </span>AdapterKind {
+<a href=#249 id=249 data-nosnippet>249</a>    <span class="doccomment">/// LoRA
+<a href=#250 id=250 data-nosnippet>250</a>    </span>Lora,
+<a href=#251 id=251 data-nosnippet>251</a>    <span class="doccomment">/// X-LoRA
+<a href=#252 id=252 data-nosnippet>252</a>    </span>XLora,
+<a href=#253 id=253 data-nosnippet>253</a>}
+<a href=#254 id=254 data-nosnippet>254</a>
+<a href=#255 id=255 data-nosnippet>255</a><span class="comment">// For the proper name as formatted via doc comment for a variant
+<a href=#256 id=256 data-nosnippet>256</a></span><span class="kw">pub trait </span>PrettyName: strum::EnumMessage + ToString {
+<a href=#257 id=257 data-nosnippet>257</a>    <span class="kw">fn </span>pretty_name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#258 id=258 data-nosnippet>258</a>        <span class="kw">match </span><span class="self">self</span>.get_documentation() {
+<a href=#259 id=259 data-nosnippet>259</a>            <span class="prelude-val">Some</span>(s) =&gt; s.to_string(),
+<a href=#260 id=260 data-nosnippet>260</a>            <span class="comment">// Instead of panic via expect(),
+<a href=#261 id=261 data-nosnippet>261</a>            // fallback to default kebab-case:
+<a href=#262 id=262 data-nosnippet>262</a>            </span><span class="prelude-val">None </span>=&gt; <span class="self">self</span>.to_string(),
+<a href=#263 id=263 data-nosnippet>263</a>        }
+<a href=#264 id=264 data-nosnippet>264</a>    }
+<a href=#265 id=265 data-nosnippet>265</a>}
+<a href=#266 id=266 data-nosnippet>266</a>
+<a href=#267 id=267 data-nosnippet>267</a><span class="kw">impl </span>PrettyName <span class="kw">for </span>AdapterKind {}
+<a href=#268 id=268 data-nosnippet>268</a><span class="kw">impl </span>PrettyName <span class="kw">for </span>QuantizationKind {}
+<a href=#269 id=269 data-nosnippet>269</a>
+<a href=#270 id=270 data-nosnippet>270</a><span class="kw">impl </span>ModelKind {
+<a href=#271 id=271 data-nosnippet>271</a>    <span class="comment">// Quantized helpers:
+<a href=#272 id=272 data-nosnippet>272</a>    </span><span class="kw">pub fn </span>is_quantized(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#273 id=273 data-nosnippet>273</a>        <span class="self">self</span>.quantized_kind().iter().any(|q| q.is_some())
+<a href=#274 id=274 data-nosnippet>274</a>    }
+<a href=#275 id=275 data-nosnippet>275</a>
+<a href=#276 id=276 data-nosnippet>276</a>    <span class="kw">pub fn </span>is_quantized_and(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>f: <span class="kw">impl </span>FnMut(QuantizationKind) -&gt; bool) -&gt; bool {
+<a href=#277 id=277 data-nosnippet>277</a>        <span class="self">self</span>.quantized_kind().iter().any(|q| q.is_some_and(<span class="kw-2">&amp;mut </span>f))
+<a href=#278 id=278 data-nosnippet>278</a>    }
+<a href=#279 id=279 data-nosnippet>279</a>
+<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">pub fn </span>quantized_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;<span class="prelude-ty">Option</span>&lt;QuantizationKind&gt;&gt; {
+<a href=#281 id=281 data-nosnippet>281</a>        <span class="kw">use </span>ModelKind::<span class="kw-2">*</span>;
+<a href=#282 id=282 data-nosnippet>282</a>
+<a href=#283 id=283 data-nosnippet>283</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#284 id=284 data-nosnippet>284</a>            Normal | Adapter { .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
+<a href=#285 id=285 data-nosnippet>285</a>            GgufQuantized { quant } | GgufAdapter { quant, .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">*</span>quant)],
+<a href=#286 id=286 data-nosnippet>286</a>            Speculative { target, draft } =&gt; {
+<a href=#287 id=287 data-nosnippet>287</a>                <span class="kw">let </span>t = <span class="kw-2">*</span>target.clone();
+<a href=#288 id=288 data-nosnippet>288</a>                <span class="kw">let </span>d = <span class="kw-2">*</span>draft.clone();
+<a href=#289 id=289 data-nosnippet>289</a>
+<a href=#290 id=290 data-nosnippet>290</a>                [t.quantized_kind(), d.quantized_kind()].concat()
+<a href=#291 id=291 data-nosnippet>291</a>            }
+<a href=#292 id=292 data-nosnippet>292</a>            AnyMoe { target } =&gt; target.quantized_kind(),
+<a href=#293 id=293 data-nosnippet>293</a>        }
+<a href=#294 id=294 data-nosnippet>294</a>    }
+<a href=#295 id=295 data-nosnippet>295</a>
+<a href=#296 id=296 data-nosnippet>296</a>    <span class="comment">// Adapter helpers:
+<a href=#297 id=297 data-nosnippet>297</a>    </span><span class="kw">pub fn </span>is_adapted(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#298 id=298 data-nosnippet>298</a>        <span class="self">self</span>.adapted_kind().iter().any(|a| a.is_some())
+<a href=#299 id=299 data-nosnippet>299</a>    }
+<a href=#300 id=300 data-nosnippet>300</a>
+<a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">pub fn </span>is_adapted_and(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="kw-2">mut </span>f: <span class="kw">impl </span>FnMut(AdapterKind) -&gt; bool) -&gt; bool {
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="self">self</span>.adapted_kind().iter().any(|a| a.is_some_and(<span class="kw-2">&amp;mut </span>f))
+<a href=#303 id=303 data-nosnippet>303</a>    }
+<a href=#304 id=304 data-nosnippet>304</a>
+<a href=#305 id=305 data-nosnippet>305</a>    <span class="kw">pub fn </span>adapted_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;<span class="prelude-ty">Option</span>&lt;AdapterKind&gt;&gt; {
+<a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">use </span>ModelKind::<span class="kw-2">*</span>;
+<a href=#307 id=307 data-nosnippet>307</a>
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#309 id=309 data-nosnippet>309</a>            Normal | GgufQuantized { .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
+<a href=#310 id=310 data-nosnippet>310</a>            Adapter { adapter } | GgufAdapter { adapter, .. } =&gt; <span class="macro">vec!</span>[<span class="prelude-val">Some</span>(<span class="kw-2">*</span>adapter)],
+<a href=#311 id=311 data-nosnippet>311</a>            Speculative { target, draft } =&gt; {
+<a href=#312 id=312 data-nosnippet>312</a>                <span class="kw">let </span>t = <span class="kw-2">*</span>target.clone();
+<a href=#313 id=313 data-nosnippet>313</a>                <span class="kw">let </span>d = <span class="kw-2">*</span>draft.clone();
+<a href=#314 id=314 data-nosnippet>314</a>
+<a href=#315 id=315 data-nosnippet>315</a>                [t.adapted_kind(), d.adapted_kind()].concat()
+<a href=#316 id=316 data-nosnippet>316</a>            }
+<a href=#317 id=317 data-nosnippet>317</a>            AnyMoe { target } =&gt; target.adapted_kind(),
+<a href=#318 id=318 data-nosnippet>318</a>        }
+<a href=#319 id=319 data-nosnippet>319</a>    }
+<a href=#320 id=320 data-nosnippet>320</a>}
+<a href=#321 id=321 data-nosnippet>321</a>
+<a href=#322 id=322 data-nosnippet>322</a><span class="macro">macro_rules!</span> b_to_mb {
+<a href=#323 id=323 data-nosnippet>323</a>    (<span class="macro-nonterminal">$x</span>:expr) =&gt; {
+<a href=#324 id=324 data-nosnippet>324</a>        <span class="macro-nonterminal">$x </span>/ (<span class="number">1024 </span>* <span class="number">1024</span>)
+<a href=#325 id=325 data-nosnippet>325</a>    };
+<a href=#326 id=326 data-nosnippet>326</a>}
+<a href=#327 id=327 data-nosnippet>327</a>
+<a href=#328 id=328 data-nosnippet>328</a><span class="attr">#[derive(Debug, Clone)]
+<a href=#329 id=329 data-nosnippet>329</a></span><span class="kw">pub enum </span>AutoDeviceMapParams {
+<a href=#330 id=330 data-nosnippet>330</a>    Text {
+<a href=#331 id=331 data-nosnippet>331</a>        max_seq_len: usize,
+<a href=#332 id=332 data-nosnippet>332</a>        max_batch_size: usize,
+<a href=#333 id=333 data-nosnippet>333</a>    },
+<a href=#334 id=334 data-nosnippet>334</a>    Vision {
+<a href=#335 id=335 data-nosnippet>335</a>        max_seq_len: usize,
+<a href=#336 id=336 data-nosnippet>336</a>        max_batch_size: usize,
+<a href=#337 id=337 data-nosnippet>337</a>        max_image_shape: (usize, usize),
+<a href=#338 id=338 data-nosnippet>338</a>        max_num_images: usize,
+<a href=#339 id=339 data-nosnippet>339</a>    },
+<a href=#340 id=340 data-nosnippet>340</a>}
+<a href=#341 id=341 data-nosnippet>341</a>
+<a href=#342 id=342 data-nosnippet>342</a><span class="kw">impl </span>AutoDeviceMapParams {
+<a href=#343 id=343 data-nosnippet>343</a>    <span class="kw">pub fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#344 id=344 data-nosnippet>344</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#345 id=345 data-nosnippet>345</a>            <span class="self">Self</span>::Text { max_seq_len, .. } | <span class="self">Self</span>::Vision { max_seq_len, .. } =&gt; <span class="kw-2">*</span>max_seq_len,
+<a href=#346 id=346 data-nosnippet>346</a>        }
+<a href=#347 id=347 data-nosnippet>347</a>    }
+<a href=#348 id=348 data-nosnippet>348</a>}
+<a href=#349 id=349 data-nosnippet>349</a>
+<a href=#350 id=350 data-nosnippet>350</a><span class="kw">impl </span>Display <span class="kw">for </span>AutoDeviceMapParams {
+<a href=#351 id=351 data-nosnippet>351</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
+<a href=#352 id=352 data-nosnippet>352</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#353 id=353 data-nosnippet>353</a>            <span class="self">Self</span>::Text {
+<a href=#354 id=354 data-nosnippet>354</a>                max_seq_len,
+<a href=#355 id=355 data-nosnippet>355</a>                max_batch_size,
+<a href=#356 id=356 data-nosnippet>356</a>            } =&gt; <span class="macro">write!</span>(
+<a href=#357 id=357 data-nosnippet>357</a>                f,
+<a href=#358 id=358 data-nosnippet>358</a>                <span class="string">"text[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}]"
+<a href=#359 id=359 data-nosnippet>359</a>            </span>),
+<a href=#360 id=360 data-nosnippet>360</a>            <span class="self">Self</span>::Vision {
+<a href=#361 id=361 data-nosnippet>361</a>                max_seq_len,
+<a href=#362 id=362 data-nosnippet>362</a>                max_batch_size,
+<a href=#363 id=363 data-nosnippet>363</a>                max_image_shape,
+<a href=#364 id=364 data-nosnippet>364</a>                max_num_images
+<a href=#365 id=365 data-nosnippet>365</a>            } =&gt; <span class="macro">write!</span>(
+<a href=#366 id=366 data-nosnippet>366</a>                f,
+<a href=#367 id=367 data-nosnippet>367</a>                <span class="string">"vision[max_seq_len: {max_seq_len}, max_batch_size: {max_batch_size}, max_image_shape: {max_image_shape:?}, max_num_images: {max_num_images}]"
+<a href=#368 id=368 data-nosnippet>368</a>            </span>),
+<a href=#369 id=369 data-nosnippet>369</a>        }
+<a href=#370 id=370 data-nosnippet>370</a>    }
+<a href=#371 id=371 data-nosnippet>371</a>}
+<a href=#372 id=372 data-nosnippet>372</a>
+<a href=#373 id=373 data-nosnippet>373</a><span class="kw">impl </span>AutoDeviceMapParams {
+<a href=#374 id=374 data-nosnippet>374</a>    <span class="kw">pub const </span>DEFAULT_MAX_SEQ_LEN: usize = <span class="number">4 </span>* <span class="number">1024</span>;
+<a href=#375 id=375 data-nosnippet>375</a>    <span class="kw">pub const </span>DEFAULT_MAX_BATCH_SIZE: usize = <span class="number">1</span>;
+<a href=#376 id=376 data-nosnippet>376</a>    <span class="kw">pub const </span>DEFAULT_MAX_NUM_IMAGES: usize = <span class="number">1</span>;
+<a href=#377 id=377 data-nosnippet>377</a>    <span class="kw">pub const </span>DEFAULT_MAX_IMAGE_LENGTH: usize = <span class="number">1024</span>;
+<a href=#378 id=378 data-nosnippet>378</a>
+<a href=#379 id=379 data-nosnippet>379</a>    <span class="kw">pub fn </span>default_text() -&gt; <span class="self">Self </span>{
+<a href=#380 id=380 data-nosnippet>380</a>        <span class="self">Self</span>::Text {
+<a href=#381 id=381 data-nosnippet>381</a>            max_seq_len: <span class="self">Self</span>::DEFAULT_MAX_SEQ_LEN,
+<a href=#382 id=382 data-nosnippet>382</a>            max_batch_size: <span class="self">Self</span>::DEFAULT_MAX_BATCH_SIZE,
+<a href=#383 id=383 data-nosnippet>383</a>        }
+<a href=#384 id=384 data-nosnippet>384</a>    }
+<a href=#385 id=385 data-nosnippet>385</a>
+<a href=#386 id=386 data-nosnippet>386</a>    <span class="kw">pub fn </span>default_vision() -&gt; <span class="self">Self </span>{
+<a href=#387 id=387 data-nosnippet>387</a>        <span class="self">Self</span>::Vision {
+<a href=#388 id=388 data-nosnippet>388</a>            max_seq_len: <span class="self">Self</span>::DEFAULT_MAX_SEQ_LEN,
+<a href=#389 id=389 data-nosnippet>389</a>            max_batch_size: <span class="self">Self</span>::DEFAULT_MAX_BATCH_SIZE,
+<a href=#390 id=390 data-nosnippet>390</a>            max_num_images: <span class="self">Self</span>::DEFAULT_MAX_NUM_IMAGES,
+<a href=#391 id=391 data-nosnippet>391</a>            max_image_shape: (
 <a href=#392 id=392 data-nosnippet>392</a>                <span class="self">Self</span>::DEFAULT_MAX_IMAGE_LENGTH,
-<a href=#393 id=393 data-nosnippet>393</a>            ),
-<a href=#394 id=394 data-nosnippet>394</a>        }
-<a href=#395 id=395 data-nosnippet>395</a>    }
-<a href=#396 id=396 data-nosnippet>396</a>}
-<a href=#397 id=397 data-nosnippet>397</a>
-<a href=#398 id=398 data-nosnippet>398</a><span class="attr">#[derive(Clone, Debug)]
-<a href=#399 id=399 data-nosnippet>399</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>NonMappedSubModel {
-<a href=#400 id=400 data-nosnippet>400</a>    Vision,
-<a href=#401 id=401 data-nosnippet>401</a>}
-<a href=#402 id=402 data-nosnippet>402</a>
-<a href=#403 id=403 data-nosnippet>403</a><span class="kw">impl </span>Display <span class="kw">for </span>NonMappedSubModel {
-<a href=#404 id=404 data-nosnippet>404</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#406 id=406 data-nosnippet>406</a>            <span class="self">Self</span>::Vision =&gt; <span class="macro">write!</span>(f, <span class="string">"vision"</span>),
-<a href=#407 id=407 data-nosnippet>407</a>        }
-<a href=#408 id=408 data-nosnippet>408</a>    }
-<a href=#409 id=409 data-nosnippet>409</a>}
-<a href=#410 id=410 data-nosnippet>410</a>
-<a href=#411 id=411 data-nosnippet>411</a><span class="kw">fn </span>calculate_key_block_shape(
-<a href=#412 id=412 data-nosnippet>412</a>    model_config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike,
-<a href=#413 id=413 data-nosnippet>413</a>    dtype: DType,
-<a href=#414 id=414 data-nosnippet>414</a>    block_size: usize,
-<a href=#415 id=415 data-nosnippet>415</a>) -&gt; (usize, usize, usize, usize) {
-<a href=#416 id=416 data-nosnippet>416</a>    <span class="kw">let </span>element_size = dtype.size_in_bytes();
-<a href=#417 id=417 data-nosnippet>417</a>    <span class="kw">let </span>x = <span class="number">16 </span>/ element_size;
-<a href=#418 id=418 data-nosnippet>418</a>    (
-<a href=#419 id=419 data-nosnippet>419</a>        model_config.num_kv_heads(),
-<a href=#420 id=420 data-nosnippet>420</a>        model_config.k_head_dim() / x,
-<a href=#421 id=421 data-nosnippet>421</a>        block_size,
-<a href=#422 id=422 data-nosnippet>422</a>        x,
-<a href=#423 id=423 data-nosnippet>423</a>    )
-<a href=#424 id=424 data-nosnippet>424</a>}
-<a href=#425 id=425 data-nosnippet>425</a>
-<a href=#426 id=426 data-nosnippet>426</a><span class="kw">fn </span>calculate_value_block_shape(
-<a href=#427 id=427 data-nosnippet>427</a>    model_config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike,
-<a href=#428 id=428 data-nosnippet>428</a>    block_size: usize,
-<a href=#429 id=429 data-nosnippet>429</a>) -&gt; (usize, usize, usize) {
-<a href=#430 id=430 data-nosnippet>430</a>    (
-<a href=#431 id=431 data-nosnippet>431</a>        model_config.num_kv_heads(),
-<a href=#432 id=432 data-nosnippet>432</a>        model_config.v_head_dim(),
-<a href=#433 id=433 data-nosnippet>433</a>        block_size,
-<a href=#434 id=434 data-nosnippet>434</a>    )
-<a href=#435 id=435 data-nosnippet>435</a>}
-<a href=#436 id=436 data-nosnippet>436</a>
-<a href=#437 id=437 data-nosnippet>437</a><span class="kw">pub trait </span>DeviceMappedModelLoader {
-<a href=#438 id=438 data-nosnippet>438</a>    <span class="doccomment">/// Maximum activation size of non-mapped parts of this model.
-<a href=#439 id=439 data-nosnippet>439</a>    /// Useful for the vision models which may prefer to keep the vison components on the GPU.
-<a href=#440 id=440 data-nosnippet>440</a>    </span><span class="kw">fn </span>non_mapped_max_act_size_elems(
-<a href=#441 id=441 data-nosnippet>441</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#442 id=442 data-nosnippet>442</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#443 id=443 data-nosnippet>443</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-<a href=#444 id=444 data-nosnippet>444</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
-<a href=#445 id=445 data-nosnippet>445</a>    <span class="doccomment">/// Maximum activation size of mapped parts of the model
-<a href=#446 id=446 data-nosnippet>446</a>    </span><span class="kw">fn </span>mapped_max_act_size_elems(
-<a href=#447 id=447 data-nosnippet>447</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#448 id=448 data-nosnippet>448</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#449 id=449 data-nosnippet>449</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-<a href=#450 id=450 data-nosnippet>450</a>        prompt_chunksize: usize,
-<a href=#451 id=451 data-nosnippet>451</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
-<a href=#452 id=452 data-nosnippet>452</a>    <span class="doccomment">/// weight_pack_factor only applies to quantized weights.
-<a href=#453 id=453 data-nosnippet>453</a>    </span><span class="kw">fn </span>non_mapped_size_in_bytes(
-<a href=#454 id=454 data-nosnippet>454</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#455 id=455 data-nosnippet>455</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#456 id=456 data-nosnippet>456</a>        dtype: DType,
-<a href=#457 id=457 data-nosnippet>457</a>        weight_pack_factor: usize,
-<a href=#458 id=458 data-nosnippet>458</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
-<a href=#459 id=459 data-nosnippet>459</a>    <span class="doccomment">/// weight_pack_factor only applies to quantized weights.
-<a href=#460 id=460 data-nosnippet>460</a>    </span><span class="kw">fn </span>layer_sizes_in_bytes(
-<a href=#461 id=461 data-nosnippet>461</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#462 id=462 data-nosnippet>462</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#463 id=463 data-nosnippet>463</a>        dtype: DType,
-<a href=#464 id=464 data-nosnippet>464</a>        weight_pack_factor: usize,
-<a href=#465 id=465 data-nosnippet>465</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt;;
-<a href=#466 id=466 data-nosnippet>466</a>    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
-<a href=#467 id=467 data-nosnippet>467</a>        <span class="prelude-val">None
-<a href=#468 id=468 data-nosnippet>468</a>    </span>}
-<a href=#469 id=469 data-nosnippet>469</a>    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
-<a href=#470 id=470 data-nosnippet>470</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt;;
-<a href=#471 id=471 data-nosnippet>471</a>
-<a href=#472 id=472 data-nosnippet>472</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#473 id=473 data-nosnippet>473</a>    </span><span class="kw">fn </span>get_device_layers(
-<a href=#474 id=474 data-nosnippet>474</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#475 id=475 data-nosnippet>475</a>        config: <span class="kw-2">&amp;</span>str,
-<a href=#476 id=476 data-nosnippet>476</a>        num_layers: usize,
-<a href=#477 id=477 data-nosnippet>477</a>        <span class="kw-2">mut </span>layer_sizes_in_bytes: Vec&lt;usize&gt;,
-<a href=#478 id=478 data-nosnippet>478</a>        non_mapped_size_in_bytes: usize,
-<a href=#479 id=479 data-nosnippet>479</a>        total_model_size_in_bytes: usize,
-<a href=#480 id=480 data-nosnippet>480</a>        devices: <span class="kw-2">&amp;</span>[Device],
-<a href=#481 id=481 data-nosnippet>481</a>        dtype: DType,
-<a href=#482 id=482 data-nosnippet>482</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
-<a href=#483 id=483 data-nosnippet>483</a>        prompt_chunksize: usize,
-<a href=#484 id=484 data-nosnippet>484</a>        paged_attn_config: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PagedAttentionConfig&gt;,
-<a href=#485 id=485 data-nosnippet>485</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;DeviceMapMetadata&gt; {
-<a href=#486 id=486 data-nosnippet>486</a>        <span class="kw">let </span>mapped_max_act_size_in_bytes =
-<a href=#487 id=487 data-nosnippet>487</a>            <span class="self">self</span>.mapped_max_act_size_elems(config, params, prompt_chunksize)<span class="question-mark">?
-<a href=#488 id=488 data-nosnippet>488</a>                </span>* dtype.size_in_bytes();
-<a href=#489 id=489 data-nosnippet>489</a>        <span class="kw">let </span>non_mapped_max_act_size_in_bytes =
-<a href=#490 id=490 data-nosnippet>490</a>            <span class="self">self</span>.non_mapped_max_act_size_elems(config, params)<span class="question-mark">? </span>* dtype.size_in_bytes();
-<a href=#491 id=491 data-nosnippet>491</a>
-<a href=#492 id=492 data-nosnippet>492</a>        <span class="kw">let </span><span class="kw-2">mut </span>remaining_to_map = total_model_size_in_bytes;
-<a href=#493 id=493 data-nosnippet>493</a>
-<a href=#494 id=494 data-nosnippet>494</a>        <span class="kw">let </span>max_seq_len = <span class="kw">match </span>params {
-<a href=#495 id=495 data-nosnippet>495</a>            AutoDeviceMapParams::Text { max_seq_len, .. }
-<a href=#496 id=496 data-nosnippet>496</a>            | AutoDeviceMapParams::Vision { max_seq_len, .. } =&gt; <span class="kw-2">*</span>max_seq_len,
-<a href=#497 id=497 data-nosnippet>497</a>        };
-<a href=#498 id=498 data-nosnippet>498</a>        <span class="kw">let </span>max_batch_size = <span class="kw">match </span>params {
-<a href=#499 id=499 data-nosnippet>499</a>            AutoDeviceMapParams::Text { max_batch_size, .. }
-<a href=#500 id=500 data-nosnippet>500</a>            | AutoDeviceMapParams::Vision { max_batch_size, .. } =&gt; <span class="kw-2">*</span>max_batch_size,
-<a href=#501 id=501 data-nosnippet>501</a>        };
-<a href=#502 id=502 data-nosnippet>502</a>
-<a href=#503 id=503 data-nosnippet>503</a>        <span class="kw">let </span>model_cfg = <span class="self">self</span>.model_config(config)<span class="question-mark">?</span>;
-<a href=#504 id=504 data-nosnippet>504</a>        <span class="kw">let </span>kv_cache_size_elems = <span class="kw">match </span>paged_attn_config {
-<a href=#505 id=505 data-nosnippet>505</a>            <span class="prelude-val">Some</span>(paged_attn_config) =&gt; {
-<a href=#506 id=506 data-nosnippet>506</a>                <span class="kw">let </span>cache_config = calculate_cache_config(
-<a href=#507 id=507 data-nosnippet>507</a>                    paged_attn_config.mem_gpu,
-<a href=#508 id=508 data-nosnippet>508</a>                    paged_attn_config.mem_cpu,
-<a href=#509 id=509 data-nosnippet>509</a>                    <span class="prelude-val">Some</span>(
-<a href=#510 id=510 data-nosnippet>510</a>                        paged_attn_config
-<a href=#511 id=511 data-nosnippet>511</a>                            .block_size
-<a href=#512 id=512 data-nosnippet>512</a>                            .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE),
-<a href=#513 id=513 data-nosnippet>513</a>                    ),
-<a href=#514 id=514 data-nosnippet>514</a>                    dtype,
-<a href=#515 id=515 data-nosnippet>515</a>                    <span class="kw-2">&amp;*</span>model_cfg,
-<a href=#516 id=516 data-nosnippet>516</a>                    <span class="kw-2">&amp;</span>devices[<span class="number">0</span>],
-<a href=#517 id=517 data-nosnippet>517</a>                    <span class="kw-2">&amp;</span>devices.iter().map(|x| <span class="prelude-val">Some</span>(x.clone())).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#518 id=518 data-nosnippet>518</a>                    <span class="bool-val">true</span>,
-<a href=#519 id=519 data-nosnippet>519</a>                )<span class="question-mark">?</span>;
-<a href=#520 id=520 data-nosnippet>520</a>
-<a href=#521 id=521 data-nosnippet>521</a>                <span class="kw">let </span>key_block_shape =
-<a href=#522 id=522 data-nosnippet>522</a>                    calculate_key_block_shape(<span class="kw-2">&amp;*</span>model_cfg, dtype, cache_config.block_size);
-<a href=#523 id=523 data-nosnippet>523</a>                <span class="kw">let </span>key_block_size = cache_config.num_gpu_blocks
-<a href=#524 id=524 data-nosnippet>524</a>                    * key_block_shape.<span class="number">0
-<a href=#525 id=525 data-nosnippet>525</a>                    </span>* key_block_shape.<span class="number">1
-<a href=#526 id=526 data-nosnippet>526</a>                    </span>* key_block_shape.<span class="number">2
-<a href=#527 id=527 data-nosnippet>527</a>                    </span>* key_block_shape.<span class="number">3</span>;
-<a href=#528 id=528 data-nosnippet>528</a>
-<a href=#529 id=529 data-nosnippet>529</a>                <span class="kw">let </span>value_block_shape = calculate_value_block_shape(
-<a href=#530 id=530 data-nosnippet>530</a>                    <span class="kw-2">&amp;*</span><span class="self">self</span>.model_config(config)<span class="question-mark">?</span>,
-<a href=#531 id=531 data-nosnippet>531</a>                    cache_config.block_size,
-<a href=#532 id=532 data-nosnippet>532</a>                );
-<a href=#533 id=533 data-nosnippet>533</a>                <span class="kw">let </span>value_block_size = cache_config.num_gpu_blocks
-<a href=#534 id=534 data-nosnippet>534</a>                    * value_block_shape.<span class="number">0
-<a href=#535 id=535 data-nosnippet>535</a>                    </span>* value_block_shape.<span class="number">1
-<a href=#536 id=536 data-nosnippet>536</a>                    </span>* value_block_shape.<span class="number">2</span>;
-<a href=#537 id=537 data-nosnippet>537</a>
-<a href=#538 id=538 data-nosnippet>538</a>                key_block_size + value_block_size
-<a href=#539 id=539 data-nosnippet>539</a>            }
-<a href=#540 id=540 data-nosnippet>540</a>            <span class="prelude-val">None </span>=&gt; {
-<a href=#541 id=541 data-nosnippet>541</a>                <span class="comment">// Non-paged KV cache
-<a href=#542 id=542 data-nosnippet>542</a>                </span><span class="kw">let </span>key_block_shape = [
-<a href=#543 id=543 data-nosnippet>543</a>                    max_batch_size,
-<a href=#544 id=544 data-nosnippet>544</a>                    model_cfg.num_kv_heads(),
-<a href=#545 id=545 data-nosnippet>545</a>                    max_seq_len,
-<a href=#546 id=546 data-nosnippet>546</a>                    model_cfg.k_head_dim(),
-<a href=#547 id=547 data-nosnippet>547</a>                ];
-<a href=#548 id=548 data-nosnippet>548</a>                <span class="kw">let </span>value_block_shape = [
-<a href=#549 id=549 data-nosnippet>549</a>                    max_batch_size,
-<a href=#550 id=550 data-nosnippet>550</a>                    model_cfg.num_kv_heads(),
-<a href=#551 id=551 data-nosnippet>551</a>                    max_seq_len,
-<a href=#552 id=552 data-nosnippet>552</a>                    model_cfg.v_head_dim(),
-<a href=#553 id=553 data-nosnippet>553</a>                ];
-<a href=#554 id=554 data-nosnippet>554</a>
-<a href=#555 id=555 data-nosnippet>555</a>                key_block_shape.into_iter().product::&lt;usize&gt;()
-<a href=#556 id=556 data-nosnippet>556</a>                    + value_block_shape.iter().product::&lt;usize&gt;()
-<a href=#557 id=557 data-nosnippet>557</a>            }
-<a href=#558 id=558 data-nosnippet>558</a>        };
-<a href=#559 id=559 data-nosnippet>559</a>        <span class="kw">let </span>kv_cache_size_in_bytes = kv_cache_size_elems * dtype.size_in_bytes();
-<a href=#560 id=560 data-nosnippet>560</a>
-<a href=#561 id=561 data-nosnippet>561</a>        <span class="kw">let </span><span class="kw-2">mut </span>per_layer_avail = Vec::new();
-<a href=#562 id=562 data-nosnippet>562</a>        <span class="comment">// Always add the CPU as fallback
-<a href=#563 id=563 data-nosnippet>563</a>        </span><span class="kw">for </span>dev <span class="kw">in </span>[devices, <span class="kw-2">&amp;</span>[Device::Cpu]].concat() {
-<a href=#564 id=564 data-nosnippet>564</a>            <span class="kw">let </span>avail = MemoryUsage.get_memory_available(<span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>;
-<a href=#565 id=565 data-nosnippet>565</a>            per_layer_avail.push((avail, dev));
-<a href=#566 id=566 data-nosnippet>566</a>        }
-<a href=#567 id=567 data-nosnippet>567</a>        <span class="comment">// Reverse so we don't use the cpu first!
-<a href=#568 id=568 data-nosnippet>568</a>        </span>per_layer_avail.reverse();
-<a href=#569 id=569 data-nosnippet>569</a>
-<a href=#570 id=570 data-nosnippet>570</a>        <span class="comment">// Reverse layer sizes so we can pop
-<a href=#571 id=571 data-nosnippet>571</a>        </span>layer_sizes_in_bytes.reverse();
-<a href=#572 id=572 data-nosnippet>572</a>
-<a href=#573 id=573 data-nosnippet>573</a>        <span class="kw">let </span><span class="kw-2">mut </span>device_layers = Vec::new();
-<a href=#574 id=574 data-nosnippet>574</a>
-<a href=#575 id=575 data-nosnippet>575</a>        <span class="macro">info!</span>(<span class="string">"Using automatic device mapping parameters: {params}."</span>);
-<a href=#576 id=576 data-nosnippet>576</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(sub_models) = <span class="self">self</span>.non_mapped_sub_models() {
-<a href=#577 id=577 data-nosnippet>577</a>            <span class="kw">let </span>(<span class="kw">_</span>, last) = per_layer_avail.last().unwrap();
-<a href=#578 id=578 data-nosnippet>578</a>            <span class="macro">info!</span>(
-<a href=#579 id=579 data-nosnippet>579</a>                <span class="string">"The following sub-models will not be device mapped and will be loaded on {}: {}"</span>,
-<a href=#580 id=580 data-nosnippet>580</a>                last.device_pretty_repr(),
-<a href=#581 id=581 data-nosnippet>581</a>                sub_models.iter().map(|x| x.to_string()).join(<span class="string">", "</span>)
-<a href=#582 id=582 data-nosnippet>582</a>            );
-<a href=#583 id=583 data-nosnippet>583</a>        }
-<a href=#584 id=584 data-nosnippet>584</a>
-<a href=#585 id=585 data-nosnippet>585</a>        <span class="kw">let </span><span class="kw-2">mut </span>current_ordinal = <span class="number">0</span>;
-<a href=#586 id=586 data-nosnippet>586</a>        <span class="kw">let </span><span class="kw-2">mut </span>current_layer = <span class="number">0</span>;
-<a href=#587 id=587 data-nosnippet>587</a>        <span class="kw">let </span>per_layer_avail_cpy = per_layer_avail.clone();
-<a href=#588 id=588 data-nosnippet>588</a>        <span class="kw">let </span><span class="kw-2">mut </span>mapping_includes_cpu = <span class="bool-val">false</span>;
-<a href=#589 id=589 data-nosnippet>589</a>        <span class="kw">while </span>remaining_to_map &gt; <span class="number">0 </span>&amp;&amp; !per_layer_avail.is_empty() {
-<a href=#590 id=590 data-nosnippet>590</a>            <span class="kw">let </span>(device_capacity, device) = per_layer_avail
-<a href=#591 id=591 data-nosnippet>591</a>                .pop()
-<a href=#592 id=592 data-nosnippet>592</a>                .context(<span class="string">"No more devices to map to. The model does not fit on this system."</span>)<span class="question-mark">?</span>;
-<a href=#593 id=593 data-nosnippet>593</a>            <span class="comment">// All usage of 90% of the memory as a maximum.
-<a href=#594 id=594 data-nosnippet>594</a>            </span><span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-<a href=#595 id=595 data-nosnippet>595</a>            </span><span class="kw">let </span>device_capacity = (device_capacity <span class="kw">as </span>f64 * <span class="number">0.90</span>) <span class="kw">as </span>usize;
-<a href=#596 id=596 data-nosnippet>596</a>
-<a href=#597 id=597 data-nosnippet>597</a>            <span class="comment">// Algorithm is to check the following:
-<a href=#598 id=598 data-nosnippet>598</a>            // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
-<a href=#599 id=599 data-nosnippet>599</a>            // 2) if the mapped activations plus remaining fits on the nth device
-<a href=#600 id=600 data-nosnippet>600</a>            // 3) common case, iteratively find the optimal amount of layers to put on the nth device
-<a href=#601 id=601 data-nosnippet>601</a>            //   - if this is the first dev: must hold the non-mapped act and non-mapped model
-<a href=#602 id=602 data-nosnippet>602</a>            //   - otherwise, must hold the mapped act
-<a href=#603 id=603 data-nosnippet>603</a>            </span><span class="attr">#[allow(clippy::if_same_then_else)]
-<a href=#604 id=604 data-nosnippet>604</a>            </span><span class="kw">let </span>layers_on_device = <span class="kw">if </span>current_ordinal == <span class="number">0
-<a href=#605 id=605 data-nosnippet>605</a>                </span>&amp;&amp; device_capacity
-<a href=#606 id=606 data-nosnippet>606</a>                    &gt;= remaining_to_map
-<a href=#607 id=607 data-nosnippet>607</a>                        + non_mapped_max_act_size_in_bytes.max(mapped_max_act_size_in_bytes)
-<a href=#608 id=608 data-nosnippet>608</a>                        + non_mapped_size_in_bytes
-<a href=#609 id=609 data-nosnippet>609</a>                        + kv_cache_size_in_bytes * (num_layers - current_layer)
-<a href=#610 id=610 data-nosnippet>610</a>            {
-<a href=#611 id=611 data-nosnippet>611</a>                remaining_to_map = <span class="number">0</span>;
-<a href=#612 id=612 data-nosnippet>612</a>
-<a href=#613 id=613 data-nosnippet>613</a>                num_layers - current_layer
-<a href=#614 id=614 data-nosnippet>614</a>            } <span class="kw">else if </span>current_ordinal != <span class="number">0
-<a href=#615 id=615 data-nosnippet>615</a>                </span>&amp;&amp; device_capacity
-<a href=#616 id=616 data-nosnippet>616</a>                    &gt;= remaining_to_map
-<a href=#617 id=617 data-nosnippet>617</a>                        + mapped_max_act_size_in_bytes
-<a href=#618 id=618 data-nosnippet>618</a>                        + kv_cache_size_in_bytes * (num_layers - current_layer)
-<a href=#619 id=619 data-nosnippet>619</a>            {
-<a href=#620 id=620 data-nosnippet>620</a>                remaining_to_map = <span class="number">0</span>;
-<a href=#621 id=621 data-nosnippet>621</a>
-<a href=#622 id=622 data-nosnippet>622</a>                num_layers - current_layer
-<a href=#623 id=623 data-nosnippet>623</a>            } <span class="kw">else </span>{
-<a href=#624 id=624 data-nosnippet>624</a>                <span class="comment">// All devices need to account for the max mapped act size
-<a href=#625 id=625 data-nosnippet>625</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>used_capacity = mapped_max_act_size_in_bytes;
-<a href=#626 id=626 data-nosnippet>626</a>                <span class="kw">let </span><span class="kw-2">mut </span>used_capacity_no_act = <span class="number">0</span>;
-<a href=#627 id=627 data-nosnippet>627</a>                <span class="kw">let </span><span class="kw-2">mut </span>layers_on_device = <span class="number">0</span>;
-<a href=#628 id=628 data-nosnippet>628</a>
-<a href=#629 id=629 data-nosnippet>629</a>                <span class="comment">// Device w/ ordinal 0 carries the non-mapped things
-<a href=#630 id=630 data-nosnippet>630</a>                </span><span class="kw">if </span>current_ordinal == <span class="number">0 </span>{
-<a href=#631 id=631 data-nosnippet>631</a>                    <span class="comment">// Ensure the activations are properly handled
-<a href=#632 id=632 data-nosnippet>632</a>                    </span>used_capacity = used_capacity.max(non_mapped_max_act_size_in_bytes);
-<a href=#633 id=633 data-nosnippet>633</a>                    used_capacity += non_mapped_size_in_bytes;
-<a href=#634 id=634 data-nosnippet>634</a>                    used_capacity_no_act += non_mapped_size_in_bytes;
-<a href=#635 id=635 data-nosnippet>635</a>                }
-<a href=#636 id=636 data-nosnippet>636</a>
-<a href=#637 id=637 data-nosnippet>637</a>                <span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>last) = layer_sizes_in_bytes.last() {
-<a href=#638 id=638 data-nosnippet>638</a>                    <span class="kw">let </span>delta = last + kv_cache_size_in_bytes;
-<a href=#639 id=639 data-nosnippet>639</a>                    <span class="kw">if </span>used_capacity + delta &gt; device_capacity {
-<a href=#640 id=640 data-nosnippet>640</a>                        <span class="kw">break</span>;
-<a href=#641 id=641 data-nosnippet>641</a>                    }
-<a href=#642 id=642 data-nosnippet>642</a>                    <span class="kw">let _ </span>= layer_sizes_in_bytes.pop().unwrap();
-<a href=#643 id=643 data-nosnippet>643</a>                    used_capacity += delta;
-<a href=#644 id=644 data-nosnippet>644</a>                    used_capacity_no_act += delta;
-<a href=#645 id=645 data-nosnippet>645</a>                    layers_on_device += <span class="number">1</span>;
-<a href=#646 id=646 data-nosnippet>646</a>                }
-<a href=#647 id=647 data-nosnippet>647</a>
-<a href=#648 id=648 data-nosnippet>648</a>                <span class="comment">// Do not reduce amount to map if this device can't fit any
-<a href=#649 id=649 data-nosnippet>649</a>                // If the device cannot fit any layers, warn the user.
-<a href=#650 id=650 data-nosnippet>650</a>                </span><span class="kw">if </span>layers_on_device &gt; <span class="number">0 </span>{
-<a href=#651 id=651 data-nosnippet>651</a>                    remaining_to_map = remaining_to_map.saturating_sub(used_capacity_no_act);
-<a href=#652 id=652 data-nosnippet>652</a>                } <span class="kw">else </span>{
-<a href=#653 id=653 data-nosnippet>653</a>                    <span class="macro">warn!</span>(
-<a href=#654 id=654 data-nosnippet>654</a>                        <span class="string">"Device {} can fit 0 layers. Consider reducing auto map params from current: {params} (ex. reducing max seq len or max num images)"</span>,
-<a href=#655 id=655 data-nosnippet>655</a>                        device.device_pretty_repr(),
-<a href=#656 id=656 data-nosnippet>656</a>                    );
-<a href=#657 id=657 data-nosnippet>657</a>                    current_ordinal += <span class="number">1</span>;
-<a href=#658 id=658 data-nosnippet>658</a>                    <span class="kw">continue</span>;
-<a href=#659 id=659 data-nosnippet>659</a>                }
-<a href=#660 id=660 data-nosnippet>660</a>                layers_on_device
-<a href=#661 id=661 data-nosnippet>661</a>            };
-<a href=#662 id=662 data-nosnippet>662</a>
-<a href=#663 id=663 data-nosnippet>663</a>            <span class="comment">// CPU mappings are automatically handled by the traditional device mapper, we can just leave them out here.
-<a href=#664 id=664 data-nosnippet>664</a>            </span><span class="kw">if </span>!device.is_cpu() {
-<a href=#665 id=665 data-nosnippet>665</a>                device_layers.push(DeviceLayerMapMetadata {
-<a href=#666 id=666 data-nosnippet>666</a>                    ordinal: current_ordinal,
-<a href=#667 id=667 data-nosnippet>667</a>                    layers: layers_on_device,
-<a href=#668 id=668 data-nosnippet>668</a>                });
-<a href=#669 id=669 data-nosnippet>669</a>                current_ordinal += <span class="number">1</span>;
-<a href=#670 id=670 data-nosnippet>670</a>            } <span class="kw">else </span>{
-<a href=#671 id=671 data-nosnippet>671</a>                mapping_includes_cpu = <span class="bool-val">true</span>;
-<a href=#672 id=672 data-nosnippet>672</a>            }
-<a href=#673 id=673 data-nosnippet>673</a>
-<a href=#674 id=674 data-nosnippet>674</a>            current_layer += layers_on_device;
-<a href=#675 id=675 data-nosnippet>675</a>        }
-<a href=#676 id=676 data-nosnippet>676</a>        <span class="kw">if </span>remaining_to_map &gt; <span class="number">0 </span>{
-<a href=#677 id=677 data-nosnippet>677</a>            <span class="macro">anyhow::bail!</span>(
-<a href=#678 id=678 data-nosnippet>678</a>                <span class="string">"This model does not fit on the devices {:?}, and exceeds total capacity by {}MB. Auto device mapping params: {params}"</span>,
-<a href=#679 id=679 data-nosnippet>679</a>                per_layer_avail_cpy
-<a href=#680 id=680 data-nosnippet>680</a>                    .iter()
-<a href=#681 id=681 data-nosnippet>681</a>                    .rev()
-<a href=#682 id=682 data-nosnippet>682</a>                    .map(|(avail, dev)| <span class="macro">format!</span>(
-<a href=#683 id=683 data-nosnippet>683</a>                        <span class="string">"{} (avail: {}MB)"</span>,
-<a href=#684 id=684 data-nosnippet>684</a>                        dev.device_pretty_repr(),
-<a href=#685 id=685 data-nosnippet>685</a>                        avail / (<span class="number">1024 </span>* <span class="number">1024</span>),
-<a href=#686 id=686 data-nosnippet>686</a>                    ))
-<a href=#687 id=687 data-nosnippet>687</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
-<a href=#688 id=688 data-nosnippet>688</a>                <span class="macro">b_to_mb!</span>(remaining_to_map)
-<a href=#689 id=689 data-nosnippet>689</a>            );
-<a href=#690 id=690 data-nosnippet>690</a>        }
-<a href=#691 id=691 data-nosnippet>691</a>
-<a href=#692 id=692 data-nosnippet>692</a>        <span class="comment">// TODO: PagedAttention is not supported with CPU for now.
-<a href=#693 id=693 data-nosnippet>693</a>        // Recalculate without PagedAttention metadata.
-<a href=#694 id=694 data-nosnippet>694</a>        </span><span class="kw">if </span>paged_attn_config.is_some_and(|<span class="kw">_</span>| mapping_includes_cpu) {
-<a href=#695 id=695 data-nosnippet>695</a>            <span class="kw">return </span><span class="self">self</span>.get_device_layers(
-<a href=#696 id=696 data-nosnippet>696</a>                config,
-<a href=#697 id=697 data-nosnippet>697</a>                num_layers,
-<a href=#698 id=698 data-nosnippet>698</a>                layer_sizes_in_bytes,
-<a href=#699 id=699 data-nosnippet>699</a>                non_mapped_size_in_bytes,
-<a href=#700 id=700 data-nosnippet>700</a>                total_model_size_in_bytes,
-<a href=#701 id=701 data-nosnippet>701</a>                devices,
-<a href=#702 id=702 data-nosnippet>702</a>                dtype,
-<a href=#703 id=703 data-nosnippet>703</a>                params,
-<a href=#704 id=704 data-nosnippet>704</a>                prompt_chunksize,
-<a href=#705 id=705 data-nosnippet>705</a>                <span class="prelude-val">None</span>,
-<a href=#706 id=706 data-nosnippet>706</a>            );
-<a href=#707 id=707 data-nosnippet>707</a>        }
-<a href=#708 id=708 data-nosnippet>708</a>
-<a href=#709 id=709 data-nosnippet>709</a>        <span class="prelude-val">Ok</span>(DeviceMapMetadata::from_num_device_layers(device_layers))
-<a href=#710 id=710 data-nosnippet>710</a>    }
-<a href=#711 id=711 data-nosnippet>711</a>}
-<a href=#712 id=712 data-nosnippet>712</a>
-<a href=#713 id=713 data-nosnippet>713</a><span class="doccomment">/// The `Loader` trait abstracts the loading process. The primary entrypoint is the
-<a href=#714 id=714 data-nosnippet>714</a>/// `load_model` method.
-<a href=#715 id=715 data-nosnippet>715</a>///
-<a href=#716 id=716 data-nosnippet>716</a>/// # Example
-<a href=#717 id=717 data-nosnippet>717</a>/// ```no_run
-<a href=#718 id=718 data-nosnippet>718</a>/// use mistralrs_core::{Loader, TokenSource, DeviceMapSetting, AutoDeviceMapParams, ModelDType};
-<a href=#719 id=719 data-nosnippet>719</a>/// use candle_core::Device;
-<a href=#720 id=720 data-nosnippet>720</a>///
-<a href=#721 id=721 data-nosnippet>721</a>/// let loader: Box&lt;dyn Loader&gt; = todo!();
-<a href=#722 id=722 data-nosnippet>722</a>/// let pipeline = loader.load_model_from_hf(
-<a href=#723 id=723 data-nosnippet>723</a>///     None,
-<a href=#724 id=724 data-nosnippet>724</a>///     TokenSource::CacheToken,
-<a href=#725 id=725 data-nosnippet>725</a>///     &amp;ModelDType::Auto,
-<a href=#726 id=726 data-nosnippet>726</a>///     &amp;Device::cuda_if_available(0).unwrap(),
-<a href=#727 id=727 data-nosnippet>727</a>///     false,
-<a href=#728 id=728 data-nosnippet>728</a>///     DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
-<a href=#729 id=729 data-nosnippet>729</a>///     None,
+<a href=#393 id=393 data-nosnippet>393</a>                <span class="self">Self</span>::DEFAULT_MAX_IMAGE_LENGTH,
+<a href=#394 id=394 data-nosnippet>394</a>            ),
+<a href=#395 id=395 data-nosnippet>395</a>        }
+<a href=#396 id=396 data-nosnippet>396</a>    }
+<a href=#397 id=397 data-nosnippet>397</a>}
+<a href=#398 id=398 data-nosnippet>398</a>
+<a href=#399 id=399 data-nosnippet>399</a><span class="attr">#[derive(Clone, Debug)]
+<a href=#400 id=400 data-nosnippet>400</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">enum </span>NonMappedSubModel {
+<a href=#401 id=401 data-nosnippet>401</a>    Vision,
+<a href=#402 id=402 data-nosnippet>402</a>}
+<a href=#403 id=403 data-nosnippet>403</a>
+<a href=#404 id=404 data-nosnippet>404</a><span class="kw">impl </span>Display <span class="kw">for </span>NonMappedSubModel {
+<a href=#405 id=405 data-nosnippet>405</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
+<a href=#406 id=406 data-nosnippet>406</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#407 id=407 data-nosnippet>407</a>            <span class="self">Self</span>::Vision =&gt; <span class="macro">write!</span>(f, <span class="string">"vision"</span>),
+<a href=#408 id=408 data-nosnippet>408</a>        }
+<a href=#409 id=409 data-nosnippet>409</a>    }
+<a href=#410 id=410 data-nosnippet>410</a>}
+<a href=#411 id=411 data-nosnippet>411</a>
+<a href=#412 id=412 data-nosnippet>412</a><span class="kw">fn </span>calculate_key_block_shape(
+<a href=#413 id=413 data-nosnippet>413</a>    model_config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike,
+<a href=#414 id=414 data-nosnippet>414</a>    dtype: DType,
+<a href=#415 id=415 data-nosnippet>415</a>    block_size: usize,
+<a href=#416 id=416 data-nosnippet>416</a>) -&gt; (usize, usize, usize, usize) {
+<a href=#417 id=417 data-nosnippet>417</a>    <span class="kw">let </span>element_size = dtype.size_in_bytes();
+<a href=#418 id=418 data-nosnippet>418</a>    <span class="kw">let </span>x = <span class="number">16 </span>/ element_size;
+<a href=#419 id=419 data-nosnippet>419</a>    (
+<a href=#420 id=420 data-nosnippet>420</a>        model_config.num_kv_heads(),
+<a href=#421 id=421 data-nosnippet>421</a>        model_config.k_head_dim() / x,
+<a href=#422 id=422 data-nosnippet>422</a>        block_size,
+<a href=#423 id=423 data-nosnippet>423</a>        x,
+<a href=#424 id=424 data-nosnippet>424</a>    )
+<a href=#425 id=425 data-nosnippet>425</a>}
+<a href=#426 id=426 data-nosnippet>426</a>
+<a href=#427 id=427 data-nosnippet>427</a><span class="kw">fn </span>calculate_value_block_shape(
+<a href=#428 id=428 data-nosnippet>428</a>    model_config: <span class="kw-2">&amp;</span><span class="kw">dyn </span>ModelConfigLike,
+<a href=#429 id=429 data-nosnippet>429</a>    block_size: usize,
+<a href=#430 id=430 data-nosnippet>430</a>) -&gt; (usize, usize, usize) {
+<a href=#431 id=431 data-nosnippet>431</a>    (
+<a href=#432 id=432 data-nosnippet>432</a>        model_config.num_kv_heads(),
+<a href=#433 id=433 data-nosnippet>433</a>        model_config.v_head_dim(),
+<a href=#434 id=434 data-nosnippet>434</a>        block_size,
+<a href=#435 id=435 data-nosnippet>435</a>    )
+<a href=#436 id=436 data-nosnippet>436</a>}
+<a href=#437 id=437 data-nosnippet>437</a>
+<a href=#438 id=438 data-nosnippet>438</a><span class="kw">pub trait </span>DeviceMappedModelLoader {
+<a href=#439 id=439 data-nosnippet>439</a>    <span class="doccomment">/// Maximum activation size of non-mapped parts of this model.
+<a href=#440 id=440 data-nosnippet>440</a>    /// Useful for the vision models which may prefer to keep the vison components on the GPU.
+<a href=#441 id=441 data-nosnippet>441</a>    </span><span class="kw">fn </span>non_mapped_max_act_size_elems(
+<a href=#442 id=442 data-nosnippet>442</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#443 id=443 data-nosnippet>443</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#444 id=444 data-nosnippet>444</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+<a href=#445 id=445 data-nosnippet>445</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
+<a href=#446 id=446 data-nosnippet>446</a>    <span class="doccomment">/// Maximum activation size of mapped parts of the model
+<a href=#447 id=447 data-nosnippet>447</a>    </span><span class="kw">fn </span>mapped_max_act_size_elems(
+<a href=#448 id=448 data-nosnippet>448</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#449 id=449 data-nosnippet>449</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#450 id=450 data-nosnippet>450</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+<a href=#451 id=451 data-nosnippet>451</a>        prompt_chunksize: usize,
+<a href=#452 id=452 data-nosnippet>452</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
+<a href=#453 id=453 data-nosnippet>453</a>    <span class="doccomment">/// weight_pack_factor only applies to quantized weights.
+<a href=#454 id=454 data-nosnippet>454</a>    </span><span class="kw">fn </span>non_mapped_size_in_bytes(
+<a href=#455 id=455 data-nosnippet>455</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#456 id=456 data-nosnippet>456</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#457 id=457 data-nosnippet>457</a>        dtype: DType,
+<a href=#458 id=458 data-nosnippet>458</a>        weight_pack_factor: usize,
+<a href=#459 id=459 data-nosnippet>459</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
+<a href=#460 id=460 data-nosnippet>460</a>    <span class="doccomment">/// weight_pack_factor only applies to quantized weights.
+<a href=#461 id=461 data-nosnippet>461</a>    </span><span class="kw">fn </span>layer_sizes_in_bytes(
+<a href=#462 id=462 data-nosnippet>462</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#463 id=463 data-nosnippet>463</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#464 id=464 data-nosnippet>464</a>        dtype: DType,
+<a href=#465 id=465 data-nosnippet>465</a>        weight_pack_factor: usize,
+<a href=#466 id=466 data-nosnippet>466</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;usize&gt;&gt;;
+<a href=#467 id=467 data-nosnippet>467</a>    <span class="kw">fn </span>non_mapped_sub_models(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Vec&lt;NonMappedSubModel&gt;&gt; {
+<a href=#468 id=468 data-nosnippet>468</a>        <span class="prelude-val">None
+<a href=#469 id=469 data-nosnippet>469</a>    </span>}
+<a href=#470 id=470 data-nosnippet>470</a>    <span class="kw">fn </span>num_layers(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt;;
+<a href=#471 id=471 data-nosnippet>471</a>    <span class="kw">fn </span>model_config(<span class="kw-2">&amp;</span><span class="self">self</span>, config: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;Box&lt;<span class="kw">dyn </span>ModelConfigLike&gt;&gt;;
+<a href=#472 id=472 data-nosnippet>472</a>
+<a href=#473 id=473 data-nosnippet>473</a>    <span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#474 id=474 data-nosnippet>474</a>    </span><span class="kw">fn </span>get_device_layers(
+<a href=#475 id=475 data-nosnippet>475</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#476 id=476 data-nosnippet>476</a>        config: <span class="kw-2">&amp;</span>str,
+<a href=#477 id=477 data-nosnippet>477</a>        num_layers: usize,
+<a href=#478 id=478 data-nosnippet>478</a>        <span class="kw-2">mut </span>layer_sizes_in_bytes: Vec&lt;usize&gt;,
+<a href=#479 id=479 data-nosnippet>479</a>        non_mapped_size_in_bytes: usize,
+<a href=#480 id=480 data-nosnippet>480</a>        total_model_size_in_bytes: usize,
+<a href=#481 id=481 data-nosnippet>481</a>        devices: <span class="kw-2">&amp;</span>[Device],
+<a href=#482 id=482 data-nosnippet>482</a>        dtype: DType,
+<a href=#483 id=483 data-nosnippet>483</a>        params: <span class="kw-2">&amp;</span>AutoDeviceMapParams,
+<a href=#484 id=484 data-nosnippet>484</a>        prompt_chunksize: usize,
+<a href=#485 id=485 data-nosnippet>485</a>        paged_attn_config: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>PagedAttentionConfig&gt;,
+<a href=#486 id=486 data-nosnippet>486</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;DeviceMapMetadata&gt; {
+<a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span>mapped_max_act_size_in_bytes =
+<a href=#488 id=488 data-nosnippet>488</a>            <span class="self">self</span>.mapped_max_act_size_elems(config, params, prompt_chunksize)<span class="question-mark">?
+<a href=#489 id=489 data-nosnippet>489</a>                </span>* dtype.size_in_bytes();
+<a href=#490 id=490 data-nosnippet>490</a>        <span class="kw">let </span>non_mapped_max_act_size_in_bytes =
+<a href=#491 id=491 data-nosnippet>491</a>            <span class="self">self</span>.non_mapped_max_act_size_elems(config, params)<span class="question-mark">? </span>* dtype.size_in_bytes();
+<a href=#492 id=492 data-nosnippet>492</a>
+<a href=#493 id=493 data-nosnippet>493</a>        <span class="kw">let </span><span class="kw-2">mut </span>remaining_to_map = total_model_size_in_bytes;
+<a href=#494 id=494 data-nosnippet>494</a>
+<a href=#495 id=495 data-nosnippet>495</a>        <span class="kw">let </span>max_seq_len = <span class="kw">match </span>params {
+<a href=#496 id=496 data-nosnippet>496</a>            AutoDeviceMapParams::Text { max_seq_len, .. }
+<a href=#497 id=497 data-nosnippet>497</a>            | AutoDeviceMapParams::Vision { max_seq_len, .. } =&gt; <span class="kw-2">*</span>max_seq_len,
+<a href=#498 id=498 data-nosnippet>498</a>        };
+<a href=#499 id=499 data-nosnippet>499</a>        <span class="kw">let </span>max_batch_size = <span class="kw">match </span>params {
+<a href=#500 id=500 data-nosnippet>500</a>            AutoDeviceMapParams::Text { max_batch_size, .. }
+<a href=#501 id=501 data-nosnippet>501</a>            | AutoDeviceMapParams::Vision { max_batch_size, .. } =&gt; <span class="kw-2">*</span>max_batch_size,
+<a href=#502 id=502 data-nosnippet>502</a>        };
+<a href=#503 id=503 data-nosnippet>503</a>
+<a href=#504 id=504 data-nosnippet>504</a>        <span class="kw">let </span>model_cfg = <span class="self">self</span>.model_config(config)<span class="question-mark">?</span>;
+<a href=#505 id=505 data-nosnippet>505</a>        <span class="kw">let </span>kv_cache_size_elems = <span class="kw">match </span>paged_attn_config {
+<a href=#506 id=506 data-nosnippet>506</a>            <span class="prelude-val">Some</span>(paged_attn_config) =&gt; {
+<a href=#507 id=507 data-nosnippet>507</a>                <span class="kw">let </span>cache_config = calculate_cache_config(
+<a href=#508 id=508 data-nosnippet>508</a>                    paged_attn_config.mem_gpu,
+<a href=#509 id=509 data-nosnippet>509</a>                    paged_attn_config.mem_cpu,
+<a href=#510 id=510 data-nosnippet>510</a>                    <span class="prelude-val">Some</span>(
+<a href=#511 id=511 data-nosnippet>511</a>                        paged_attn_config
+<a href=#512 id=512 data-nosnippet>512</a>                            .block_size
+<a href=#513 id=513 data-nosnippet>513</a>                            .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE),
+<a href=#514 id=514 data-nosnippet>514</a>                    ),
+<a href=#515 id=515 data-nosnippet>515</a>                    dtype,
+<a href=#516 id=516 data-nosnippet>516</a>                    <span class="kw-2">&amp;*</span>model_cfg,
+<a href=#517 id=517 data-nosnippet>517</a>                    <span class="kw-2">&amp;</span>devices[<span class="number">0</span>],
+<a href=#518 id=518 data-nosnippet>518</a>                    <span class="kw-2">&amp;</span>devices.iter().map(|x| <span class="prelude-val">Some</span>(x.clone())).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#519 id=519 data-nosnippet>519</a>                    <span class="bool-val">true</span>,
+<a href=#520 id=520 data-nosnippet>520</a>                )<span class="question-mark">?</span>;
+<a href=#521 id=521 data-nosnippet>521</a>
+<a href=#522 id=522 data-nosnippet>522</a>                <span class="kw">let </span>key_block_shape =
+<a href=#523 id=523 data-nosnippet>523</a>                    calculate_key_block_shape(<span class="kw-2">&amp;*</span>model_cfg, dtype, cache_config.block_size);
+<a href=#524 id=524 data-nosnippet>524</a>                <span class="kw">let </span>key_block_size = cache_config.num_gpu_blocks
+<a href=#525 id=525 data-nosnippet>525</a>                    * key_block_shape.<span class="number">0
+<a href=#526 id=526 data-nosnippet>526</a>                    </span>* key_block_shape.<span class="number">1
+<a href=#527 id=527 data-nosnippet>527</a>                    </span>* key_block_shape.<span class="number">2
+<a href=#528 id=528 data-nosnippet>528</a>                    </span>* key_block_shape.<span class="number">3</span>;
+<a href=#529 id=529 data-nosnippet>529</a>
+<a href=#530 id=530 data-nosnippet>530</a>                <span class="kw">let </span>value_block_shape = calculate_value_block_shape(
+<a href=#531 id=531 data-nosnippet>531</a>                    <span class="kw-2">&amp;*</span><span class="self">self</span>.model_config(config)<span class="question-mark">?</span>,
+<a href=#532 id=532 data-nosnippet>532</a>                    cache_config.block_size,
+<a href=#533 id=533 data-nosnippet>533</a>                );
+<a href=#534 id=534 data-nosnippet>534</a>                <span class="kw">let </span>value_block_size = cache_config.num_gpu_blocks
+<a href=#535 id=535 data-nosnippet>535</a>                    * value_block_shape.<span class="number">0
+<a href=#536 id=536 data-nosnippet>536</a>                    </span>* value_block_shape.<span class="number">1
+<a href=#537 id=537 data-nosnippet>537</a>                    </span>* value_block_shape.<span class="number">2</span>;
+<a href=#538 id=538 data-nosnippet>538</a>
+<a href=#539 id=539 data-nosnippet>539</a>                key_block_size + value_block_size
+<a href=#540 id=540 data-nosnippet>540</a>            }
+<a href=#541 id=541 data-nosnippet>541</a>            <span class="prelude-val">None </span>=&gt; {
+<a href=#542 id=542 data-nosnippet>542</a>                <span class="comment">// Non-paged KV cache
+<a href=#543 id=543 data-nosnippet>543</a>                </span><span class="kw">let </span>key_block_shape = [
+<a href=#544 id=544 data-nosnippet>544</a>                    max_batch_size,
+<a href=#545 id=545 data-nosnippet>545</a>                    model_cfg.num_kv_heads(),
+<a href=#546 id=546 data-nosnippet>546</a>                    max_seq_len,
+<a href=#547 id=547 data-nosnippet>547</a>                    model_cfg.k_head_dim(),
+<a href=#548 id=548 data-nosnippet>548</a>                ];
+<a href=#549 id=549 data-nosnippet>549</a>                <span class="kw">let </span>value_block_shape = [
+<a href=#550 id=550 data-nosnippet>550</a>                    max_batch_size,
+<a href=#551 id=551 data-nosnippet>551</a>                    model_cfg.num_kv_heads(),
+<a href=#552 id=552 data-nosnippet>552</a>                    max_seq_len,
+<a href=#553 id=553 data-nosnippet>553</a>                    model_cfg.v_head_dim(),
+<a href=#554 id=554 data-nosnippet>554</a>                ];
+<a href=#555 id=555 data-nosnippet>555</a>
+<a href=#556 id=556 data-nosnippet>556</a>                key_block_shape.into_iter().product::&lt;usize&gt;()
+<a href=#557 id=557 data-nosnippet>557</a>                    + value_block_shape.iter().product::&lt;usize&gt;()
+<a href=#558 id=558 data-nosnippet>558</a>            }
+<a href=#559 id=559 data-nosnippet>559</a>        };
+<a href=#560 id=560 data-nosnippet>560</a>        <span class="kw">let </span>kv_cache_size_in_bytes = kv_cache_size_elems * dtype.size_in_bytes();
+<a href=#561 id=561 data-nosnippet>561</a>
+<a href=#562 id=562 data-nosnippet>562</a>        <span class="kw">let </span><span class="kw-2">mut </span>per_layer_avail = Vec::new();
+<a href=#563 id=563 data-nosnippet>563</a>        <span class="comment">// Always add the CPU as fallback
+<a href=#564 id=564 data-nosnippet>564</a>        </span><span class="kw">for </span>dev <span class="kw">in </span>[devices, <span class="kw-2">&amp;</span>[Device::Cpu]].concat() {
+<a href=#565 id=565 data-nosnippet>565</a>            <span class="kw">let </span>avail = MemoryUsage.get_memory_available(<span class="kw-2">&amp;</span>dev)<span class="question-mark">?</span>;
+<a href=#566 id=566 data-nosnippet>566</a>            per_layer_avail.push((avail, dev));
+<a href=#567 id=567 data-nosnippet>567</a>        }
+<a href=#568 id=568 data-nosnippet>568</a>        <span class="comment">// Reverse so we don't use the cpu first!
+<a href=#569 id=569 data-nosnippet>569</a>        </span>per_layer_avail.reverse();
+<a href=#570 id=570 data-nosnippet>570</a>
+<a href=#571 id=571 data-nosnippet>571</a>        <span class="comment">// Reverse layer sizes so we can pop
+<a href=#572 id=572 data-nosnippet>572</a>        </span>layer_sizes_in_bytes.reverse();
+<a href=#573 id=573 data-nosnippet>573</a>
+<a href=#574 id=574 data-nosnippet>574</a>        <span class="kw">let </span><span class="kw-2">mut </span>device_layers = Vec::new();
+<a href=#575 id=575 data-nosnippet>575</a>
+<a href=#576 id=576 data-nosnippet>576</a>        <span class="macro">info!</span>(<span class="string">"Using automatic device mapping parameters: {params}."</span>);
+<a href=#577 id=577 data-nosnippet>577</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(sub_models) = <span class="self">self</span>.non_mapped_sub_models() {
+<a href=#578 id=578 data-nosnippet>578</a>            <span class="kw">let </span>(<span class="kw">_</span>, last) = per_layer_avail.last().unwrap();
+<a href=#579 id=579 data-nosnippet>579</a>            <span class="macro">info!</span>(
+<a href=#580 id=580 data-nosnippet>580</a>                <span class="string">"The following sub-models will not be device mapped and will be loaded on {}: {}"</span>,
+<a href=#581 id=581 data-nosnippet>581</a>                last.device_pretty_repr(),
+<a href=#582 id=582 data-nosnippet>582</a>                sub_models.iter().map(|x| x.to_string()).join(<span class="string">", "</span>)
+<a href=#583 id=583 data-nosnippet>583</a>            );
+<a href=#584 id=584 data-nosnippet>584</a>        }
+<a href=#585 id=585 data-nosnippet>585</a>
+<a href=#586 id=586 data-nosnippet>586</a>        <span class="kw">let </span><span class="kw-2">mut </span>current_ordinal = <span class="number">0</span>;
+<a href=#587 id=587 data-nosnippet>587</a>        <span class="kw">let </span><span class="kw-2">mut </span>current_layer = <span class="number">0</span>;
+<a href=#588 id=588 data-nosnippet>588</a>        <span class="kw">let </span>per_layer_avail_cpy = per_layer_avail.clone();
+<a href=#589 id=589 data-nosnippet>589</a>        <span class="kw">let </span><span class="kw-2">mut </span>mapping_includes_cpu = <span class="bool-val">false</span>;
+<a href=#590 id=590 data-nosnippet>590</a>        <span class="kw">while </span>remaining_to_map &gt; <span class="number">0 </span>&amp;&amp; !per_layer_avail.is_empty() {
+<a href=#591 id=591 data-nosnippet>591</a>            <span class="kw">let </span>(device_capacity, device) = per_layer_avail
+<a href=#592 id=592 data-nosnippet>592</a>                .pop()
+<a href=#593 id=593 data-nosnippet>593</a>                .context(<span class="string">"No more devices to map to. The model does not fit on this system."</span>)<span class="question-mark">?</span>;
+<a href=#594 id=594 data-nosnippet>594</a>            <span class="comment">// All usage of 90% of the memory as a maximum.
+<a href=#595 id=595 data-nosnippet>595</a>            </span><span class="attr">#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+<a href=#596 id=596 data-nosnippet>596</a>            </span><span class="kw">let </span>device_capacity = (device_capacity <span class="kw">as </span>f64 * <span class="number">0.90</span>) <span class="kw">as </span>usize;
+<a href=#597 id=597 data-nosnippet>597</a>
+<a href=#598 id=598 data-nosnippet>598</a>            <span class="comment">// Algorithm is to check the following:
+<a href=#599 id=599 data-nosnippet>599</a>            // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
+<a href=#600 id=600 data-nosnippet>600</a>            // 2) if the mapped activations plus remaining fits on the nth device
+<a href=#601 id=601 data-nosnippet>601</a>            // 3) common case, iteratively find the optimal amount of layers to put on the nth device
+<a href=#602 id=602 data-nosnippet>602</a>            //   - if this is the first dev: must hold the non-mapped act and non-mapped model
+<a href=#603 id=603 data-nosnippet>603</a>            //   - otherwise, must hold the mapped act
+<a href=#604 id=604 data-nosnippet>604</a>            </span><span class="attr">#[allow(clippy::if_same_then_else)]
+<a href=#605 id=605 data-nosnippet>605</a>            </span><span class="kw">let </span>layers_on_device = <span class="kw">if </span>current_ordinal == <span class="number">0
+<a href=#606 id=606 data-nosnippet>606</a>                </span>&amp;&amp; device_capacity
+<a href=#607 id=607 data-nosnippet>607</a>                    &gt;= remaining_to_map
+<a href=#608 id=608 data-nosnippet>608</a>                        + non_mapped_max_act_size_in_bytes.max(mapped_max_act_size_in_bytes)
+<a href=#609 id=609 data-nosnippet>609</a>                        + non_mapped_size_in_bytes
+<a href=#610 id=610 data-nosnippet>610</a>                        + kv_cache_size_in_bytes * (num_layers - current_layer)
+<a href=#611 id=611 data-nosnippet>611</a>            {
+<a href=#612 id=612 data-nosnippet>612</a>                remaining_to_map = <span class="number">0</span>;
+<a href=#613 id=613 data-nosnippet>613</a>
+<a href=#614 id=614 data-nosnippet>614</a>                num_layers - current_layer
+<a href=#615 id=615 data-nosnippet>615</a>            } <span class="kw">else if </span>current_ordinal != <span class="number">0
+<a href=#616 id=616 data-nosnippet>616</a>                </span>&amp;&amp; device_capacity
+<a href=#617 id=617 data-nosnippet>617</a>                    &gt;= remaining_to_map
+<a href=#618 id=618 data-nosnippet>618</a>                        + mapped_max_act_size_in_bytes
+<a href=#619 id=619 data-nosnippet>619</a>                        + kv_cache_size_in_bytes * (num_layers - current_layer)
+<a href=#620 id=620 data-nosnippet>620</a>            {
+<a href=#621 id=621 data-nosnippet>621</a>                remaining_to_map = <span class="number">0</span>;
+<a href=#622 id=622 data-nosnippet>622</a>
+<a href=#623 id=623 data-nosnippet>623</a>                num_layers - current_layer
+<a href=#624 id=624 data-nosnippet>624</a>            } <span class="kw">else </span>{
+<a href=#625 id=625 data-nosnippet>625</a>                <span class="comment">// All devices need to account for the max mapped act size
+<a href=#626 id=626 data-nosnippet>626</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>used_capacity = mapped_max_act_size_in_bytes;
+<a href=#627 id=627 data-nosnippet>627</a>                <span class="kw">let </span><span class="kw-2">mut </span>used_capacity_no_act = <span class="number">0</span>;
+<a href=#628 id=628 data-nosnippet>628</a>                <span class="kw">let </span><span class="kw-2">mut </span>layers_on_device = <span class="number">0</span>;
+<a href=#629 id=629 data-nosnippet>629</a>
+<a href=#630 id=630 data-nosnippet>630</a>                <span class="comment">// Device w/ ordinal 0 carries the non-mapped things
+<a href=#631 id=631 data-nosnippet>631</a>                </span><span class="kw">if </span>current_ordinal == <span class="number">0 </span>{
+<a href=#632 id=632 data-nosnippet>632</a>                    <span class="comment">// Ensure the activations are properly handled
+<a href=#633 id=633 data-nosnippet>633</a>                    </span>used_capacity = used_capacity.max(non_mapped_max_act_size_in_bytes);
+<a href=#634 id=634 data-nosnippet>634</a>                    used_capacity += non_mapped_size_in_bytes;
+<a href=#635 id=635 data-nosnippet>635</a>                    used_capacity_no_act += non_mapped_size_in_bytes;
+<a href=#636 id=636 data-nosnippet>636</a>                }
+<a href=#637 id=637 data-nosnippet>637</a>
+<a href=#638 id=638 data-nosnippet>638</a>                <span class="kw">while let </span><span class="prelude-val">Some</span>(<span class="kw-2">&amp;</span>last) = layer_sizes_in_bytes.last() {
+<a href=#639 id=639 data-nosnippet>639</a>                    <span class="kw">let </span>delta = last + kv_cache_size_in_bytes;
+<a href=#640 id=640 data-nosnippet>640</a>                    <span class="kw">if </span>used_capacity + delta &gt; device_capacity {
+<a href=#641 id=641 data-nosnippet>641</a>                        <span class="kw">break</span>;
+<a href=#642 id=642 data-nosnippet>642</a>                    }
+<a href=#643 id=643 data-nosnippet>643</a>                    <span class="kw">let _ </span>= layer_sizes_in_bytes.pop().unwrap();
+<a href=#644 id=644 data-nosnippet>644</a>                    used_capacity += delta;
+<a href=#645 id=645 data-nosnippet>645</a>                    used_capacity_no_act += delta;
+<a href=#646 id=646 data-nosnippet>646</a>                    layers_on_device += <span class="number">1</span>;
+<a href=#647 id=647 data-nosnippet>647</a>                }
+<a href=#648 id=648 data-nosnippet>648</a>
+<a href=#649 id=649 data-nosnippet>649</a>                <span class="comment">// Do not reduce amount to map if this device can't fit any
+<a href=#650 id=650 data-nosnippet>650</a>                // If the device cannot fit any layers, warn the user.
+<a href=#651 id=651 data-nosnippet>651</a>                </span><span class="kw">if </span>layers_on_device &gt; <span class="number">0 </span>{
+<a href=#652 id=652 data-nosnippet>652</a>                    remaining_to_map = remaining_to_map.saturating_sub(used_capacity_no_act);
+<a href=#653 id=653 data-nosnippet>653</a>                } <span class="kw">else </span>{
+<a href=#654 id=654 data-nosnippet>654</a>                    <span class="macro">warn!</span>(
+<a href=#655 id=655 data-nosnippet>655</a>                        <span class="string">"Device {} can fit 0 layers. Consider reducing auto map params from current: {params} (ex. reducing max seq len or max num images)"</span>,
+<a href=#656 id=656 data-nosnippet>656</a>                        device.device_pretty_repr(),
+<a href=#657 id=657 data-nosnippet>657</a>                    );
+<a href=#658 id=658 data-nosnippet>658</a>                    current_ordinal += <span class="number">1</span>;
+<a href=#659 id=659 data-nosnippet>659</a>                    <span class="kw">continue</span>;
+<a href=#660 id=660 data-nosnippet>660</a>                }
+<a href=#661 id=661 data-nosnippet>661</a>                layers_on_device
+<a href=#662 id=662 data-nosnippet>662</a>            };
+<a href=#663 id=663 data-nosnippet>663</a>
+<a href=#664 id=664 data-nosnippet>664</a>            <span class="comment">// CPU mappings are automatically handled by the traditional device mapper, we can just leave them out here.
+<a href=#665 id=665 data-nosnippet>665</a>            </span><span class="kw">if </span>!device.is_cpu() {
+<a href=#666 id=666 data-nosnippet>666</a>                device_layers.push(DeviceLayerMapMetadata {
+<a href=#667 id=667 data-nosnippet>667</a>                    ordinal: current_ordinal,
+<a href=#668 id=668 data-nosnippet>668</a>                    layers: layers_on_device,
+<a href=#669 id=669 data-nosnippet>669</a>                });
+<a href=#670 id=670 data-nosnippet>670</a>                current_ordinal += <span class="number">1</span>;
+<a href=#671 id=671 data-nosnippet>671</a>            } <span class="kw">else </span>{
+<a href=#672 id=672 data-nosnippet>672</a>                mapping_includes_cpu = <span class="bool-val">true</span>;
+<a href=#673 id=673 data-nosnippet>673</a>            }
+<a href=#674 id=674 data-nosnippet>674</a>
+<a href=#675 id=675 data-nosnippet>675</a>            current_layer += layers_on_device;
+<a href=#676 id=676 data-nosnippet>676</a>        }
+<a href=#677 id=677 data-nosnippet>677</a>        <span class="kw">if </span>remaining_to_map &gt; <span class="number">0 </span>{
+<a href=#678 id=678 data-nosnippet>678</a>            <span class="macro">anyhow::bail!</span>(
+<a href=#679 id=679 data-nosnippet>679</a>                <span class="string">"This model does not fit on the devices {:?}, and exceeds total capacity by {}MB. Auto device mapping params: {params}"</span>,
+<a href=#680 id=680 data-nosnippet>680</a>                per_layer_avail_cpy
+<a href=#681 id=681 data-nosnippet>681</a>                    .iter()
+<a href=#682 id=682 data-nosnippet>682</a>                    .rev()
+<a href=#683 id=683 data-nosnippet>683</a>                    .map(|(avail, dev)| <span class="macro">format!</span>(
+<a href=#684 id=684 data-nosnippet>684</a>                        <span class="string">"{} (avail: {}MB)"</span>,
+<a href=#685 id=685 data-nosnippet>685</a>                        dev.device_pretty_repr(),
+<a href=#686 id=686 data-nosnippet>686</a>                        avail / (<span class="number">1024 </span>* <span class="number">1024</span>),
+<a href=#687 id=687 data-nosnippet>687</a>                    ))
+<a href=#688 id=688 data-nosnippet>688</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
+<a href=#689 id=689 data-nosnippet>689</a>                <span class="macro">b_to_mb!</span>(remaining_to_map)
+<a href=#690 id=690 data-nosnippet>690</a>            );
+<a href=#691 id=691 data-nosnippet>691</a>        }
+<a href=#692 id=692 data-nosnippet>692</a>
+<a href=#693 id=693 data-nosnippet>693</a>        <span class="comment">// TODO: PagedAttention is not supported with CPU for now.
+<a href=#694 id=694 data-nosnippet>694</a>        // Recalculate without PagedAttention metadata.
+<a href=#695 id=695 data-nosnippet>695</a>        </span><span class="kw">if </span>paged_attn_config.is_some_and(|<span class="kw">_</span>| mapping_includes_cpu) {
+<a href=#696 id=696 data-nosnippet>696</a>            <span class="kw">return </span><span class="self">self</span>.get_device_layers(
+<a href=#697 id=697 data-nosnippet>697</a>                config,
+<a href=#698 id=698 data-nosnippet>698</a>                num_layers,
+<a href=#699 id=699 data-nosnippet>699</a>                layer_sizes_in_bytes,
+<a href=#700 id=700 data-nosnippet>700</a>                non_mapped_size_in_bytes,
+<a href=#701 id=701 data-nosnippet>701</a>                total_model_size_in_bytes,
+<a href=#702 id=702 data-nosnippet>702</a>                devices,
+<a href=#703 id=703 data-nosnippet>703</a>                dtype,
+<a href=#704 id=704 data-nosnippet>704</a>                params,
+<a href=#705 id=705 data-nosnippet>705</a>                prompt_chunksize,
+<a href=#706 id=706 data-nosnippet>706</a>                <span class="prelude-val">None</span>,
+<a href=#707 id=707 data-nosnippet>707</a>            );
+<a href=#708 id=708 data-nosnippet>708</a>        }
+<a href=#709 id=709 data-nosnippet>709</a>
+<a href=#710 id=710 data-nosnippet>710</a>        <span class="prelude-val">Ok</span>(DeviceMapMetadata::from_num_device_layers(device_layers))
+<a href=#711 id=711 data-nosnippet>711</a>    }
+<a href=#712 id=712 data-nosnippet>712</a>}
+<a href=#713 id=713 data-nosnippet>713</a>
+<a href=#714 id=714 data-nosnippet>714</a><span class="doccomment">/// The `Loader` trait abstracts the loading process. The primary entrypoint is the
+<a href=#715 id=715 data-nosnippet>715</a>/// `load_model` method.
+<a href=#716 id=716 data-nosnippet>716</a>///
+<a href=#717 id=717 data-nosnippet>717</a>/// # Example
+<a href=#718 id=718 data-nosnippet>718</a>/// ```no_run
+<a href=#719 id=719 data-nosnippet>719</a>/// use mistralrs_core::{Loader, TokenSource, DeviceMapSetting, AutoDeviceMapParams, ModelDType};
+<a href=#720 id=720 data-nosnippet>720</a>/// use candle_core::Device;
+<a href=#721 id=721 data-nosnippet>721</a>///
+<a href=#722 id=722 data-nosnippet>722</a>/// let loader: Box&lt;dyn Loader&gt; = todo!();
+<a href=#723 id=723 data-nosnippet>723</a>/// let pipeline = loader.load_model_from_hf(
+<a href=#724 id=724 data-nosnippet>724</a>///     None,
+<a href=#725 id=725 data-nosnippet>725</a>///     TokenSource::CacheToken,
+<a href=#726 id=726 data-nosnippet>726</a>///     &amp;ModelDType::Auto,
+<a href=#727 id=727 data-nosnippet>727</a>///     &amp;Device::cuda_if_available(0).unwrap(),
+<a href=#728 id=728 data-nosnippet>728</a>///     false,
+<a href=#729 id=729 data-nosnippet>729</a>///     DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
 <a href=#730 id=730 data-nosnippet>730</a>///     None,
-<a href=#731 id=731 data-nosnippet>731</a>/// ).unwrap();
-<a href=#732 id=732 data-nosnippet>732</a>/// ```
-<a href=#733 id=733 data-nosnippet>733</a></span><span class="kw">pub trait </span>Loader: Send + Sync {
-<a href=#734 id=734 data-nosnippet>734</a>    <span class="doccomment">/// If `revision` is None, then it defaults to `main`.
-<a href=#735 id=735 data-nosnippet>735</a>    /// If `dtype` is None, then it defaults to the model default (usually BF16).
-<a href=#736 id=736 data-nosnippet>736</a>    /// If model is not found on HF, will attempt to resolve locally.
-<a href=#737 id=737 data-nosnippet>737</a>    </span><span class="attr">#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-<a href=#738 id=738 data-nosnippet>738</a>    </span><span class="kw">fn </span>load_model_from_hf(
-<a href=#739 id=739 data-nosnippet>739</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#740 id=740 data-nosnippet>740</a>        revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#741 id=741 data-nosnippet>741</a>        token_source: TokenSource,
-<a href=#742 id=742 data-nosnippet>742</a>        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
-<a href=#743 id=743 data-nosnippet>743</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#744 id=744 data-nosnippet>744</a>        silent: bool,
-<a href=#745 id=745 data-nosnippet>745</a>        mapper: DeviceMapSetting,
-<a href=#746 id=746 data-nosnippet>746</a>        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
-<a href=#747 id=747 data-nosnippet>747</a>        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
-<a href=#748 id=748 data-nosnippet>748</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
-<a href=#749 id=749 data-nosnippet>749</a>
-<a href=#750 id=750 data-nosnippet>750</a>    <span class="doccomment">/// Load a model from the specified paths.
-<a href=#751 id=751 data-nosnippet>751</a>    /// Also initializes `DEBUG`.
-<a href=#752 id=752 data-nosnippet>752</a>    </span><span class="attr">#[allow(
-<a href=#753 id=753 data-nosnippet>753</a>        clippy::type_complexity,
-<a href=#754 id=754 data-nosnippet>754</a>        clippy::too_many_arguments,
-<a href=#755 id=755 data-nosnippet>755</a>        clippy::borrowed_box
-<a href=#756 id=756 data-nosnippet>756</a>    )]
-<a href=#757 id=757 data-nosnippet>757</a>    </span><span class="kw">fn </span>load_model_from_path(
-<a href=#758 id=758 data-nosnippet>758</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#759 id=759 data-nosnippet>759</a>        paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
-<a href=#760 id=760 data-nosnippet>760</a>        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
-<a href=#761 id=761 data-nosnippet>761</a>        device: <span class="kw-2">&amp;</span>Device,
-<a href=#762 id=762 data-nosnippet>762</a>        silent: bool,
-<a href=#763 id=763 data-nosnippet>763</a>        mapper: DeviceMapSetting,
-<a href=#764 id=764 data-nosnippet>764</a>        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
-<a href=#765 id=765 data-nosnippet>765</a>        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
-<a href=#766 id=766 data-nosnippet>766</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
-<a href=#767 id=767 data-nosnippet>767</a>
-<a href=#768 id=768 data-nosnippet>768</a>    <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
-<a href=#769 id=769 data-nosnippet>769</a>    <span class="kw">fn </span>get_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelKind;
-<a href=#770 id=770 data-nosnippet>770</a>}</code></pre></div></section></main></body></html>
+<a href=#731 id=731 data-nosnippet>731</a>///     None,
+<a href=#732 id=732 data-nosnippet>732</a>/// ).unwrap();
+<a href=#733 id=733 data-nosnippet>733</a>/// ```
+<a href=#734 id=734 data-nosnippet>734</a></span><span class="kw">pub trait </span>Loader: Send + Sync {
+<a href=#735 id=735 data-nosnippet>735</a>    <span class="doccomment">/// If `revision` is None, then it defaults to `main`.
+<a href=#736 id=736 data-nosnippet>736</a>    /// If `dtype` is None, then it defaults to the model default (usually BF16).
+<a href=#737 id=737 data-nosnippet>737</a>    /// If model is not found on HF, will attempt to resolve locally.
+<a href=#738 id=738 data-nosnippet>738</a>    </span><span class="attr">#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+<a href=#739 id=739 data-nosnippet>739</a>    </span><span class="kw">fn </span>load_model_from_hf(
+<a href=#740 id=740 data-nosnippet>740</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#741 id=741 data-nosnippet>741</a>        revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#742 id=742 data-nosnippet>742</a>        token_source: TokenSource,
+<a href=#743 id=743 data-nosnippet>743</a>        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
+<a href=#744 id=744 data-nosnippet>744</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#745 id=745 data-nosnippet>745</a>        silent: bool,
+<a href=#746 id=746 data-nosnippet>746</a>        mapper: DeviceMapSetting,
+<a href=#747 id=747 data-nosnippet>747</a>        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
+<a href=#748 id=748 data-nosnippet>748</a>        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
+<a href=#749 id=749 data-nosnippet>749</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
+<a href=#750 id=750 data-nosnippet>750</a>
+<a href=#751 id=751 data-nosnippet>751</a>    <span class="doccomment">/// Load a model from the specified paths.
+<a href=#752 id=752 data-nosnippet>752</a>    /// Also initializes `DEBUG`.
+<a href=#753 id=753 data-nosnippet>753</a>    </span><span class="attr">#[allow(
+<a href=#754 id=754 data-nosnippet>754</a>        clippy::type_complexity,
+<a href=#755 id=755 data-nosnippet>755</a>        clippy::too_many_arguments,
+<a href=#756 id=756 data-nosnippet>756</a>        clippy::borrowed_box
+<a href=#757 id=757 data-nosnippet>757</a>    )]
+<a href=#758 id=758 data-nosnippet>758</a>    </span><span class="kw">fn </span>load_model_from_path(
+<a href=#759 id=759 data-nosnippet>759</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#760 id=760 data-nosnippet>760</a>        paths: <span class="kw-2">&amp;</span>Box&lt;<span class="kw">dyn </span>ModelPaths&gt;,
+<a href=#761 id=761 data-nosnippet>761</a>        dtype: <span class="kw-2">&amp;</span><span class="kw">dyn </span>TryIntoDType,
+<a href=#762 id=762 data-nosnippet>762</a>        device: <span class="kw-2">&amp;</span>Device,
+<a href=#763 id=763 data-nosnippet>763</a>        silent: bool,
+<a href=#764 id=764 data-nosnippet>764</a>        mapper: DeviceMapSetting,
+<a href=#765 id=765 data-nosnippet>765</a>        in_situ_quant: <span class="prelude-ty">Option</span>&lt;IsqType&gt;,
+<a href=#766 id=766 data-nosnippet>766</a>        paged_attn_config: <span class="prelude-ty">Option</span>&lt;PagedAttentionConfig&gt;,
+<a href=#767 id=767 data-nosnippet>767</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;Mutex&lt;<span class="kw">dyn </span>Pipeline + Send + Sync&gt;&gt;&gt;;
+<a href=#768 id=768 data-nosnippet>768</a>
+<a href=#769 id=769 data-nosnippet>769</a>    <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String;
+<a href=#770 id=770 data-nosnippet>770</a>    <span class="kw">fn </span>get_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelKind;
+<a href=#771 id=771 data-nosnippet>771</a>}</code></pre></div></section></main></body></html>
