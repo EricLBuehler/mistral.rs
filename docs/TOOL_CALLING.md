@@ -21,6 +21,7 @@ We support the following models' tool calling in OpenAI-compatible and parse nat
 - Hermes 2 Pro
 - Hermes 3
 - DeepSeeek V2/V3/R1
+- Qwen 3
 
 All models that support tool calling will respond according to the OpenAI tool calling API.
 

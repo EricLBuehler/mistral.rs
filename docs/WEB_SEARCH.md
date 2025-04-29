@@ -3,9 +3,11 @@
 mistral.rs is compatible with OpenAI's `web_search_options` parameter! Once enabled, this allows web searching for models.
 
 This works with all models that support [tool calling](TOOL_CALLING.md). However, your mileage may vary depending on the specific model. The following models work during testing and are recommended for usage:
+
 - Hermes 3 3b/8b
 - Mistral 3 24b
 - Llama 4 Scout/Maverick
+- Qwen 3
 
 Besides tool calling and parsing of web content, we also use an embedding model to select the most relevant search results.
 
