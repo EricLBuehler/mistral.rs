@@ -16,6 +16,9 @@ use crate::Pipeline;
 
 fn contains_tool_call_prefix(prefix: &str) -> bool {
     prefix.contains("<tool_call>")
+        || prefix.contains("<｜tool▁call▁begin｜>")
+        || prefix.contains("<|python_tag|>")
+        || prefix.contains("[TOOL_CALLS]")
 }
 
 fn process_model_specific_message(message: &str) -> Result<String> {
