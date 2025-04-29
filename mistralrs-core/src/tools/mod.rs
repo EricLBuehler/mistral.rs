@@ -14,6 +14,10 @@ use uuid::Uuid;
 
 use crate::Pipeline;
 
+fn contains_tool_call_prefix(prefix: &str) -> bool {
+    prefix.contains("<tool_call>")
+}
+
 fn process_model_specific_message(message: &str) -> Result<String> {
     static DEEPSEEK_REGEX: OnceLock<Regex> = OnceLock::new();
     static QWEN_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -119,7 +123,7 @@ impl ToolCallingMatcher {
                 None
             }
         })
-        .unwrap_or_default())
+        .unwrap_or((contains_tool_call_prefix(&message_prefix), false)))
     }
 
     pub fn get_call(
