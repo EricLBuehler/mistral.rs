@@ -134,7 +134,7 @@
 <a href=#134 id=134 data-nosnippet>134</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(reason) = is_done {
 <a href=#135 id=135 data-nosnippet>135</a>                <span class="kw">if </span>use_prefix_cacher {
 <a href=#136 id=136 data-nosnippet>136</a>                    prefix_cacher.add_sequence(seq);
-<a href=#137 id=137 data-nosnippet>137</a>                    prefix_cacher.evict_to_cpu()<span class="question-mark">?</span>;
+<a href=#137 id=137 data-nosnippet>137</a>                    prefix_cacher.evict_caches()<span class="question-mark">?</span>;
 <a href=#138 id=138 data-nosnippet>138</a>                }
 <a href=#139 id=139 data-nosnippet>139</a>                seq.set_state(<span class="kw">crate</span>::sequence::SequenceState::Done(reason));
 <a href=#140 id=140 data-nosnippet>140</a>                this.reset_non_granular_state();
@@ -250,7 +250,7 @@
 <a href=#250 id=250 data-nosnippet>250</a>
 <a href=#251 id=251 data-nosnippet>251</a>            <span class="kw">if </span>use_prefix_cacher {
 <a href=#252 id=252 data-nosnippet>252</a>                prefix_cacher.add_sequence(seq);
-<a href=#253 id=253 data-nosnippet>253</a>                prefix_cacher.evict_to_cpu()<span class="question-mark">?</span>;
+<a href=#253 id=253 data-nosnippet>253</a>                prefix_cacher.evict_caches()<span class="question-mark">?</span>;
 <a href=#254 id=254 data-nosnippet>254</a>            }
 <a href=#255 id=255 data-nosnippet>255</a>
 <a href=#256 id=256 data-nosnippet>256</a>            <span class="kw">let </span>group = seq.get_mut_group();
