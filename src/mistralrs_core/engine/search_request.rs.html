@@ -65,9 +65,9 @@
 <a href=#65 id=65 data-nosnippet>65</a>        <span class="comment">// Manage context size by # of tokens. Apply default here.
 <a href=#66 id=66 data-nosnippet>66</a>        </span><span class="kw">let </span>max_results_budget_toks =
 <a href=#67 id=67 data-nosnippet>67</a>            <span class="kw">match </span>web_search_options.search_context_size.unwrap_or_default() {
-<a href=#68 id=68 data-nosnippet>68</a>                SearchContextSize::High =&gt; <span class="number">10000_usize</span>,
-<a href=#69 id=69 data-nosnippet>69</a>                SearchContextSize::Medium =&gt; <span class="number">7500_usize</span>,
-<a href=#70 id=70 data-nosnippet>70</a>                SearchContextSize::Low =&gt; <span class="number">3000_usize</span>,
+<a href=#68 id=68 data-nosnippet>68</a>                SearchContextSize::High =&gt; <span class="number">16384_usize</span>,
+<a href=#69 id=69 data-nosnippet>69</a>                SearchContextSize::Medium =&gt; <span class="number">8192_usize</span>,
+<a href=#70 id=70 data-nosnippet>70</a>                SearchContextSize::Low =&gt; <span class="number">4096_usize</span>,
 <a href=#71 id=71 data-nosnippet>71</a>            };
 <a href=#72 id=72 data-nosnippet>72</a>        <span class="kw">let </span><span class="kw-2">mut </span>results = tracing::dispatcher::with_default(<span class="kw-2">&amp;</span>dispatch, || {
 <a href=#73 id=73 data-nosnippet>73</a>            search::run_search_tool(<span class="kw-2">&amp;</span>tool_call_params)
@@ -121,7 +121,7 @@
 <a href=#121 id=121 data-nosnippet>121</a>        <span class="kw">let </span><span class="kw-2">mut </span>used_results = Vec::new();
 <a href=#122 id=122 data-nosnippet>122</a>        <span class="kw">let </span><span class="kw-2">mut </span>used_len = <span class="number">0</span>;
 <a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">for </span>(item, len) <span class="kw">in </span>results {
-<a href=#124 id=124 data-nosnippet>124</a>            <span class="kw">if </span>used_len + len &gt;= max_results_budget_toks {
+<a href=#124 id=124 data-nosnippet>124</a>            <span class="kw">if </span>used_len + len &gt; max_results_budget_toks {
 <a href=#125 id=125 data-nosnippet>125</a>                <span class="kw">break</span>;
 <a href=#126 id=126 data-nosnippet>126</a>            }
 <a href=#127 id=127 data-nosnippet>127</a>            <span class="comment">// So the info! below gets the correct value

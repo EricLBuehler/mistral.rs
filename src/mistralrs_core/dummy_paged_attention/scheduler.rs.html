@@ -86,7 +86,7 @@
 <a href=#86 id=86 data-nosnippet>86</a>                        <span class="kw">let </span>id = <span class="kw-2">*</span><span class="macro">get_mut_arcmutex!</span>(seq).id();
 <a href=#87 id=87 data-nosnippet>87</a>                        <span class="kw">let </span>len = <span class="macro">get_mut_arcmutex!</span>(seq).get_toks().len();
 <a href=#88 id=88 data-nosnippet>88</a>                        <span class="macro">warn!</span>(
-<a href=#89 id=89 data-nosnippet>89</a>                            <span class="string">"Sequence {id} with length of {len} tokens is too long and exceeds capacity of block engine. Sequence will be ignored."</span>,
+<a href=#89 id=89 data-nosnippet>89</a>                            <span class="string">"Sequence {id} with length of {len} tokens is too long and exceeds KV cache size. To fix, increase the maximum sequence length for the KV cache, for example with `--max-seq-len`/ `max_seq_len` in automatic device mapping parameters."</span>,
 <a href=#90 id=90 data-nosnippet>90</a>                        );
 <a href=#91 id=91 data-nosnippet>91</a>                        <span class="macro">get_mut_arcmutex!</span>(seq).set_state(SequenceState::FinishedIgnored);
 <a href=#92 id=92 data-nosnippet>92</a>                        did_ignore = <span class="bool-val">true</span>;
