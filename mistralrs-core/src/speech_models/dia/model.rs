@@ -107,7 +107,6 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         attn_mask: Option<&Tensor>,
         cached_kv: Option<&mut (Tensor, Tensor)>,
         prefill: bool,
-        is_causal: bool,
     ) -> Result<Tensor> {
         let (b, t, d) = xq.dims3()?;
 
@@ -118,23 +117,46 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         xq = self.rope.forward(&xq, positions)?;
         xq = xq.transpose(1, 2)?;
 
+        // ---- K‒V computation & cache handling --------------------------------
         let (k, v) = if CROSS_ATTN {
-            cached_kv.unwrap().clone()
+            // Cross‑attention re‑uses a pre‑computed immutable cache.
+            cached_kv
+                .expect("cross‑attention requires cached KV tensors")
+                .clone()
         } else {
+            // Compute fresh K and V for self‑attention.
             let mut k =
                 self.k_proj
                     .forward(xkv)?
                     .reshape((b, t, self.num_kv_heads, self.head_dim))?;
-            let v = self
-                .v_proj
-                .forward(xkv)?
-                .reshape((b, t, self.num_kv_heads, self.head_dim))?;
+            let mut v =
+                self.v_proj
+                    .forward(xkv)?
+                    .reshape((b, t, self.num_kv_heads, self.head_dim))?;
 
+            // Apply RoPE to K and put heads first.
             k = self.rope.forward(&k, positions)?;
             k = k.transpose(1, 2)?;
+            v = v.transpose(1, 2)?;
 
-            // https://github.com/nari-labs/dia/blob/9fbe53c0df683b38502d3e9b99fb6789eecc9719/dia/layers.py#L241
-            todo!()
+            // Update / create cache when provided.
+            match cached_kv {
+                Some((ref mut k_cache, ref mut v_cache)) => {
+                    if prefill {
+                        // Prefill pass (full sequence) – overwrite cache.
+                        *k_cache = k.clone();
+                        *v_cache = v.clone();
+                    } else {
+                        // Incremental decoding – append new token to cache.
+                        let cat_dim = 2; // sequence length dimension
+                        *k_cache = Tensor::cat(&[&*k_cache, &k], cat_dim)?;
+                        *v_cache = Tensor::cat(&[&*v_cache, &v], cat_dim)?;
+                    }
+                    (k_cache.clone(), v_cache.clone())
+                }
+                // No cache supplied – just use freshly computed tensors.
+                None => (k, v),
+            }
         };
 
         // TODO: flash attention
@@ -224,6 +246,27 @@ impl DiaEncoderLayer {
             mlp,
         })
     }
+
+    fn forward(
+        &self,
+        x: &Tensor,
+        positions: &[usize],
+        attn_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let mut residual = x;
+        let mut x_norm = self.pre_sa_norm.forward(x)?;
+
+        let sa_out = self
+            .self_attn
+            .forward(&x_norm, &x_norm, positions, attn_mask, None, false)?;
+        let x = (residual + sa_out)?;
+
+        residual = &x;
+        x_norm = self.post_sa_norm.forward(&x)?;
+        let mlp_out = self.mlp.forward(&x)?;
+
+        residual + mlp_out
+    }
 }
 
 struct DiaEncoder {
@@ -255,6 +298,21 @@ impl DiaEncoder {
             norm,
             layers,
         })
+    }
+
+    fn forward(
+        &self,
+        x: &Tensor,
+        positions: &[usize],
+        attn_mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let mut x = self.embedding.forward(x)?;
+
+        for layer in &self.layers {
+            x = layer.forward(&x, positions, attn_mask)?;
+        }
+
+        self.norm.forward(&x)
     }
 }
 
@@ -320,6 +378,44 @@ impl DiaDecoderLayer {
             cross_attn,
             mlp,
         })
+    }
+
+    fn forward(
+        &self,
+        x: &Tensor,
+        encoder_out: &Tensor,
+        positions: &[usize],
+        cross_attn_mask: Option<&Tensor>,
+        self_attn_cache: Option<&mut (Tensor, Tensor)>,
+        cross_attn_cache: Option<&mut (Tensor, Tensor)>,
+        prefill: bool,
+    ) -> Result<Tensor> {
+        let mut residual = x;
+        let mut x_norm = self.pre_sa_norm.forward(x)?;
+
+        let sa_out =
+            self.self_attn
+                .forward(&x_norm, &x_norm, positions, None, self_attn_cache, prefill)?;
+        let x = (residual + sa_out)?;
+
+        residual = &x;
+        x_norm = self.pre_ca_norm.forward(&x)?;
+
+        let ca_out = self.self_attn.forward(
+            &x_norm,
+            &encoder_out,
+            positions,
+            cross_attn_mask,
+            cross_attn_cache,
+            false,
+        )?;
+        let x = (residual + ca_out)?;
+        residual = &x;
+
+        x_norm = self.pre_ca_norm.forward(&x)?;
+        let mlp_out = self.mlp.forward(&x_norm)?;
+
+        residual + mlp_out
     }
 }
 
