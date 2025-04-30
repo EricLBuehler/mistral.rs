@@ -86,7 +86,7 @@ impl PagedAttentionScheduler {
                         let id = *get_mut_arcmutex!(seq).id();
                         let len = get_mut_arcmutex!(seq).get_toks().len();
                         warn!(
-                            "Sequence {id} with length of {len} tokens is too long and exceeds capacity of block engine. Sequence will be ignored.",
+                            "Sequence {id} with length of {len} tokens is too long and exceeds KV cache size. To fix, increase the maximum sequence length for the KV cache, for example with `--max-seq-len`/ `max_seq_len` in automatic device mapping parameters.",
                         );
                         get_mut_arcmutex!(seq).set_state(SequenceState::FinishedIgnored);
                         did_ignore = true;

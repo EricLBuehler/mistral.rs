@@ -65,9 +65,9 @@ async fn do_search(
         // Manage context size by # of tokens. Apply default here.
         let max_results_budget_toks =
             match web_search_options.search_context_size.unwrap_or_default() {
-                SearchContextSize::High => 10000_usize,
-                SearchContextSize::Medium => 7500_usize,
-                SearchContextSize::Low => 3000_usize,
+                SearchContextSize::High => 16384_usize,
+                SearchContextSize::Medium => 8192_usize,
+                SearchContextSize::Low => 4096_usize,
             };
         let mut results = tracing::dispatcher::with_default(&dispatch, || {
             search::run_search_tool(&tool_call_params)
@@ -121,7 +121,7 @@ async fn do_search(
         let mut used_results = Vec::new();
         let mut used_len = 0;
         for (item, len) in results {
-            if used_len + len >= max_results_budget_toks {
+            if used_len + len > max_results_budget_toks {
                 break;
             }
             // So the info! below gets the correct value
