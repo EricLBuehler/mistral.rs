@@ -68,6 +68,7 @@ mod response;
 mod sampler;
 mod scheduler;
 mod sequence;
+mod speech_models;
 mod toml_selector;
 mod tools;
 mod topology;
