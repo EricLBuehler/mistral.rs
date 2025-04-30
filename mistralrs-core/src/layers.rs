@@ -1488,6 +1488,65 @@ impl Gemma3RotaryEmbedding {
     }
 }
 
+pub struct DiaRotaryEmbedding {
+    sin: Tensor,
+    cos: Tensor,
+}
+
+impl DiaRotaryEmbedding {
+    pub fn new(
+        min_timescale: f32,
+        max_timescale: f32,
+        head_dim: usize,
+        device: &Device,
+        dtype: DType,
+        max_len: usize,
+    ) -> Result<Self> {
+        assert_eq!(head_dim % 2, 0);
+        let half_embedding_dim = head_dim / 2;
+
+        let fraction = (0..half_embedding_dim)
+            .step_by(2)
+            .map(|i| 2f32 * i as f32 / head_dim as f32);
+        let timescale = fraction
+            .into_iter()
+            .map(|x| min_timescale * (max_timescale / min_timescale).powf(x))
+            .collect::<Vec<_>>();
+
+        let timescale_len = timescale.len();
+        let timescale = Tensor::from_vec(timescale, timescale_len, device)?;
+        let t = Tensor::arange(0u32, max_len as u32, device)?.to_dtype(DType::F32)?;
+
+        let freqs = (t / timescale)?;
+
+        let sin = freqs.sin()?.to_dtype(dtype)?;
+        let cos = freqs.cos()?.to_dtype(dtype)?;
+
+        Ok(Self { sin, cos })
+    }
+
+    pub fn forward(&self, xs: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
+        let (b_sz, seq_len, qh, n_embd) = xs.dims4()?;
+
+        let rope = candle_nn::rotary_emb::rope;
+
+        if seqlen_offsets.len() == 1 {
+            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
+            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
+            let xs_embed = rope(&xs.contiguous()?, &cos, &sin)?;
+            Ok(xs_embed)
+        } else {
+            let mut xs_embeds = Vec::new();
+            for (i, offset) in seqlen_offsets.iter().enumerate() {
+                let cos = self.cos.narrow(0, *offset, seq_len)?;
+                let sin = self.sin.narrow(0, *offset, seq_len)?;
+                let xs_embed = rope(&xs.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
+                xs_embeds.push(xs_embed);
+            }
+            Ok(Tensor::cat(&xs_embeds, 0)?)
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub struct QLinear {
     inner: QMatMul,

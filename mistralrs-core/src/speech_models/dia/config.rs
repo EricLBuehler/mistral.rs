@@ -41,8 +41,8 @@ pub struct ModelConfig {
     pub tgt_vocab_size: usize,
     pub normalization_layer_epsilon: f64,
     pub weight_dtype: String,
-    pub rope_min_timescale: usize,
-    pub rope_max_timescale: usize,
+    pub rope_min_timescale: f32,
+    pub rope_max_timescale: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

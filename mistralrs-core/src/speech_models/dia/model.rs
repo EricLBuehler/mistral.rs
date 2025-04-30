@@ -1,8 +1,11 @@
-use candle_core::Result;
-use candle_nn::{Embedding, Linear};
+use candle_core::{IndexOp, Result, Tensor};
+use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
-use crate::layers::{self, RmsNorm};
+use crate::{
+    attention::SdpaParams,
+    layers::{self, DiaRotaryEmbedding, RmsNorm, RotaryEmbedding, Sdpa},
+};
 
 use super::config::DiaConfig;
 
@@ -35,6 +38,11 @@ struct DiaAttention<const CROSS_ATTN: bool> {
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
+    rope: DiaRotaryEmbedding,
+    head_dim: usize,
+    num_q_heads: usize,
+    num_kv_heads: usize,
+    num_gqa_groups: usize,
 }
 
 impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
@@ -67,6 +75,15 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
             dense_general_column(kv_embed_dim, vec![num_kv_heads, head_dim], vb.pp("v_proj"))?;
         let o_proj = dense_general_row(vec![num_q_heads, head_dim], output_dim, vb.pp("v_proj"))?;
 
+        let rope = DiaRotaryEmbedding::new(
+            cfg.model.rope_min_timescale,
+            cfg.model.rope_max_timescale,
+            head_dim,
+            vb.device(),
+            vb.dtype(),
+            cfg.data.text_length,
+        )?;
+
         Ok(Self {
             pre_sa_norm,
             post_sa_norm,
@@ -74,7 +91,71 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
             k_proj,
             v_proj,
             o_proj,
+            rope,
+            num_q_heads,
+            num_kv_heads,
+            head_dim,
+            num_gqa_groups: num_q_heads / num_kv_heads,
         })
+    }
+
+    fn forward(
+        &self,
+        xq: &Tensor,
+        xkv: &Tensor,
+        positions: &[usize],
+        attn_mask: Option<&Tensor>,
+        cached_kv: Option<&mut (Tensor, Tensor)>,
+        prefill: bool,
+        is_causal: bool,
+    ) -> Result<Tensor> {
+        let (b, t, d) = xq.dims3()?;
+
+        let mut xq = self
+            .q_proj
+            .forward(xq)?
+            .reshape((b, t, self.num_q_heads, self.head_dim))?;
+        xq = self.rope.forward(&xq, positions)?;
+        xq = xq.transpose(1, 2)?;
+
+        let (k, v) = if CROSS_ATTN {
+            cached_kv.unwrap().clone()
+        } else {
+            let mut k =
+                self.k_proj
+                    .forward(xkv)?
+                    .reshape((b, t, self.num_kv_heads, self.head_dim))?;
+            let v = self
+                .v_proj
+                .forward(xkv)?
+                .reshape((b, t, self.num_kv_heads, self.head_dim))?;
+
+            k = self.rope.forward(&k, positions)?;
+            k = k.transpose(1, 2)?;
+
+            // https://github.com/nari-labs/dia/blob/9fbe53c0df683b38502d3e9b99fb6789eecc9719/dia/layers.py#L241
+            todo!()
+        };
+
+        // TODO: flash attention
+        let mut attn_output = Sdpa.run_attention(
+            &xq,
+            &k,
+            &v,
+            attn_mask,
+            None,
+            &SdpaParams {
+                n_kv_groups: self.num_gqa_groups,
+                sliding_window: None,
+                softcap: None,
+                use_flash_attn: false,
+                softmax_scale: 1.,
+            },
+        )?;
+
+        attn_output = attn_output.transpose(1, 2)?.reshape((b, t, ()))?;
+
+        self.o_proj.forward(&attn_output)
     }
 }
 
@@ -84,16 +165,20 @@ struct DiaMlp {
 }
 
 impl DiaMlp {
-    fn new(
-        cfg: &DiaConfig,
-        vb: ShardedVarBuilder,
-        embed_dim: usize,
-        intermediate_dim: usize,
-    ) -> Result<Self> {
+    fn new(vb: ShardedVarBuilder, embed_dim: usize, intermediate_dim: usize) -> Result<Self> {
         let wi = dense_general_column(embed_dim, vec![2, intermediate_dim], vb.pp("wi"))?;
         let wo = dense_general_row(vec![intermediate_dim], embed_dim, vb.pp("v_proj"))?;
 
         Ok(Self { wi, wo })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let (bs, seqlen, _dim) = xs.dims3()?;
+        let fused_x = self.wi.forward(xs)?.reshape((bs, seqlen, 2, ()))?;
+        let gate = fused_x.i((.., .., 0, ..))?;
+        let up = fused_x.i((.., .., 1, ..))?;
+        let hidden = (gate.silu()? * up)?;
+        self.wo.forward(&hidden)
     }
 }
 
@@ -127,8 +212,7 @@ impl DiaEncoderLayer {
             cfg.model.encoder.head_dim,
         )?;
         let mlp = DiaMlp::new(
-            cfg,
-            vb.pp("self_attention"),
+            vb.pp("mlp"),
             cfg.model.encoder.head_dim,
             cfg.model.encoder.n_hidden,
         )?;
@@ -223,8 +307,7 @@ impl DiaDecoderLayer {
             cfg.model.decoder.n_embd,
         )?;
         let mlp = DiaMlp::new(
-            cfg,
-            vb.pp("self_attention"),
+            vb.pp("mlp"),
             cfg.model.decoder.n_embd,
             cfg.model.decoder.n_hidden,
         )?;
