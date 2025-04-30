@@ -637,6 +637,7 @@ pub fn call_affine_quantize(
     kernels: &Kernels,
     full_ty: DType,
     input: &Buffer,
+    input_offset: usize,
     input_dims: &[usize],
     input_strides: &[usize],
     output: &Buffer,
@@ -714,9 +715,9 @@ pub fn call_affine_quantize(
     };
 
     if dequantize {
-        set_params!(encoder, (input, scales, biases, output));
+        set_params!(encoder, ((input, input_offset), scales, biases, output));
     } else {
-        set_params!(encoder, (input, output, scales, biases));
+        set_params!(encoder, ((input, input_offset), output, scales, biases));
     }
 
     encoder.dispatch_threads(grid_dims, group_dims);

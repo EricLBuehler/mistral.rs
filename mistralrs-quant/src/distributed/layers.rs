@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{Context, Device, Result, Tensor, D};
+use candle_core::{Context, Result, Tensor};
 use candle_nn::Linear;
 
 use crate::{

@@ -25,11 +25,6 @@ pub(crate) fn afq_quantize_op(
             w.dims()
         );
     }
-    let w = if w.layout().start_offset() != 0 {
-        w.copy()?
-    } else {
-        w.clone()
-    };
 
     #[cfg(feature = "metal")]
     {
@@ -60,6 +55,7 @@ pub(crate) fn afq_quantize_op(
             &crate::metal_kernels::Kernels::new(),
             w.dtype(),
             w_s.buffer(),
+            w.layout().start_offset() * w_s.dtype().size_in_bytes(),
             w.dims(),
             w.stride(),
             &output,
@@ -172,6 +168,7 @@ pub(crate) fn afq_dequantize_op(
             &crate::metal_kernels::Kernels::new(),
             scales.dtype(),
             wq_s.buffer(),
+            w_q.layout().start_offset() * wq_s.dtype().size_in_bytes(),
             w_q.dims(),
             w_q.stride(),
             &output,
