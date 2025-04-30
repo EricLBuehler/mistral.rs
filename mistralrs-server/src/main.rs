@@ -153,10 +153,6 @@ struct Args {
     #[arg(long = "paged-attn", default_value_t = false)]
     paged_attn: bool,
 
-    /// Enable server throughput logging, supported in the server and with interactive mode
-    #[arg(long = "throughput", default_value_t = false)]
-    throughput_log: bool,
-
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
     prompt_chunksize: Option<usize>,
@@ -165,10 +161,6 @@ struct Args {
     #[arg(long)]
     cpu: bool,
 
-    /// Enable web searching for interactive mode.
-    #[arg(long = "interactive-search")]
-    interactive_search: bool,
-
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
     #[arg(long = "enable-search")]
     enable_search: bool,
@@ -176,6 +168,10 @@ struct Args {
     /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
     #[arg(long = "search-bert-model")]
     search_bert_model: Option<String>,
+
+    /// Enable thinking for interactive mode and models that support it.
+    #[arg(long = "enable-thinking")]
+    enable_thinking: bool,
 }
 
 #[utoipa::path(
@@ -479,7 +475,7 @@ async fn main() -> Result<()> {
         pipeline,
         scheduler_config,
         !args.interactive_mode,
-        bert_model,
+        bert_model.clone(),
     )
     .with_opt_log(args.log)
     .with_truncate_sequence(args.truncate_sequence)
@@ -488,7 +484,12 @@ async fn main() -> Result<()> {
     .build();
 
     if args.interactive_mode {
-        interactive_mode(mistralrs, args.throughput_log, args.interactive_search).await;
+        interactive_mode(
+            mistralrs,
+            bert_model.is_some(),
+            args.enable_thinking.then_some(true),
+        )
+        .await;
         return Ok(());
     }
 

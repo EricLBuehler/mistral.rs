@@ -19,7 +19,8 @@ use tokio::sync::Mutex;
 pub use normal_loaders::{
     AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
     MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
-    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
+    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
+    Qwen3MoELoader, Starcoder2Loader,
 };
 
 use tracing::{info, warn};

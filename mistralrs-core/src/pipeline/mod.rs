@@ -31,6 +31,7 @@ use image::DynamicImage;
 pub use inputs_processor::InputProcessorOutput;
 pub(crate) use isq::IsqModelLoader;
 pub use isq::{parse_isq_value, IsqModel, IsqOrganization, UQFF_MULTI_FILE_DELIMITER};
+use llguidance::toktrie::TokEnv;
 pub use loaders::{
     AdapterKind, AutoDeviceMapParams, AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader,
     DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
@@ -39,8 +40,8 @@ pub use loaders::{
     MistralLoader, MixtralLoader, ModelKind, ModelPaths, NormalLoaderType, NormalLoadingMetadata,
     NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader,
     Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
-    Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VisionLoaderType, VisionModel,
-    VisionModelLoader,
+    Qwen3Loader, Qwen3MoELoader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
+    VisionLoaderType, VisionModel, VisionModelLoader,
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -76,8 +77,8 @@ use self::text_models_inputs_processor::PagedAttentionMeta;
 
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
-    /// Only None if it doesnt make sense for the model
-    pub tok_env: Option<llguidance::toktrie::TokEnv>,
+    /// Only None if it doesn't make sense for the model
+    pub llg_factory: Option<Arc<llguidance::ParserFactory>>,
     pub no_kv_cache: bool,
     pub no_prefix_cache: bool,
     pub num_hidden_layers: usize,
@@ -92,6 +93,12 @@ pub struct GeneralMetadata {
     pub cache_engine: Option<CacheEngine>,
     pub prompt_chunksize: Option<NonZeroUsize>,
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
+}
+
+impl GeneralMetadata {
+    pub fn tok_env(&self) -> Option<TokEnv> {
+        self.llg_factory.as_ref().map(|f| f.tok_env().clone())
+    }
 }
 
 pub enum CacheInstruction {
@@ -230,10 +237,10 @@ impl PartialEq for ModelCategory {
     }
 }
 
-/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at
+/// Prepend a vision tag appropriate for the model to the prompt. Image indexing is assumed that start at 0.
 pub trait VisionPromptPrefixer: Send + Sync {
     /// Prefix for inclusion in messages (may do nothing if the chat template handles it).
-    fn prefix_image(&self, image_index: usize, prompt: &str) -> String;
+    fn prefix_image(&self, image_indees: Vec<usize>, prompt: &str) -> String;
 }
 
 pub enum CacheBackendMetadata<'a> {
@@ -411,6 +418,7 @@ pub trait Pipeline:
                     return Ok(exec_duration);
                 }
 
+                let start = Instant::now();
                 let logits = logits
                     .into_iter()
                     .map(|l| {
@@ -419,7 +427,6 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
-                let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
@@ -484,9 +491,9 @@ pub trait Pipeline:
                     .as_ref()
                     .expect("PagedAttention must have cache engines.")
                     .execute_scheduler_ops(
-                        blocks_to_swap_in.clone(),
-                        blocks_to_swap_out.clone(),
-                        blocks_to_copy.clone(),
+                        &blocks_to_swap_in,
+                        &blocks_to_swap_out,
+                        &blocks_to_copy,
                     )?;
 
                 let inputs_iter = self.get_processor().inputs_processor().process_inputs(
@@ -555,6 +562,7 @@ pub trait Pipeline:
                     return Ok(exec_duration);
                 }
 
+                let start = Instant::now();
                 let logits = logits
                     .into_iter()
                     .map(|l| {
@@ -563,7 +571,6 @@ pub trait Pipeline:
                     })
                     .collect::<candle_core::Result<Vec<_>>>()?;
 
-                let start = Instant::now();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
@@ -686,6 +693,7 @@ mod tests {
                     inputs.clone()
                 },
                 true,
+                None,
                 &ChatTemplateValue(Either::Left(template.to_string())),
                 Some(bos.to_string()),
                 Some(eos.to_string()),

@@ -327,9 +327,16 @@ async fn parse_request(
 
                     images.push(image);
                 }
-                RequestMessage::VisionChat { messages, images }
+                RequestMessage::VisionChat {
+                    messages,
+                    images,
+                    enable_thinking: oairequest.enable_thinking,
+                }
             } else {
-                RequestMessage::Chat(messages)
+                RequestMessage::Chat {
+                    messages,
+                    enable_thinking: oairequest.enable_thinking,
+                }
             }
         }
         Either::Right(prompt) => {
@@ -339,7 +346,10 @@ async fn parse_request(
             message_map.insert("role".to_string(), Either::Left("user".to_string()));
             message_map.insert("content".to_string(), Either::Left(prompt));
             messages.push(message_map);
-            RequestMessage::Chat(messages)
+            RequestMessage::Chat {
+                messages,
+                enable_thinking: oairequest.enable_thinking,
+            }
         }
     };
 

@@ -6,6 +6,7 @@ use anyhow::Result;
 use candle_core::{DType, Device, Tensor, D};
 use candle_nn::Conv2dConfig;
 use image::{ColorType, DynamicImage};
+use itertools::Itertools;
 use mistralrs_quant::ShardedVarBuilder;
 
 #[cfg(feature = "pyo3_macros")]
@@ -245,9 +246,15 @@ pub struct Phi3VLoader;
 pub struct Phi3VPrefixer;
 
 impl VisionPromptPrefixer for Phi3VPrefixer {
-    fn prefix_image(&self, image_index: usize, prompt: &str) -> String {
+    fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         // Image indexing starts at 0.
-        format!("<|image_{}|>{prompt}", image_index + 1)
+        format!(
+            "{}{prompt}",
+            image_indexes
+                .into_iter()
+                .map(|image_index| format!("<|image_{}|>", image_index + 1))
+                .join("")
+        )
     }
 }
 
@@ -508,7 +515,7 @@ pub struct Idefics2Loader;
 pub struct Idefics2Prefixer;
 
 impl VisionPromptPrefixer for Idefics2Prefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+    fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
         // Chat template does it
         prompt.to_string()
     }
@@ -837,8 +844,8 @@ pub struct LLaVANextLoader;
 pub struct LLaVANextPrefixer;
 
 impl VisionPromptPrefixer for LLaVANextPrefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
-        format!("<image>{prompt}")
+    fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
+        format!("{}{prompt}", "<image>".repeat(image_indexes.len()))
     }
 }
 
@@ -1085,8 +1092,8 @@ pub struct LLaVALoader;
 pub struct LLaVAPrefixer;
 
 impl VisionPromptPrefixer for LLaVAPrefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
-        format!("<image>{prompt}")
+    fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
+        format!("{}{prompt}", "<image>".repeat(image_indexes.len()))
     }
 }
 
@@ -1325,8 +1332,8 @@ pub struct VLlamaLoader;
 pub struct VLlamaPrefixer;
 
 impl VisionPromptPrefixer for VLlamaPrefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
-        format!("<|image|>{prompt}")
+    fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
+        format!("{}{prompt}", "<|image|>".repeat(image_indexes.len()))
     }
 }
 
@@ -1699,12 +1706,16 @@ pub struct Qwen2VLLoader;
 pub struct Qwen2VLPrefixer;
 
 impl VisionPromptPrefixer for Qwen2VLPrefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+    fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         format!(
-            "{}{}{}{prompt}",
-            Qwen2VLProcessor::VISION_START,
-            Qwen2VLProcessor::IMAGE_PAD,
-            Qwen2VLProcessor::VISION_END
+            "{}{prompt}",
+            format!(
+                "{}{}{}",
+                Qwen2VLProcessor::VISION_START,
+                Qwen2VLProcessor::IMAGE_PAD,
+                Qwen2VLProcessor::VISION_END
+            )
+            .repeat(image_indexes.len())
         )
     }
 }
@@ -1981,7 +1992,7 @@ pub struct Idefics3Loader;
 pub struct Idefics3Prefixer;
 
 impl VisionPromptPrefixer for Idefics3Prefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+    fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
         // Chat template does it
         prompt.to_string()
     }
@@ -2261,8 +2272,11 @@ pub struct MiniCpmOLoader;
 pub struct MiniCpmOPrefixer;
 
 impl VisionPromptPrefixer for MiniCpmOPrefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
-        format!("(<image>./</image>){prompt}")
+    fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
+        format!(
+            "{}{prompt}",
+            "(<image>./</image>)".repeat(image_indexes.len())
+        )
     }
 }
 
@@ -2529,9 +2543,16 @@ pub struct Phi4MMLoader;
 pub struct Phi4MMPrefixer;
 
 impl VisionPromptPrefixer for Phi4MMPrefixer {
-    fn prefix_image(&self, image_index: usize, prompt: &str) -> String {
+    fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         // Image indexing starts at 0.
-        format!("<|image_{}|>{prompt}", image_index + 1)
+
+        format!(
+            "{}{prompt}",
+            image_indexes
+                .into_iter()
+                .map(|image_index| format!("<|image_{}|>", image_index + 1))
+                .join("")
+        )
     }
 }
 
@@ -2840,12 +2861,16 @@ pub struct Qwen2_5VLLoader;
 pub struct Qwen2_5VLPrefixer;
 
 impl VisionPromptPrefixer for Qwen2_5VLPrefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+    fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
         format!(
-            "{}{}{}{prompt}",
-            Qwen2_5VLProcessor::VISION_START,
-            Qwen2_5VLProcessor::IMAGE_PAD,
-            Qwen2_5VLProcessor::VISION_END
+            "{}{prompt}",
+            format!(
+                "{}{}{}",
+                Qwen2_5VLProcessor::VISION_START,
+                Qwen2_5VLProcessor::IMAGE_PAD,
+                Qwen2_5VLProcessor::VISION_END
+            )
+            .repeat(image_indexes.len())
         )
     }
 }
@@ -3121,7 +3146,7 @@ pub struct Gemma3Loader;
 pub struct Gemma3Prefixer;
 
 impl VisionPromptPrefixer for Gemma3Prefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+    fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
         prompt.to_string()
     }
 }
@@ -3436,7 +3461,7 @@ pub struct Mistral3Loader;
 pub struct Mistral3Prefixer;
 
 impl VisionPromptPrefixer for Mistral3Prefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
+    fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
         prompt.to_string()
     }
 }
@@ -3736,8 +3761,11 @@ pub struct VLlama4Loader;
 pub struct VLlama4Prefixer;
 
 impl VisionPromptPrefixer for VLlama4Prefixer {
-    fn prefix_image(&self, _image_index: usize, prompt: &str) -> String {
-        format!("{}{prompt}", llama4::IMAGE_TOKEN)
+    fn prefix_image(&self, image_indexes: Vec<usize>, prompt: &str) -> String {
+        format!(
+            "{}{prompt}",
+            llama4::IMAGE_TOKEN.repeat(image_indexes.len())
+        )
     }
 }
 

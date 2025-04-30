@@ -14,20 +14,32 @@ use uuid::Uuid;
 
 use crate::Pipeline;
 
+fn contains_tool_call_prefix(prefix: &str) -> bool {
+    prefix.contains("<tool_call>")
+        || prefix.contains("<｜tool▁call▁begin｜>")
+        || prefix.contains("<|python_tag|>")
+        || prefix.contains("[TOOL_CALLS]")
+}
+
 fn process_model_specific_message(message: &str) -> Result<String> {
     static DEEPSEEK_REGEX: OnceLock<Regex> = OnceLock::new();
+    static QWEN_REGEX: OnceLock<Regex> = OnceLock::new();
+
+    // These are reasoning models so we need a regex.
     let deepseek_regex = DEEPSEEK_REGEX.get_or_init(|| Regex::new(
-        r"<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n(?P<json>.+?)\n```<｜tool▁call▁end｜>",
+        r"(?s)<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n(?P<json>.+?)\n```<｜tool▁call▁end｜>",
     ).unwrap());
+    let qwen_regex = QWEN_REGEX
+        .get_or_init(|| Regex::new(r"(?s)<tool_call>(?P<inner>.*?)</tool_call>").unwrap());
 
     if let Some(message) = message.strip_prefix("<|python_tag|>") {
         // Llama case
         Ok(message.to_string())
-    } else if let Some(message) = message
-        .strip_prefix("<tool_call>")
-        .and_then(|s| s.strip_suffix("</tool_call>"))
-    {
-        // Hermes case
+    } else if qwen_regex.is_match(message) {
+        if let Some(caps) = qwen_regex.captures(message) {
+            let inner = caps.name("inner").unwrap().as_str();
+            return Ok(inner.trim().to_string());
+        }
         Ok(message.to_string())
     } else if let Some(message) = message
         .strip_prefix("[TOOL_CALLS][")
@@ -114,7 +126,7 @@ impl ToolCallingMatcher {
                 None
             }
         })
-        .unwrap_or_default())
+        .unwrap_or((contains_tool_call_prefix(&message_prefix), false)))
     }
 
     pub fn get_call(

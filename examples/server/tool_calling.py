@@ -83,7 +83,10 @@ messages = [
 ]
 
 completion = client.chat.completions.create(
-    model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
+    model="llama-3.1",
+    messages=messages,
+    tools=tools,
+    tool_choice="auto",
 )
 
 # print(completion.usage)

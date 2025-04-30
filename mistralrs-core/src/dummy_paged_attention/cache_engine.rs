@@ -45,9 +45,9 @@ impl CacheEngine {
 impl CacheEngine {
     pub fn execute_scheduler_ops(
         &self,
-        blocks_to_swap_in: HashMap<usize, usize>,
-        blocks_to_swap_out: HashMap<usize, usize>,
-        blocks_to_copy: HashMap<usize, Vec<usize>>,
+        blocks_to_swap_in: &HashMap<usize, usize>,
+        blocks_to_swap_out: &HashMap<usize, usize>,
+        blocks_to_copy: &HashMap<usize, Vec<usize>>,
     ) -> Result<()> {
         if !blocks_to_swap_in.is_empty() {
             self.swap_in(blocks_to_swap_in)?;
@@ -61,15 +61,15 @@ impl CacheEngine {
         Ok(())
     }
 
-    pub fn swap_in(&self, _src_to_dst: HashMap<usize, usize>) -> Result<()> {
+    pub fn swap_in(&self, _src_to_dst: &HashMap<usize, usize>) -> Result<()> {
         Ok(())
     }
 
-    pub fn swap_out(&self, _src_to_dst: HashMap<usize, usize>) -> Result<()> {
+    pub fn swap_out(&self, _src_to_dst: &HashMap<usize, usize>) -> Result<()> {
         Ok(())
     }
 
-    pub fn copy(&self, _src_to_dst: HashMap<usize, Vec<usize>>) -> Result<()> {
+    pub fn copy(&self, _src_to_dst: &HashMap<usize, Vec<usize>>) -> Result<()> {
         Ok(())
     }
 }
