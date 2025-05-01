@@ -513,60 +513,51 @@ pub mod text_models_inputs_processor {
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
         return_raw_logits: bool,
-        mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
         prompt_chunksize: Option<NonZeroUsize>,
         mapper: Option<&dyn DeviceMapper>,
     ) -> Box<dyn Iterator<Item = Result<InnerInputProcessorOutput>>> {
         if let (Some(prompt_chunksize), true) = (prompt_chunksize, paged_attn_metadata.is_none()) {
-            let mut seq_chunks = Vec::new();
-            let mut n_chunks = Vec::new();
-            let prompt_chunksize: usize = prompt_chunksize.into();
-
-            // This comes from prefix caching
-            // The invariant where all token offsets are the same is handled by the scheduler
+            let chunk_size = prompt_chunksize.get();
             let offset = input_seqs[0].token_offset();
+            // Determine the maximum number of chunks across all sequences
+            let num_chunks = toks
+                .iter()
+                .map(|ctxt| ctxt.len().div_ceil(chunk_size))
+                .max()
+                .unwrap_or(0);
 
-            // Pad each sequence by the padding token to the max len.
-            for ctxt in toks.iter() {
-                let chunks = ctxt.chunks(prompt_chunksize).collect::<Vec<_>>();
-                n_chunks.push(chunks.len());
-                seq_chunks.push(chunks);
-            }
-            // Basically convert the sequences and tok chunks into chunks of seqs and the corresp toks
-            let mut chunks_transposed: Vec<Vec<(Vec<T>, usize)>> = Vec::new();
-            for (seq_n, seq) in seq_chunks.into_iter().enumerate() {
-                for (i, chunk) in seq.into_iter().enumerate() {
-                    match chunks_transposed.get_mut(i) {
-                        Some(part) => part.push((chunk.to_vec(), seq_n)),
-                        None => chunks_transposed.push(vec![(chunk.to_vec(), seq_n)]),
+            let mut outputs = Vec::with_capacity(num_chunks);
+            for chunk_idx in 0..num_chunks {
+                let mut slices = Vec::new();
+                let mut seq_ids = Vec::new();
+                let mut seq_indices = Vec::new();
+                for (seq_n, ctxt) in toks.iter().enumerate() {
+                    let start = chunk_idx * chunk_size;
+                    if start < ctxt.len() {
+                        let end = (start + chunk_size).min(ctxt.len());
+                        slices.push(&ctxt[start..end]);
+                        seq_indices.push(seq_n);
+                        seq_ids.push(*input_seqs[seq_n].id());
                     }
                 }
+                let result = make_prompt_chunk(
+                    chunk_idx * chunk_size + offset,
+                    slices,
+                    &seq_ids,
+                    device,
+                    last_n_context_len,
+                    return_raw_logits,
+                    None,
+                    mapper,
+                )
+                .map(|inputs| InnerInputProcessorOutput {
+                    inputs,
+                    seq_indices,
+                });
+                outputs.push(result);
             }
-            let chunks = chunks_transposed
-                .into_iter()
-                .enumerate()
-                .map(|(i, chunk)| {
-                    let (toks, seq_ns): (Vec<Vec<T>>, Vec<usize>) = chunk.into_iter().unzip();
-                    make_prompt_chunk(
-                        i * prompt_chunksize + offset,
-                        toks.iter().map(Vec::as_slice).collect(),
-                        &seq_ns
-                            .iter()
-                            .map(|i| *input_seqs[*i].id())
-                            .collect::<Vec<_>>(),
-                        device,
-                        last_n_context_len,
-                        return_raw_logits,
-                        paged_attn_metadata.as_deref_mut(),
-                        mapper,
-                    )
-                    .map(|inputs| InnerInputProcessorOutput {
-                        inputs,
-                        seq_indices: seq_ns,
-                    })
-                })
-                .collect::<Vec<_>>();
-            Box::new(chunks.into_iter())
+            Box::new(outputs.into_iter())
         } else {
             let offset = input_seqs[0].token_offset();
             if offset != 0 && paged_attn_metadata.is_some() {
