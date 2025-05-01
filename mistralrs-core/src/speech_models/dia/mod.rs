@@ -196,11 +196,11 @@ impl DiaPipeline {
         top_p: f32,
         cfg_filter_top_k: Option<usize>,
         rng: &mut Isaac64Rng,
-    ) -> Result<u32> {
+    ) -> Result<Vec<u32>> {
         assert_eq!(logits.rank(), 2);
 
         if temperature == 0. {
-            return logits.argmax(D::Minus1)?.to_scalar::<u32>();
+            return logits.argmax(D::Minus1)?.to_vec1::<u32>();
         }
 
         let mut logits = (logits / temperature as f64)?;
@@ -240,14 +240,19 @@ impl DiaPipeline {
         }
 
         logits = candle_nn::ops::softmax_last_dim(&logits)?;
-        assert_eq!(logits.dim(0)?, 1);
-        logits = logits.i(0)?;
-        let probs = logits.to_vec1::<f32>()?;
 
-        let distr = WeightedIndex::new(&probs).map_err(candle_core::Error::msg)?;
+        let mut sampled = Vec::new();
+        for mut logits in logits.chunk(logits.dim(0)?, 0)? {
+            logits = logits.squeeze(0)?;
 
-        let next_token = distr.sample(rng);
-        Ok(next_token as u32)
+            let probs = logits.to_vec1::<f32>()?;
+
+            let distr = WeightedIndex::new(&probs).map_err(candle_core::Error::msg)?;
+
+            let next_token = distr.sample(rng);
+            sampled.push(next_token as u32);
+        }
+        Ok(sampled)
     }
 
     fn decoder_step(
@@ -264,7 +269,7 @@ impl DiaPipeline {
         top_p: f32,
         cfg_filter_top_k: Option<usize>,
         rng: &mut Isaac64Rng,
-    ) -> Result<u32> {
+    ) -> Result<Vec<u32>> {
         let audio_eos_value = self.cfg.data.audio_eos_value as usize;
 
         let mut logits = self.model.decoder.decode_step(
@@ -311,14 +316,14 @@ impl DiaPipeline {
         let top_p = 0.95f32;
         let cfg_filter_top_k = Some(35usize);
 
-        let audio_pad_value = self.cfg.data.audio_pad_value;
-        let audio_eos_value = self.cfg.data.audio_eos_value;
+        let audio_pad_value = self.cfg.data.audio_pad_value as u32;
+        let audio_eos_value = self.cfg.data.audio_eos_value as u32;
         let delay_pattern = &self.cfg.data.delay_pattern;
         let max_tokens = max_tokens.unwrap_or(self.cfg.data.audio_length);
-        let max_delay_pattern = delay_pattern.iter().max().unwrap();
+        let max_delay_pattern = *delay_pattern.iter().max().unwrap() as usize;
 
         let (
-            generated_tokens,
+            mut generated_tokens,
             decoder_attn_mask,
             encoder_out,
             encoder_positions,
@@ -330,7 +335,7 @@ impl DiaPipeline {
 
         let mut bos_countdown = max_delay_pattern;
         let mut eos_detected = false;
-        let mut eos_countdown = -1;
+        let mut eos_countdown: Option<usize> = None;
 
         let mut rng = Isaac64Rng::seed_from_u64(0);
 
@@ -341,7 +346,7 @@ impl DiaPipeline {
                 .unsqueeze(0)?
                 .repeat((2, 1, 1))?;
 
-            let pred_c = self.decoder_step(
+            let mut pred_c = self.decoder_step(
                 &current_tokens,
                 &encoder_out,
                 Some(&decoder_attn_mask),
@@ -355,7 +360,64 @@ impl DiaPipeline {
                 cfg_filter_top_k,
                 &mut rng,
             )?;
+
+            if (!eos_detected && pred_c[0] == audio_eos_value)
+                || dec_step == max_tokens - max_delay_pattern - 1
+            {
+                eos_detected = true;
+                eos_countdown = Some(max_delay_pattern);
+            }
+
+            if let Some(eos_countdown) = &mut eos_countdown {
+                let step_after_eos = max_delay_pattern - *eos_countdown;
+                for (i, d) in delay_pattern.iter().enumerate() {
+                    if step_after_eos == *d as usize {
+                        pred_c[i] = audio_eos_value;
+                    } else if step_after_eos > *d as usize {
+                        pred_c[i] = audio_pad_value;
+                    }
+                }
+                *eos_countdown -= 1;
+            }
+
+            bos_countdown = bos_countdown.saturating_sub(1);
+
+            let apply_mask = bos_countdown > 0;
+            if apply_mask {
+                let len = pred_c.len();
+                let dec_out = Tensor::from_vec(pred_c, len, &self.device)?;
+
+                let mask = generated_tokens
+                    .i((dec_step + 1..dec_step + 2, ..))?
+                    .eq(-1.)?;
+                generated_tokens = generated_tokens.slice_assign(
+                    &[&(dec_step + 1..dec_step + 2), &..],
+                    &mask.where_cond(
+                        &dec_out,
+                        &generated_tokens.i((dec_step + 1..dec_step + 2, ..))?,
+                    )?,
+                )?;
+            } else {
+                let len = pred_c.len();
+                generated_tokens.slice_set(
+                    &Tensor::from_vec(pred_c, len, &self.device)?,
+                    0,
+                    dec_step + 1,
+                )?;
+            }
+
+            if eos_countdown.is_some_and(|eos_countdown| eos_countdown == 0) {
+                break;
+            }
+
+            dec_step += 1;
+
+            if dec_step % 86 == 0 {
+                println!("Generated 1s")
+            }
         }
+
+        let generated_codes = generated_tokens.i((0..dec_step + 1, ..))?;
         Ok(())
     }
 }
