@@ -32,8 +32,8 @@ impl DiaKvCache {
         self.v.slice_set(&v, 2, self.current_index)?;
         self.current_index += 1;
         Ok((
-            self.k.i((.., .., self.current_index, ..))?,
-            self.v.i((.., .., self.current_index, ..))?,
+            self.k.i((.., .., ..self.current_index, ..))?,
+            self.v.i((.., .., ..self.current_index, ..))?,
         ))
     }
 

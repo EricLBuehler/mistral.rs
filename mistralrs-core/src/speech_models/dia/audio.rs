@@ -47,7 +47,7 @@ pub fn build_revert_indices(
         .repeat(&[b, 1])?
         .to_dtype(DType::F32)?
         .unsqueeze(2)?;
-    let t_idx_btc = (&t_idx_bt + delay.reshape((1, 1, c))?)?;
+    let t_idx_btc = t_idx_bt.broadcast_add(&delay.reshape((1, 1, c))?)?;
     // clamp to valid time range [0, t-1]
     let t_idx_btc = t_idx_btc.clamp(0, (t - 1) as i32)?;
     let b_idx = Tensor::arange(0f32, b as f32, dev)?
@@ -89,7 +89,7 @@ pub fn revert_audio_delay(
     let gathered = gathered_flat.reshape((b, t, c))?;
 
     let mask_out = t_idx.ge(original_t as f64)?;
-    let pad = Tensor::full(pad_value as f32, gathered.shape(), dev)?;
+    let pad = Tensor::full(pad_value as u32, gathered.shape(), dev)?;
     let result = mask_out.where_cond(&pad, &gathered)?;
     Ok(result)
 }

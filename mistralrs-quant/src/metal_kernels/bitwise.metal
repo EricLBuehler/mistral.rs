@@ -18,6 +18,42 @@ template <typename T>
 instantiate_bitwise_or(uint8_t) instantiate_bitwise_or(uint32_t)
     instantiate_bitwise_or(int64_t) instantiate_bitwise_or(int)
 
+template <typename T>
+[[kernel]] void bitwise_and(const device T *a [[buffer(0)]],
+                           const device T *b [[buffer(1)]],
+                           device T *output [[buffer(2)]],
+                           uint tid [[thread_position_in_grid]]) {
+  output[tid] = a[tid] | b[tid];
+}
+
+#define instantiate_bitwise_and(type)                                           \
+  template [[host_name("bitwise_and_" #type)]] [[kernel]] void                  \
+  bitwise_and<type>(const device type *a [[buffer(0)]],                         \
+                   const device type *b [[buffer(1)]],                         \
+                   device type *out [[buffer(2)]],                            \            
+    uint tid [[thread_position_in_grid]]);
+
+instantiate_bitwise_and(uint8_t) instantiate_bitwise_and(uint32_t)
+    instantiate_bitwise_and(int64_t) instantiate_bitwise_and(int)
+
+template <typename T>
+[[kernel]] void bitwise_xor(const device T *a [[buffer(0)]],
+                           const device T *b [[buffer(1)]],
+                           device T *output [[buffer(2)]],
+                           uint tid [[thread_position_in_grid]]) {
+  output[tid] = a[tid] ^ b[tid];
+}
+
+#define instantiate_bitwise_xor(type)                                           \
+  template [[host_name("bitwise_xor_" #type)]] [[kernel]] void                  \
+  bitwise_xor<type>(const device type *a [[buffer(0)]],                         \
+                   const device type *b [[buffer(1)]],                         \
+                   device type *out [[buffer(2)]],                            \            
+    uint tid [[thread_position_in_grid]]);
+
+instantiate_bitwise_xor(uint8_t) instantiate_bitwise_xor(uint32_t)
+    instantiate_bitwise_xor(int64_t) instantiate_bitwise_xor(int)
+
         template <typename T>
         [[kernel]] void bitwise_leftshift(const device T *a [[buffer(0)]],
                                           device T *output [[buffer(1)]],

@@ -259,7 +259,7 @@ impl DiaEncoderLayer {
 
         residual = &x;
         x_norm = self.post_sa_norm.forward(&x)?;
-        let mlp_out = self.mlp.forward(&x)?;
+        let mlp_out = self.mlp.forward(&x_norm)?;
 
         residual + mlp_out
     }
@@ -404,7 +404,7 @@ impl DiaDecoderLayer {
         residual = &x;
         x_norm = self.pre_ca_norm.forward(&x)?;
 
-        let ca_out = self.self_attn.forward(
+        let ca_out = self.cross_attn.forward(
             &x_norm,
             &encoder_out,
             decoder_positions,
@@ -416,7 +416,7 @@ impl DiaDecoderLayer {
         let x = (residual + ca_out)?;
         residual = &x;
 
-        x_norm = self.pre_ca_norm.forward(&x)?;
+        x_norm = self.pre_mlp_norm.forward(&x)?;
         let mlp_out = self.mlp.forward(&x_norm)?;
 
         residual + mlp_out
@@ -428,6 +428,8 @@ pub struct DiaDecoder {
     norm: RmsNorm,
     layers: Vec<DiaDecoderLayer>,
     logits_dense: Linear,
+    channels: usize,
+    vocab_size: usize,
 }
 
 impl DiaDecoder {
@@ -465,6 +467,8 @@ impl DiaDecoder {
             norm,
             layers,
             logits_dense,
+            channels: cfg.data.channels,
+            vocab_size: cfg.model.tgt_vocab_size,
         })
     }
 
@@ -541,7 +545,9 @@ impl DiaDecoder {
 
         x = self.norm.forward(&x)?;
 
-        self.logits_dense.forward(&x)
+        x = self.logits_dense.forward(&x)?;
+
+        x.reshape((x.dim(0)?, x.dim(1)?, self.channels, self.vocab_size))
     }
 
     /// Forward pass for the Decoder stack, managing KV caches.

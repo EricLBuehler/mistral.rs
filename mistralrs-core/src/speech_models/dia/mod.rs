@@ -89,7 +89,8 @@ impl DiaPipeline {
             audio_pad_value,
             audio_bos_value,
             &delay_precomp,
-        )?;
+        )?
+        .squeeze(0)?;
 
         Ok(prefill)
     }
@@ -144,7 +145,9 @@ impl DiaPipeline {
             Tensor::arange(0f32, self.cfg.data.text_length as f32, &self.device)?
                 .unsqueeze(0)?
                 .repeat((2, 1))?;
-        let encoder_padding_mask = enc_input_cond.ne(self.cfg.data.text_pad_value)?;
+        let encoder_padding_mask = enc_input_cond
+            .ne(self.cfg.data.text_pad_value)?
+            .repeat((2, 1))?;
         let encoder_attn_mask = create_attn_mask(&encoder_padding_mask, &encoder_padding_mask)?;
         let encoder_out =
             self.model
@@ -159,15 +162,13 @@ impl DiaPipeline {
         let decoder_attn_mask = create_attn_mask(&decoder_padding_mask, &encoder_padding_mask)?;
 
         let max_audio_length = self.cfg.data.audio_length;
-        let generated_tokens = Tensor::ones(
+        let generated_tokens = Tensor::zeros(
             (max_audio_length, self.cfg.data.channels),
-            DType::F32,
+            DType::U32,
             &self.device,
-        )?
-        .neg()?
-        .to_dtype(DType::F32)?;
+        )?;
 
-        generated_tokens.slice_set(&prefill, 0, 0)?;
+        generated_tokens.slice_set(&prefill.to_dtype(DType::U32)?, 0, 0)?;
 
         let mut decoder_self_attn_cache = Vec::new();
         for _ in 0..self.cfg.model.decoder.n_layer {
@@ -203,9 +204,9 @@ impl DiaPipeline {
     ) -> Result<Vec<u32>> {
         assert_eq!(logits.rank(), 2);
 
-        if temperature == 0. {
-            return logits.argmax(D::Minus1)?.to_vec1::<u32>();
-        }
+        // if temperature == 0. {
+        return logits.argmax(D::Minus1)?.to_vec1::<u32>();
+        // }
 
         let mut logits = (logits / temperature as f64)?;
         if let Some(cfg_filter_top_k) = cfg_filter_top_k {
@@ -286,9 +287,9 @@ impl DiaPipeline {
             cross_attn_cache,
         )?;
 
-        let logits_last = logits.i((.., logits.dim(D::Minus1)? - 1.., .., ..))?;
-        let uncond_logits = logits_last.i((0, .., ..))?;
-        let cond_logits = logits_last.i((1, .., ..))?;
+        let logits_last = logits.i((.., logits.dim(1)? - 1.., .., ..))?.squeeze(1)?;
+        let uncond_logits = logits_last.i((0, .., ..))?.squeeze(0)?;
+        let cond_logits = logits_last.i((1, .., ..))?.squeeze(0)?;
 
         logits = (&cond_logits + (cfg_scale as f64 * (&cond_logits - uncond_logits)?)?)?;
         // logits_CxV[:, audio_eos_value + 1 :] = -torch.inf
@@ -333,10 +334,13 @@ impl DiaPipeline {
 
         let min_valid_index = 0f64;
         let max_valid_index = 1023f64;
+
+        // Original code scatters values where the below `invalid_mask` is true to 0.
+        // We do the opposite inverse.
         let invalid_mask = codebook
             .lt(min_valid_index)?
             .bitwise_or(&codebook.gt(max_valid_index)?)?;
-        codebook.scatter_add(&invalid_mask, &codebook.neg()?, 0)?;
+        codebook = invalid_mask.where_cond(&codebook.zeros_like()?, &codebook)?;
 
         let codes = codebook.transpose(1, 2)?;
 
@@ -427,14 +431,14 @@ impl DiaPipeline {
                 generated_tokens = generated_tokens.slice_assign(
                     &[&(dec_step + 1..dec_step + 2), &..],
                     &mask.where_cond(
-                        &dec_out,
+                        &dec_out.unsqueeze(0)?,
                         &generated_tokens.i((dec_step + 1..dec_step + 2, ..))?,
                     )?,
                 )?;
             } else {
                 let len = pred_c.len();
                 generated_tokens.slice_set(
-                    &Tensor::from_vec(pred_c, len, &self.device)?,
+                    &Tensor::from_vec(pred_c, len, &self.device)?.unsqueeze(0)?,
                     0,
                     dec_step + 1,
                 )?;
