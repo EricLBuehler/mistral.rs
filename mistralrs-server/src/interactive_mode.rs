@@ -1,3 +1,4 @@
+use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
@@ -8,9 +9,12 @@ use mistralrs_core::{
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
+use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
 use serde_json::Value;
 use std::{
+    fs,
     io::{self, Write},
+    path::PathBuf,
     sync::{atomic::Ordering, Arc, Mutex},
     time::Instant,
 };
@@ -25,6 +29,46 @@ fn exit_handler() {
 
 fn terminate_handler() {
     TERMINATE_ALL_NEXT_STEP.store(true, Ordering::SeqCst);
+}
+
+fn history_file_path() -> PathBuf {
+    // Replace these with your own org/app identifiers.
+    let proj_dirs = ProjectDirs::from("com", "", "mistral.rs")
+        .expect("Could not determine project directories");
+    let config_dir = proj_dirs.config_dir();
+
+    // Ensure the directory exists:
+    fs::create_dir_all(config_dir).expect("Failed to create config directory");
+
+    // e.g. ~/.config/MyApp/history.txt
+    config_dir.join("history.txt")
+}
+
+fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
+    let r = editor.readline("> ");
+    match r {
+        Err(ReadlineError::Interrupted) => {
+            editor.save_history(&history_file_path()).unwrap();
+            // Ctrl+C
+            std::process::exit(0);
+        }
+
+        Err(ReadlineError::Eof) => {
+            editor.save_history(&history_file_path()).unwrap();
+            // CTRL-D
+            std::process::exit(0);
+        }
+
+        Err(e) => {
+            editor.save_history(&history_file_path()).unwrap();
+            eprintln!("Error reading input: {:?}", e);
+            std::process::exit(1);
+        }
+        Ok(prompt) => {
+            editor.add_history_entry(prompt.clone()).unwrap();
+            prompt
+        }
+    }
 }
 
 static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
@@ -122,16 +166,13 @@ async fn text_interactive_mode(
     ctrlc::set_handler(move || CTRLC_HANDLER.lock().unwrap()())
         .expect("Failed to set CTRL-C handler for interactive mode");
 
+    let mut rl = DefaultEditor::new().expect("Failed to open input");
+    let _ = rl.load_history(&history_file_path());
     'outer: loop {
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let mut prompt = String::new();
-        print!("> ");
-        io::stdout().flush().unwrap();
-        io::stdin()
-            .read_line(&mut prompt)
-            .expect("Failed to get input");
+        let prompt = read_line(&mut rl);
 
         match prompt.as_str().trim() {
             "" => continue,
@@ -269,6 +310,8 @@ async fn text_interactive_mode(
         messages.push(assistant_message);
         println!();
     }
+
+    rl.save_history(&history_file_path()).unwrap();
 }
 
 fn parse_image_urls_and_message(input: &str) -> (Vec<String>, String) {
@@ -331,16 +374,13 @@ async fn vision_interactive_mode(
     ctrlc::set_handler(move || CTRLC_HANDLER.lock().unwrap()())
         .expect("Failed to set CTRL-C handler for interactive mode");
 
+    let mut rl = DefaultEditor::new().expect("Failed to open input");
+    let _ = rl.load_history(&history_file_path());
     'outer: loop {
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let mut prompt = String::new();
-        print!("> ");
-        io::stdout().flush().unwrap();
-        io::stdin()
-            .read_line(&mut prompt)
-            .expect("Failed to get input");
+        let prompt = read_line(&mut rl);
 
         match prompt.as_str().trim() {
             "" => continue,
@@ -522,6 +562,8 @@ async fn vision_interactive_mode(
         messages.push(assistant_message);
         println!();
     }
+
+    rl.save_history(&history_file_path()).unwrap();
 }
 
 async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {
@@ -542,16 +584,13 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
     ctrlc::set_handler(move || CTRLC_HANDLER.lock().unwrap()())
         .expect("Failed to set CTRL-C handler for interactive mode");
 
+    let mut rl = DefaultEditor::new().expect("Failed to open input");
+    let _ = rl.load_history(&history_file_path());
     loop {
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let mut prompt = String::new();
-        print!("> ");
-        io::stdout().flush().unwrap();
-        io::stdin()
-            .read_line(&mut prompt)
-            .expect("Failed to get input");
+        let prompt = read_line(&mut rl);
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -612,4 +651,6 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
 
         println!();
     }
+
+    rl.save_history(&history_file_path()).unwrap();
 }

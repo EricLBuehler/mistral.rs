@@ -1,14 +1,10 @@
 use std::collections::HashMap;
 
 use candle_core::{Device, Result};
-use either::Either;
 use itertools::Itertools;
 use tracing::info;
 
-use crate::{
-    pipeline::{KvCache, RotatingCache, SingleCache},
-    sequence::Sequence,
-};
+use crate::{pipeline::KvCache, sequence::Sequence};
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -36,7 +32,6 @@ impl From<Vec<u32>> for Tokens {
 struct CacheElement {
     cache: Vec<Option<KvCache>>,
     image_hashes: Option<Vec<u64>>,
-    devices: Vec<Option<Device>>,
 }
 
 pub struct PrefixCacheManagerV2 {
@@ -72,78 +67,19 @@ impl PrefixCacheManagerV2 {
             return;
         }
         let cache = seq.normal_cache().to_vec();
-        let devices = cache
-            .iter()
-            .map(|x| x.as_ref().map(|x| x.k().unwrap().unwrap().device().clone()))
-            .collect::<Vec<_>>();
+
         self.caches.insert(
             seq.get_toks().to_vec().into(),
             CacheElement {
                 cache,
-                devices,
                 image_hashes: seq.image_hashes().map(|x| x.to_vec()),
             },
         );
     }
 
-    fn cache_to(
-        cache: &mut [Option<KvCache>],
-        devices: Either<&Device, &Vec<Option<Device>>>,
-    ) -> Result<()> {
-        for (i, layer) in cache
-            .iter_mut()
-            .enumerate()
-            .flat_map(|(i, x)| x.as_mut().map(|x| (i, x)))
-        {
-            let device = devices.left_or_else(|layers| layers[i].as_ref().unwrap());
-
-            match layer {
-                KvCache::Normal { k, v } => {
-                    *layer = KvCache::Normal {
-                        k: SingleCache {
-                            all_data: k.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
-                            dim: k.dim,
-                            current_seq_len: k.current_seq_len,
-                            max_seq_len: k.max_seq_len,
-                            capacity_seq_len: k.capacity_seq_len,
-                        },
-                        v: SingleCache {
-                            all_data: v.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
-                            dim: v.dim,
-                            current_seq_len: v.current_seq_len,
-                            max_seq_len: v.max_seq_len,
-                            capacity_seq_len: v.capacity_seq_len,
-                        },
-                    }
-                }
-                KvCache::Rotating { k, v } => {
-                    *layer = KvCache::Rotating {
-                        k: RotatingCache {
-                            all_data: k.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
-                            dim: k.dim,
-                            current_seq_len: k.current_seq_len,
-                            max_seq_len: k.max_seq_len,
-                            offset: k.offset,
-                            capacity_seq_len: k.capacity_seq_len,
-                        },
-                        v: RotatingCache {
-                            all_data: v.all_data.as_ref().map(|x| x.to_device(device).unwrap()),
-                            dim: v.dim,
-                            current_seq_len: v.current_seq_len,
-                            max_seq_len: v.max_seq_len,
-                            offset: v.offset,
-                            capacity_seq_len: v.capacity_seq_len,
-                        },
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Evict the caches to CPU. This will evict the first k seqs such that the number of sequences on device after the copy is
+    /// Evict the caches. This will evict the first k seqs such that the number of sequences on device after the copy is
     /// the maximum allowed. Returns the number of evicted sequences.
-    pub fn evict_to_cpu(&mut self) -> Result<usize> {
+    pub fn evict_caches(&mut self) -> Result<usize> {
         if self.no_prefix_cache {
             return Ok(0);
         }
@@ -188,39 +124,21 @@ impl PrefixCacheManagerV2 {
             };
 
             if !matches!(cache_device, Device::Cpu) {
-                Self::cache_to(&mut cache.cache, Either::Left(&Device::Cpu))?;
+                cache.cache.clear();
                 n_evicted += 1;
             }
         }
+
+        self.caches.retain(|_tokens, cache| !cache.cache.is_empty());
+
         Ok(self.caches.len().saturating_sub(self.n_on_device))
     }
 
-    /// Evict all the caches to CPU.
-    pub fn evict_all_to_cpu(&mut self) -> Result<usize> {
-        if self.no_prefix_cache {
-            return Ok(0);
-        }
-        // Intentionally evict the first ones first, as they are the oldest
-        for cache in self.caches.values_mut() {
-            let first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
-            let Some(Some(first_non_none)) = first_non_none else {
-                continue;
-            };
-
-            let cache_device = match first_non_none {
-                KvCache::Normal { k, .. } => {
-                    k.all_data().as_ref().expect("No KV cache data").device()
-                }
-                KvCache::Rotating { k, .. } => {
-                    k.all_data().as_ref().expect("No KV cache data").device()
-                }
-            };
-
-            if !matches!(cache_device, Device::Cpu) {
-                Self::cache_to(&mut cache.cache, Either::Left(&Device::Cpu))?;
-            }
-        }
-        Ok(self.caches.len())
+    /// Evict all the caches.
+    pub fn evict_all_caches(&mut self) -> Result<usize> {
+        let len = self.caches.len();
+        self.caches.clear();
+        Ok(len)
     }
 
     /// Search for a matching cache given some tokens. Image-containing sequences are now cached too.
@@ -269,7 +187,6 @@ impl PrefixCacheManagerV2 {
             } else {
                 0
             };
-            Self::cache_to(&mut cache.cache, Either::Right(&cache.devices))?;
             for layer in cache.cache.iter_mut().flatten() {
                 match layer.set_len(match_len) {
                     Ok(_) => (),
