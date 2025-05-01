@@ -1,10 +1,11 @@
-use candle_core::{IndexOp, Result, Tensor, D};
+use candle_core::{DType, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::{
     attention::SdpaParams,
     layers::{self, DiaRotaryEmbedding, RmsNorm, Sdpa},
+    layers_masker::masked_fill,
 };
 
 use super::{
@@ -29,7 +30,7 @@ pub fn dense_general_row(
     vb: ShardedVarBuilder,
 ) -> Result<Linear> {
     let kernel_shape = [in_features.clone(), vec![out_features]].concat();
-    let weight = vb.get(kernel_shape, "weight")?.flatten_from(1)?.t()?;
+    let weight = vb.get(kernel_shape, "weight")?.flatten_to(D::Minus2)?.t()?;
 
     Ok(Linear::new(weight, None))
 }
@@ -142,12 +143,24 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
             }
         };
 
+        let attn_mask = match attn_mask {
+            Some(attn_mask) => {
+                let should_attend = attn_mask.eq(1.)?;
+                let should_not_attend = attn_mask.eq(0.)?;
+                Some(masked_fill(
+                    &masked_fill(&attn_mask.to_dtype(DType::F32)?, &should_attend, 0f32)?,
+                    &should_not_attend,
+                    f32::NEG_INFINITY,
+                )?)
+            }
+            None => None,
+        };
         // TODO: flash attention
         let mut attn_output = Sdpa.run_attention(
             &xq,
             &k,
             &v,
-            attn_mask,
+            attn_mask.as_ref(),
             None,
             &SdpaParams {
                 n_kv_groups: self.num_gqa_groups,

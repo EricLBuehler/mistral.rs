@@ -1489,7 +1489,7 @@ impl Gemma3RotaryEmbedding {
 }
 
 pub struct DiaRotaryEmbedding {
-    t: Tensor,
+    timescale: Tensor,
     dtype: DType,
 }
 
@@ -1515,19 +1515,26 @@ impl DiaRotaryEmbedding {
         let timescale = Tensor::from_vec(timescale, timescale_len, device)?;
         let t = Tensor::arange(0u32, max_len as u32, device)?.to_dtype(DType::F32)?;
 
-        Ok(Self { t, dtype })
+        Ok(Self { timescale, dtype })
     }
 
     pub fn forward(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
         let freqs = positions
             .unsqueeze(D::Minus1)?
             .unsqueeze(D::Minus1)?
-            .broadcast_div(&self.t)?;
+            .broadcast_div(&self.timescale)?;
 
         let sin = freqs.sin()?.to_dtype(self.dtype)?;
         let cos = freqs.cos()?.to_dtype(self.dtype)?;
 
-        candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin)
+        let split = xs.chunk(2, D::Minus1)?;
+        let first_half = &split[0];
+        let second_half = &split[1];
+
+        let first_part = (first_half.broadcast_mul(&cos)? - second_half.broadcast_mul(&sin)?)?;
+        let second_part = (second_half.broadcast_mul(&cos)? + first_half.broadcast_mul(&sin)?)?;
+
+        Tensor::cat(&[first_part, second_part], D::Minus1)
     }
 }
 #[derive(Debug, Clone)]

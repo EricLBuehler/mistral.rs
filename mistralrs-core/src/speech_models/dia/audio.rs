@@ -1,4 +1,4 @@
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 
 /// Builds the (t_idx, indices) tensors once and re-uses them every call.
 pub fn build_delay_indices(
@@ -75,11 +75,19 @@ pub fn revert_audio_delay(
     let (t_idx, gather_idx) = precomp;
     let dev = audio.device();
     let t_idx = t_idx.to_device(dev)?;
-    let gather_idx = gather_idx.to_device(dev)?.to_dtype(DType::U32)?;
-    let gathered = audio
-        .index_select(&gather_idx.i(0)?, 0)?
-        .index_select(&gather_idx.i(1)?, 1)?
-        .index_select(&gather_idx.i(2)?, 2)?;
+
+    let gather_idx = gather_idx.to_dtype(DType::F32)?;
+    // Flatten and gather with a single index_select
+    let (b, t, c) = audio.dims3()?;
+    let flat_audio = audio.reshape((b * t * c,))?;
+    let gather_b_idx = gather_idx.i((.., 0))?.squeeze(D::Minus1)?;
+    let gather_t_idx = gather_idx.i((.., 1))?.squeeze(D::Minus1)?;
+    let gather_c_idx = gather_idx.i((.., 2))?.squeeze(D::Minus1)?;
+    let linear_idx =
+        (((&gather_b_idx * (t * c) as f64)? + (&gather_t_idx * c as f64)?)? + &gather_c_idx)?;
+    let gathered_flat = flat_audio.index_select(&linear_idx.to_dtype(DType::U32)?, 0)?;
+    let gathered = gathered_flat.reshape((b, t, c))?;
+
     let mask_out = t_idx.ge(original_t as f64)?;
     let pad = Tensor::full(pad_value as f32, gathered.shape(), dev)?;
     let result = mask_out.where_cond(&pad, &gathered)?;
@@ -94,12 +102,19 @@ pub fn apply_audio_delay(
     precomp: &(Tensor, Tensor),
 ) -> Result<Tensor> {
     let (t_idx, gather_idx) = precomp;
-    let gather_idx = gather_idx.to_dtype(DType::U32)?;
-    let gathered = audio
-        .index_select(&gather_idx.i(0)?, 0)? // batch
-        .index_select(&gather_idx.i(1)?, 1)? // time
-        .index_select(&gather_idx.i(2)?, 2)?; // channel
-                                              // where
+
+    let gather_idx = gather_idx.to_dtype(DType::F32)?;
+    // Flatten and gather with a single index_select
+    let (b, t, c) = audio.dims3()?;
+    let flat_audio = audio.reshape((b * t * c,))?;
+    let gather_b_idx = gather_idx.i((.., 0))?.squeeze(D::Minus1)?;
+    let gather_t_idx = gather_idx.i((.., 1))?.squeeze(D::Minus1)?;
+    let gather_c_idx = gather_idx.i((.., 2))?.squeeze(D::Minus1)?;
+    let linear_idx =
+        (((&gather_b_idx * (t * c) as f64)? + (&gather_t_idx * c as f64)?)? + &gather_c_idx)?;
+    let gathered_flat = flat_audio.index_select(&linear_idx.to_dtype(DType::U32)?, 0)?;
+    let gathered = gathered_flat.reshape((b, t, c))?;
+
     let mask_bos = t_idx.lt(0)?;
     let mask_pad = t_idx.ge(audio.dims()[1] as f64)?;
     let bos = Tensor::full(bos_value as f32, gathered.shape(), gathered.device())?;

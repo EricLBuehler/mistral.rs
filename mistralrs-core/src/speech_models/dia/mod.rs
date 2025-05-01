@@ -113,7 +113,7 @@ impl DiaPipeline {
             Tensor::cat(&[text, pad], 0)?
         };
 
-        padded_text_np.to_dtype(DType::F32)?.unsqueeze(0)
+        padded_text_np.to_dtype(DType::U32)?.unsqueeze(0)
     }
 
     /// Returns:
@@ -144,11 +144,7 @@ impl DiaPipeline {
             Tensor::arange(0f32, self.cfg.data.text_length as f32, &self.device)?
                 .unsqueeze(0)?
                 .repeat((2, 1))?;
-        let encoder_padding_mask =
-            Tensor::arange(0f32, self.cfg.data.text_length as f32, &self.device)?
-                .unsqueeze(2)?
-                .broadcast_as((2, self.cfg.data.text_length))?
-                .ne(&enc_input_cond)?;
+        let encoder_padding_mask = enc_input_cond.ne(self.cfg.data.text_pad_value)?;
         let encoder_attn_mask = create_attn_mask(&encoder_padding_mask, &encoder_padding_mask)?;
         let encoder_out =
             self.model
