@@ -8,7 +8,10 @@ use tracing::{level_filters::LevelFilter, Dispatch};
 use crate::{
     get_mut_arcmutex,
     request::SearchContextSize,
-    search::{self, SearchFunctionParameters, SearchResult},
+    search::{
+        self, search_tool_called, ExtractFunctionParameters, SearchFunctionParameters,
+        SearchResult, EXTRACT_TOOL_NAME, SEARCH_TOOL_NAME,
+    },
     MessageContent, NormalRequest, RequestMessage, Response, ResponseOk, ToolCallResponse,
     WebSearchOptions,
 };
@@ -156,6 +159,101 @@ async fn do_search(
     this.add_request(second_request).await;
 }
 
+async fn do_extraction(
+    this: Arc<Engine>,
+    mut second_request: NormalRequest,
+    tool_calls: &ToolCallResponse,
+    web_search_options: &WebSearchOptions,
+) {
+    let messages = match &mut second_request.messages {
+        RequestMessage::Chat { messages, .. } | RequestMessage::VisionChat { messages, .. } => {
+            messages
+        }
+        _ => unreachable!(),
+    };
+
+    // Add assistant call message
+    {
+        let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+        message.insert("role".to_string(), Either::Left("assistant".to_string()));
+        message.insert(
+            "content".to_string(),
+            Either::Left(format!(
+                "{{\"name\":\"{}\",\"arguments\":\"{}\"}}",
+                tool_calls.function.name, tool_calls.function.arguments
+            )),
+        );
+        messages.push(message);
+    }
+    let tool_call_params: ExtractFunctionParameters =
+        serde_json::from_str(&tool_calls.function.arguments).unwrap();
+    println!();
+    tracing::info!(
+        "Called extrcation tool with query `{}`.",
+        tool_call_params.url
+    );
+
+    let start = Instant::now();
+    // Add tool response
+    {
+        let tokenizer = get_mut_arcmutex!(this.pipeline)
+            .tokenizer()
+            .expect("A tokenizer is expected for non-diffusion models.");
+
+        // Allow `info` and below; suppress `warn`
+        let subscriber = tracing_subscriber::fmt::Subscriber::builder()
+            .with_max_level(LevelFilter::INFO)
+            .finish();
+        let dispatch = Dispatch::new(subscriber);
+
+        // Manage context size by # of tokens. Apply default here.
+        let max_results_budget_toks =
+            match web_search_options.search_context_size.unwrap_or_default() {
+                SearchContextSize::High => 16384_usize,
+                SearchContextSize::Medium => 8192_usize,
+                SearchContextSize::Low => 4096_usize,
+            };
+
+        let res = tracing::dispatcher::with_default(&dispatch, || {
+            search::run_extract_tool(&tool_call_params)
+                .unwrap()
+                .cap_content_len(&tokenizer, max_results_budget_toks)
+                .unwrap()
+        });
+
+        let tool_result = serde_json::to_string(&res)
+            .unwrap()
+            .replace("\\n", "\n")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\");
+        let end = Instant::now();
+        let used_len = {
+            let inp = InputSequence::Raw(Cow::from(&tool_result));
+            tokenizer
+                .encode_fast(inp, false)
+                .map(|x| x.len())
+                .unwrap_or(usize::MAX)
+        };
+        tracing::info!(
+            "Extraction executed in {:.2}s, using {used_len} tokens.",
+            (end - start).as_secs_f32(),
+        );
+
+        let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+        message.insert("role".to_string(), Either::Left("tool".to_string()));
+        message.insert(
+            "content".to_string(),
+            Either::Left(format!("{{\"output\": \"{tool_result}\"}}")),
+        );
+        messages.push(message);
+    }
+
+    // Recursion is enabled here!
+    second_request.web_search_options = Some(web_search_options.clone());
+
+    this.add_request(second_request).await;
+}
+
 /// The strategy is:
 /// - Send the first request to allow a tool call
 ///     - If no, tool call, early return
@@ -168,11 +266,11 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
         unreachable!()
     };
     let mut first_request = request.clone();
-    // Actually add the search tool here
+    // Actually add the search tools here
     first_request
         .tools
         .get_or_insert_with(Vec::new)
-        .push(search::get_search_tool(&web_search_options).unwrap());
+        .extend(search::get_search_tools(&web_search_options).unwrap());
 
     let mut second_request = first_request.clone();
     first_request.web_search_options = None;
@@ -195,7 +293,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
             let tool_calls = match &done.choices[0].message.tool_calls {
                 Some(tool_calls)
                     if tool_calls.len() == 1
-                        && tool_calls[0].function.name == search::SEARCH_TOOL_NAME =>
+                        && search_tool_called(&tool_calls[0].function.name) =>
                 {
                     &tool_calls[0]
                 }
@@ -217,7 +315,13 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 }
             };
 
-            do_search(this_clone, second_request, tool_calls, &web_search_options).await;
+            if tool_calls.function.name == SEARCH_TOOL_NAME {
+                do_search(this_clone, second_request, tool_calls, &web_search_options).await;
+            } else if tool_calls.function.name == EXTRACT_TOOL_NAME {
+                do_extraction(this_clone, second_request, tool_calls, &web_search_options).await;
+            } else {
+                unreachable!()
+            }
         });
         get_mut_arcmutex!(this.handles).push(handle);
     } else {
@@ -257,7 +361,7 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
             let tool_calls = match &choice.delta.tool_calls {
                 Some(tool_calls)
                     if tool_calls.len() == 1
-                        && tool_calls[0].function.name == search::SEARCH_TOOL_NAME =>
+                        && search_tool_called(&tool_calls[0].function.name) =>
                 {
                     &tool_calls[0]
                 }
@@ -269,7 +373,13 @@ pub(super) async fn search_request(this: Arc<Engine>, request: NormalRequest) {
                 }
             };
 
-            do_search(this_clone, second_request, tool_calls, &web_search_options).await;
+            if tool_calls.function.name == SEARCH_TOOL_NAME {
+                do_search(this_clone, second_request, tool_calls, &web_search_options).await;
+            } else if tool_calls.function.name == EXTRACT_TOOL_NAME {
+                do_extraction(this_clone, second_request, tool_calls, &web_search_options).await;
+            } else {
+                unreachable!()
+            }
         });
         get_mut_arcmutex!(this.handles).push(handle);
     }
