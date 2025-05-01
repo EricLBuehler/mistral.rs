@@ -8,6 +8,7 @@ use mistralrs_core::{
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
+use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
 use serde_json::Value;
 use std::{
     io::{self, Write},
@@ -25,6 +26,27 @@ fn exit_handler() {
 
 fn terminate_handler() {
     TERMINATE_ALL_NEXT_STEP.store(true, Ordering::SeqCst);
+}
+
+fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
+    let r = editor.readline("> ");
+    match r {
+        Err(ReadlineError::Interrupted) => {
+            // Ctrl+C
+            std::process::exit(0);
+        }
+
+        Err(ReadlineError::Eof) => {
+            // CTRL-D
+            std::process::exit(0);
+        }
+
+        Err(e) => {
+            eprintln!("Error reading input: {:?}", e);
+            std::process::exit(1);
+        }
+        Ok(prompt) => prompt,
+    }
 }
 
 static CTRLC_HANDLER: Lazy<Mutex<&'static (dyn Fn() + Sync)>> =
@@ -122,16 +144,12 @@ async fn text_interactive_mode(
     ctrlc::set_handler(move || CTRLC_HANDLER.lock().unwrap()())
         .expect("Failed to set CTRL-C handler for interactive mode");
 
+    let mut rl = DefaultEditor::new().expect("Failed to open input");
     'outer: loop {
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let mut prompt = String::new();
-        print!("> ");
-        io::stdout().flush().unwrap();
-        io::stdin()
-            .read_line(&mut prompt)
-            .expect("Failed to get input");
+        let prompt = read_line(&mut rl);
 
         match prompt.as_str().trim() {
             "" => continue,
@@ -331,16 +349,12 @@ async fn vision_interactive_mode(
     ctrlc::set_handler(move || CTRLC_HANDLER.lock().unwrap()())
         .expect("Failed to set CTRL-C handler for interactive mode");
 
+    let mut rl = DefaultEditor::new().expect("Failed to open input");
     'outer: loop {
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let mut prompt = String::new();
-        print!("> ");
-        io::stdout().flush().unwrap();
-        io::stdin()
-            .read_line(&mut prompt)
-            .expect("Failed to get input");
+        let prompt = read_line(&mut rl);
 
         match prompt.as_str().trim() {
             "" => continue,
@@ -542,16 +556,12 @@ async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) 
     ctrlc::set_handler(move || CTRLC_HANDLER.lock().unwrap()())
         .expect("Failed to set CTRL-C handler for interactive mode");
 
+    let mut rl = DefaultEditor::new().expect("Failed to open input");
     loop {
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let mut prompt = String::new();
-        print!("> ");
-        io::stdout().flush().unwrap();
-        io::stdin()
-            .read_line(&mut prompt)
-            .expect("Failed to get input");
+        let prompt = read_line(&mut rl);
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
