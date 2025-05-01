@@ -1,10 +1,10 @@
-use candle_core::{IndexOp, Result, Tensor};
+use candle_core::{IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, Linear, Module};
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::{
     attention::SdpaParams,
-    layers::{self, DiaRotaryEmbedding, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{self, DiaRotaryEmbedding, RmsNorm, Sdpa},
 };
 
 use super::config::DiaConfig;
@@ -269,7 +269,7 @@ impl DiaEncoderLayer {
     }
 }
 
-struct DiaEncoder {
+pub struct DiaEncoder {
     embedding: Embedding,
     norm: RmsNorm,
     layers: Vec<DiaEncoderLayer>,
@@ -300,7 +300,7 @@ impl DiaEncoder {
         })
     }
 
-    fn forward(
+    pub fn forward(
         &self,
         x: &Tensor,
         positions: &[usize],
@@ -419,7 +419,7 @@ impl DiaDecoderLayer {
     }
 }
 
-struct DiaDecoder {
+pub struct DiaDecoder {
     embeddings: Vec<Embedding>,
     norm: RmsNorm,
     layers: Vec<DiaDecoderLayer>,
@@ -463,17 +463,130 @@ impl DiaDecoder {
             logits_dense,
         })
     }
+
+    /// Computes the Key and Value tensors for cross-attention for each layer from the encoder output.
+    pub fn precompute_cross_attn_cache(
+        &self,
+        encoder_out: &Tensor,
+        encoder_positions: &[usize],
+    ) -> Result<Vec<Option<(Tensor, Tensor)>>> {
+        let (b, t, _d) = encoder_out.dims3()?;
+
+        let mut per_layer_kv_cache = Vec::new();
+
+        for layer in &self.layers {
+            let ca = &layer.cross_attn;
+
+            let mut k_proj =
+                ca.k_proj
+                    .forward(encoder_out)?
+                    .reshape((b, t, ca.num_kv_heads, ca.head_dim))?;
+            k_proj = ca.rope.forward(&k_proj, encoder_positions)?;
+
+            let v_proj =
+                ca.v_proj
+                    .forward(encoder_out)?
+                    .reshape((b, t, ca.num_kv_heads, ca.head_dim))?;
+
+            per_layer_kv_cache.push(Some((k_proj.transpose(1, 2)?, v_proj.transpose(1, 2)?)))
+        }
+
+        Ok(per_layer_kv_cache)
+    }
+
+    /// Performs a single decoding step, managing KV caches layer by layer.
+    pub fn decode_step(
+        &self,
+        tgt_ids: &Tensor,
+        encoder_out: &Tensor,
+        cross_attn_mask: Option<&Tensor>,
+        decoder_positions: &[usize],
+        self_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
+        cross_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
+    ) -> Result<Tensor> {
+        let mut x: Option<Tensor> = None;
+        for (i, embedding) in self.embeddings.iter().enumerate() {
+            let channel_tokens = tgt_ids.narrow(D::Minus1, i, 1)?.squeeze(D::Minus1)?;
+            let channel_embed = embedding.forward(&channel_tokens)?;
+            x = match x {
+                Some(x) => Some((x + channel_embed)?),
+                None => Some(channel_embed),
+            };
+        }
+
+        let mut x = x.unwrap();
+
+        for (i, layer) in self.layers.iter().enumerate() {
+            let self_cache = &mut self_attn_cache[i];
+            let cross_cache = &mut cross_attn_cache[i];
+            x = layer.forward(
+                &x,
+                encoder_out,
+                decoder_positions,
+                cross_attn_mask,
+                self_cache.as_mut(),
+                cross_cache.as_mut(),
+                false,
+            )?;
+        }
+
+        x = self.norm.forward(&x)?;
+
+        self.logits_dense.forward(&x)
+    }
+
+    /// Forward pass for the Decoder stack, managing KV caches.
+    pub fn forward(
+        &self,
+        tgt_ids: &Tensor,
+        encoder_out: &Tensor,
+        cross_attn_mask: Option<&Tensor>,
+        decoder_positions: &[usize],
+        self_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
+        cross_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
+    ) -> Result<Tensor> {
+        let mut x: Option<Tensor> = None;
+        for (i, embedding) in self.embeddings.iter().enumerate() {
+            let channel_tokens = tgt_ids.narrow(D::Minus1, i, 1)?.squeeze(D::Minus1)?;
+            let channel_embed = embedding.forward(&channel_tokens)?;
+            x = match x {
+                Some(x) => Some((x + channel_embed)?),
+                None => Some(channel_embed),
+            };
+        }
+
+        let mut x = x.unwrap();
+
+        for (i, layer) in self.layers.iter().enumerate() {
+            let self_cache = &mut self_attn_cache[i];
+            let cross_cache = &mut cross_attn_cache[i];
+            x = layer.forward(
+                &x,
+                encoder_out,
+                decoder_positions,
+                cross_attn_mask,
+                self_cache.as_mut(),
+                cross_cache.as_mut(),
+                true,
+            )?;
+        }
+
+        x = self.norm.forward(&x)?;
+
+        self.logits_dense.forward(&x)
+    }
 }
 
 pub struct DiaModel {
-    encoder: DiaEncoder,
-    decoder: DiaDecoder,
+    pub encoder: DiaEncoder,
+    pub decoder: DiaDecoder,
 }
 
 impl DiaModel {
     pub fn new(cfg: &DiaConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let encoder = DiaEncoder::new(cfg, vb.pp("encoder"))?;
         let decoder = DiaDecoder::new(cfg, vb.pp("decoder"))?;
-        todo!()
+
+        Ok(Self { encoder, decoder })
     }
 }
