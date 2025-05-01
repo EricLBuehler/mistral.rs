@@ -1,8 +1,7 @@
-use audio::{apply_audio_delay, build_delay_indices};
+use audio::{apply_audio_delay, build_delay_indices, build_revert_indices, revert_audio_delay};
 use cache::DiaKvCache;
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use config::DiaConfig;
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{BitWiseOp, ShardedVarBuilder};
 use model::DiaModel;
 use rand::{
     distr::{weighted::WeightedIndex, Distribution},
@@ -14,6 +13,8 @@ use crate::{
     layers_masker::masked_fill,
     ops::{TopKLastDimOp, TopKOutput},
 };
+
+pub use config::DiaConfig;
 
 mod audio;
 mod cache;
@@ -309,6 +310,36 @@ impl DiaPipeline {
         self.sample_next_token(&logits, temperature, top_p, cfg_filter_top_k, rng)
     }
 
+    fn generate_output(&self, generated_codes: &Tensor) -> Result<Tensor> {
+        let num_channels = self.cfg.data.channels;
+        let seq_length = generated_codes.dim(0)?;
+        let audio_pad_value = self.cfg.data.audio_pad_value;
+        let delay_pattern = &self.cfg.data.delay_pattern;
+        let max_delay_pattern = *delay_pattern.iter().max().unwrap() as usize;
+
+        let revert_precomp =
+            build_revert_indices(1, seq_length, num_channels, delay_pattern, &self.device)?;
+
+        let mut codebook = revert_audio_delay(
+            &generated_codes.unsqueeze(0)?,
+            audio_pad_value,
+            &revert_precomp,
+            seq_length,
+        )?;
+        codebook = codebook.i((.., codebook.dim(1)? - max_delay_pattern.., ..))?;
+
+        let min_valid_index = 0f64;
+        let max_valid_index = 1023f64;
+        let invalid_mask = codebook
+            .lt(min_valid_index)?
+            .bitwise_or(&codebook.gt(max_valid_index)?)?;
+        codebook.scatter_add(&invalid_mask, &codebook.neg()?, 0)?;
+
+        let codes = codebook.transpose(1, 2)?;
+
+        todo!()
+    }
+
     pub fn generate(&self, text: &str) -> Result<()> {
         let max_tokens: Option<usize> = None;
         let cfg_scale = 3.0f32;
@@ -418,6 +449,11 @@ impl DiaPipeline {
         }
 
         let generated_codes = generated_tokens.i((0..dec_step + 1, ..))?;
+        self.generate_output(&generated_codes)?;
         Ok(())
+    }
+
+    pub fn device(&self) -> &Device {
+        &self.device
     }
 }

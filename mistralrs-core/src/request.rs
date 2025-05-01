@@ -59,6 +59,9 @@ pub enum RequestMessage {
         format: ImageGenerationResponseFormat,
         generation_params: DiffusionGenerationParams,
     },
+    SpeechGeneration {
+        prompt: String,
+    },
 }
 
 fn default_responder<T>() -> Sender<T> {

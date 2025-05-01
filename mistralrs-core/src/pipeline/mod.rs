@@ -15,6 +15,7 @@ mod processing;
 mod response;
 mod sampling;
 mod speculative;
+mod speech;
 mod vision;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
@@ -53,6 +54,7 @@ pub(crate) use processing::{
 };
 use rand_isaac::Isaac64Rng;
 pub use speculative::{SpeculativeConfig, SpeculativeLoader, SpeculativePipeline};
+pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -221,6 +223,7 @@ pub enum ModelCategory {
         prefixer: Arc<dyn VisionPromptPrefixer>,
     },
     Diffusion,
+    Speech,
 }
 
 impl PartialEq for ModelCategory {
@@ -232,6 +235,8 @@ impl PartialEq for ModelCategory {
             (Self::Text, _) => false,
             (Self::Vision { .. }, _) => false,
             (Self::Diffusion, _) => false,
+            (Self::Speech, Self::Speech) => true,
+            (Self::Speech, _) => false,
         }
     }
 }

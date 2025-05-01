@@ -12,8 +12,8 @@ use crate::{
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
     toml_selector::get_toml_selected_model_device_map_params,
     AutoDeviceMapParams, DiffusionLoaderBuilder, DiffusionSpecificConfig, GGUFSpecificConfig,
-    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
-    VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
+    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, SpeechLoader, TomlLoaderArgs,
+    TomlSelector, Topology, VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
     UQFF_MULTI_FILE_DELIMITER,
 };
 
@@ -75,7 +75,8 @@ pub fn get_tgt_non_granular_index(model: &ModelSelected) -> Option<usize> {
         | ModelSelected::LoraGGML { .. }
         | ModelSelected::Toml { .. }
         | ModelSelected::VisionPlain { .. }
-        | ModelSelected::DiffusionPlain { .. } => None,
+        | ModelSelected::DiffusionPlain { .. }
+        | ModelSelected::Speech { .. } => None,
         ModelSelected::XLora {
             tgt_non_granular_index,
             ..
@@ -103,7 +104,8 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::XLoraGGUF { dtype, .. }
         | ModelSelected::XLoraGGML { dtype, .. }
         | ModelSelected::LoraGGUF { dtype, .. }
-        | ModelSelected::LoraGGML { dtype, .. } => Ok(*dtype),
+        | ModelSelected::LoraGGML { dtype, .. }
+        | ModelSelected::Speech { dtype } => Ok(*dtype),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -176,7 +178,9 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
             max_image_shape: (*max_image_length, *max_image_length),
             max_num_images: *max_num_images,
         }),
-        ModelSelected::DiffusionPlain { .. } => Ok(AutoDeviceMapParams::default_text()),
+        ModelSelected::DiffusionPlain { .. } | ModelSelected::Speech { .. } => {
+            Ok(AutoDeviceMapParams::default_text())
+        }
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -555,6 +559,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             DiffusionLoaderBuilder::new(DiffusionSpecificConfig { use_flash_attn }, Some(model_id))
                 .build(arch)
         }
+        ModelSelected::Speech { .. } => Box::new(SpeechLoader),
     };
     Ok(loader)
 }

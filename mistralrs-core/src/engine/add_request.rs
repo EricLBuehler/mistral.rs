@@ -71,7 +71,8 @@ impl Engine {
             RequestMessage::Chat { .. }
             | RequestMessage::CompletionTokens(_)
             | RequestMessage::VisionChat { .. }
-            | RequestMessage::ImageGeneration { .. } => None,
+            | RequestMessage::ImageGeneration { .. }
+            | RequestMessage::SpeechGeneration { .. } => None,
         };
         if is_chat
             && !get_mut_arcmutex!(self.pipeline)
@@ -161,7 +162,8 @@ impl Engine {
                     text,
                 )
             }
-            RequestMessage::ImageGeneration { prompt, .. } => (vec![u32::MAX], prompt),
+            RequestMessage::ImageGeneration { prompt, .. }
+            | RequestMessage::SpeechGeneration { prompt } => (vec![u32::MAX], prompt),
             RequestMessage::CompletionTokens(it) => {
                 let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
                     request

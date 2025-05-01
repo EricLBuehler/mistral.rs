@@ -539,4 +539,10 @@ pub enum ModelSelected {
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
     },
+
+    Speech {
+        /// Model data type. Defaults to `auto`.
+        #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
+        dtype: ModelDType,
+    },
 }
