@@ -4,6 +4,16 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use config::DiaConfig;
 use mistralrs_quant::ShardedVarBuilder;
 use model::DiaModel;
+use rand::{
+    distr::{weighted::WeightedIndex, Distribution},
+    SeedableRng,
+};
+use rand_isaac::Isaac64Rng;
+
+use crate::{
+    layers_masker::masked_fill,
+    ops::{TopKLastDimOp, TopKOutput},
+};
 
 mod audio;
 mod cache;
@@ -179,6 +189,67 @@ impl DiaPipeline {
         ))
     }
 
+    fn sample_next_token(
+        &self,
+        logits: &Tensor,
+        temperature: f32,
+        top_p: f32,
+        cfg_filter_top_k: Option<usize>,
+        rng: &mut Isaac64Rng,
+    ) -> Result<u32> {
+        assert_eq!(logits.rank(), 2);
+
+        if temperature == 0. {
+            return logits.argmax(D::Minus1)?.to_scalar::<u32>();
+        }
+
+        let mut logits = (logits / temperature as f64)?;
+        if let Some(cfg_filter_top_k) = cfg_filter_top_k {
+            let TopKOutput {
+                values: _,
+                indices: top_k_indices,
+            } = logits.topk(cfg_filter_top_k)?;
+            let mut mask = logits.ones_like()?;
+            mask = mask.scatter_add(&top_k_indices, &mask.gather(&top_k_indices, 0)?.neg()?, 0)?;
+            logits = masked_fill(&logits, &mask, f32::NEG_INFINITY)?;
+        }
+
+        if top_p < 1. {
+            let probs = candle_nn::ops::softmax_last_dim(&logits)?;
+            let (sorted_probs, sorted_indices) = probs.sort_last_dim(false)?;
+            let cumulative_probs = sorted_probs.cumsum(D::Minus1)?;
+
+            let mut sorted_indices_to_remove = cumulative_probs.ge(top_p as f64)?;
+            sorted_indices_to_remove = sorted_indices_to_remove.slice_assign(
+                &[&.., &(1..)],
+                &sorted_indices_to_remove
+                    .i((.., ..sorted_indices_to_remove.dim(D::Minus1)? - 1))?,
+            )?;
+            sorted_indices_to_remove = sorted_indices_to_remove.slice_assign(
+                &[&.., &0],
+                &sorted_indices_to_remove.i((.., 0))?.zeros_like()?,
+            )?;
+
+            let mut indices_to_remove = sorted_indices_to_remove.zeros_like()?;
+            indices_to_remove = indices_to_remove.scatter_add(
+                &sorted_indices_to_remove,
+                &sorted_indices,
+                D::Minus1,
+            )?;
+            logits = masked_fill(&logits, &indices_to_remove, f32::NEG_INFINITY)?;
+        }
+
+        logits = candle_nn::ops::softmax_last_dim(&logits)?;
+        assert_eq!(logits.dim(0)?, 1);
+        logits = logits.i(0)?;
+        let probs = logits.to_vec1::<f32>()?;
+
+        let distr = WeightedIndex::new(&probs).map_err(candle_core::Error::msg)?;
+
+        let next_token = distr.sample(rng);
+        Ok(next_token as u32)
+    }
+
     fn decoder_step(
         &self,
         tokens: &Tensor,
@@ -191,8 +262,9 @@ impl DiaPipeline {
         cfg_scale: f32,
         temperature: f32,
         top_p: f32,
-        cfg_filter_top_k: usize,
-    ) -> Result<Tensor> {
+        cfg_filter_top_k: Option<usize>,
+        rng: &mut Isaac64Rng,
+    ) -> Result<u32> {
         let audio_eos_value = self.cfg.data.audio_eos_value as usize;
 
         let mut logits = self.model.decoder.decode_step(
@@ -229,7 +301,7 @@ impl DiaPipeline {
             )? * f64::NEG_INFINITY)?,
         )?;
 
-        todo!()
+        self.sample_next_token(&logits, temperature, top_p, cfg_filter_top_k, rng)
     }
 
     pub fn generate(&self, text: &str) -> Result<()> {
@@ -237,7 +309,7 @@ impl DiaPipeline {
         let cfg_scale = 3.0f32;
         let temperature = 1.3f32;
         let top_p = 0.95f32;
-        let cfg_filter_top_k = 35usize;
+        let cfg_filter_top_k = Some(35usize);
 
         let audio_pad_value = self.cfg.data.audio_pad_value;
         let audio_eos_value = self.cfg.data.audio_eos_value;
@@ -260,6 +332,8 @@ impl DiaPipeline {
         let mut eos_detected = false;
         let mut eos_countdown = -1;
 
+        let mut rng = Isaac64Rng::seed_from_u64(0);
+
         while dec_step < max_tokens {
             let dec_positions = &[dec_step + 1];
             let current_tokens = generated_tokens
@@ -279,6 +353,7 @@ impl DiaPipeline {
                 temperature,
                 top_p,
                 cfg_filter_top_k,
+                &mut rng,
             )?;
         }
         Ok(())
