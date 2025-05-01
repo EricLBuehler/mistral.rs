@@ -1,8 +1,8 @@
 use audio::{apply_audio_delay, build_delay_indices};
 use cache::DiaKvCache;
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use config::DiaConfig;
-use mistralrs_quant::{BitWiseOp, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 use model::DiaModel;
 
 mod audio;
@@ -116,6 +116,7 @@ impl DiaPipeline {
         Tensor,
         Tensor,
         Tensor,
+        Vec<usize>,
         Vec<Option<DiaKvCache>>,
         Vec<Option<DiaKvCache>>,
     )> {
@@ -172,13 +173,71 @@ impl DiaPipeline {
             generated_tokens,
             decoder_attn_mask,
             encoder_out,
+            encoder_positions.to_vec(),
             decoder_cross_attn_cache,
             decoder_self_attn_cache,
         ))
     }
 
+    fn decoder_step(
+        &self,
+        tokens: &Tensor,
+        encoder_out: &Tensor,
+        cross_attn_mask: Option<&Tensor>,
+        encoder_positions: &[usize],
+        decoder_positions: &[usize],
+        self_attn_cache: &mut Vec<Option<DiaKvCache>>,
+        cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
+        cfg_scale: f32,
+        temperature: f32,
+        top_p: f32,
+        cfg_filter_top_k: usize,
+    ) -> Result<Tensor> {
+        let audio_eos_value = self.cfg.data.audio_eos_value as usize;
+
+        let mut logits = self.model.decoder.decode_step(
+            tokens,
+            encoder_out,
+            cross_attn_mask,
+            encoder_positions,
+            decoder_positions,
+            self_attn_cache,
+            cross_attn_cache,
+        )?;
+
+        let logits_last = logits.i((.., logits.dim(D::Minus1)? - 1.., .., ..))?;
+        let uncond_logits = logits_last.i((0, .., ..))?;
+        let cond_logits = logits_last.i((1, .., ..))?;
+
+        logits = (&cond_logits + (cfg_scale as f64 * (&cond_logits - uncond_logits)?)?)?;
+        // logits_CxV[:, audio_eos_value + 1 :] = -torch.inf
+        // logits_CxV[1:, audio_eos_value:] = -torch.inf
+        logits = logits.slice_assign(
+            &[&.., &(audio_eos_value + 1..)],
+            &(Tensor::ones(
+                (logits.dim(0)?, logits.dim(1)? - (audio_eos_value + 1)),
+                logits.dtype(),
+                logits.device(),
+            )? * f64::NEG_INFINITY)?,
+        )?;
+        logits = logits.slice_assign(
+            &[&(1..), &(audio_eos_value..)],
+            &(Tensor::ones(
+                (logits.dim(0)? - 1, logits.dim(1)? - audio_eos_value),
+                logits.dtype(),
+                logits.device(),
+            )? * f64::NEG_INFINITY)?,
+        )?;
+
+        todo!()
+    }
+
     pub fn generate(&self, text: &str) -> Result<()> {
         let max_tokens: Option<usize> = None;
+        let cfg_scale = 3.0f32;
+        let temperature = 1.3f32;
+        let top_p = 0.95f32;
+        let cfg_filter_top_k = 35usize;
 
         let audio_pad_value = self.cfg.data.audio_pad_value;
         let audio_eos_value = self.cfg.data.audio_eos_value;
@@ -190,8 +249,9 @@ impl DiaPipeline {
             generated_tokens,
             decoder_attn_mask,
             encoder_out,
-            decoder_cross_attn_cache,
-            decoder_self_attn_cache,
+            encoder_positions,
+            mut decoder_cross_attn_cache,
+            mut decoder_self_attn_cache,
         ) = self.prepare_generation(text)?;
 
         let mut dec_step = 0;
@@ -202,6 +262,24 @@ impl DiaPipeline {
 
         while dec_step < max_tokens {
             let dec_positions = &[dec_step + 1];
+            let current_tokens = generated_tokens
+                .i((dec_step..dec_step + 1, ..))?
+                .unsqueeze(0)?
+                .repeat((2, 1, 1))?;
+
+            let pred_c = self.decoder_step(
+                &current_tokens,
+                &encoder_out,
+                Some(&decoder_attn_mask),
+                &encoder_positions,
+                dec_positions,
+                &mut decoder_self_attn_cache,
+                &mut decoder_cross_attn_cache,
+                cfg_scale,
+                temperature,
+                top_p,
+                cfg_filter_top_k,
+            )?;
         }
         Ok(())
     }
