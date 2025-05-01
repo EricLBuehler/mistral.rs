@@ -118,6 +118,7 @@ impl DiaPipeline {
     /// - generated tokens
     /// - decoder attn mask
     /// - encoder out
+    /// - encoder positions
     /// - cross cache
     /// - self cache
     fn prepare_generation(
@@ -127,7 +128,7 @@ impl DiaPipeline {
         Tensor,
         Tensor,
         Tensor,
-        Vec<usize>,
+        Tensor,
         Vec<Option<DiaKvCache>>,
         Vec<Option<DiaKvCache>>,
     )> {
@@ -137,7 +138,10 @@ impl DiaPipeline {
 
         let prefill = self.prepare_audio_prompt()?;
 
-        let encoder_positions = &[self.cfg.data.text_length];
+        let encoder_positions =
+            Tensor::arange(0f32, self.cfg.data.text_length as f32, &self.device)?
+                .unsqueeze(0)?
+                .repeat((2, 1))?;
         let encoder_padding_mask =
             Tensor::arange(0f32, self.cfg.data.text_length as f32, &self.device)?
                 .unsqueeze(2)?
@@ -147,12 +151,12 @@ impl DiaPipeline {
         let encoder_out =
             self.model
                 .encoder
-                .forward(&enc_input, encoder_positions, Some(&encoder_attn_mask))?;
+                .forward(&enc_input, &encoder_positions, Some(&encoder_attn_mask))?;
 
         let decoder_cross_attn_cache = self
             .model
             .decoder
-            .precompute_cross_attn_cache(&encoder_out, encoder_positions)?;
+            .precompute_cross_attn_cache(&encoder_out, &encoder_positions)?;
         let decoder_padding_mask = Tensor::ones((2, 1), DType::U8, &self.device)?;
         let decoder_attn_mask = create_attn_mask(&decoder_padding_mask, &encoder_padding_mask)?;
 
@@ -184,7 +188,7 @@ impl DiaPipeline {
             generated_tokens,
             decoder_attn_mask,
             encoder_out,
-            encoder_positions.to_vec(),
+            encoder_positions,
             decoder_cross_attn_cache,
             decoder_self_attn_cache,
         ))
@@ -261,8 +265,8 @@ impl DiaPipeline {
         tokens: &Tensor,
         encoder_out: &Tensor,
         cross_attn_mask: Option<&Tensor>,
-        encoder_positions: &[usize],
-        decoder_positions: &[usize],
+        encoder_positions: &Tensor,
+        decoder_positions: &Tensor,
         self_attn_cache: &mut Vec<Option<DiaKvCache>>,
         cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
         cfg_scale: f32,
@@ -371,7 +375,7 @@ impl DiaPipeline {
         let mut rng = Isaac64Rng::seed_from_u64(0);
 
         while dec_step < max_tokens {
-            let dec_positions = &[dec_step + 1];
+            let dec_positions = Tensor::zeros((2, 1), DType::F32, &self.device)?;
             let current_tokens = generated_tokens
                 .i((dec_step..dec_step + 1, ..))?
                 .unsqueeze(0)?
@@ -382,7 +386,7 @@ impl DiaPipeline {
                 &encoder_out,
                 Some(&decoder_attn_mask),
                 &encoder_positions,
-                dec_positions,
+                &dec_positions,
                 &mut decoder_self_attn_cache,
                 &mut decoder_cross_attn_cache,
                 cfg_scale,

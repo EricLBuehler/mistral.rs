@@ -35,8 +35,6 @@ pub fn dense_general_row(
 }
 
 struct DiaAttention<const CROSS_ATTN: bool> {
-    pre_sa_norm: RmsNorm,
-    post_sa_norm: RmsNorm,
     q_proj: Linear,
     k_proj: Linear,
     v_proj: Linear,
@@ -59,24 +57,13 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         head_dim: usize,
         output_dim: usize,
     ) -> Result<Self> {
-        let pre_sa_norm = RmsNorm::new(
-            cfg.model.encoder.n_embd,
-            cfg.model.normalization_layer_epsilon,
-            vb.pp("pre_sa_norm"),
-        )?;
-        let post_sa_norm = RmsNorm::new(
-            cfg.model.encoder.n_embd,
-            cfg.model.normalization_layer_epsilon,
-            vb.pp("post_sa_norm"),
-        )?;
-
         let q_proj =
             dense_general_column(q_embed_dim, vec![num_q_heads, head_dim], vb.pp("q_proj"))?;
         let k_proj =
             dense_general_column(kv_embed_dim, vec![num_kv_heads, head_dim], vb.pp("k_proj"))?;
         let v_proj =
             dense_general_column(kv_embed_dim, vec![num_kv_heads, head_dim], vb.pp("v_proj"))?;
-        let o_proj = dense_general_row(vec![num_q_heads, head_dim], output_dim, vb.pp("v_proj"))?;
+        let o_proj = dense_general_row(vec![num_q_heads, head_dim], output_dim, vb.pp("o_proj"))?;
 
         let rope = DiaRotaryEmbedding::new(
             cfg.model.rope_min_timescale,
@@ -88,8 +75,6 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         )?;
 
         Ok(Self {
-            pre_sa_norm,
-            post_sa_norm,
             q_proj,
             k_proj,
             v_proj,
@@ -106,8 +91,8 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         &self,
         xq: &Tensor,
         xkv: &Tensor,
-        q_positions: &[usize],
-        kv_positions: &[usize],
+        q_positions: &Tensor,
+        kv_positions: &Tensor,
         attn_mask: Option<&Tensor>,
         cached_kv: Option<&mut DiaKvCache>,
         prefill: bool,
@@ -248,7 +233,7 @@ impl DiaEncoderLayer {
     fn forward(
         &self,
         x: &Tensor,
-        positions: &[usize],
+        positions: &Tensor,
         attn_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let mut residual = x;
@@ -301,7 +286,7 @@ impl DiaEncoder {
     pub fn forward(
         &self,
         x: &Tensor,
-        positions: &[usize],
+        positions: &Tensor,
         attn_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let mut x = self.embedding.forward(x)?;
@@ -382,8 +367,8 @@ impl DiaDecoderLayer {
         &self,
         x: &Tensor,
         encoder_out: &Tensor,
-        encoder_positions: &[usize],
-        decoder_positions: &[usize],
+        encoder_positions: &Tensor,
+        decoder_positions: &Tensor,
         cross_attn_mask: Option<&Tensor>,
         self_attn_cache: Option<&mut DiaKvCache>,
         cross_attn_cache: Option<&mut DiaKvCache>,
@@ -474,7 +459,7 @@ impl DiaDecoder {
     pub fn precompute_cross_attn_cache(
         &self,
         encoder_out: &Tensor,
-        encoder_positions: &[usize],
+        encoder_positions: &Tensor,
     ) -> Result<Vec<Option<DiaKvCache>>> {
         let (b, t, _d) = encoder_out.dims3()?;
 
@@ -509,8 +494,8 @@ impl DiaDecoder {
         tgt_ids: &Tensor,
         encoder_out: &Tensor,
         cross_attn_mask: Option<&Tensor>,
-        encoder_positions: &[usize],
-        decoder_positions: &[usize],
+        encoder_positions: &Tensor,
+        decoder_positions: &Tensor,
         self_attn_cache: &mut Vec<Option<DiaKvCache>>,
         cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
     ) -> Result<Tensor> {
@@ -552,8 +537,8 @@ impl DiaDecoder {
         tgt_ids: &Tensor,
         encoder_out: &Tensor,
         cross_attn_mask: Option<&Tensor>,
-        encoder_positions: &[usize],
-        decoder_positions: &[usize],
+        encoder_positions: &Tensor,
+        decoder_positions: &Tensor,
         self_attn_cache: &mut Vec<Option<DiaKvCache>>,
         cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
     ) -> Result<Tensor> {

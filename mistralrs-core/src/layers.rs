@@ -1489,8 +1489,8 @@ impl Gemma3RotaryEmbedding {
 }
 
 pub struct DiaRotaryEmbedding {
-    sin: Tensor,
-    cos: Tensor,
+    t: Tensor,
+    dtype: DType,
 }
 
 impl DiaRotaryEmbedding {
@@ -1505,9 +1505,7 @@ impl DiaRotaryEmbedding {
         assert_eq!(head_dim % 2, 0);
         let half_embedding_dim = head_dim / 2;
 
-        let fraction = (0..half_embedding_dim)
-            .step_by(2)
-            .map(|i| 2f32 * i as f32 / head_dim as f32);
+        let fraction = (0..half_embedding_dim).map(|i| 2f32 * i as f32 / head_dim as f32);
         let timescale = fraction
             .into_iter()
             .map(|x| min_timescale * (max_timescale / min_timescale).powf(x))
@@ -1517,34 +1515,19 @@ impl DiaRotaryEmbedding {
         let timescale = Tensor::from_vec(timescale, timescale_len, device)?;
         let t = Tensor::arange(0u32, max_len as u32, device)?.to_dtype(DType::F32)?;
 
-        let freqs = (t / timescale)?;
-
-        let sin = freqs.sin()?.to_dtype(dtype)?;
-        let cos = freqs.cos()?.to_dtype(dtype)?;
-
-        Ok(Self { sin, cos })
+        Ok(Self { t, dtype })
     }
 
-    pub fn forward(&self, xs: &Tensor, seqlen_offsets: &[usize]) -> Result<Tensor> {
-        let (b_sz, seq_len, qh, n_embd) = xs.dims4()?;
+    pub fn forward(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
+        let freqs = positions
+            .unsqueeze(D::Minus1)?
+            .unsqueeze(D::Minus1)?
+            .broadcast_div(&self.t)?;
 
-        let rope = candle_nn::rotary_emb::rope;
+        let sin = freqs.sin()?.to_dtype(self.dtype)?;
+        let cos = freqs.cos()?.to_dtype(self.dtype)?;
 
-        if seqlen_offsets.len() == 1 {
-            let cos = self.cos.narrow(0, seqlen_offsets[0], seq_len)?;
-            let sin = self.sin.narrow(0, seqlen_offsets[0], seq_len)?;
-            let xs_embed = rope(&xs.contiguous()?, &cos, &sin)?;
-            Ok(xs_embed)
-        } else {
-            let mut xs_embeds = Vec::new();
-            for (i, offset) in seqlen_offsets.iter().enumerate() {
-                let cos = self.cos.narrow(0, *offset, seq_len)?;
-                let sin = self.sin.narrow(0, *offset, seq_len)?;
-                let xs_embed = rope(&xs.i(i)?.unsqueeze(0)?.contiguous()?, &cos, &sin)?;
-                xs_embeds.push(xs_embed);
-            }
-            Ok(Tensor::cat(&xs_embeds, 0)?)
-        }
+        candle_nn::rotary_emb::rope(&xs.contiguous()?, &cos, &sin)
     }
 }
 #[derive(Debug, Clone)]
