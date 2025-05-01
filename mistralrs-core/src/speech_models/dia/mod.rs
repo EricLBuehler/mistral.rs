@@ -71,7 +71,9 @@ impl DiaPipeline {
             (Tensor::ones((1, num_channels), DType::I32, &self.device)? * audio_bos_value as f64)?;
 
         let delay_pad_tensor =
-            Tensor::ones((max_delay_pattern, num_channels), DType::I32, &self.device)?.neg()?;
+            Tensor::ones((max_delay_pattern, num_channels), DType::F32, &self.device)?
+                .neg()?
+                .to_dtype(DType::I32)?;
         let prefill = Tensor::cat(&[prefill, delay_pad_tensor], 0)?;
 
         let delay_precomp = build_delay_indices(
@@ -163,10 +165,11 @@ impl DiaPipeline {
         let max_audio_length = self.cfg.data.audio_length;
         let generated_tokens = Tensor::ones(
             (max_audio_length, self.cfg.data.channels),
-            DType::I32,
+            DType::F32,
             &self.device,
         )?
-        .neg()?;
+        .neg()?
+        .to_dtype(DType::I32)?;
 
         generated_tokens.slice_set(&prefill, 0, 0)?;
 

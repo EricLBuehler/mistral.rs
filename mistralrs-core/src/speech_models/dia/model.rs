@@ -171,8 +171,8 @@ struct DiaMlp {
 
 impl DiaMlp {
     fn new(vb: ShardedVarBuilder, embed_dim: usize, intermediate_dim: usize) -> Result<Self> {
-        let wi = dense_general_column(embed_dim, vec![2, intermediate_dim], vb.pp("wi"))?;
-        let wo = dense_general_row(vec![intermediate_dim], embed_dim, vb.pp("v_proj"))?;
+        let wi = dense_general_column(embed_dim, vec![2, intermediate_dim], vb.pp("wi_fused"))?;
+        let wo = dense_general_row(vec![intermediate_dim], embed_dim, vb.pp("wo"))?;
 
         Ok(Self { wi, wo })
     }
@@ -214,11 +214,11 @@ impl DiaEncoderLayer {
             cfg.model.encoder.n_embd,
             cfg.model.encoder.n_embd,
             cfg.model.encoder.head_dim,
-            cfg.model.encoder.head_dim,
+            cfg.model.encoder.n_embd,
         )?;
         let mlp = DiaMlp::new(
             vb.pp("mlp"),
-            cfg.model.encoder.head_dim,
+            cfg.model.encoder.n_embd,
             cfg.model.encoder.n_hidden,
         )?;
 
@@ -339,12 +339,12 @@ impl DiaDecoderLayer {
         // Cross-Attention (MHA)
         let cross_attn = DiaAttention::new(
             cfg,
-            vb.pp("self_attention"),
+            vb.pp("cross_attention"),
             cfg.model.decoder.cross_query_heads,
             cfg.model.decoder.cross_query_heads,
             cfg.model.decoder.n_embd,
             cfg.model.encoder.n_embd,
-            cfg.model.decoder.cross_query_heads,
+            cfg.model.decoder.cross_head_dim,
             cfg.model.decoder.n_embd,
         )?;
         let mlp = DiaMlp::new(
