@@ -314,7 +314,7 @@
 <a href=#314 id=314 data-nosnippet>314</a>
 <a href=#315 id=315 data-nosnippet>315</a>        <span class="kw">let </span>iter = <span class="kw">if </span>is_prompt {
 <a href=#316 id=316 data-nosnippet>316</a>            get_prompt_input(
-<a href=#317 id=317 data-nosnippet>317</a>                toks,
+<a href=#317 id=317 data-nosnippet>317</a>                toks.iter().map(Vec::as_slice).collect(),
 <a href=#318 id=318 data-nosnippet>318</a>                input_seqs,
 <a href=#319 id=319 data-nosnippet>319</a>                device,
 <a href=#320 id=320 data-nosnippet>320</a>                last_n_context_len,
@@ -325,7 +325,7 @@
 <a href=#325 id=325 data-nosnippet>325</a>            )
 <a href=#326 id=326 data-nosnippet>326</a>        } <span class="kw">else </span>{
 <a href=#327 id=327 data-nosnippet>327</a>            get_completion_input(
-<a href=#328 id=328 data-nosnippet>328</a>                toks,
+<a href=#328 id=328 data-nosnippet>328</a>                toks.iter().map(Vec::as_slice).collect(),
 <a href=#329 id=329 data-nosnippet>329</a>                input_seqs,
 <a href=#330 id=330 data-nosnippet>330</a>                device,
 <a href=#331 id=331 data-nosnippet>331</a>                no_kv_cache,

@@ -432,7 +432,7 @@
 <a href=#432 id=432 data-nosnippet>432</a>            get_prompt_input(
 <a href=#433 id=433 data-nosnippet>433</a>                input_seqs
 <a href=#434 id=434 data-nosnippet>434</a>                    .iter()
-<a href=#435 id=435 data-nosnippet>435</a>                    .map(|seq| seq.get_toks().to_vec())
+<a href=#435 id=435 data-nosnippet>435</a>                    .map(|seq| seq.get_toks())
 <a href=#436 id=436 data-nosnippet>436</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
 <a href=#437 id=437 data-nosnippet>437</a>                input_seqs,
 <a href=#438 id=438 data-nosnippet>438</a>                device,
@@ -449,7 +449,7 @@
 <a href=#449 id=449 data-nosnippet>449</a>            get_completion_input(
 <a href=#450 id=450 data-nosnippet>450</a>                input_seqs
 <a href=#451 id=451 data-nosnippet>451</a>                    .iter()
-<a href=#452 id=452 data-nosnippet>452</a>                    .map(|seq| seq.get_toks().to_vec())
+<a href=#452 id=452 data-nosnippet>452</a>                    .map(|seq| seq.get_toks())
 <a href=#453 id=453 data-nosnippet>453</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
 <a href=#454 id=454 data-nosnippet>454</a>                input_seqs,
 <a href=#455 id=455 data-nosnippet>455</a>                device,

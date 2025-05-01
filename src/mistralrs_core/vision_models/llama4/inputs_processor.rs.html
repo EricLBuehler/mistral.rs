@@ -300,7 +300,7 @@
 <a href=#300 id=300 data-nosnippet>300</a>            get_prompt_input(
 <a href=#301 id=301 data-nosnippet>301</a>                input_seqs
 <a href=#302 id=302 data-nosnippet>302</a>                    .iter()
-<a href=#303 id=303 data-nosnippet>303</a>                    .map(|seq| seq.get_toks().to_vec())
+<a href=#303 id=303 data-nosnippet>303</a>                    .map(|seq| seq.get_toks())
 <a href=#304 id=304 data-nosnippet>304</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
 <a href=#305 id=305 data-nosnippet>305</a>                input_seqs,
 <a href=#306 id=306 data-nosnippet>306</a>                device,
@@ -317,7 +317,7 @@
 <a href=#317 id=317 data-nosnippet>317</a>            get_completion_input(
 <a href=#318 id=318 data-nosnippet>318</a>                input_seqs
 <a href=#319 id=319 data-nosnippet>319</a>                    .iter()
-<a href=#320 id=320 data-nosnippet>320</a>                    .map(|seq| seq.get_toks().to_vec())
+<a href=#320 id=320 data-nosnippet>320</a>                    .map(|seq| seq.get_toks())
 <a href=#321 id=321 data-nosnippet>321</a>                    .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;(),
 <a href=#322 id=322 data-nosnippet>322</a>                input_seqs,
 <a href=#323 id=323 data-nosnippet>323</a>                device,
