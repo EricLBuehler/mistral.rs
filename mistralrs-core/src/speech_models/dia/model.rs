@@ -103,7 +103,8 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         &self,
         xq: &Tensor,
         xkv: &Tensor,
-        positions: &[usize],
+        q_positions: &[usize],
+        kv_positions: &[usize],
         attn_mask: Option<&Tensor>,
         cached_kv: Option<&mut (Tensor, Tensor)>,
         prefill: bool,
@@ -114,7 +115,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
             .q_proj
             .forward(xq)?
             .reshape((b, t, self.num_q_heads, self.head_dim))?;
-        xq = self.rope.forward(&xq, positions)?;
+        xq = self.rope.forward(&xq, q_positions)?;
         xq = xq.transpose(1, 2)?;
 
         // ---- K‒V computation & cache handling --------------------------------
@@ -135,7 +136,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
                     .reshape((b, t, self.num_kv_heads, self.head_dim))?;
 
             // Apply RoPE to K and put heads first.
-            k = self.rope.forward(&k, positions)?;
+            k = self.rope.forward(&k, kv_positions)?;
             k = k.transpose(1, 2)?;
             v = v.transpose(1, 2)?;
 
@@ -256,9 +257,9 @@ impl DiaEncoderLayer {
         let mut residual = x;
         let mut x_norm = self.pre_sa_norm.forward(x)?;
 
-        let sa_out = self
-            .self_attn
-            .forward(&x_norm, &x_norm, positions, attn_mask, None, false)?;
+        let sa_out = self.self_attn.forward(
+            &x_norm, &x_norm, positions, positions, attn_mask, None, false,
+        )?;
         let x = (residual + sa_out)?;
 
         residual = &x;
@@ -384,7 +385,8 @@ impl DiaDecoderLayer {
         &self,
         x: &Tensor,
         encoder_out: &Tensor,
-        positions: &[usize],
+        encoder_positions: &[usize],
+        decoder_positions: &[usize],
         cross_attn_mask: Option<&Tensor>,
         self_attn_cache: Option<&mut (Tensor, Tensor)>,
         cross_attn_cache: Option<&mut (Tensor, Tensor)>,
@@ -393,9 +395,15 @@ impl DiaDecoderLayer {
         let mut residual = x;
         let mut x_norm = self.pre_sa_norm.forward(x)?;
 
-        let sa_out =
-            self.self_attn
-                .forward(&x_norm, &x_norm, positions, None, self_attn_cache, prefill)?;
+        let sa_out = self.self_attn.forward(
+            &x_norm,
+            &x_norm,
+            decoder_positions,
+            decoder_positions,
+            None,
+            self_attn_cache,
+            prefill,
+        )?;
         let x = (residual + sa_out)?;
 
         residual = &x;
@@ -404,7 +412,8 @@ impl DiaDecoderLayer {
         let ca_out = self.self_attn.forward(
             &x_norm,
             &encoder_out,
-            positions,
+            decoder_positions,
+            encoder_positions,
             cross_attn_mask,
             cross_attn_cache,
             false,
@@ -500,6 +509,7 @@ impl DiaDecoder {
         tgt_ids: &Tensor,
         encoder_out: &Tensor,
         cross_attn_mask: Option<&Tensor>,
+        encoder_positions: &[usize],
         decoder_positions: &[usize],
         self_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
         cross_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
@@ -522,6 +532,7 @@ impl DiaDecoder {
             x = layer.forward(
                 &x,
                 encoder_out,
+                encoder_positions,
                 decoder_positions,
                 cross_attn_mask,
                 self_cache.as_mut(),
@@ -541,6 +552,7 @@ impl DiaDecoder {
         tgt_ids: &Tensor,
         encoder_out: &Tensor,
         cross_attn_mask: Option<&Tensor>,
+        encoder_positions: &[usize],
         decoder_positions: &[usize],
         self_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
         cross_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
@@ -563,6 +575,7 @@ impl DiaDecoder {
             x = layer.forward(
                 &x,
                 encoder_out,
+                encoder_positions,
                 decoder_positions,
                 cross_attn_mask,
                 self_cache.as_mut(),
