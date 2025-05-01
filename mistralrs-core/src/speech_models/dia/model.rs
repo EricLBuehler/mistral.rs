@@ -7,7 +7,10 @@ use crate::{
     layers::{self, DiaRotaryEmbedding, RmsNorm, Sdpa},
 };
 
-use super::config::DiaConfig;
+use super::{
+    cache::{self, DiaKvCache},
+    config::DiaConfig,
+};
 
 pub fn dense_general_column(
     in_features: usize,
@@ -106,7 +109,7 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         q_positions: &[usize],
         kv_positions: &[usize],
         attn_mask: Option<&Tensor>,
-        cached_kv: Option<&mut (Tensor, Tensor)>,
+        cached_kv: Option<&mut DiaKvCache>,
         prefill: bool,
     ) -> Result<Tensor> {
         let (b, t, d) = xq.dims3()?;
@@ -122,8 +125,8 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
         let (k, v) = if CROSS_ATTN {
             // Cross‑attention re‑uses a pre‑computed immutable cache.
             cached_kv
-                .expect("cross‑attention requires cached KV tensors")
-                .clone()
+                .expect("cross-attention requires cached KV tensors")
+                .k_v()
         } else {
             // Compute fresh K and V for self‑attention.
             let mut k =
@@ -142,18 +145,12 @@ impl<const CROSS_ATTN: bool> DiaAttention<CROSS_ATTN> {
 
             // Update / create cache when provided.
             match cached_kv {
-                Some((ref mut k_cache, ref mut v_cache)) => {
+                Some(kv_cache) => {
                     if prefill {
-                        // Prefill pass (full sequence) – overwrite cache.
-                        *k_cache = k.clone();
-                        *v_cache = v.clone();
+                        kv_cache.prefill(&k, &v)?
                     } else {
-                        // Incremental decoding – append new token to cache.
-                        let cat_dim = 2; // sequence length dimension
-                        *k_cache = Tensor::cat(&[&*k_cache, &k], cat_dim)?;
-                        *v_cache = Tensor::cat(&[&*v_cache, &v], cat_dim)?;
+                        kv_cache.update(&k, &v)?
                     }
-                    (k_cache.clone(), v_cache.clone())
                 }
                 // No cache supplied – just use freshly computed tensors.
                 None => (k, v),
@@ -388,8 +385,8 @@ impl DiaDecoderLayer {
         encoder_positions: &[usize],
         decoder_positions: &[usize],
         cross_attn_mask: Option<&Tensor>,
-        self_attn_cache: Option<&mut (Tensor, Tensor)>,
-        cross_attn_cache: Option<&mut (Tensor, Tensor)>,
+        self_attn_cache: Option<&mut DiaKvCache>,
+        cross_attn_cache: Option<&mut DiaKvCache>,
         prefill: bool,
     ) -> Result<Tensor> {
         let mut residual = x;
@@ -478,7 +475,7 @@ impl DiaDecoder {
         &self,
         encoder_out: &Tensor,
         encoder_positions: &[usize],
-    ) -> Result<Vec<Option<(Tensor, Tensor)>>> {
+    ) -> Result<Vec<Option<DiaKvCache>>> {
         let (b, t, _d) = encoder_out.dims3()?;
 
         let mut per_layer_kv_cache = Vec::new();
@@ -497,7 +494,10 @@ impl DiaDecoder {
                     .forward(encoder_out)?
                     .reshape((b, t, ca.num_kv_heads, ca.head_dim))?;
 
-            per_layer_kv_cache.push(Some((k_proj.transpose(1, 2)?, v_proj.transpose(1, 2)?)))
+            per_layer_kv_cache.push(Some(DiaKvCache::from_kv(
+                k_proj.transpose(1, 2)?,
+                v_proj.transpose(1, 2)?,
+            )));
         }
 
         Ok(per_layer_kv_cache)
@@ -511,8 +511,8 @@ impl DiaDecoder {
         cross_attn_mask: Option<&Tensor>,
         encoder_positions: &[usize],
         decoder_positions: &[usize],
-        self_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
-        cross_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
+        self_attn_cache: &mut Vec<Option<DiaKvCache>>,
+        cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
     ) -> Result<Tensor> {
         let mut x: Option<Tensor> = None;
         for (i, embedding) in self.embeddings.iter().enumerate() {
@@ -554,8 +554,8 @@ impl DiaDecoder {
         cross_attn_mask: Option<&Tensor>,
         encoder_positions: &[usize],
         decoder_positions: &[usize],
-        self_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
-        cross_attn_cache: &mut Vec<Option<(Tensor, Tensor)>>,
+        self_attn_cache: &mut Vec<Option<DiaKvCache>>,
+        cross_attn_cache: &mut Vec<Option<DiaKvCache>>,
     ) -> Result<Tensor> {
         let mut x: Option<Tensor> = None;
         for (i, embedding) in self.embeddings.iter().enumerate() {

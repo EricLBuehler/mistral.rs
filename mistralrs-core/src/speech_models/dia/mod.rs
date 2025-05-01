@@ -1,10 +1,12 @@
 use audio::{apply_audio_delay, build_delay_indices};
+use cache::DiaKvCache;
 use candle_core::{DType, Device, Result, Tensor};
 use config::DiaConfig;
 use mistralrs_quant::{BitWiseOp, ShardedVarBuilder};
 use model::DiaModel;
 
 mod audio;
+mod cache;
 mod config;
 mod model;
 
@@ -114,8 +116,8 @@ impl DiaPipeline {
         Tensor,
         Tensor,
         Tensor,
-        Vec<Option<(Tensor, Tensor)>>,
-        Vec<Option<(Tensor, Tensor)>>,
+        Vec<Option<DiaKvCache>>,
+        Vec<Option<DiaKvCache>>,
     )> {
         let enc_input_cond = self.prepare_text_prompt(text)?;
         let enc_input_uncond = enc_input_cond.zeros_like()?;
@@ -154,7 +156,7 @@ impl DiaPipeline {
 
         let mut decoder_self_attn_cache = Vec::new();
         for _ in 0..self.cfg.model.decoder.n_layer {
-            let k = Tensor::zeros(
+            decoder_self_attn_cache.push(Some(DiaKvCache::new(
                 (
                     2,
                     self.cfg.model.decoder.kv_heads,
@@ -163,18 +165,7 @@ impl DiaPipeline {
                 ),
                 self.dtype,
                 &self.device,
-            )?;
-            let v = Tensor::zeros(
-                (
-                    2,
-                    self.cfg.model.decoder.kv_heads,
-                    max_audio_length,
-                    self.cfg.model.decoder.gqa_head_dim,
-                ),
-                self.dtype,
-                &self.device,
-            )?;
-            decoder_self_attn_cache.push(Some((k, v)))
+            )?));
         }
 
         Ok((
