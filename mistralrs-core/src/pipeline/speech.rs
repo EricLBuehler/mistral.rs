@@ -6,7 +6,6 @@ use super::{
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::device_map::DeviceMapper;
-use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
@@ -19,7 +18,6 @@ use crate::{
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-use image::{DynamicImage, RgbImage};
 use indexmap::IndexMap;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -147,7 +145,9 @@ pub struct SpeechPipeline {
     dummy_cache: EitherCache,
 }
 
-pub struct SpeechLoader;
+pub struct SpeechLoader {
+    pub model_id: String,
+}
 
 impl Loader for SpeechLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -168,13 +168,12 @@ impl Loader for SpeechLoader {
                 .with_token(get_token(&token_source)?)
                 .build()?;
             let revision = revision.unwrap_or("main".to_string());
-            let model_id = "nari-labs/Dia-1.6B";
             let api = api.repo(Repo::with_revision(
-                model_id.to_string(),
+                self.model_id.to_string(),
                 RepoType::Model,
                 revision.clone(),
             ));
-            let model_id = std::path::Path::new(model_id);
+            let model_id = std::path::Path::new(&self.model_id);
 
             let weight = api_get_file!(api, "model.safetensors", &model_id);
             let config = api_get_file!(api, "config.json", &model_id);

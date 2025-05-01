@@ -105,7 +105,7 @@ pub fn get_model_dtype(model: &ModelSelected) -> anyhow::Result<ModelDType> {
         | ModelSelected::XLoraGGML { dtype, .. }
         | ModelSelected::LoraGGUF { dtype, .. }
         | ModelSelected::LoraGGML { dtype, .. }
-        | ModelSelected::Speech { dtype } => Ok(*dtype),
+        | ModelSelected::Speech { dtype, .. } => Ok(*dtype),
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
                 &fs::read_to_string(file.clone())
@@ -559,7 +559,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             DiffusionLoaderBuilder::new(DiffusionSpecificConfig { use_flash_attn }, Some(model_id))
                 .build(arch)
         }
-        ModelSelected::Speech { .. } => Box::new(SpeechLoader),
+        ModelSelected::Speech { model_id, .. } => Box::new(SpeechLoader { model_id }),
     };
     Ok(loader)
 }

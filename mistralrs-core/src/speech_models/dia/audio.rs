@@ -8,24 +8,24 @@ pub fn build_delay_indices(
     delay_pattern: &[i32],
     dev: &Device,
 ) -> Result<(Tensor, Tensor)> {
-    let delay = Tensor::from_slice(delay_pattern, (c,), dev)?.to_dtype(DType::I64)?;
+    let delay = Tensor::from_slice(delay_pattern, (c,), dev)?.to_dtype(DType::F32)?;
     let t_idx_bt = Tensor::arange(0f32, t as f32, dev)?
         .reshape((1, t))?
         .repeat(&[b, 1])?
-        .to_dtype(DType::I64)?
+        .to_dtype(DType::F32)?
         .unsqueeze(2)?;
     let t_idx_btc = t_idx_bt.broadcast_sub(&delay.reshape((1, 1, c))?)?;
     // clamp – Candle has a ‘clamp_min_max’ util.
     let t_idx_btc = t_idx_btc.clamp(0, (t - 1) as i32)?;
     // build gather indices [B*T*C, 3]
     let b_idx = Tensor::arange(0f32, b as f32, dev)?
-        .to_dtype(DType::I64)?
+        .to_dtype(DType::F32)?
         .reshape((b, 1, 1))?
         .repeat(&[1, t, c])?
         .reshape(b * t * c)?;
     let t_idx_flat = t_idx_btc.reshape(b * t * c)?;
     let c_idx = Tensor::arange(0f32, c as f32, dev)?
-        .to_dtype(DType::I64)?
+        .to_dtype(DType::F32)?
         .reshape((1, 1, c))?
         .repeat(&[b, t, 1])?
         .reshape(b * t * c)?;
@@ -41,23 +41,23 @@ pub fn build_revert_indices(
     delay_pattern: &[i32],
     dev: &Device,
 ) -> Result<(Tensor, Tensor)> {
-    let delay = Tensor::from_slice(delay_pattern, (c,), dev)?.to_dtype(DType::I64)?;
+    let delay = Tensor::from_slice(delay_pattern, (c,), dev)?.to_dtype(DType::F32)?;
     let t_idx_bt = Tensor::arange(0f32, t as f32, dev)?
         .reshape((1, t))?
         .repeat(&[b, 1])?
-        .to_dtype(DType::I64)?
+        .to_dtype(DType::F32)?
         .unsqueeze(2)?;
     let t_idx_btc = (&t_idx_bt + delay.reshape((1, 1, c))?)?;
     // clamp to valid time range [0, t-1]
     let t_idx_btc = t_idx_btc.clamp(0, (t - 1) as i32)?;
     let b_idx = Tensor::arange(0f32, b as f32, dev)?
-        .to_dtype(DType::I64)?
+        .to_dtype(DType::F32)?
         .reshape((b, 1, 1))?
         .repeat(&[b, t, c])?
         .reshape((b * t * c,))?;
     let t_idx_flat = t_idx_btc.reshape((b * t * c,))?;
     let c_idx = Tensor::arange(0f32, c as f32, dev)?
-        .to_dtype(DType::I64)?
+        .to_dtype(DType::F32)?
         .reshape((1, 1, c))?
         .repeat(&[b, t, 1])?
         .reshape((b * t * c,))?;
@@ -75,7 +75,7 @@ pub fn revert_audio_delay(
     let (t_idx, gather_idx) = precomp;
     let dev = audio.device();
     let t_idx = t_idx.to_device(dev)?;
-    let gather_idx = gather_idx.to_device(dev)?;
+    let gather_idx = gather_idx.to_device(dev)?.to_dtype(DType::U32)?;
     let gathered = audio
         .index_select(&gather_idx.i(0)?, 0)?
         .index_select(&gather_idx.i(1)?, 1)?
@@ -94,6 +94,7 @@ pub fn apply_audio_delay(
     precomp: &(Tensor, Tensor),
 ) -> Result<Tensor> {
     let (t_idx, gather_idx) = precomp;
+    let gather_idx = gather_idx.to_dtype(DType::U32)?;
     let gathered = audio
         .index_select(&gather_idx.i(0)?, 0)? // batch
         .index_select(&gather_idx.i(1)?, 1)? // time

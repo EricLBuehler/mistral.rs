@@ -541,6 +541,10 @@ pub enum ModelSelected {
     },
 
     Speech {
+        /// Model ID to load from. This may be a HF hub repo or a local path.
+        #[arg(short, long)]
+        model_id: String,
+
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,
