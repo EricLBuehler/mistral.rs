@@ -672,7 +672,7 @@ impl Loader for NormalLoader {
                 let start = Instant::now();
                 let inputs = make_prompt_chunk(
                     0,
-                    vec![chunk],
+                    vec![&chunk],
                     &[0],
                     &load_device,
                     None,

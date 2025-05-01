@@ -138,7 +138,7 @@ pub mod text_models_inputs_processor {
     #[allow(clippy::too_many_arguments)]
     pub fn make_prompt_chunk<T: WithDType + Debug>(
         chunk_offset_toks: usize,
-        toks: Vec<Vec<T>>,
+        toks: Vec<&[T]>,
         seq_ids: &[usize],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
@@ -162,12 +162,13 @@ pub mod text_models_inputs_processor {
         let mut paged_attn_context_lens = Vec::new();
         let mut seqlens_q = vec![0];
         let mut seqlens_k = vec![0];
-        for (seq_id, mut ctxt) in seq_ids.iter().zip(toks) {
+        for (seq_id, ctxt) in seq_ids.iter().zip(toks) {
             let prompt_len = ctxt.len();
             let offset = last_n_context_len.unwrap_or_default();
             seqlen_offsets.push(offset.1 + chunk_offset_toks);
 
             position_ids.push(ctxt.len() + chunk_offset_toks);
+            let mut ctxt = ctxt.to_vec();
             ctxt.extend(std::iter::repeat_n(
                 padding_tok,
                 max_len.saturating_sub(ctxt.len()),
@@ -342,7 +343,7 @@ pub mod text_models_inputs_processor {
     }
 
     fn make_completion_chunk<T: WithDType>(
-        toks: Vec<Vec<T>>,
+        toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
         device: &Device,
         mut paged_attn_metadata: Option<&mut PagedAttentionMeta<'_>>,
@@ -507,7 +508,7 @@ pub mod text_models_inputs_processor {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_prompt_input<T: WithDType + std::fmt::Debug>(
-        toks: Vec<Vec<T>>,
+        toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
         device: &Device,
         last_n_context_len: Option<(usize, usize)>,
@@ -548,7 +549,7 @@ pub mod text_models_inputs_processor {
                     let (toks, seq_ns): (Vec<Vec<T>>, Vec<usize>) = chunk.into_iter().unzip();
                     make_prompt_chunk(
                         i * prompt_chunksize + offset,
-                        toks,
+                        toks.iter().map(Vec::as_slice).collect(),
                         &seq_ns
                             .iter()
                             .map(|i| *input_seqs[*i].id())
@@ -594,7 +595,7 @@ pub mod text_models_inputs_processor {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn get_completion_input<T: WithDType + std::fmt::Debug>(
-        toks: Vec<Vec<T>>,
+        toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
         device: &Device,
         no_kv_cache: bool,
@@ -663,7 +664,7 @@ pub mod text_models_inputs_processor {
                     get_prompt_input(
                         input_seqs
                             .iter()
-                            .map(|seq| seq.get_toks().to_vec())
+                            .map(|seq| seq.get_toks())
                             .collect::<Vec<_>>(),
                         input_seqs,
                         device,
@@ -676,7 +677,7 @@ pub mod text_models_inputs_processor {
                     .zip(get_completion_input(
                         input_seqs
                             .iter()
-                            .map(|seq| seq.get_toks().to_vec())
+                            .map(|seq| seq.get_toks())
                             .collect::<Vec<_>>(),
                         input_seqs,
                         device,
@@ -734,7 +735,7 @@ pub mod text_models_inputs_processor {
                     get_prompt_input(
                         input_seqs
                             .iter()
-                            .map(|seq| seq.get_toks().to_vec())
+                            .map(|seq| seq.get_toks())
                             .collect::<Vec<_>>(),
                         input_seqs,
                         device,
@@ -779,7 +780,7 @@ pub mod text_models_inputs_processor {
                     get_prompt_input(
                         input_seqs
                             .iter()
-                            .map(|seq| seq.get_toks().to_vec())
+                            .map(|seq| seq.get_toks())
                             .collect::<Vec<_>>(),
                         input_seqs,
                         device,
@@ -824,7 +825,7 @@ pub mod text_models_inputs_processor {
                     get_completion_input(
                         input_seqs
                             .iter()
-                            .map(|seq| seq.get_toks().to_vec())
+                            .map(|seq| seq.get_toks())
                             .collect::<Vec<_>>(),
                         input_seqs,
                         device,
