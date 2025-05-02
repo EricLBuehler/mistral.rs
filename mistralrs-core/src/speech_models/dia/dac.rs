@@ -22,7 +22,7 @@ impl Config {
         Self {
             num_codebooks: 9,
             codebook_size: 1024,
-            latent_dim: 8,
+            latent_dim: 1024,
             sampling_rate: 44100,
         }
     }
@@ -256,7 +256,6 @@ impl Decoder {
         d_out: usize,
         vb: VarBuilder,
     ) -> Result<Self> {
-        let vb = vb.pp("model");
         let cfg1 = Conv1dConfig {
             padding: 3,
             ..Default::default()
