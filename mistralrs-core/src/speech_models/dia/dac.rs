@@ -7,7 +7,43 @@
 use candle_core::{IndexOp, Result, Tensor, D};
 use candle_nn::{Conv1d, Conv1dConfig, ConvTranspose1d, ConvTranspose1dConfig, VarBuilder};
 
-use super::encodec;
+// Applies weight norm for inference by recomputing the weight tensor. This
+// does not apply to training.
+// https://pytorch.org/docs/stable/generated/torch.nn.utils.weight_norm.html
+fn conv1d_weight_norm(
+    in_c: usize,
+    out_c: usize,
+    kernel_size: usize,
+    config: candle_nn::Conv1dConfig,
+    vb: VarBuilder,
+) -> Result<Conv1d> {
+    let weight_g = vb.get((out_c, 1, 1), "weight_g")?;
+    let weight_v = vb.get((out_c, in_c, kernel_size), "weight_v")?;
+    let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
+    let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
+    let bias = vb.get(out_c, "bias")?;
+    Ok(Conv1d::new(weight, Some(bias), config))
+}
+
+fn conv_transpose1d_weight_norm(
+    in_c: usize,
+    out_c: usize,
+    kernel_size: usize,
+    bias: bool,
+    config: candle_nn::ConvTranspose1dConfig,
+    vb: VarBuilder,
+) -> Result<ConvTranspose1d> {
+    let weight_g = vb.get((in_c, 1, 1), "weight_g")?;
+    let weight_v = vb.get((in_c, out_c, kernel_size), "weight_v")?;
+    let norm_v = weight_v.sqr()?.sum_keepdim((1, 2))?.sqrt()?;
+    let weight = weight_v.broadcast_mul(&weight_g)?.broadcast_div(&norm_v)?;
+    let bias = if bias {
+        Some(vb.get(out_c, "bias")?)
+    } else {
+        None
+    };
+    Ok(ConvTranspose1d::new(weight, bias, config))
+}
 
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct Config {
@@ -68,9 +104,9 @@ impl ResidualUnit {
             padding: pad,
             ..Default::default()
         };
-        let conv1 = encodec::conv1d_weight_norm(dim, dim, 7, cfg1, vb.pp(1))?;
+        let conv1 = conv1d_weight_norm(dim, dim, 7, cfg1, vb.pp(1))?;
         let snake2 = Snake1d::new(dim, vb.pp(2))?;
-        let conv2 = encodec::conv1d_weight_norm(dim, dim, 1, Default::default(), vb.pp(3))?;
+        let conv2 = conv1d_weight_norm(dim, dim, 1, Default::default(), vb.pp(3))?;
         Ok(Self {
             snake1,
             conv1,
@@ -117,7 +153,7 @@ impl EncoderBlock {
             padding: stride.div_ceil(2),
             ..Default::default()
         };
-        let conv1 = encodec::conv1d_weight_norm(dim / 2, dim, 2 * stride, cfg1, vb.pp(4))?;
+        let conv1 = conv1d_weight_norm(dim / 2, dim, 2 * stride, cfg1, vb.pp(4))?;
         Ok(Self {
             res1,
             res2,
@@ -168,7 +204,7 @@ impl Encoder {
             padding: 3,
             ..Default::default()
         };
-        let conv1 = encodec::conv1d_weight_norm(1, d_model, 7, cfg1, vb.pp(0))?;
+        let conv1 = conv1d_weight_norm(1, d_model, 7, cfg1, vb.pp(0))?;
         let mut blocks = Vec::with_capacity(strides.len());
         for (block_idx, stride) in strides.iter().enumerate() {
             d_model *= 2;
@@ -180,8 +216,7 @@ impl Encoder {
             padding: 1,
             ..Default::default()
         };
-        let conv2 =
-            encodec::conv1d_weight_norm(d_model, d_latent, 3, cfg2, vb.pp(strides.len() + 2))?;
+        let conv2 = conv1d_weight_norm(d_model, d_latent, 3, cfg2, vb.pp(strides.len() + 2))?;
         Ok(Self {
             conv1,
             blocks,
@@ -209,14 +244,8 @@ impl DecoderBlock {
             padding: stride.div_ceil(2),
             ..Default::default()
         };
-        let conv_tr1 = encodec::conv_transpose1d_weight_norm(
-            in_dim,
-            out_dim,
-            2 * stride,
-            true,
-            cfg,
-            vb.pp(1),
-        )?;
+        let conv_tr1 =
+            conv_transpose1d_weight_norm(in_dim, out_dim, 2 * stride, true, cfg, vb.pp(1))?;
         let res1 = ResidualUnit::new(out_dim, 1, vb.pp(2))?;
         let res2 = ResidualUnit::new(out_dim, 3, vb.pp(3))?;
         let res3 = ResidualUnit::new(out_dim, 9, vb.pp(4))?;
@@ -260,7 +289,7 @@ impl Decoder {
             padding: 3,
             ..Default::default()
         };
-        let conv1 = encodec::conv1d_weight_norm(in_c, channels, 7, cfg1, vb.pp(0))?;
+        let conv1 = conv1d_weight_norm(in_c, channels, 7, cfg1, vb.pp(0))?;
         let mut blocks = Vec::with_capacity(rates.len());
         for (idx, stride) in rates.iter().enumerate() {
             let block = DecoderBlock::new(channels, channels / 2, *stride, vb.pp(idx + 1))?;
@@ -268,7 +297,7 @@ impl Decoder {
             blocks.push(block)
         }
         let snake1 = Snake1d::new(channels, vb.pp(rates.len() + 1))?;
-        let conv2 = encodec::conv1d_weight_norm(channels, d_out, 7, cfg1, vb.pp(rates.len() + 2))?;
+        let conv2 = conv1d_weight_norm(channels, d_out, 7, cfg1, vb.pp(rates.len() + 2))?;
         Ok(Self {
             conv1,
             blocks,
@@ -298,10 +327,9 @@ pub struct VectorQuantizer {
 
 impl VectorQuantizer {
     pub fn new(in_dim: usize, cb_size: usize, cb_dim: usize, vb: VarBuilder) -> Result<Self> {
-        let in_proj =
-            encodec::conv1d_weight_norm(in_dim, cb_dim, 1, Default::default(), vb.pp("in_proj"))?;
+        let in_proj = conv1d_weight_norm(in_dim, cb_dim, 1, Default::default(), vb.pp("in_proj"))?;
         let out_proj =
-            encodec::conv1d_weight_norm(cb_dim, in_dim, 1, Default::default(), vb.pp("out_proj"))?;
+            conv1d_weight_norm(cb_dim, in_dim, 1, Default::default(), vb.pp("out_proj"))?;
         let codebook = candle_nn::embedding(cb_size, cb_dim, vb.pp("codebook"))?;
         Ok(Self {
             in_proj,

@@ -2,7 +2,7 @@ use std::io::Write;
 
 use audio::{apply_audio_delay, build_delay_indices, build_revert_indices, revert_audio_delay};
 use cache::DiaKvCache;
-use candle_core::{pickle::PthTensors, DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::VarBuilder;
 use mistralrs_quant::{BitWiseOp, ShardedVarBuilder};
 use model::DiaModel;
@@ -25,7 +25,6 @@ mod audio;
 mod cache;
 mod config;
 mod dac;
-mod encodec;
 mod model;
 
 fn normalize_loudness(wav: &Tensor, sample_rate: u32, loudness_compressor: bool) -> Result<Tensor> {

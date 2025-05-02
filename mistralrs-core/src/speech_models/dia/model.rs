@@ -8,10 +8,7 @@ use crate::{
     layers_masker::masked_fill,
 };
 
-use super::{
-    cache::{self, DiaKvCache},
-    config::DiaConfig,
-};
+use super::{cache::DiaKvCache, config::DiaConfig};
 
 pub fn dense_general_column(
     in_features: usize,

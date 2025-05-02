@@ -16,7 +16,6 @@ use crate::{
     api_get_file, DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
-use candle_core::pickle::{read_pth_tensor_info, PthTensors};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
