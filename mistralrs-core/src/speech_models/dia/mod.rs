@@ -202,6 +202,7 @@ impl DiaPipeline {
             Tensor::cat(&[text, pad], 0)?
         };
 
+        println!("{padded_text_np}");
         padded_text_np.to_dtype(DType::U32)?.unsqueeze(0)
     }
 
@@ -241,6 +242,7 @@ impl DiaPipeline {
             self.model
                 .encoder
                 .forward(&enc_input, &encoder_positions, Some(&encoder_attn_mask))?;
+        println!("{encoder_out}");
 
         let decoder_cross_attn_cache = self
             .model
@@ -365,6 +367,7 @@ impl DiaPipeline {
     ) -> Result<Vec<u32>> {
         let audio_eos_value = self.cfg.data.audio_eos_value as usize;
 
+        println!("{tokens}");
         let mut logits = self.model.decoder.decode_step(
             tokens,
             encoder_out,
@@ -374,6 +377,8 @@ impl DiaPipeline {
             self_attn_cache,
             cross_attn_cache,
         )?;
+        println!("{logits}");
+        todo!();
 
         let logits_last = logits.i((.., logits.dim(1)? - 1.., .., ..))?.squeeze(1)?;
         let uncond_logits = logits_last.i((0, .., ..))?.squeeze(0)?;

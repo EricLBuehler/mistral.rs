@@ -387,6 +387,8 @@ impl DiaDecoderLayer {
         let mut residual = x;
         let mut x_norm = self.pre_sa_norm.forward(x)?;
 
+        println!("\n\n\n");
+        println!("x {x}");
         let sa_out = self.self_attn.forward(
             &x_norm,
             &x_norm,
@@ -396,11 +398,16 @@ impl DiaDecoderLayer {
             self_attn_cache,
             prefill,
         )?;
+        println!("sa_out {sa_out}");
         let x = (residual + sa_out)?;
 
         residual = &x;
         x_norm = self.pre_ca_norm.forward(&x)?;
+        println!("x_norm {x_norm}");
 
+        println!("encoder_out {encoder_out}");
+        println!("decoder_positions {decoder_positions}");
+        println!("encoder_positions {encoder_positions}");
         let ca_out = self.cross_attn.forward(
             &x_norm,
             &encoder_out,
@@ -410,11 +417,14 @@ impl DiaDecoderLayer {
             cross_attn_cache,
             false,
         )?;
+        println!("ca_out {ca_out}");
         let x = (residual + ca_out)?;
         residual = &x;
 
         x_norm = self.pre_mlp_norm.forward(&x)?;
         let mlp_out = self.mlp.forward(&x_norm)?;
+        println!("mlp_out {mlp_out}");
+        todo!();
 
         residual + mlp_out
     }
@@ -524,6 +534,7 @@ impl DiaDecoder {
         }
 
         let mut x = x.unwrap();
+        println!("{x}");
 
         for (i, layer) in self.layers.iter().enumerate() {
             let self_cache = &mut self_attn_cache[i];
