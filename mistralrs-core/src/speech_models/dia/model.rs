@@ -387,8 +387,8 @@ impl DiaDecoderLayer {
         let mut residual = x;
         let mut x_norm = self.pre_sa_norm.forward(x)?;
 
-        println!("\n\n\n");
-        println!("x {x}");
+        //println!("\n\n\n");
+        //println!("x {x}");
         let sa_out = self.self_attn.forward(
             &x_norm,
             &x_norm,
@@ -398,16 +398,21 @@ impl DiaDecoderLayer {
             self_attn_cache,
             prefill,
         )?;
-        println!("sa_out {sa_out}");
+        //println!("sa_out {sa_out}");
         let x = (residual + sa_out)?;
 
         residual = &x;
         x_norm = self.pre_ca_norm.forward(&x)?;
-        println!("x_norm {x_norm}");
+        //println!("x_norm {x_norm}");
 
-        println!("encoder_out {encoder_out}");
-        println!("decoder_positions {decoder_positions}");
-        println!("encoder_positions {encoder_positions}");
+        //println!("encoder_out {encoder_out}");
+        //println!("decoder_positions {decoder_positions}");
+        //println!("encoder_positions {encoder_positions}");
+        //println!("cross_attn_mask {}", cross_attn_mask.as_ref().unwrap().to_dtype(DType::F32)?.mean_all()?);
+        //println!("cross_attn_cache k {}", cross_attn_cache.as_ref().unwrap().k_v().0.mean_all()?);
+        //println!("cross_attn_cache v {}", cross_attn_cache.as_ref().unwrap().k_v().1.mean_all()?);
+        //x_norm.write_npy("x_norm_m.npy")?;
+        //encoder_out.write_npy("encoder_out_m.npy")?;
         let ca_out = self.cross_attn.forward(
             &x_norm,
             &encoder_out,
@@ -417,14 +422,16 @@ impl DiaDecoderLayer {
             cross_attn_cache,
             false,
         )?;
-        println!("ca_out {ca_out}");
+        //println!("ca_out {}", ca_out.mean_all()?);
+        //ca_out.write_npy("ca_out_m.npy")?;
         let x = (residual + ca_out)?;
         residual = &x;
 
         x_norm = self.pre_mlp_norm.forward(&x)?;
         let mlp_out = self.mlp.forward(&x_norm)?;
-        println!("mlp_out {mlp_out}");
-        todo!();
+        //mlp_out.write_npy("mlp_out_m.npy")?;
+        //println!("mlp_out {}", mlp_out.mean_all()?);
+        //todo!();
 
         residual + mlp_out
     }
@@ -534,7 +541,7 @@ impl DiaDecoder {
         }
 
         let mut x = x.unwrap();
-        println!("{x}");
+        //println!("{x}");
 
         for (i, layer) in self.layers.iter().enumerate() {
             let self_cache = &mut self_attn_cache[i];

@@ -242,6 +242,7 @@ impl DiaPipeline {
             self.model
                 .encoder
                 .forward(&enc_input, &encoder_positions, Some(&encoder_attn_mask))?;
+        let encoder_out = Tensor::read_npy("encoder_out.npy")?.to_dtype(DType::F32)?.to_device(&self.device)?;
         println!("{encoder_out}");
 
         let decoder_cross_attn_cache = self
@@ -367,7 +368,7 @@ impl DiaPipeline {
     ) -> Result<Vec<u32>> {
         let audio_eos_value = self.cfg.data.audio_eos_value as usize;
 
-        println!("{tokens}");
+        // println!("{tokens}");
         let mut logits = self.model.decoder.decode_step(
             tokens,
             encoder_out,
@@ -377,8 +378,8 @@ impl DiaPipeline {
             self_attn_cache,
             cross_attn_cache,
         )?;
-        println!("{logits}");
-        todo!();
+        // println!("{logits}");
+        // todo!();
 
         let logits_last = logits.i((.., logits.dim(1)? - 1.., .., ..))?.squeeze(1)?;
         let uncond_logits = logits_last.i((0, .., ..))?.squeeze(0)?;
