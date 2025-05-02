@@ -161,9 +161,7 @@ impl DiaPipeline {
             (Tensor::ones((1, num_channels), DType::F32, &self.device)? * audio_bos_value as f64)?;
 
         let delay_pad_tensor =
-            Tensor::ones((max_delay_pattern, num_channels), DType::F32, &self.device)?
-                .neg()?
-                .to_dtype(DType::F32)?;
+            (Tensor::ones((max_delay_pattern, num_channels), DType::F32, &self.device)? * 1024f64)?;
         let prefill = Tensor::cat(&[prefill, delay_pad_tensor], 0)?;
 
         let delay_precomp = build_delay_indices(
@@ -433,6 +431,7 @@ impl DiaPipeline {
         codebook = invalid_mask.where_cond(&codebook.zeros_like()?, &codebook)?;
 
         let codes = codebook.transpose(1, 2)?;
+        println!("{codes}");
         let pcm = self.dac.decode_codes(&codes)?;
         println!("{pcm}");
         let pcm = pcm.i((0, 0))?;
@@ -475,7 +474,7 @@ impl DiaPipeline {
         let mut rng = Isaac64Rng::seed_from_u64(0);
 
         while dec_step < max_tokens {
-            let dec_positions = Tensor::zeros((2, 1), DType::F32, &self.device)?;
+            let dec_positions = Tensor::full(dec_step as f32, (2, 1), &self.device)?;
             let current_tokens = generated_tokens
                 .i((dec_step..dec_step + 1, ..))?
                 .unsqueeze(0)?
@@ -524,7 +523,7 @@ impl DiaPipeline {
 
                 let mask = generated_tokens
                     .i((dec_step + 1..dec_step + 2, ..))?
-                    .eq(-1.)?;
+                    .eq(1024.)?;
                 generated_tokens = generated_tokens.slice_assign(
                     &[&(dec_step + 1..dec_step + 2), &..],
                     &mask.where_cond(
