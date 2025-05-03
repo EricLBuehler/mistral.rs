@@ -19,8 +19,15 @@ const BITWISE: &str = include_str!("bitwise.metal");
 const QUANTIZED: &str = include_str!("quantized.metal");
 const BLOCKWISE_FP8: &str = include_str!("blockwise_fp8.metal");
 
+#[cfg(target_os = "macos")]
+const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant.metallib"));
+#[cfg(target_os = "ios")]
+const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant_ios.metallib"));
+
+#[allow(unused)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
+    Kernels,
     HqqDequant,
     BnbDequant,
     Bitwise,
@@ -51,7 +58,7 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
 type Libraries = HashMap<Source, Library>;
 type Pipelines = HashMap<String, ComputePipelineState>;
 
-static KERNELS: OnceLock<Arc<Kernels_>> = OnceLock::new();
+static G_KERNEL: OnceLock<Arc<Kernels_>> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct Kernels_ {
@@ -82,6 +89,7 @@ impl Kernels_ {
             Source::Bitwise => BITWISE,
             Source::Quantized => QUANTIZED,
             Source::BlockwiseFp8 => BLOCKWISE_FP8,
+            Source::Kernels => unreachable!(),
         }
     }
 
@@ -96,11 +104,21 @@ impl Kernels_ {
         if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
-            let lib = {
-                let source_content = self.get_library_source(source);
-                device
-                    .new_library_with_source(source_content, &CompileOptions::new())
-                    .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+            let lib = match source {
+                Source::Kernels => {
+                    let source_data = KERNELS;
+                    device.new_library_with_data(source_data).map_err(|e| {
+                        MetalKernelError::LoadLibraryError(format!(
+                            "Metal requires macosx > 13.0 or higher, cannot load candle metal library: {e}"
+                        ))
+                    })?
+                }
+                source => {
+                    let source_content = self.get_library_source(source);
+                    device
+                        .new_library_with_source(source_content, &CompileOptions::new())
+                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+                }
             };
             libraries.insert(source, lib.clone());
             Ok(lib)
@@ -151,7 +169,7 @@ pub struct Kernels(Arc<Kernels_>);
 
 impl Kernels {
     pub fn new() -> Self {
-        let kernels = KERNELS.get_or_init(|| Arc::new(Kernels_::new()));
+        let kernels = G_KERNEL.get_or_init(|| Arc::new(Kernels_::new()));
         Self(kernels.clone())
     }
 }
@@ -188,7 +206,7 @@ pub fn call_dequant_8bit(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::HqqDequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -227,7 +245,7 @@ pub fn call_dequant_4bit(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::HqqDequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -266,7 +284,7 @@ pub fn call_dequant_2bit(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::HqqDequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -305,7 +323,7 @@ pub fn call_dequant_1bit(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::HqqDequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -344,7 +362,7 @@ pub fn call_dequant_3bit(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::HqqDequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -384,7 +402,7 @@ pub fn call_bitwise_or(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::Bitwise, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -422,7 +440,7 @@ pub fn call_bitwise_and(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::Bitwise, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -460,7 +478,7 @@ pub fn call_bitwise_xor(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::Bitwise, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -497,7 +515,7 @@ pub fn call_bitwise_leftshift(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::Bitwise, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -534,7 +552,7 @@ pub fn call_dequant_bnb_nf4(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::BnbDequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -574,7 +592,7 @@ pub fn call_dequant_bnb_fp4(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::BnbDequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -614,7 +632,7 @@ pub fn call_dequant_bnb_int8(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::BnbDequant, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -665,7 +683,7 @@ pub fn call_affine_quantize(
     };
     let name = format!("{kernel_func}_{type_string}_gs_{group_size}_b_{bits}");
 
-    let pipeline = kernels.load_pipeline(device, Source::Quantized, &name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, &name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -913,7 +931,7 @@ pub fn call_afq_qmm(
         name.push_str(&format!("_batch_{}", batched as usize));
     }
 
-    let pipeline = kernels.load_pipeline(device, Source::Quantized, &name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, &name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -1039,7 +1057,7 @@ pub fn call_dequant_blockwise_fp8(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::BlockwiseFp8, name)?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
