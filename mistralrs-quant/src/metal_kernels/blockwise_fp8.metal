@@ -1,4 +1,6 @@
+#include "float8.metal"
 #include "utils.metal"
+
 #include <metal_stdlib>
 
 using namespace metal;
@@ -12,31 +14,6 @@ extern "C" struct DequantParams {
   uint block_size_y;      // tile height   ( == weight_block_size_y )
   uint block_size_x;      // tile width    ( == weight_block_size_x )
 };
-
-/* ------------------ FP8-E4M3 → float32 helper ------------------ */
-inline float fp8_e4m3_to_float(uchar v) {
-  const uint sign = v >> 7;
-  const uint exponent = (v >> 3) & 0xF;
-  const uint mantissa = v & 0x7;
-
-  /* special encodings ------------------------------------------------ */
-  if (exponent == 0) { // sub-normal / zero
-    if (mantissa == 0)
-      return 0.0f * (1.0f - 2.0f * sign); // signed zero
-    float m = float(mantissa) / 8.0f;     // 2⁻³ scale for 3-bit frac
-    float val = ldexp(m, -6);             // 2^(1-bias-fracbits) : bias=7
-    return sign ? -val : val;
-  }
-  if (exponent == 0xF) { // Inf / NaN
-    return sign ? -INFINITY : INFINITY;
-  }
-
-  /* normal numbers --------------------------------------------------- */
-  float m = 1.0f + float(mantissa) / 8.0f; // implicit leading 1
-  int exp = int(exponent) - 7;             // remove bias (bias = 7)
-  float val = ldexp(m, exp);
-  return sign ? -val : val;
-}
 
 /* -------------------------- kernel bodies ---------------------------- */
 template <typename OutT>
