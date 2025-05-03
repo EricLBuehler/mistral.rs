@@ -486,46 +486,55 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         let mut new_k_cache = Vec::new();
         let mut new_v_cache = Vec::new();
 
-        'outer: for layer in 0..pipeline.get_metadata().num_hidden_layers {
-            let mut k_vec = Vec::new();
-            let mut v_vec = Vec::new();
-            for seq in &mut *seqs {
+        for layer in 0..pipeline.get_metadata().num_hidden_layers {
+            // Preallocate combined k and v caches across all sequences, avoiding Tensor::cat copies
+            let batch_len = seqs.len();
+            // Use the first sequence as template
+            let (first_k, first_v) = {
+                let src_cache = if modify_draft_cache {
+                    seqs[0].normal_draft_cache()
+                } else {
+                    seqs[0].normal_cache()
+                };
+                let cache = src_cache.get(layer).unwrap().as_ref().unwrap();
+                match cache {
+                    KvCache::Normal { k, v } => {
+                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+                    }
+                    KvCache::Rotating { k, v } => {
+                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+                    }
+                }
+            };
+            // Build dims for batched cache
+            let mut dims_k = first_k.dims().to_vec();
+            let mut dims_v = first_v.dims().to_vec();
+            dims_k[0] *= batch_len;
+            dims_v[0] *= batch_len;
+            let batch_k = Tensor::zeros(dims_k.clone(), first_k.dtype(), first_k.device()).unwrap();
+            let batch_v = Tensor::zeros(dims_v.clone(), first_v.dtype(), first_v.device()).unwrap();
+            // Fill each sequence's cache slice
+            for (i, seq) in seqs.iter_mut().enumerate() {
                 let src_cache = if modify_draft_cache {
                     seq.normal_draft_cache()
                 } else {
                     seq.normal_cache()
                 };
-                let cache = src_cache.get(layer).unwrap();
-                // This case for llama 3.2 vision cross attn
-                if cache.is_none() {
-                    new_k_cache.push(None);
-                    new_v_cache.push(None);
-                    continue 'outer;
-                }
-                let cache = cache
-                    .as_ref()
-                    .expect("Not handling completions in `clone_in_cache`.");
-                match cache {
+                let cache = src_cache.get(layer).unwrap().as_ref().unwrap();
+                let (src_k, src_v) = match cache {
                     KvCache::Normal { k, v } => {
-                        k_vec.push(k.all_data.clone().unwrap());
-                        v_vec.push(v.all_data.clone().unwrap());
+                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
                     }
                     KvCache::Rotating { k, v } => {
-                        k_vec.push(k.all_data.clone().unwrap());
-                        v_vec.push(v.all_data.clone().unwrap());
+                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
                     }
-                }
+                };
+                let offset = i * first_k.dims()[0];
+                batch_k.slice_set(&src_k, 0, offset).unwrap();
+                batch_v.slice_set(&src_v, 0, offset).unwrap();
             }
-            new_k_cache.push(Some(if k_vec.len() > 1 {
-                Tensor::cat(&k_vec, 0).unwrap()
-            } else {
-                k_vec[0].clone()
-            }));
-            new_v_cache.push(Some(if v_vec.len() > 1 {
-                Tensor::cat(&v_vec, 0).unwrap()
-            } else {
-                v_vec[0].clone()
-            }));
+            new_k_cache.push(Some(batch_k));
+            new_v_cache.push(Some(batch_v));
         }
 
         let seq0_cache = if modify_draft_cache {
