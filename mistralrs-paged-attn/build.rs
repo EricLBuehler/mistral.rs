@@ -92,7 +92,7 @@ fn main() -> Result<(), String> {
 
     const METAL_SOURCES: [&str; 3] = ["copy_blocks", "pagedattention", "reshape_and_cache"];
     for src in METAL_SOURCES {
-        println!("cargo::rerun-if-changed=src/{src}.metal");
+        println!("cargo::rerun-if-changed=src/metal/kernels/{src}.metal");
     }
     println!("cargo::rerun-if-changed=src/metal/kernels/utils.metal");
     println!("cargo::rerun-if-changed=build.rs");
