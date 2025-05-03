@@ -1,10 +1,9 @@
 use candle_core::{DType, MetalStorage};
 use metal::{
-    Buffer, CompileOptions, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
+    Buffer, ComputeCommandEncoderRef, ComputePipelineState, Device, Function,
     FunctionConstantValues, Library, MTLDataType, MTLSize, NSUInteger,
 };
-use once_cell::sync::OnceCell;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 use std::{collections::HashMap, ffi::c_void};
 
 pub mod utils;
@@ -22,19 +21,6 @@ const KERNELS: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
     "/mistralrs_paged_attention_ios.metallib"
 ));
-
-const COPY_BLOCKS: &str = include_str!("copy_blocks.metal");
-const RESHAPE_AND_CACHE: &str = include_str!("reshape_and_cache.metal");
-const PAGEDATTENTION: &str = include_str!("pagedattention.metal");
-
-#[allow(unused)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Source {
-    CopyBlocks,
-    ReshapeAndCache,
-    PagedAttention,
-    Kernels,
-}
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
@@ -56,82 +42,52 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
     }
 }
 
-type Libraries = HashMap<Source, Library>;
 type Pipelines = HashMap<(String, Option<ConstantValues>), ComputePipelineState>;
+
+static LIBRARY: OnceLock<Library> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct Kernels {
-    libraries: RwLock<Libraries>,
     pipelines: RwLock<Pipelines>,
 }
 
-pub(crate) static G_KERNEL: OnceCell<Kernels> = OnceCell::new();
+impl Default for Kernels {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Kernels {
-    pub fn default() -> &'static Kernels {
-        G_KERNEL.get_or_init(Kernels::new)
-    }
-
     pub fn new() -> Self {
-        let libraries = RwLock::new(Libraries::new());
         let pipelines = RwLock::new(Pipelines::new());
-        Self {
-            libraries,
-            pipelines,
-        }
-    }
-
-    fn get_library_source(&self, source: Source) -> &'static str {
-        match source {
-            Source::CopyBlocks => COPY_BLOCKS,
-            Source::ReshapeAndCache => RESHAPE_AND_CACHE,
-            Source::PagedAttention => PAGEDATTENTION,
-            Source::Kernels => unreachable!(),
-        }
+        Self { pipelines }
     }
 
     /// Load the give library from its [`source`].
     /// If this has been previously loaded it will just fetch it from cache.
-    pub fn load_library(
-        &self,
-        device: &Device,
-        source: Source,
-    ) -> Result<Library, MetalKernelError> {
-        let mut libraries = self.libraries.write()?;
-        if let Some(lib) = libraries.get(&source) {
+    pub fn load_library(&self, device: &Device) -> Result<Library, MetalKernelError> {
+        if let Some(lib) = LIBRARY.get() {
             Ok(lib.clone())
         } else {
-            let lib = match source {
-                Source::Kernels => {
-                    let source_data = KERNELS;
-                    device.new_library_with_data(source_data).map_err(|e| {
-                        MetalKernelError::LoadLibraryError(format!(
-                            "Metal requires macosx > 13.0 or higher, cannot load candle metal library: {e}"
-                        ))
-                    })?
-                }
-                source => {
-                    let source_content = self.get_library_source(source);
-                    device
-                        .new_library_with_source(source_content, &CompileOptions::new())
-                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
-                }
-            };
-            libraries.insert(source, lib.clone());
-            Ok(lib)
+            let source_data = KERNELS;
+            let lib = device.new_library_with_data(source_data).map_err(|e| {
+                MetalKernelError::LoadLibraryError(format!(
+                    "Metal requires macosx > 13.0 or higher, cannot load candle metal library: {e}"
+                ))
+            })?;
+            Ok(LIBRARY.get_or_init(|| lib).clone())
         }
     }
 
     fn load_function(
         &self,
         device: &Device,
-        source: Source,
-        name: String,
+        name: impl ToString,
         constants: Option<FunctionConstantValues>,
     ) -> Result<Function, MetalKernelError> {
         let func = self
-            .load_library(device, source)?
-            .get_function(&name, constants)
+            .load_library(device)?
+            .get_function(&name.to_string(), constants)
             .map_err(|e| MetalKernelError::LoadFunctionError(e.to_string()))?;
         Ok(func)
     }
@@ -142,7 +98,6 @@ impl Kernels {
     fn load_pipeline_with_constants(
         &self,
         device: &Device,
-        source: Source,
         name: String,
         constants: Option<ConstantValues>,
     ) -> Result<ComputePipelineState, MetalKernelError> {
@@ -154,7 +109,6 @@ impl Kernels {
             let (name, constants) = key;
             let func = self.load_function(
                 device,
-                source,
                 name.clone(),
                 constants.as_ref().map(|c| c.function_constant_values()),
             )?;
@@ -173,10 +127,9 @@ impl Kernels {
     pub fn load_pipeline(
         &self,
         device: &Device,
-        source: Source,
         name: String,
     ) -> Result<ComputePipelineState, MetalKernelError> {
-        self.load_pipeline_with_constants(device, source, name, None)
+        self.load_pipeline_with_constants(device, name, None)
     }
 }
 
@@ -206,7 +159,7 @@ pub fn call_copy_blocks(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::Kernels, name.to_string())?;
+    let pipeline = kernels.load_pipeline(device, name.to_string())?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -271,7 +224,7 @@ pub fn call_reshape_and_cache(
         PagedAttentionDType::BF16 => "reshape_and_cache_bfloat16_t",
         PagedAttentionDType::F16 => "reshape_and_cache_half",
     };
-    let pipeline = kernels.load_pipeline(device, Source::Kernels, name.to_string())?;
+    let pipeline = kernels.load_pipeline(device, name.to_string())?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -414,8 +367,7 @@ pub fn call_paged_attention_v1(
         ),
     ]));
 
-    let pipeline =
-        kernels.load_pipeline_with_constants(device, Source::Kernels, name, constants)?;
+    let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -551,8 +503,7 @@ pub fn call_paged_attention_v2(
             ),
         ]));
 
-        let pipeline =
-            kernels.load_pipeline_with_constants(device, Source::Kernels, name, constants)?;
+        let pipeline = kernels.load_pipeline_with_constants(device, name, constants)?;
 
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -641,7 +592,7 @@ pub fn call_paged_attention_v2(
         name.push_str(&format!("_nsl{}", NUM_SIMD_LANES));
         name.push_str(&format!("_ps{}", PARTITION_SIZE));
 
-        let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
+        let pipeline = kernels.load_pipeline(device, name)?;
 
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();

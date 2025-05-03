@@ -179,7 +179,7 @@ fn main() -> Result<(), String> {
 
         fn compile(platform: Platform) -> Result<(), String> {
             for src in METAL_SOURCES {
-                println!("cargo::rerun-if-changed=src/{src}.metal");
+                println!("cargo::rerun-if-changed=src/metal_kernels/{src}.metal");
             }
             println!("cargo::rerun-if-changed=src/metal_kernels/utils.metal");
             println!("cargo::rerun-if-changed=build.rs");
@@ -281,4 +281,7 @@ fn main() -> Result<(), String> {
 
         Ok(())
     }
+
+    #[cfg(not(any(feature = "metal", feature = "cuda")))]
+    Ok(())
 }
