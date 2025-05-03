@@ -12,15 +12,28 @@ use utils::EncoderProvider;
 
 use crate::set_params;
 
+#[cfg(target_os = "macos")]
+const KERNELS: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/mistralrs_paged_attention.metallib"
+));
+#[cfg(target_os = "ios")]
+const KERNELS: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/mistralrs_paged_attention_ios.metallib"
+));
+
 const COPY_BLOCKS: &str = include_str!("copy_blocks.metal");
 const RESHAPE_AND_CACHE: &str = include_str!("reshape_and_cache.metal");
 const PAGEDATTENTION: &str = include_str!("pagedattention.metal");
 
+#[allow(unused)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Source {
     CopyBlocks,
     ReshapeAndCache,
     PagedAttention,
+    Kernels,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -73,6 +86,7 @@ impl Kernels {
             Source::CopyBlocks => COPY_BLOCKS,
             Source::ReshapeAndCache => RESHAPE_AND_CACHE,
             Source::PagedAttention => PAGEDATTENTION,
+            Source::Kernels => unreachable!(),
         }
     }
 
@@ -87,11 +101,21 @@ impl Kernels {
         if let Some(lib) = libraries.get(&source) {
             Ok(lib.clone())
         } else {
-            let lib = {
-                let source_content = self.get_library_source(source);
-                device
-                    .new_library_with_source(source_content, &CompileOptions::new())
-                    .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+            let lib = match source {
+                Source::Kernels => {
+                    let source_data = KERNELS;
+                    device.new_library_with_data(source_data).map_err(|e| {
+                        MetalKernelError::LoadLibraryError(format!(
+                            "Metal requires macosx > 13.0 or higher, cannot load candle metal library: {e}"
+                        ))
+                    })?
+                }
+                source => {
+                    let source_content = self.get_library_source(source);
+                    device
+                        .new_library_with_source(source_content, &CompileOptions::new())
+                        .map_err(|e| MetalKernelError::LoadLibraryError(e.to_string()))?
+                }
             };
             libraries.insert(source, lib.clone());
             Ok(lib)
@@ -182,7 +206,7 @@ pub fn call_copy_blocks(
             })
         }
     };
-    let pipeline = kernels.load_pipeline(device, Source::CopyBlocks, name.to_string())?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name.to_string())?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -247,7 +271,7 @@ pub fn call_reshape_and_cache(
         PagedAttentionDType::BF16 => "reshape_and_cache_bfloat16_t",
         PagedAttentionDType::F16 => "reshape_and_cache_half",
     };
-    let pipeline = kernels.load_pipeline(device, Source::ReshapeAndCache, name.to_string())?;
+    let pipeline = kernels.load_pipeline(device, Source::Kernels, name.to_string())?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -391,7 +415,7 @@ pub fn call_paged_attention_v1(
     ]));
 
     let pipeline =
-        kernels.load_pipeline_with_constants(device, Source::PagedAttention, name, constants)?;
+        kernels.load_pipeline_with_constants(device, Source::Kernels, name, constants)?;
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
@@ -527,12 +551,8 @@ pub fn call_paged_attention_v2(
             ),
         ]));
 
-        let pipeline = kernels.load_pipeline_with_constants(
-            device,
-            Source::PagedAttention,
-            name,
-            constants,
-        )?;
+        let pipeline =
+            kernels.load_pipeline_with_constants(device, Source::Kernels, name, constants)?;
 
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
@@ -621,7 +641,7 @@ pub fn call_paged_attention_v2(
         name.push_str(&format!("_nsl{}", NUM_SIMD_LANES));
         name.push_str(&format!("_ps{}", PARTITION_SIZE));
 
-        let pipeline = kernels.load_pipeline(device, Source::PagedAttention, name)?;
+        let pipeline = kernels.load_pipeline(device, Source::Kernels, name)?;
 
         let encoder = ep.encoder();
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
