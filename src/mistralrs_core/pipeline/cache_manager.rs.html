@@ -486,623 +486,632 @@
 <a href=#486 id=486 data-nosnippet>486</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_k_cache = Vec::new();
 <a href=#487 id=487 data-nosnippet>487</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_v_cache = Vec::new();
 <a href=#488 id=488 data-nosnippet>488</a>
-<a href=#489 id=489 data-nosnippet>489</a>        <span class="lifetime">'outer</span>: <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
-<a href=#490 id=490 data-nosnippet>490</a>            <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
-<a href=#491 id=491 data-nosnippet>491</a>            <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
-<a href=#492 id=492 data-nosnippet>492</a>            <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
-<a href=#493 id=493 data-nosnippet>493</a>                <span class="kw">let </span>src_cache = <span class="kw">if </span>modify_draft_cache {
-<a href=#494 id=494 data-nosnippet>494</a>                    seq.normal_draft_cache()
-<a href=#495 id=495 data-nosnippet>495</a>                } <span class="kw">else </span>{
-<a href=#496 id=496 data-nosnippet>496</a>                    seq.normal_cache()
-<a href=#497 id=497 data-nosnippet>497</a>                };
-<a href=#498 id=498 data-nosnippet>498</a>                <span class="kw">let </span>cache = src_cache.get(layer).unwrap();
-<a href=#499 id=499 data-nosnippet>499</a>                <span class="comment">// This case for llama 3.2 vision cross attn
-<a href=#500 id=500 data-nosnippet>500</a>                </span><span class="kw">if </span>cache.is_none() {
-<a href=#501 id=501 data-nosnippet>501</a>                    new_k_cache.push(<span class="prelude-val">None</span>);
-<a href=#502 id=502 data-nosnippet>502</a>                    new_v_cache.push(<span class="prelude-val">None</span>);
-<a href=#503 id=503 data-nosnippet>503</a>                    <span class="kw">continue </span><span class="lifetime">'outer</span>;
-<a href=#504 id=504 data-nosnippet>504</a>                }
-<a href=#505 id=505 data-nosnippet>505</a>                <span class="kw">let </span>cache = cache
-<a href=#506 id=506 data-nosnippet>506</a>                    .as_ref()
-<a href=#507 id=507 data-nosnippet>507</a>                    .expect(<span class="string">"Not handling completions in `clone_in_cache`."</span>);
-<a href=#508 id=508 data-nosnippet>508</a>                <span class="kw">match </span>cache {
-<a href=#509 id=509 data-nosnippet>509</a>                    KvCache::Normal { k, v } =&gt; {
-<a href=#510 id=510 data-nosnippet>510</a>                        k_vec.push(k.all_data.clone().unwrap());
-<a href=#511 id=511 data-nosnippet>511</a>                        v_vec.push(v.all_data.clone().unwrap());
-<a href=#512 id=512 data-nosnippet>512</a>                    }
-<a href=#513 id=513 data-nosnippet>513</a>                    KvCache::Rotating { k, v } =&gt; {
-<a href=#514 id=514 data-nosnippet>514</a>                        k_vec.push(k.all_data.clone().unwrap());
-<a href=#515 id=515 data-nosnippet>515</a>                        v_vec.push(v.all_data.clone().unwrap());
-<a href=#516 id=516 data-nosnippet>516</a>                    }
-<a href=#517 id=517 data-nosnippet>517</a>                }
-<a href=#518 id=518 data-nosnippet>518</a>            }
-<a href=#519 id=519 data-nosnippet>519</a>            new_k_cache.push(<span class="prelude-val">Some</span>(<span class="kw">if </span>k_vec.len() &gt; <span class="number">1 </span>{
-<a href=#520 id=520 data-nosnippet>520</a>                Tensor::cat(<span class="kw-2">&amp;</span>k_vec, <span class="number">0</span>).unwrap()
-<a href=#521 id=521 data-nosnippet>521</a>            } <span class="kw">else </span>{
-<a href=#522 id=522 data-nosnippet>522</a>                k_vec[<span class="number">0</span>].clone()
-<a href=#523 id=523 data-nosnippet>523</a>            }));
-<a href=#524 id=524 data-nosnippet>524</a>            new_v_cache.push(<span class="prelude-val">Some</span>(<span class="kw">if </span>v_vec.len() &gt; <span class="number">1 </span>{
-<a href=#525 id=525 data-nosnippet>525</a>                Tensor::cat(<span class="kw-2">&amp;</span>v_vec, <span class="number">0</span>).unwrap()
-<a href=#526 id=526 data-nosnippet>526</a>            } <span class="kw">else </span>{
-<a href=#527 id=527 data-nosnippet>527</a>                v_vec[<span class="number">0</span>].clone()
-<a href=#528 id=528 data-nosnippet>528</a>            }));
-<a href=#529 id=529 data-nosnippet>529</a>        }
-<a href=#530 id=530 data-nosnippet>530</a>
-<a href=#531 id=531 data-nosnippet>531</a>        <span class="kw">let </span>seq0_cache = <span class="kw">if </span>modify_draft_cache {
-<a href=#532 id=532 data-nosnippet>532</a>            <span class="kw-2">&amp;*</span>seqs[<span class="number">0</span>].normal_draft_cache()
-<a href=#533 id=533 data-nosnippet>533</a>        } <span class="kw">else </span>{
-<a href=#534 id=534 data-nosnippet>534</a>            <span class="kw-2">&amp;*</span>seqs[<span class="number">0</span>].normal_cache()
-<a href=#535 id=535 data-nosnippet>535</a>        };
-<a href=#536 id=536 data-nosnippet>536</a>
-<a href=#537 id=537 data-nosnippet>537</a>        <span class="kw">let </span><span class="kw-2">mut </span>caches = Vec::new();
-<a href=#538 id=538 data-nosnippet>538</a>        <span class="kw">for </span>(layer_idx, (k_cache, v_cache)) <span class="kw">in </span>new_k_cache.into_iter().zip(new_v_cache).enumerate()
-<a href=#539 id=539 data-nosnippet>539</a>        {
-<a href=#540 id=540 data-nosnippet>540</a>            <span class="comment">// Use this for the various parameters. Assumes all seqs are from one model.
-<a href=#541 id=541 data-nosnippet>541</a>            </span><span class="kw">match </span>seq0_cache[layer_idx].as_ref().unwrap() {
-<a href=#542 id=542 data-nosnippet>542</a>                KvCache::Normal { k: old_k, .. } =&gt; {
-<a href=#543 id=543 data-nosnippet>543</a>                    <span class="kw">let </span>template_cache_dim = old_k.dim;
-<a href=#544 id=544 data-nosnippet>544</a>                    <span class="kw">let </span>template_cache_csl = old_k.current_seq_len;
-<a href=#545 id=545 data-nosnippet>545</a>                    <span class="kw">let </span>template_cache_msl = old_k.max_seq_len;
-<a href=#546 id=546 data-nosnippet>546</a>                    <span class="kw">let </span>template_cache_capsl = old_k.capacity_seq_len;
-<a href=#547 id=547 data-nosnippet>547</a>
-<a href=#548 id=548 data-nosnippet>548</a>                    caches.push(KvCache::Normal {
-<a href=#549 id=549 data-nosnippet>549</a>                        k: SingleCache {
-<a href=#550 id=550 data-nosnippet>550</a>                            all_data: k_cache.map(|x| x.contiguous().unwrap()),
-<a href=#551 id=551 data-nosnippet>551</a>                            dim: template_cache_dim,
-<a href=#552 id=552 data-nosnippet>552</a>                            current_seq_len: template_cache_csl,
-<a href=#553 id=553 data-nosnippet>553</a>                            max_seq_len: template_cache_msl,
-<a href=#554 id=554 data-nosnippet>554</a>                            capacity_seq_len: template_cache_capsl,
-<a href=#555 id=555 data-nosnippet>555</a>                        },
-<a href=#556 id=556 data-nosnippet>556</a>                        v: SingleCache {
-<a href=#557 id=557 data-nosnippet>557</a>                            all_data: v_cache.map(|x| x.contiguous().unwrap()),
-<a href=#558 id=558 data-nosnippet>558</a>                            dim: template_cache_dim,
-<a href=#559 id=559 data-nosnippet>559</a>                            current_seq_len: template_cache_csl,
-<a href=#560 id=560 data-nosnippet>560</a>                            max_seq_len: template_cache_msl,
-<a href=#561 id=561 data-nosnippet>561</a>                            capacity_seq_len: template_cache_capsl,
-<a href=#562 id=562 data-nosnippet>562</a>                        },
-<a href=#563 id=563 data-nosnippet>563</a>                    });
-<a href=#564 id=564 data-nosnippet>564</a>                }
-<a href=#565 id=565 data-nosnippet>565</a>                KvCache::Rotating { k: old_k, .. } =&gt; {
-<a href=#566 id=566 data-nosnippet>566</a>                    <span class="kw">let </span>template_cache_dim = old_k.dim;
-<a href=#567 id=567 data-nosnippet>567</a>                    <span class="kw">let </span>template_cache_csl = old_k.current_seq_len;
-<a href=#568 id=568 data-nosnippet>568</a>                    <span class="kw">let </span>template_cache_msl = old_k.max_seq_len;
-<a href=#569 id=569 data-nosnippet>569</a>                    <span class="kw">let </span>template_cache_offset = old_k.offset;
-<a href=#570 id=570 data-nosnippet>570</a>                    <span class="kw">let </span>template_cache_capsl = old_k.capacity_seq_len;
-<a href=#571 id=571 data-nosnippet>571</a>
-<a href=#572 id=572 data-nosnippet>572</a>                    caches.push(KvCache::Rotating {
-<a href=#573 id=573 data-nosnippet>573</a>                        k: RotatingCache {
-<a href=#574 id=574 data-nosnippet>574</a>                            all_data: k_cache.map(|x| x.contiguous().unwrap()),
-<a href=#575 id=575 data-nosnippet>575</a>                            dim: template_cache_dim,
-<a href=#576 id=576 data-nosnippet>576</a>                            current_seq_len: template_cache_csl,
-<a href=#577 id=577 data-nosnippet>577</a>                            max_seq_len: template_cache_msl,
-<a href=#578 id=578 data-nosnippet>578</a>                            offset: template_cache_offset,
-<a href=#579 id=579 data-nosnippet>579</a>                            capacity_seq_len: template_cache_capsl,
-<a href=#580 id=580 data-nosnippet>580</a>                        },
-<a href=#581 id=581 data-nosnippet>581</a>                        v: RotatingCache {
-<a href=#582 id=582 data-nosnippet>582</a>                            all_data: v_cache.map(|x| x.contiguous().unwrap()),
-<a href=#583 id=583 data-nosnippet>583</a>                            dim: template_cache_dim,
-<a href=#584 id=584 data-nosnippet>584</a>                            current_seq_len: template_cache_csl,
-<a href=#585 id=585 data-nosnippet>585</a>                            max_seq_len: template_cache_msl,
-<a href=#586 id=586 data-nosnippet>586</a>                            offset: template_cache_offset,
-<a href=#587 id=587 data-nosnippet>587</a>                            capacity_seq_len: template_cache_capsl,
-<a href=#588 id=588 data-nosnippet>588</a>                        },
-<a href=#589 id=589 data-nosnippet>589</a>                    });
-<a href=#590 id=590 data-nosnippet>590</a>                }
-<a href=#591 id=591 data-nosnippet>591</a>            }
-<a href=#592 id=592 data-nosnippet>592</a>        }
-<a href=#593 id=593 data-nosnippet>593</a>        <span class="kw-2">*</span>pipeline.cache().normal() = NormalCache(caches);
-<a href=#594 id=594 data-nosnippet>594</a>    }
-<a href=#595 id=595 data-nosnippet>595</a>    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;</span>T, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
-<a href=#596 id=596 data-nosnippet>596</a>        <span class="kw">let </span>all_cache = pipeline.cache().normal();
-<a href=#597 id=597 data-nosnippet>597</a>        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
-<a href=#598 id=598 data-nosnippet>598</a>            <span class="kw">let </span>cache = all_cache.<span class="number">0</span>.get(layer).unwrap();
-<a href=#599 id=599 data-nosnippet>599</a>            <span class="comment">// This case for llama 3.2 vision cross attn
-<a href=#600 id=600 data-nosnippet>600</a>            </span><span class="kw">if </span>cache.k().unwrap().is_none() {
-<a href=#601 id=601 data-nosnippet>601</a>                <span class="kw">continue</span>;
-<a href=#602 id=602 data-nosnippet>602</a>            }
-<a href=#603 id=603 data-nosnippet>603</a>
-<a href=#604 id=604 data-nosnippet>604</a>            <span class="kw">let </span>(k_cache, v_cache) = <span class="kw">match </span>cache {
-<a href=#605 id=605 data-nosnippet>605</a>                KvCache::Normal { k, v } =&gt; {
-<a href=#606 id=606 data-nosnippet>606</a>                    (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
-<a href=#607 id=607 data-nosnippet>607</a>                }
-<a href=#608 id=608 data-nosnippet>608</a>                KvCache::Rotating { k, v } =&gt; {
-<a href=#609 id=609 data-nosnippet>609</a>                    (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
-<a href=#610 id=610 data-nosnippet>610</a>                }
-<a href=#611 id=611 data-nosnippet>611</a>            };
+<a href=#489 id=489 data-nosnippet>489</a>        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
+<a href=#490 id=490 data-nosnippet>490</a>            <span class="comment">// Preallocate combined k and v caches across all sequences, avoiding Tensor::cat copies
+<a href=#491 id=491 data-nosnippet>491</a>            </span><span class="kw">let </span>batch_len = seqs.len();
+<a href=#492 id=492 data-nosnippet>492</a>            <span class="comment">// Use the first sequence as template
+<a href=#493 id=493 data-nosnippet>493</a>            </span><span class="kw">let </span>(first_k, first_v) = {
+<a href=#494 id=494 data-nosnippet>494</a>                <span class="kw">let </span>src_cache = <span class="kw">if </span>modify_draft_cache {
+<a href=#495 id=495 data-nosnippet>495</a>                    seqs[<span class="number">0</span>].normal_draft_cache()
+<a href=#496 id=496 data-nosnippet>496</a>                } <span class="kw">else </span>{
+<a href=#497 id=497 data-nosnippet>497</a>                    seqs[<span class="number">0</span>].normal_cache()
+<a href=#498 id=498 data-nosnippet>498</a>                };
+<a href=#499 id=499 data-nosnippet>499</a>                <span class="kw">let </span>cache = src_cache.get(layer).unwrap().as_ref().unwrap();
+<a href=#500 id=500 data-nosnippet>500</a>                <span class="kw">match </span>cache {
+<a href=#501 id=501 data-nosnippet>501</a>                    KvCache::Normal { k, v } =&gt; {
+<a href=#502 id=502 data-nosnippet>502</a>                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+<a href=#503 id=503 data-nosnippet>503</a>                    }
+<a href=#504 id=504 data-nosnippet>504</a>                    KvCache::Rotating { k, v } =&gt; {
+<a href=#505 id=505 data-nosnippet>505</a>                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+<a href=#506 id=506 data-nosnippet>506</a>                    }
+<a href=#507 id=507 data-nosnippet>507</a>                }
+<a href=#508 id=508 data-nosnippet>508</a>            };
+<a href=#509 id=509 data-nosnippet>509</a>            <span class="comment">// Build dims for batched cache
+<a href=#510 id=510 data-nosnippet>510</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>dims_k = first_k.dims().to_vec();
+<a href=#511 id=511 data-nosnippet>511</a>            <span class="kw">let </span><span class="kw-2">mut </span>dims_v = first_v.dims().to_vec();
+<a href=#512 id=512 data-nosnippet>512</a>            dims_k[<span class="number">0</span>] <span class="kw-2">*</span>= batch_len;
+<a href=#513 id=513 data-nosnippet>513</a>            dims_v[<span class="number">0</span>] <span class="kw-2">*</span>= batch_len;
+<a href=#514 id=514 data-nosnippet>514</a>            <span class="kw">let </span>batch_k = Tensor::zeros(dims_k.clone(), first_k.dtype(), first_k.device()).unwrap();
+<a href=#515 id=515 data-nosnippet>515</a>            <span class="kw">let </span>batch_v = Tensor::zeros(dims_v.clone(), first_v.dtype(), first_v.device()).unwrap();
+<a href=#516 id=516 data-nosnippet>516</a>            <span class="comment">// Fill each sequence's cache slice
+<a href=#517 id=517 data-nosnippet>517</a>            </span><span class="kw">for </span>(i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
+<a href=#518 id=518 data-nosnippet>518</a>                <span class="kw">let </span>src_cache = <span class="kw">if </span>modify_draft_cache {
+<a href=#519 id=519 data-nosnippet>519</a>                    seq.normal_draft_cache()
+<a href=#520 id=520 data-nosnippet>520</a>                } <span class="kw">else </span>{
+<a href=#521 id=521 data-nosnippet>521</a>                    seq.normal_cache()
+<a href=#522 id=522 data-nosnippet>522</a>                };
+<a href=#523 id=523 data-nosnippet>523</a>                <span class="kw">let </span>cache = src_cache.get(layer).unwrap().as_ref().unwrap();
+<a href=#524 id=524 data-nosnippet>524</a>                <span class="kw">let </span>(src_k, src_v) = <span class="kw">match </span>cache {
+<a href=#525 id=525 data-nosnippet>525</a>                    KvCache::Normal { k, v } =&gt; {
+<a href=#526 id=526 data-nosnippet>526</a>                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+<a href=#527 id=527 data-nosnippet>527</a>                    }
+<a href=#528 id=528 data-nosnippet>528</a>                    KvCache::Rotating { k, v } =&gt; {
+<a href=#529 id=529 data-nosnippet>529</a>                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+<a href=#530 id=530 data-nosnippet>530</a>                    }
+<a href=#531 id=531 data-nosnippet>531</a>                };
+<a href=#532 id=532 data-nosnippet>532</a>                <span class="kw">let </span>offset = i * first_k.dims()[<span class="number">0</span>];
+<a href=#533 id=533 data-nosnippet>533</a>                batch_k.slice_set(<span class="kw-2">&amp;</span>src_k, <span class="number">0</span>, offset).unwrap();
+<a href=#534 id=534 data-nosnippet>534</a>                batch_v.slice_set(<span class="kw-2">&amp;</span>src_v, <span class="number">0</span>, offset).unwrap();
+<a href=#535 id=535 data-nosnippet>535</a>            }
+<a href=#536 id=536 data-nosnippet>536</a>            new_k_cache.push(<span class="prelude-val">Some</span>(batch_k));
+<a href=#537 id=537 data-nosnippet>537</a>            new_v_cache.push(<span class="prelude-val">Some</span>(batch_v));
+<a href=#538 id=538 data-nosnippet>538</a>        }
+<a href=#539 id=539 data-nosnippet>539</a>
+<a href=#540 id=540 data-nosnippet>540</a>        <span class="kw">let </span>seq0_cache = <span class="kw">if </span>modify_draft_cache {
+<a href=#541 id=541 data-nosnippet>541</a>            <span class="kw-2">&amp;*</span>seqs[<span class="number">0</span>].normal_draft_cache()
+<a href=#542 id=542 data-nosnippet>542</a>        } <span class="kw">else </span>{
+<a href=#543 id=543 data-nosnippet>543</a>            <span class="kw-2">&amp;*</span>seqs[<span class="number">0</span>].normal_cache()
+<a href=#544 id=544 data-nosnippet>544</a>        };
+<a href=#545 id=545 data-nosnippet>545</a>
+<a href=#546 id=546 data-nosnippet>546</a>        <span class="kw">let </span><span class="kw-2">mut </span>caches = Vec::new();
+<a href=#547 id=547 data-nosnippet>547</a>        <span class="kw">for </span>(layer_idx, (k_cache, v_cache)) <span class="kw">in </span>new_k_cache.into_iter().zip(new_v_cache).enumerate()
+<a href=#548 id=548 data-nosnippet>548</a>        {
+<a href=#549 id=549 data-nosnippet>549</a>            <span class="comment">// Use this for the various parameters. Assumes all seqs are from one model.
+<a href=#550 id=550 data-nosnippet>550</a>            </span><span class="kw">match </span>seq0_cache[layer_idx].as_ref().unwrap() {
+<a href=#551 id=551 data-nosnippet>551</a>                KvCache::Normal { k: old_k, .. } =&gt; {
+<a href=#552 id=552 data-nosnippet>552</a>                    <span class="kw">let </span>template_cache_dim = old_k.dim;
+<a href=#553 id=553 data-nosnippet>553</a>                    <span class="kw">let </span>template_cache_csl = old_k.current_seq_len;
+<a href=#554 id=554 data-nosnippet>554</a>                    <span class="kw">let </span>template_cache_msl = old_k.max_seq_len;
+<a href=#555 id=555 data-nosnippet>555</a>                    <span class="kw">let </span>template_cache_capsl = old_k.capacity_seq_len;
+<a href=#556 id=556 data-nosnippet>556</a>
+<a href=#557 id=557 data-nosnippet>557</a>                    caches.push(KvCache::Normal {
+<a href=#558 id=558 data-nosnippet>558</a>                        k: SingleCache {
+<a href=#559 id=559 data-nosnippet>559</a>                            all_data: k_cache.map(|x| x.contiguous().unwrap()),
+<a href=#560 id=560 data-nosnippet>560</a>                            dim: template_cache_dim,
+<a href=#561 id=561 data-nosnippet>561</a>                            current_seq_len: template_cache_csl,
+<a href=#562 id=562 data-nosnippet>562</a>                            max_seq_len: template_cache_msl,
+<a href=#563 id=563 data-nosnippet>563</a>                            capacity_seq_len: template_cache_capsl,
+<a href=#564 id=564 data-nosnippet>564</a>                        },
+<a href=#565 id=565 data-nosnippet>565</a>                        v: SingleCache {
+<a href=#566 id=566 data-nosnippet>566</a>                            all_data: v_cache.map(|x| x.contiguous().unwrap()),
+<a href=#567 id=567 data-nosnippet>567</a>                            dim: template_cache_dim,
+<a href=#568 id=568 data-nosnippet>568</a>                            current_seq_len: template_cache_csl,
+<a href=#569 id=569 data-nosnippet>569</a>                            max_seq_len: template_cache_msl,
+<a href=#570 id=570 data-nosnippet>570</a>                            capacity_seq_len: template_cache_capsl,
+<a href=#571 id=571 data-nosnippet>571</a>                        },
+<a href=#572 id=572 data-nosnippet>572</a>                    });
+<a href=#573 id=573 data-nosnippet>573</a>                }
+<a href=#574 id=574 data-nosnippet>574</a>                KvCache::Rotating { k: old_k, .. } =&gt; {
+<a href=#575 id=575 data-nosnippet>575</a>                    <span class="kw">let </span>template_cache_dim = old_k.dim;
+<a href=#576 id=576 data-nosnippet>576</a>                    <span class="kw">let </span>template_cache_csl = old_k.current_seq_len;
+<a href=#577 id=577 data-nosnippet>577</a>                    <span class="kw">let </span>template_cache_msl = old_k.max_seq_len;
+<a href=#578 id=578 data-nosnippet>578</a>                    <span class="kw">let </span>template_cache_offset = old_k.offset;
+<a href=#579 id=579 data-nosnippet>579</a>                    <span class="kw">let </span>template_cache_capsl = old_k.capacity_seq_len;
+<a href=#580 id=580 data-nosnippet>580</a>
+<a href=#581 id=581 data-nosnippet>581</a>                    caches.push(KvCache::Rotating {
+<a href=#582 id=582 data-nosnippet>582</a>                        k: RotatingCache {
+<a href=#583 id=583 data-nosnippet>583</a>                            all_data: k_cache.map(|x| x.contiguous().unwrap()),
+<a href=#584 id=584 data-nosnippet>584</a>                            dim: template_cache_dim,
+<a href=#585 id=585 data-nosnippet>585</a>                            current_seq_len: template_cache_csl,
+<a href=#586 id=586 data-nosnippet>586</a>                            max_seq_len: template_cache_msl,
+<a href=#587 id=587 data-nosnippet>587</a>                            offset: template_cache_offset,
+<a href=#588 id=588 data-nosnippet>588</a>                            capacity_seq_len: template_cache_capsl,
+<a href=#589 id=589 data-nosnippet>589</a>                        },
+<a href=#590 id=590 data-nosnippet>590</a>                        v: RotatingCache {
+<a href=#591 id=591 data-nosnippet>591</a>                            all_data: v_cache.map(|x| x.contiguous().unwrap()),
+<a href=#592 id=592 data-nosnippet>592</a>                            dim: template_cache_dim,
+<a href=#593 id=593 data-nosnippet>593</a>                            current_seq_len: template_cache_csl,
+<a href=#594 id=594 data-nosnippet>594</a>                            max_seq_len: template_cache_msl,
+<a href=#595 id=595 data-nosnippet>595</a>                            offset: template_cache_offset,
+<a href=#596 id=596 data-nosnippet>596</a>                            capacity_seq_len: template_cache_capsl,
+<a href=#597 id=597 data-nosnippet>597</a>                        },
+<a href=#598 id=598 data-nosnippet>598</a>                    });
+<a href=#599 id=599 data-nosnippet>599</a>                }
+<a href=#600 id=600 data-nosnippet>600</a>            }
+<a href=#601 id=601 data-nosnippet>601</a>        }
+<a href=#602 id=602 data-nosnippet>602</a>        <span class="kw-2">*</span>pipeline.cache().normal() = NormalCache(caches);
+<a href=#603 id=603 data-nosnippet>603</a>    }
+<a href=#604 id=604 data-nosnippet>604</a>    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, pipeline: <span class="kw-2">&amp;</span>T, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence], modify_draft_cache: bool) {
+<a href=#605 id=605 data-nosnippet>605</a>        <span class="kw">let </span>all_cache = pipeline.cache().normal();
+<a href=#606 id=606 data-nosnippet>606</a>        <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
+<a href=#607 id=607 data-nosnippet>607</a>            <span class="kw">let </span>cache = all_cache.<span class="number">0</span>.get(layer).unwrap();
+<a href=#608 id=608 data-nosnippet>608</a>            <span class="comment">// This case for llama 3.2 vision cross attn
+<a href=#609 id=609 data-nosnippet>609</a>            </span><span class="kw">if </span>cache.k().unwrap().is_none() {
+<a href=#610 id=610 data-nosnippet>610</a>                <span class="kw">continue</span>;
+<a href=#611 id=611 data-nosnippet>611</a>            }
 <a href=#612 id=612 data-nosnippet>612</a>
-<a href=#613 id=613 data-nosnippet>613</a>            <span class="kw">let </span>k_caches = k_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
-<a href=#614 id=614 data-nosnippet>614</a>            <span class="macro">debug_assert_eq!</span>(k_caches.len(), seqs.len());
-<a href=#615 id=615 data-nosnippet>615</a>            <span class="kw">let </span>v_caches = v_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
-<a href=#616 id=616 data-nosnippet>616</a>            <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
-<a href=#617 id=617 data-nosnippet>617</a>
-<a href=#618 id=618 data-nosnippet>618</a>            <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
-<a href=#619 id=619 data-nosnippet>619</a>                <span class="kw">let </span>output_cache = <span class="kw">if </span>modify_draft_cache {
-<a href=#620 id=620 data-nosnippet>620</a>                    seq.normal_draft_cache()
-<a href=#621 id=621 data-nosnippet>621</a>                } <span class="kw">else </span>{
-<a href=#622 id=622 data-nosnippet>622</a>                    seq.normal_cache()
-<a href=#623 id=623 data-nosnippet>623</a>                };
-<a href=#624 id=624 data-nosnippet>624</a>                <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;mut </span>output_cache[layer];
-<a href=#625 id=625 data-nosnippet>625</a>                <span class="kw">let </span>k = k_caches.get(seq_i).unwrap().clone();
-<a href=#626 id=626 data-nosnippet>626</a>                <span class="kw">let </span>v = v_caches.get(seq_i).unwrap().clone();
-<a href=#627 id=627 data-nosnippet>627</a>
-<a href=#628 id=628 data-nosnippet>628</a>                <span class="kw">match </span>cache {
-<a href=#629 id=629 data-nosnippet>629</a>                    KvCache::Normal {
-<a href=#630 id=630 data-nosnippet>630</a>                        k: cache_k,
-<a href=#631 id=631 data-nosnippet>631</a>                        v: cache_v,
-<a href=#632 id=632 data-nosnippet>632</a>                    } =&gt; {
-<a href=#633 id=633 data-nosnippet>633</a>                        <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>(KvCache::Normal {
-<a href=#634 id=634 data-nosnippet>634</a>                            k: SingleCache {
-<a href=#635 id=635 data-nosnippet>635</a>                                all_data: <span class="prelude-val">Some</span>(k),
-<a href=#636 id=636 data-nosnippet>636</a>                                dim: cache_k.dim,
-<a href=#637 id=637 data-nosnippet>637</a>                                current_seq_len: cache_k.current_seq_len,
-<a href=#638 id=638 data-nosnippet>638</a>                                max_seq_len: cache_k.max_seq_len,
-<a href=#639 id=639 data-nosnippet>639</a>                                capacity_seq_len: cache_k.capacity_seq_len,
-<a href=#640 id=640 data-nosnippet>640</a>                            },
-<a href=#641 id=641 data-nosnippet>641</a>                            v: SingleCache {
-<a href=#642 id=642 data-nosnippet>642</a>                                all_data: <span class="prelude-val">Some</span>(v),
-<a href=#643 id=643 data-nosnippet>643</a>                                dim: cache_v.dim,
-<a href=#644 id=644 data-nosnippet>644</a>                                current_seq_len: cache_v.current_seq_len,
-<a href=#645 id=645 data-nosnippet>645</a>                                max_seq_len: cache_v.max_seq_len,
-<a href=#646 id=646 data-nosnippet>646</a>                                capacity_seq_len: cache_v.capacity_seq_len,
-<a href=#647 id=647 data-nosnippet>647</a>                            },
-<a href=#648 id=648 data-nosnippet>648</a>                        });
-<a href=#649 id=649 data-nosnippet>649</a>                    }
-<a href=#650 id=650 data-nosnippet>650</a>                    KvCache::Rotating {
-<a href=#651 id=651 data-nosnippet>651</a>                        k: cache_k,
-<a href=#652 id=652 data-nosnippet>652</a>                        v: cache_v,
-<a href=#653 id=653 data-nosnippet>653</a>                    } =&gt; {
-<a href=#654 id=654 data-nosnippet>654</a>                        <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>(KvCache::Rotating {
-<a href=#655 id=655 data-nosnippet>655</a>                            k: RotatingCache {
-<a href=#656 id=656 data-nosnippet>656</a>                                all_data: <span class="prelude-val">Some</span>(k),
-<a href=#657 id=657 data-nosnippet>657</a>                                dim: cache_k.dim,
-<a href=#658 id=658 data-nosnippet>658</a>                                current_seq_len: cache_k.current_seq_len,
-<a href=#659 id=659 data-nosnippet>659</a>                                max_seq_len: cache_k.max_seq_len,
-<a href=#660 id=660 data-nosnippet>660</a>                                offset: cache_k.offset,
-<a href=#661 id=661 data-nosnippet>661</a>                                capacity_seq_len: cache_k.capacity_seq_len,
-<a href=#662 id=662 data-nosnippet>662</a>                            },
-<a href=#663 id=663 data-nosnippet>663</a>                            v: RotatingCache {
-<a href=#664 id=664 data-nosnippet>664</a>                                all_data: <span class="prelude-val">Some</span>(v),
-<a href=#665 id=665 data-nosnippet>665</a>                                dim: cache_v.dim,
-<a href=#666 id=666 data-nosnippet>666</a>                                current_seq_len: cache_v.current_seq_len,
-<a href=#667 id=667 data-nosnippet>667</a>                                max_seq_len: cache_v.max_seq_len,
-<a href=#668 id=668 data-nosnippet>668</a>                                offset: cache_v.offset,
-<a href=#669 id=669 data-nosnippet>669</a>                                capacity_seq_len: cache_v.capacity_seq_len,
-<a href=#670 id=670 data-nosnippet>670</a>                            },
-<a href=#671 id=671 data-nosnippet>671</a>                        });
-<a href=#672 id=672 data-nosnippet>672</a>                    }
-<a href=#673 id=673 data-nosnippet>673</a>                }
-<a href=#674 id=674 data-nosnippet>674</a>            }
-<a href=#675 id=675 data-nosnippet>675</a>        }
-<a href=#676 id=676 data-nosnippet>676</a>    }
-<a href=#677 id=677 data-nosnippet>677</a>    <span class="kw">fn </span>set_none_cache(
-<a href=#678 id=678 data-nosnippet>678</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#679 id=679 data-nosnippet>679</a>        pipeline: <span class="kw-2">&amp;</span>T,
-<a href=#680 id=680 data-nosnippet>680</a>        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#681 id=681 data-nosnippet>681</a>        _modify_draft_cache: bool,
-<a href=#682 id=682 data-nosnippet>682</a>        load_preallocated_cache: bool,
-<a href=#683 id=683 data-nosnippet>683</a>    ) {
-<a href=#684 id=684 data-nosnippet>684</a>        <span class="kw">if </span>seqs.iter().any(|seq| seq.preallocated_cache().is_none()) {
-<a href=#685 id=685 data-nosnippet>685</a>            <span class="kw">for </span>layer <span class="kw">in </span>pipeline.cache().normal().<span class="number">0</span>.iter_mut() {
-<a href=#686 id=686 data-nosnippet>686</a>                layer.reset();
-<a href=#687 id=687 data-nosnippet>687</a>            }
-<a href=#688 id=688 data-nosnippet>688</a>            <span class="kw">return</span>;
-<a href=#689 id=689 data-nosnippet>689</a>        }
-<a href=#690 id=690 data-nosnippet>690</a>
-<a href=#691 id=691 data-nosnippet>691</a>        <span class="kw">let </span>layer_devices = <span class="kw">if let </span><span class="prelude-val">Some</span>(device_mapper) = pipeline.device_mapper() {
-<a href=#692 id=692 data-nosnippet>692</a>            <span class="kw">let </span><span class="kw-2">mut </span>layer_devices = Vec::new();
-<a href=#693 id=693 data-nosnippet>693</a>            <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..device_mapper.num_device_mapping_layers() {
-<a href=#694 id=694 data-nosnippet>694</a>                <span class="kw">let </span>device = device_mapper.device_for(layer, <span class="bool-val">false</span>).cloned();
-<a href=#695 id=695 data-nosnippet>695</a>                layer_devices.push(device.expect(<span class="string">"Internal bug, layer out of range!"</span>));
+<a href=#613 id=613 data-nosnippet>613</a>            <span class="kw">let </span>(k_cache, v_cache) = <span class="kw">match </span>cache {
+<a href=#614 id=614 data-nosnippet>614</a>                KvCache::Normal { k, v } =&gt; {
+<a href=#615 id=615 data-nosnippet>615</a>                    (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+<a href=#616 id=616 data-nosnippet>616</a>                }
+<a href=#617 id=617 data-nosnippet>617</a>                KvCache::Rotating { k, v } =&gt; {
+<a href=#618 id=618 data-nosnippet>618</a>                    (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
+<a href=#619 id=619 data-nosnippet>619</a>                }
+<a href=#620 id=620 data-nosnippet>620</a>            };
+<a href=#621 id=621 data-nosnippet>621</a>
+<a href=#622 id=622 data-nosnippet>622</a>            <span class="kw">let </span>k_caches = k_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
+<a href=#623 id=623 data-nosnippet>623</a>            <span class="macro">debug_assert_eq!</span>(k_caches.len(), seqs.len());
+<a href=#624 id=624 data-nosnippet>624</a>            <span class="kw">let </span>v_caches = v_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
+<a href=#625 id=625 data-nosnippet>625</a>            <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
+<a href=#626 id=626 data-nosnippet>626</a>
+<a href=#627 id=627 data-nosnippet>627</a>            <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
+<a href=#628 id=628 data-nosnippet>628</a>                <span class="kw">let </span>output_cache = <span class="kw">if </span>modify_draft_cache {
+<a href=#629 id=629 data-nosnippet>629</a>                    seq.normal_draft_cache()
+<a href=#630 id=630 data-nosnippet>630</a>                } <span class="kw">else </span>{
+<a href=#631 id=631 data-nosnippet>631</a>                    seq.normal_cache()
+<a href=#632 id=632 data-nosnippet>632</a>                };
+<a href=#633 id=633 data-nosnippet>633</a>                <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;mut </span>output_cache[layer];
+<a href=#634 id=634 data-nosnippet>634</a>                <span class="kw">let </span>k = k_caches.get(seq_i).unwrap().clone();
+<a href=#635 id=635 data-nosnippet>635</a>                <span class="kw">let </span>v = v_caches.get(seq_i).unwrap().clone();
+<a href=#636 id=636 data-nosnippet>636</a>
+<a href=#637 id=637 data-nosnippet>637</a>                <span class="kw">match </span>cache {
+<a href=#638 id=638 data-nosnippet>638</a>                    KvCache::Normal {
+<a href=#639 id=639 data-nosnippet>639</a>                        k: cache_k,
+<a href=#640 id=640 data-nosnippet>640</a>                        v: cache_v,
+<a href=#641 id=641 data-nosnippet>641</a>                    } =&gt; {
+<a href=#642 id=642 data-nosnippet>642</a>                        <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>(KvCache::Normal {
+<a href=#643 id=643 data-nosnippet>643</a>                            k: SingleCache {
+<a href=#644 id=644 data-nosnippet>644</a>                                all_data: <span class="prelude-val">Some</span>(k),
+<a href=#645 id=645 data-nosnippet>645</a>                                dim: cache_k.dim,
+<a href=#646 id=646 data-nosnippet>646</a>                                current_seq_len: cache_k.current_seq_len,
+<a href=#647 id=647 data-nosnippet>647</a>                                max_seq_len: cache_k.max_seq_len,
+<a href=#648 id=648 data-nosnippet>648</a>                                capacity_seq_len: cache_k.capacity_seq_len,
+<a href=#649 id=649 data-nosnippet>649</a>                            },
+<a href=#650 id=650 data-nosnippet>650</a>                            v: SingleCache {
+<a href=#651 id=651 data-nosnippet>651</a>                                all_data: <span class="prelude-val">Some</span>(v),
+<a href=#652 id=652 data-nosnippet>652</a>                                dim: cache_v.dim,
+<a href=#653 id=653 data-nosnippet>653</a>                                current_seq_len: cache_v.current_seq_len,
+<a href=#654 id=654 data-nosnippet>654</a>                                max_seq_len: cache_v.max_seq_len,
+<a href=#655 id=655 data-nosnippet>655</a>                                capacity_seq_len: cache_v.capacity_seq_len,
+<a href=#656 id=656 data-nosnippet>656</a>                            },
+<a href=#657 id=657 data-nosnippet>657</a>                        });
+<a href=#658 id=658 data-nosnippet>658</a>                    }
+<a href=#659 id=659 data-nosnippet>659</a>                    KvCache::Rotating {
+<a href=#660 id=660 data-nosnippet>660</a>                        k: cache_k,
+<a href=#661 id=661 data-nosnippet>661</a>                        v: cache_v,
+<a href=#662 id=662 data-nosnippet>662</a>                    } =&gt; {
+<a href=#663 id=663 data-nosnippet>663</a>                        <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>(KvCache::Rotating {
+<a href=#664 id=664 data-nosnippet>664</a>                            k: RotatingCache {
+<a href=#665 id=665 data-nosnippet>665</a>                                all_data: <span class="prelude-val">Some</span>(k),
+<a href=#666 id=666 data-nosnippet>666</a>                                dim: cache_k.dim,
+<a href=#667 id=667 data-nosnippet>667</a>                                current_seq_len: cache_k.current_seq_len,
+<a href=#668 id=668 data-nosnippet>668</a>                                max_seq_len: cache_k.max_seq_len,
+<a href=#669 id=669 data-nosnippet>669</a>                                offset: cache_k.offset,
+<a href=#670 id=670 data-nosnippet>670</a>                                capacity_seq_len: cache_k.capacity_seq_len,
+<a href=#671 id=671 data-nosnippet>671</a>                            },
+<a href=#672 id=672 data-nosnippet>672</a>                            v: RotatingCache {
+<a href=#673 id=673 data-nosnippet>673</a>                                all_data: <span class="prelude-val">Some</span>(v),
+<a href=#674 id=674 data-nosnippet>674</a>                                dim: cache_v.dim,
+<a href=#675 id=675 data-nosnippet>675</a>                                current_seq_len: cache_v.current_seq_len,
+<a href=#676 id=676 data-nosnippet>676</a>                                max_seq_len: cache_v.max_seq_len,
+<a href=#677 id=677 data-nosnippet>677</a>                                offset: cache_v.offset,
+<a href=#678 id=678 data-nosnippet>678</a>                                capacity_seq_len: cache_v.capacity_seq_len,
+<a href=#679 id=679 data-nosnippet>679</a>                            },
+<a href=#680 id=680 data-nosnippet>680</a>                        });
+<a href=#681 id=681 data-nosnippet>681</a>                    }
+<a href=#682 id=682 data-nosnippet>682</a>                }
+<a href=#683 id=683 data-nosnippet>683</a>            }
+<a href=#684 id=684 data-nosnippet>684</a>        }
+<a href=#685 id=685 data-nosnippet>685</a>    }
+<a href=#686 id=686 data-nosnippet>686</a>    <span class="kw">fn </span>set_none_cache(
+<a href=#687 id=687 data-nosnippet>687</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#688 id=688 data-nosnippet>688</a>        pipeline: <span class="kw-2">&amp;</span>T,
+<a href=#689 id=689 data-nosnippet>689</a>        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#690 id=690 data-nosnippet>690</a>        _modify_draft_cache: bool,
+<a href=#691 id=691 data-nosnippet>691</a>        load_preallocated_cache: bool,
+<a href=#692 id=692 data-nosnippet>692</a>    ) {
+<a href=#693 id=693 data-nosnippet>693</a>        <span class="kw">if </span>seqs.iter().any(|seq| seq.preallocated_cache().is_none()) {
+<a href=#694 id=694 data-nosnippet>694</a>            <span class="kw">for </span>layer <span class="kw">in </span>pipeline.cache().normal().<span class="number">0</span>.iter_mut() {
+<a href=#695 id=695 data-nosnippet>695</a>                layer.reset();
 <a href=#696 id=696 data-nosnippet>696</a>            }
-<a href=#697 id=697 data-nosnippet>697</a>            <span class="prelude-val">Some</span>(layer_devices)
-<a href=#698 id=698 data-nosnippet>698</a>        } <span class="kw">else </span>{
-<a href=#699 id=699 data-nosnippet>699</a>            <span class="prelude-val">None
-<a href=#700 id=700 data-nosnippet>700</a>        </span>};
-<a href=#701 id=701 data-nosnippet>701</a>
-<a href=#702 id=702 data-nosnippet>702</a>        <span class="kw">let </span>old_caches = pipeline.cache().normal().<span class="number">0</span>.clone();
-<a href=#703 id=703 data-nosnippet>703</a>
-<a href=#704 id=704 data-nosnippet>704</a>        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span>pipeline.cache().normal().<span class="number">0</span>.iter_mut().enumerate() {
-<a href=#705 id=705 data-nosnippet>705</a>            <span class="kw">if </span>!load_preallocated_cache {
-<a href=#706 id=706 data-nosnippet>706</a>                layer.reset();
-<a href=#707 id=707 data-nosnippet>707</a>                <span class="kw">continue</span>;
-<a href=#708 id=708 data-nosnippet>708</a>            }
-<a href=#709 id=709 data-nosnippet>709</a>
-<a href=#710 id=710 data-nosnippet>710</a>            <span class="kw">let </span><span class="kw-2">mut </span>k_caches = Vec::new();
-<a href=#711 id=711 data-nosnippet>711</a>            <span class="kw">let </span><span class="kw-2">mut </span>v_caches = Vec::new();
-<a href=#712 id=712 data-nosnippet>712</a>            <span class="kw">for </span>seq <span class="kw">in </span>seqs.iter_mut() {
-<a href=#713 id=713 data-nosnippet>713</a>                <span class="kw">let </span>(<span class="kw-2">mut </span>k_preallocated_cache, <span class="kw-2">mut </span>v_preallocated_cache) =
-<a href=#714 id=714 data-nosnippet>714</a>                    (<span class="kw-2">*</span>seq.preallocated_cache().as_ref().unwrap()).clone();
-<a href=#715 id=715 data-nosnippet>715</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(layer_devices) = <span class="kw-2">&amp;</span>layer_devices {
-<a href=#716 id=716 data-nosnippet>716</a>                    <span class="kw">let </span>layer_dev = <span class="kw-2">&amp;</span>layer_devices[layer_idx];
-<a href=#717 id=717 data-nosnippet>717</a>                    k_preallocated_cache = k_preallocated_cache
-<a href=#718 id=718 data-nosnippet>718</a>                        .to_device(layer_dev)
-<a href=#719 id=719 data-nosnippet>719</a>                        .expect(<span class="string">"Could not prepare cache"</span>);
-<a href=#720 id=720 data-nosnippet>720</a>                    v_preallocated_cache = v_preallocated_cache
-<a href=#721 id=721 data-nosnippet>721</a>                        .to_device(layer_dev)
-<a href=#722 id=722 data-nosnippet>722</a>                        .expect(<span class="string">"Could not prepare cache"</span>);
-<a href=#723 id=723 data-nosnippet>723</a>                }
-<a href=#724 id=724 data-nosnippet>724</a>                k_caches.push(k_preallocated_cache);
-<a href=#725 id=725 data-nosnippet>725</a>                v_caches.push(v_preallocated_cache);
-<a href=#726 id=726 data-nosnippet>726</a>            }
-<a href=#727 id=727 data-nosnippet>727</a>            <span class="kw">let </span>k_cache = <span class="kw">if </span>k_caches.len() &gt; <span class="number">1 </span>{
-<a href=#728 id=728 data-nosnippet>728</a>                Tensor::cat(<span class="kw-2">&amp;</span>k_caches, <span class="number">0</span>).unwrap()
-<a href=#729 id=729 data-nosnippet>729</a>            } <span class="kw">else </span>{
-<a href=#730 id=730 data-nosnippet>730</a>                k_caches[<span class="number">0</span>].clone()
-<a href=#731 id=731 data-nosnippet>731</a>            };
-<a href=#732 id=732 data-nosnippet>732</a>            <span class="kw">let </span>v_cache = <span class="kw">if </span>v_caches.len() &gt; <span class="number">1 </span>{
-<a href=#733 id=733 data-nosnippet>733</a>                Tensor::cat(<span class="kw-2">&amp;</span>v_caches, <span class="number">0</span>).unwrap()
-<a href=#734 id=734 data-nosnippet>734</a>            } <span class="kw">else </span>{
-<a href=#735 id=735 data-nosnippet>735</a>                v_caches[<span class="number">0</span>].clone()
-<a href=#736 id=736 data-nosnippet>736</a>            };
-<a href=#737 id=737 data-nosnippet>737</a>
-<a href=#738 id=738 data-nosnippet>738</a>            <span class="comment">// Use this for the various parameters. Assumes all seqs are from one model.
-<a href=#739 id=739 data-nosnippet>739</a>            </span><span class="kw">match </span><span class="kw-2">&amp;</span>old_caches[layer_idx] {
-<a href=#740 id=740 data-nosnippet>740</a>                KvCache::Normal { k, .. } =&gt; {
-<a href=#741 id=741 data-nosnippet>741</a>                    <span class="kw">let </span>template_cache_dim = k.dim;
-<a href=#742 id=742 data-nosnippet>742</a>                    <span class="kw">let </span>template_cache_msl = k.max_seq_len;
-<a href=#743 id=743 data-nosnippet>743</a>
-<a href=#744 id=744 data-nosnippet>744</a>                    <span class="kw">let </span>cache = KvCache::Normal {
-<a href=#745 id=745 data-nosnippet>745</a>                        k: SingleCache {
-<a href=#746 id=746 data-nosnippet>746</a>                            all_data: <span class="prelude-val">Some</span>(k_cache.zeros_like().unwrap()),
-<a href=#747 id=747 data-nosnippet>747</a>                            dim: template_cache_dim,
-<a href=#748 id=748 data-nosnippet>748</a>                            current_seq_len: <span class="number">0</span>,
-<a href=#749 id=749 data-nosnippet>749</a>                            max_seq_len: template_cache_msl,
-<a href=#750 id=750 data-nosnippet>750</a>                            capacity_seq_len: k_cache.dims()[template_cache_dim],
-<a href=#751 id=751 data-nosnippet>751</a>                        },
-<a href=#752 id=752 data-nosnippet>752</a>                        v: SingleCache {
-<a href=#753 id=753 data-nosnippet>753</a>                            all_data: <span class="prelude-val">Some</span>(v_cache.zeros_like().unwrap()),
-<a href=#754 id=754 data-nosnippet>754</a>                            dim: template_cache_dim,
-<a href=#755 id=755 data-nosnippet>755</a>                            current_seq_len: <span class="number">0</span>,
-<a href=#756 id=756 data-nosnippet>756</a>                            max_seq_len: template_cache_msl,
-<a href=#757 id=757 data-nosnippet>757</a>                            capacity_seq_len: k_cache.dims()[template_cache_dim],
-<a href=#758 id=758 data-nosnippet>758</a>                        },
-<a href=#759 id=759 data-nosnippet>759</a>                    };
-<a href=#760 id=760 data-nosnippet>760</a>                    <span class="kw-2">*</span>layer = cache;
-<a href=#761 id=761 data-nosnippet>761</a>                }
-<a href=#762 id=762 data-nosnippet>762</a>                KvCache::Rotating { k, .. } =&gt; {
-<a href=#763 id=763 data-nosnippet>763</a>                    <span class="kw">let </span>template_cache_dim = k.dim;
-<a href=#764 id=764 data-nosnippet>764</a>                    <span class="kw">let </span>template_cache_msl = k.max_seq_len;
-<a href=#765 id=765 data-nosnippet>765</a>
-<a href=#766 id=766 data-nosnippet>766</a>                    <span class="comment">// Rotating cache is not preallocated.
-<a href=#767 id=767 data-nosnippet>767</a>                    </span><span class="kw">let </span>cache = KvCache::Rotating {
-<a href=#768 id=768 data-nosnippet>768</a>                        k: RotatingCache {
-<a href=#769 id=769 data-nosnippet>769</a>                            all_data: <span class="prelude-val">None</span>,
-<a href=#770 id=770 data-nosnippet>770</a>                            dim: template_cache_dim,
-<a href=#771 id=771 data-nosnippet>771</a>                            current_seq_len: <span class="number">0</span>,
-<a href=#772 id=772 data-nosnippet>772</a>                            max_seq_len: template_cache_msl,
-<a href=#773 id=773 data-nosnippet>773</a>                            offset: <span class="number">0</span>,
-<a href=#774 id=774 data-nosnippet>774</a>                            capacity_seq_len: <span class="number">0</span>,
-<a href=#775 id=775 data-nosnippet>775</a>                        },
-<a href=#776 id=776 data-nosnippet>776</a>                        v: RotatingCache {
-<a href=#777 id=777 data-nosnippet>777</a>                            all_data: <span class="prelude-val">None</span>,
-<a href=#778 id=778 data-nosnippet>778</a>                            dim: template_cache_dim,
-<a href=#779 id=779 data-nosnippet>779</a>                            current_seq_len: <span class="number">0</span>,
-<a href=#780 id=780 data-nosnippet>780</a>                            max_seq_len: template_cache_msl,
-<a href=#781 id=781 data-nosnippet>781</a>                            offset: <span class="number">0</span>,
-<a href=#782 id=782 data-nosnippet>782</a>                            capacity_seq_len: <span class="number">0</span>,
-<a href=#783 id=783 data-nosnippet>783</a>                        },
-<a href=#784 id=784 data-nosnippet>784</a>                    };
-<a href=#785 id=785 data-nosnippet>785</a>                    <span class="kw-2">*</span>layer = cache;
-<a href=#786 id=786 data-nosnippet>786</a>                }
-<a href=#787 id=787 data-nosnippet>787</a>            }
-<a href=#788 id=788 data-nosnippet>788</a>        }
-<a href=#789 id=789 data-nosnippet>789</a>    }
-<a href=#790 id=790 data-nosnippet>790</a>}
-<a href=#791 id=791 data-nosnippet>791</a>
-<a href=#792 id=792 data-nosnippet>792</a><span class="attr">#[derive(Debug, Clone)]
-<a href=#793 id=793 data-nosnippet>793</a></span><span class="kw">pub struct </span>Cache {
-<a href=#794 id=794 data-nosnippet>794</a>    cache: Arc&lt;Mutex&lt;LayerCaches&gt;&gt;,
-<a href=#795 id=795 data-nosnippet>795</a>    xlora_cache: <span class="prelude-ty">Option</span>&lt;Arc&lt;Mutex&lt;LayerCaches&gt;&gt;&gt;,
-<a href=#796 id=796 data-nosnippet>796</a>    draft_cache: Arc&lt;Mutex&lt;LayerCaches&gt;&gt;,
-<a href=#797 id=797 data-nosnippet>797</a>    scalings_cache: <span class="prelude-ty">Option</span>&lt;Arc&lt;Mutex&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt;&gt;&gt;,
-<a href=#798 id=798 data-nosnippet>798</a>}
-<a href=#799 id=799 data-nosnippet>799</a>
-<a href=#800 id=800 data-nosnippet>800</a><span class="kw">impl </span>Cache {
-<a href=#801 id=801 data-nosnippet>801</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(len: usize, is_xlora: bool) -&gt; <span class="self">Self </span>{
-<a href=#802 id=802 data-nosnippet>802</a>        <span class="self">Self </span>{
-<a href=#803 id=803 data-nosnippet>803</a>            cache: Arc::new(Mutex::new(<span class="macro">vec!</span>[<span class="prelude-val">None</span>; len])),
-<a href=#804 id=804 data-nosnippet>804</a>            xlora_cache: <span class="kw">if </span>is_xlora {
-<a href=#805 id=805 data-nosnippet>805</a>                <span class="prelude-val">Some</span>(Arc::new(Mutex::new(<span class="macro">vec!</span>[<span class="prelude-val">None</span>; len])))
-<a href=#806 id=806 data-nosnippet>806</a>            } <span class="kw">else </span>{
-<a href=#807 id=807 data-nosnippet>807</a>                <span class="prelude-val">None
-<a href=#808 id=808 data-nosnippet>808</a>            </span>},
-<a href=#809 id=809 data-nosnippet>809</a>            draft_cache: Arc::new(Mutex::new(<span class="macro">vec!</span>[<span class="prelude-val">None</span>; len])),
-<a href=#810 id=810 data-nosnippet>810</a>            scalings_cache: <span class="kw">if </span>is_xlora {
-<a href=#811 id=811 data-nosnippet>811</a>                <span class="prelude-val">Some</span>(Arc::new(Mutex::new(<span class="prelude-val">None</span>)))
-<a href=#812 id=812 data-nosnippet>812</a>            } <span class="kw">else </span>{
-<a href=#813 id=813 data-nosnippet>813</a>                <span class="prelude-val">None
-<a href=#814 id=814 data-nosnippet>814</a>            </span>},
-<a href=#815 id=815 data-nosnippet>815</a>        }
-<a href=#816 id=816 data-nosnippet>816</a>    }
-<a href=#817 id=817 data-nosnippet>817</a>
-<a href=#818 id=818 data-nosnippet>818</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>lock(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, LayerCaches&gt; {
-<a href=#819 id=819 data-nosnippet>819</a>        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.cache)
-<a href=#820 id=820 data-nosnippet>820</a>    }
-<a href=#821 id=821 data-nosnippet>821</a>
-<a href=#822 id=822 data-nosnippet>822</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>draft_lock(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, LayerCaches&gt; {
-<a href=#823 id=823 data-nosnippet>823</a>        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft_cache)
-<a href=#824 id=824 data-nosnippet>824</a>    }
-<a href=#825 id=825 data-nosnippet>825</a>
-<a href=#826 id=826 data-nosnippet>826</a>    <span class="doccomment">/// # Panics
-<a href=#827 id=827 data-nosnippet>827</a>    /// If there is no xlora cache
-<a href=#828 id=828 data-nosnippet>828</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>xlora_lock(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, LayerCaches&gt; {
-<a href=#829 id=829 data-nosnippet>829</a>        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.xlora_cache.as_ref().expect(<span class="string">"No X-LoRA cache."</span>))
-<a href=#830 id=830 data-nosnippet>830</a>    }
-<a href=#831 id=831 data-nosnippet>831</a>
-<a href=#832 id=832 data-nosnippet>832</a>    <span class="doccomment">/// # Panics
-<a href=#833 id=833 data-nosnippet>833</a>    /// If there is no xlora cache
-<a href=#834 id=834 data-nosnippet>834</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_scalings_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, <span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
-<a href=#835 id=835 data-nosnippet>835</a>        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self
-<a href=#836 id=836 data-nosnippet>836</a>            </span>.scalings_cache
-<a href=#837 id=837 data-nosnippet>837</a>            .as_ref()
-<a href=#838 id=838 data-nosnippet>838</a>            .expect(<span class="string">"No X-LoRA scalings cache."</span>))
+<a href=#697 id=697 data-nosnippet>697</a>            <span class="kw">return</span>;
+<a href=#698 id=698 data-nosnippet>698</a>        }
+<a href=#699 id=699 data-nosnippet>699</a>
+<a href=#700 id=700 data-nosnippet>700</a>        <span class="kw">let </span>layer_devices = <span class="kw">if let </span><span class="prelude-val">Some</span>(device_mapper) = pipeline.device_mapper() {
+<a href=#701 id=701 data-nosnippet>701</a>            <span class="kw">let </span><span class="kw-2">mut </span>layer_devices = Vec::new();
+<a href=#702 id=702 data-nosnippet>702</a>            <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..device_mapper.num_device_mapping_layers() {
+<a href=#703 id=703 data-nosnippet>703</a>                <span class="kw">let </span>device = device_mapper.device_for(layer, <span class="bool-val">false</span>).cloned();
+<a href=#704 id=704 data-nosnippet>704</a>                layer_devices.push(device.expect(<span class="string">"Internal bug, layer out of range!"</span>));
+<a href=#705 id=705 data-nosnippet>705</a>            }
+<a href=#706 id=706 data-nosnippet>706</a>            <span class="prelude-val">Some</span>(layer_devices)
+<a href=#707 id=707 data-nosnippet>707</a>        } <span class="kw">else </span>{
+<a href=#708 id=708 data-nosnippet>708</a>            <span class="prelude-val">None
+<a href=#709 id=709 data-nosnippet>709</a>        </span>};
+<a href=#710 id=710 data-nosnippet>710</a>
+<a href=#711 id=711 data-nosnippet>711</a>        <span class="kw">let </span>old_caches = pipeline.cache().normal().<span class="number">0</span>.clone();
+<a href=#712 id=712 data-nosnippet>712</a>
+<a href=#713 id=713 data-nosnippet>713</a>        <span class="kw">for </span>(layer_idx, layer) <span class="kw">in </span>pipeline.cache().normal().<span class="number">0</span>.iter_mut().enumerate() {
+<a href=#714 id=714 data-nosnippet>714</a>            <span class="kw">if </span>!load_preallocated_cache {
+<a href=#715 id=715 data-nosnippet>715</a>                layer.reset();
+<a href=#716 id=716 data-nosnippet>716</a>                <span class="kw">continue</span>;
+<a href=#717 id=717 data-nosnippet>717</a>            }
+<a href=#718 id=718 data-nosnippet>718</a>
+<a href=#719 id=719 data-nosnippet>719</a>            <span class="kw">let </span><span class="kw-2">mut </span>k_caches = Vec::new();
+<a href=#720 id=720 data-nosnippet>720</a>            <span class="kw">let </span><span class="kw-2">mut </span>v_caches = Vec::new();
+<a href=#721 id=721 data-nosnippet>721</a>            <span class="kw">for </span>seq <span class="kw">in </span>seqs.iter_mut() {
+<a href=#722 id=722 data-nosnippet>722</a>                <span class="kw">let </span>(<span class="kw-2">mut </span>k_preallocated_cache, <span class="kw-2">mut </span>v_preallocated_cache) =
+<a href=#723 id=723 data-nosnippet>723</a>                    (<span class="kw-2">*</span>seq.preallocated_cache().as_ref().unwrap()).clone();
+<a href=#724 id=724 data-nosnippet>724</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(layer_devices) = <span class="kw-2">&amp;</span>layer_devices {
+<a href=#725 id=725 data-nosnippet>725</a>                    <span class="kw">let </span>layer_dev = <span class="kw-2">&amp;</span>layer_devices[layer_idx];
+<a href=#726 id=726 data-nosnippet>726</a>                    k_preallocated_cache = k_preallocated_cache
+<a href=#727 id=727 data-nosnippet>727</a>                        .to_device(layer_dev)
+<a href=#728 id=728 data-nosnippet>728</a>                        .expect(<span class="string">"Could not prepare cache"</span>);
+<a href=#729 id=729 data-nosnippet>729</a>                    v_preallocated_cache = v_preallocated_cache
+<a href=#730 id=730 data-nosnippet>730</a>                        .to_device(layer_dev)
+<a href=#731 id=731 data-nosnippet>731</a>                        .expect(<span class="string">"Could not prepare cache"</span>);
+<a href=#732 id=732 data-nosnippet>732</a>                }
+<a href=#733 id=733 data-nosnippet>733</a>                k_caches.push(k_preallocated_cache);
+<a href=#734 id=734 data-nosnippet>734</a>                v_caches.push(v_preallocated_cache);
+<a href=#735 id=735 data-nosnippet>735</a>            }
+<a href=#736 id=736 data-nosnippet>736</a>            <span class="kw">let </span>k_cache = <span class="kw">if </span>k_caches.len() &gt; <span class="number">1 </span>{
+<a href=#737 id=737 data-nosnippet>737</a>                Tensor::cat(<span class="kw-2">&amp;</span>k_caches, <span class="number">0</span>).unwrap()
+<a href=#738 id=738 data-nosnippet>738</a>            } <span class="kw">else </span>{
+<a href=#739 id=739 data-nosnippet>739</a>                k_caches[<span class="number">0</span>].clone()
+<a href=#740 id=740 data-nosnippet>740</a>            };
+<a href=#741 id=741 data-nosnippet>741</a>            <span class="kw">let </span>v_cache = <span class="kw">if </span>v_caches.len() &gt; <span class="number">1 </span>{
+<a href=#742 id=742 data-nosnippet>742</a>                Tensor::cat(<span class="kw-2">&amp;</span>v_caches, <span class="number">0</span>).unwrap()
+<a href=#743 id=743 data-nosnippet>743</a>            } <span class="kw">else </span>{
+<a href=#744 id=744 data-nosnippet>744</a>                v_caches[<span class="number">0</span>].clone()
+<a href=#745 id=745 data-nosnippet>745</a>            };
+<a href=#746 id=746 data-nosnippet>746</a>
+<a href=#747 id=747 data-nosnippet>747</a>            <span class="comment">// Use this for the various parameters. Assumes all seqs are from one model.
+<a href=#748 id=748 data-nosnippet>748</a>            </span><span class="kw">match </span><span class="kw-2">&amp;</span>old_caches[layer_idx] {
+<a href=#749 id=749 data-nosnippet>749</a>                KvCache::Normal { k, .. } =&gt; {
+<a href=#750 id=750 data-nosnippet>750</a>                    <span class="kw">let </span>template_cache_dim = k.dim;
+<a href=#751 id=751 data-nosnippet>751</a>                    <span class="kw">let </span>template_cache_msl = k.max_seq_len;
+<a href=#752 id=752 data-nosnippet>752</a>
+<a href=#753 id=753 data-nosnippet>753</a>                    <span class="kw">let </span>cache = KvCache::Normal {
+<a href=#754 id=754 data-nosnippet>754</a>                        k: SingleCache {
+<a href=#755 id=755 data-nosnippet>755</a>                            all_data: <span class="prelude-val">Some</span>(k_cache.zeros_like().unwrap()),
+<a href=#756 id=756 data-nosnippet>756</a>                            dim: template_cache_dim,
+<a href=#757 id=757 data-nosnippet>757</a>                            current_seq_len: <span class="number">0</span>,
+<a href=#758 id=758 data-nosnippet>758</a>                            max_seq_len: template_cache_msl,
+<a href=#759 id=759 data-nosnippet>759</a>                            capacity_seq_len: k_cache.dims()[template_cache_dim],
+<a href=#760 id=760 data-nosnippet>760</a>                        },
+<a href=#761 id=761 data-nosnippet>761</a>                        v: SingleCache {
+<a href=#762 id=762 data-nosnippet>762</a>                            all_data: <span class="prelude-val">Some</span>(v_cache.zeros_like().unwrap()),
+<a href=#763 id=763 data-nosnippet>763</a>                            dim: template_cache_dim,
+<a href=#764 id=764 data-nosnippet>764</a>                            current_seq_len: <span class="number">0</span>,
+<a href=#765 id=765 data-nosnippet>765</a>                            max_seq_len: template_cache_msl,
+<a href=#766 id=766 data-nosnippet>766</a>                            capacity_seq_len: k_cache.dims()[template_cache_dim],
+<a href=#767 id=767 data-nosnippet>767</a>                        },
+<a href=#768 id=768 data-nosnippet>768</a>                    };
+<a href=#769 id=769 data-nosnippet>769</a>                    <span class="kw-2">*</span>layer = cache;
+<a href=#770 id=770 data-nosnippet>770</a>                }
+<a href=#771 id=771 data-nosnippet>771</a>                KvCache::Rotating { k, .. } =&gt; {
+<a href=#772 id=772 data-nosnippet>772</a>                    <span class="kw">let </span>template_cache_dim = k.dim;
+<a href=#773 id=773 data-nosnippet>773</a>                    <span class="kw">let </span>template_cache_msl = k.max_seq_len;
+<a href=#774 id=774 data-nosnippet>774</a>
+<a href=#775 id=775 data-nosnippet>775</a>                    <span class="comment">// Rotating cache is not preallocated.
+<a href=#776 id=776 data-nosnippet>776</a>                    </span><span class="kw">let </span>cache = KvCache::Rotating {
+<a href=#777 id=777 data-nosnippet>777</a>                        k: RotatingCache {
+<a href=#778 id=778 data-nosnippet>778</a>                            all_data: <span class="prelude-val">None</span>,
+<a href=#779 id=779 data-nosnippet>779</a>                            dim: template_cache_dim,
+<a href=#780 id=780 data-nosnippet>780</a>                            current_seq_len: <span class="number">0</span>,
+<a href=#781 id=781 data-nosnippet>781</a>                            max_seq_len: template_cache_msl,
+<a href=#782 id=782 data-nosnippet>782</a>                            offset: <span class="number">0</span>,
+<a href=#783 id=783 data-nosnippet>783</a>                            capacity_seq_len: <span class="number">0</span>,
+<a href=#784 id=784 data-nosnippet>784</a>                        },
+<a href=#785 id=785 data-nosnippet>785</a>                        v: RotatingCache {
+<a href=#786 id=786 data-nosnippet>786</a>                            all_data: <span class="prelude-val">None</span>,
+<a href=#787 id=787 data-nosnippet>787</a>                            dim: template_cache_dim,
+<a href=#788 id=788 data-nosnippet>788</a>                            current_seq_len: <span class="number">0</span>,
+<a href=#789 id=789 data-nosnippet>789</a>                            max_seq_len: template_cache_msl,
+<a href=#790 id=790 data-nosnippet>790</a>                            offset: <span class="number">0</span>,
+<a href=#791 id=791 data-nosnippet>791</a>                            capacity_seq_len: <span class="number">0</span>,
+<a href=#792 id=792 data-nosnippet>792</a>                        },
+<a href=#793 id=793 data-nosnippet>793</a>                    };
+<a href=#794 id=794 data-nosnippet>794</a>                    <span class="kw-2">*</span>layer = cache;
+<a href=#795 id=795 data-nosnippet>795</a>                }
+<a href=#796 id=796 data-nosnippet>796</a>            }
+<a href=#797 id=797 data-nosnippet>797</a>        }
+<a href=#798 id=798 data-nosnippet>798</a>    }
+<a href=#799 id=799 data-nosnippet>799</a>}
+<a href=#800 id=800 data-nosnippet>800</a>
+<a href=#801 id=801 data-nosnippet>801</a><span class="attr">#[derive(Debug, Clone)]
+<a href=#802 id=802 data-nosnippet>802</a></span><span class="kw">pub struct </span>Cache {
+<a href=#803 id=803 data-nosnippet>803</a>    cache: Arc&lt;Mutex&lt;LayerCaches&gt;&gt;,
+<a href=#804 id=804 data-nosnippet>804</a>    xlora_cache: <span class="prelude-ty">Option</span>&lt;Arc&lt;Mutex&lt;LayerCaches&gt;&gt;&gt;,
+<a href=#805 id=805 data-nosnippet>805</a>    draft_cache: Arc&lt;Mutex&lt;LayerCaches&gt;&gt;,
+<a href=#806 id=806 data-nosnippet>806</a>    scalings_cache: <span class="prelude-ty">Option</span>&lt;Arc&lt;Mutex&lt;<span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt;&gt;&gt;,
+<a href=#807 id=807 data-nosnippet>807</a>}
+<a href=#808 id=808 data-nosnippet>808</a>
+<a href=#809 id=809 data-nosnippet>809</a><span class="kw">impl </span>Cache {
+<a href=#810 id=810 data-nosnippet>810</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>new(len: usize, is_xlora: bool) -&gt; <span class="self">Self </span>{
+<a href=#811 id=811 data-nosnippet>811</a>        <span class="self">Self </span>{
+<a href=#812 id=812 data-nosnippet>812</a>            cache: Arc::new(Mutex::new(<span class="macro">vec!</span>[<span class="prelude-val">None</span>; len])),
+<a href=#813 id=813 data-nosnippet>813</a>            xlora_cache: <span class="kw">if </span>is_xlora {
+<a href=#814 id=814 data-nosnippet>814</a>                <span class="prelude-val">Some</span>(Arc::new(Mutex::new(<span class="macro">vec!</span>[<span class="prelude-val">None</span>; len])))
+<a href=#815 id=815 data-nosnippet>815</a>            } <span class="kw">else </span>{
+<a href=#816 id=816 data-nosnippet>816</a>                <span class="prelude-val">None
+<a href=#817 id=817 data-nosnippet>817</a>            </span>},
+<a href=#818 id=818 data-nosnippet>818</a>            draft_cache: Arc::new(Mutex::new(<span class="macro">vec!</span>[<span class="prelude-val">None</span>; len])),
+<a href=#819 id=819 data-nosnippet>819</a>            scalings_cache: <span class="kw">if </span>is_xlora {
+<a href=#820 id=820 data-nosnippet>820</a>                <span class="prelude-val">Some</span>(Arc::new(Mutex::new(<span class="prelude-val">None</span>)))
+<a href=#821 id=821 data-nosnippet>821</a>            } <span class="kw">else </span>{
+<a href=#822 id=822 data-nosnippet>822</a>                <span class="prelude-val">None
+<a href=#823 id=823 data-nosnippet>823</a>            </span>},
+<a href=#824 id=824 data-nosnippet>824</a>        }
+<a href=#825 id=825 data-nosnippet>825</a>    }
+<a href=#826 id=826 data-nosnippet>826</a>
+<a href=#827 id=827 data-nosnippet>827</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>lock(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, LayerCaches&gt; {
+<a href=#828 id=828 data-nosnippet>828</a>        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.cache)
+<a href=#829 id=829 data-nosnippet>829</a>    }
+<a href=#830 id=830 data-nosnippet>830</a>
+<a href=#831 id=831 data-nosnippet>831</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>draft_lock(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, LayerCaches&gt; {
+<a href=#832 id=832 data-nosnippet>832</a>        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.draft_cache)
+<a href=#833 id=833 data-nosnippet>833</a>    }
+<a href=#834 id=834 data-nosnippet>834</a>
+<a href=#835 id=835 data-nosnippet>835</a>    <span class="doccomment">/// # Panics
+<a href=#836 id=836 data-nosnippet>836</a>    /// If there is no xlora cache
+<a href=#837 id=837 data-nosnippet>837</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>xlora_lock(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, LayerCaches&gt; {
+<a href=#838 id=838 data-nosnippet>838</a>        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self</span>.xlora_cache.as_ref().expect(<span class="string">"No X-LoRA cache."</span>))
 <a href=#839 id=839 data-nosnippet>839</a>    }
 <a href=#840 id=840 data-nosnippet>840</a>
-<a href=#841 id=841 data-nosnippet>841</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#842 id=842 data-nosnippet>842</a>        <span class="self">self</span>.xlora_cache.is_some()
-<a href=#843 id=843 data-nosnippet>843</a>    }
-<a href=#844 id=844 data-nosnippet>844</a>
-<a href=#845 id=845 data-nosnippet>845</a>    <span class="doccomment">/// Update the KV cache and return (k,v)
-<a href=#846 id=846 data-nosnippet>846</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>update_kv_cache(
-<a href=#847 id=847 data-nosnippet>847</a>        cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
-<a href=#848 id=848 data-nosnippet>848</a>        k: Tensor,
-<a href=#849 id=849 data-nosnippet>849</a>        v: Tensor,
-<a href=#850 id=850 data-nosnippet>850</a>        slow_cat: bool,
-<a href=#851 id=851 data-nosnippet>851</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
-<a href=#852 id=852 data-nosnippet>852</a>        <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>cache {
-<a href=#853 id=853 data-nosnippet>853</a>            <span class="prelude-val">None </span>=&gt; (k, v),
-<a href=#854 id=854 data-nosnippet>854</a>            <span class="prelude-val">Some</span>((k_cache, v_cache)) =&gt; {
-<a href=#855 id=855 data-nosnippet>855</a>                <span class="kw">if </span>!slow_cat {
-<a href=#856 id=856 data-nosnippet>856</a>                    <span class="kw">let </span>k = candle_nn::ops::kvconcat(k_cache, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-<a href=#857 id=857 data-nosnippet>857</a>                    <span class="kw">let </span>v = candle_nn::ops::kvconcat(v_cache, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-<a href=#858 id=858 data-nosnippet>858</a>                    (k, v)
-<a href=#859 id=859 data-nosnippet>859</a>                } <span class="kw">else </span>{
-<a href=#860 id=860 data-nosnippet>860</a>                    <span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[k_cache, <span class="kw-2">&amp;</span>k], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-<a href=#861 id=861 data-nosnippet>861</a>                    <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[v_cache, <span class="kw-2">&amp;</span>v], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-<a href=#862 id=862 data-nosnippet>862</a>                    (k, v)
-<a href=#863 id=863 data-nosnippet>863</a>                }
-<a href=#864 id=864 data-nosnippet>864</a>            }
-<a href=#865 id=865 data-nosnippet>865</a>        };
-<a href=#866 id=866 data-nosnippet>866</a>        <span class="kw-2">*</span>cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
-<a href=#867 id=867 data-nosnippet>867</a>        <span class="prelude-val">Ok</span>((k.contiguous()<span class="question-mark">?</span>, v.contiguous()<span class="question-mark">?</span>))
-<a href=#868 id=868 data-nosnippet>868</a>    }
-<a href=#869 id=869 data-nosnippet>869</a>
-<a href=#870 id=870 data-nosnippet>870</a>    <span class="doccomment">/// Update the KV cache and return (k,v,attn_mask)
-<a href=#871 id=871 data-nosnippet>871</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>update_kv_cache_sliding_window(
-<a href=#872 id=872 data-nosnippet>872</a>        cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
-<a href=#873 id=873 data-nosnippet>873</a>        k: Tensor,
-<a href=#874 id=874 data-nosnippet>874</a>        v: Tensor,
-<a href=#875 id=875 data-nosnippet>875</a>        attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
-<a href=#876 id=876 data-nosnippet>876</a>        sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#877 id=877 data-nosnippet>877</a>        slow_cat: bool,
-<a href=#878 id=878 data-nosnippet>878</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
-<a href=#879 id=879 data-nosnippet>879</a>        <span class="kw">let </span>(k, v, attention_mask) = <span class="kw">match </span>cache.clone() {
-<a href=#880 id=880 data-nosnippet>880</a>            <span class="prelude-val">None </span>=&gt; (k, v, attention_mask.cloned()),
-<a href=#881 id=881 data-nosnippet>881</a>            <span class="prelude-val">Some</span>((<span class="kw-2">mut </span>prev_k, <span class="kw-2">mut </span>prev_v)) =&gt; {
-<a href=#882 id=882 data-nosnippet>882</a>                <span class="kw">let </span><span class="kw-2">mut </span>mask = attention_mask.cloned();
-<a href=#883 id=883 data-nosnippet>883</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = sliding_window {
-<a href=#884 id=884 data-nosnippet>884</a>                    <span class="kw">let </span>kv_seq_len = prev_k.dim(<span class="number">2</span>)<span class="question-mark">?</span>;
-<a href=#885 id=885 data-nosnippet>885</a>                    <span class="kw">if </span>kv_seq_len &gt; sliding_window {
-<a href=#886 id=886 data-nosnippet>886</a>                        prev_k = prev_k.narrow(
-<a href=#887 id=887 data-nosnippet>887</a>                            <span class="number">2</span>,
-<a href=#888 id=888 data-nosnippet>888</a>                            kv_seq_len - (sliding_window - <span class="number">1</span>),
-<a href=#889 id=889 data-nosnippet>889</a>                            sliding_window - <span class="number">1</span>,
-<a href=#890 id=890 data-nosnippet>890</a>                        )<span class="question-mark">?</span>;
-<a href=#891 id=891 data-nosnippet>891</a>                        prev_v = prev_v.narrow(
-<a href=#892 id=892 data-nosnippet>892</a>                            <span class="number">2</span>,
-<a href=#893 id=893 data-nosnippet>893</a>                            kv_seq_len - (sliding_window - <span class="number">1</span>),
-<a href=#894 id=894 data-nosnippet>894</a>                            sliding_window - <span class="number">1</span>,
-<a href=#895 id=895 data-nosnippet>895</a>                        )<span class="question-mark">?</span>;
-<a href=#896 id=896 data-nosnippet>896</a>                        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>mask) = mask {
-<a href=#897 id=897 data-nosnippet>897</a>                            <span class="kw">let </span>mask_len = mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
-<a href=#898 id=898 data-nosnippet>898</a>                            <span class="kw-2">*</span>mask = mask.narrow(
-<a href=#899 id=899 data-nosnippet>899</a>                                <span class="number">1</span>,
-<a href=#900 id=900 data-nosnippet>900</a>                                mask_len - (sliding_window - <span class="number">1</span>),
-<a href=#901 id=901 data-nosnippet>901</a>                                sliding_window - <span class="number">1</span>,
-<a href=#902 id=902 data-nosnippet>902</a>                            )<span class="question-mark">?</span>;
-<a href=#903 id=903 data-nosnippet>903</a>                            <span class="kw-2">*</span>mask = Tensor::cat(
-<a href=#904 id=904 data-nosnippet>904</a>                                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;*</span>mask, <span class="kw-2">&amp;</span>mask.narrow(<span class="number">1</span>, mask_len - <span class="number">1</span>, <span class="number">1</span>)<span class="question-mark">?</span>.ones_like()<span class="question-mark">?</span>],
-<a href=#905 id=905 data-nosnippet>905</a>                                D::Minus1,
-<a href=#906 id=906 data-nosnippet>906</a>                            )<span class="question-mark">?</span>;
-<a href=#907 id=907 data-nosnippet>907</a>                        }
-<a href=#908 id=908 data-nosnippet>908</a>                    }
-<a href=#909 id=909 data-nosnippet>909</a>                }
-<a href=#910 id=910 data-nosnippet>910</a>                <span class="kw">let </span>(k, v) = <span class="kw">if </span>!slow_cat {
-<a href=#911 id=911 data-nosnippet>911</a>                    <span class="kw">let </span>k = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
-<a href=#912 id=912 data-nosnippet>912</a>                    <span class="kw">let </span>v = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
-<a href=#913 id=913 data-nosnippet>913</a>                    (k, v)
-<a href=#914 id=914 data-nosnippet>914</a>                } <span class="kw">else </span>{
-<a href=#915 id=915 data-nosnippet>915</a>                    <span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[prev_k, k], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-<a href=#916 id=916 data-nosnippet>916</a>                    <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[prev_v, v], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
-<a href=#917 id=917 data-nosnippet>917</a>                    (k, v)
-<a href=#918 id=918 data-nosnippet>918</a>                };
-<a href=#919 id=919 data-nosnippet>919</a>                (k, v, mask)
-<a href=#920 id=920 data-nosnippet>920</a>            }
-<a href=#921 id=921 data-nosnippet>921</a>        };
-<a href=#922 id=922 data-nosnippet>922</a>        <span class="kw-2">*</span>cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
-<a href=#923 id=923 data-nosnippet>923</a>        <span class="prelude-val">Ok</span>((k.contiguous()<span class="question-mark">?</span>, v.contiguous()<span class="question-mark">?</span>, attention_mask))
-<a href=#924 id=924 data-nosnippet>924</a>    }
-<a href=#925 id=925 data-nosnippet>925</a>}
-<a href=#926 id=926 data-nosnippet>926</a>
-<a href=#927 id=927 data-nosnippet>927</a><span class="kw">pub struct </span>FullCacheManager;
-<a href=#928 id=928 data-nosnippet>928</a>
-<a href=#929 id=929 data-nosnippet>929</a><span class="kw">enum </span>SeqCache {
-<a href=#930 id=930 data-nosnippet>930</a>    Normal,
-<a href=#931 id=931 data-nosnippet>931</a>    XLora,
-<a href=#932 id=932 data-nosnippet>932</a>    Draft,
-<a href=#933 id=933 data-nosnippet>933</a>}
-<a href=#934 id=934 data-nosnippet>934</a>
-<a href=#935 id=935 data-nosnippet>935</a><span class="kw">fn </span>clone_in_cache(
-<a href=#936 id=936 data-nosnippet>936</a>    num_hidden_layers: usize,
-<a href=#937 id=937 data-nosnippet>937</a>    cache: <span class="kw-2">&amp;mut </span>LayerCaches,
-<a href=#938 id=938 data-nosnippet>938</a>    seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
-<a href=#939 id=939 data-nosnippet>939</a>    src: SeqCache,
-<a href=#940 id=940 data-nosnippet>940</a>) {
-<a href=#941 id=941 data-nosnippet>941</a>    <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-<a href=#942 id=942 data-nosnippet>942</a>    <span class="lifetime">'outer</span>: <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
-<a href=#943 id=943 data-nosnippet>943</a>        <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
-<a href=#944 id=944 data-nosnippet>944</a>        <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
-<a href=#945 id=945 data-nosnippet>945</a>        <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
-<a href=#946 id=946 data-nosnippet>946</a>            <span class="kw">let </span>src_cache = <span class="kw">match </span>src {
-<a href=#947 id=947 data-nosnippet>947</a>                SeqCache::Normal =&gt; seq.cache(),
-<a href=#948 id=948 data-nosnippet>948</a>                SeqCache::XLora =&gt; seq.xlora_cache(),
-<a href=#949 id=949 data-nosnippet>949</a>                SeqCache::Draft =&gt; seq.draft_cache(),
-<a href=#950 id=950 data-nosnippet>950</a>            };
-<a href=#951 id=951 data-nosnippet>951</a>            <span class="kw">let </span>cache = src_cache.get(layer).unwrap();
-<a href=#952 id=952 data-nosnippet>952</a>            <span class="comment">// This case for llama 3.2 vision cross attn
-<a href=#953 id=953 data-nosnippet>953</a>            </span><span class="kw">if </span>cache.is_none() {
-<a href=#954 id=954 data-nosnippet>954</a>                new_cache.push(<span class="prelude-val">None</span>);
-<a href=#955 id=955 data-nosnippet>955</a>                <span class="kw">continue </span><span class="lifetime">'outer</span>;
-<a href=#956 id=956 data-nosnippet>956</a>            }
-<a href=#957 id=957 data-nosnippet>957</a>            <span class="kw">let </span>cache = cache
-<a href=#958 id=958 data-nosnippet>958</a>                .as_ref()
-<a href=#959 id=959 data-nosnippet>959</a>                .expect(<span class="string">"Not handling completions in `clone_in_cache`."</span>);
-<a href=#960 id=960 data-nosnippet>960</a>            k_vec.push(cache.<span class="number">0</span>.clone());
-<a href=#961 id=961 data-nosnippet>961</a>            v_vec.push(cache.<span class="number">1</span>.clone());
-<a href=#962 id=962 data-nosnippet>962</a>        }
-<a href=#963 id=963 data-nosnippet>963</a>        new_cache.push(<span class="prelude-val">Some</span>((
-<a href=#964 id=964 data-nosnippet>964</a>            <span class="kw">if </span>k_vec.len() &gt; <span class="number">1 </span>{
-<a href=#965 id=965 data-nosnippet>965</a>                Tensor::cat(<span class="kw-2">&amp;</span>k_vec, <span class="number">0</span>).unwrap()
-<a href=#966 id=966 data-nosnippet>966</a>            } <span class="kw">else </span>{
-<a href=#967 id=967 data-nosnippet>967</a>                k_vec[<span class="number">0</span>].clone()
-<a href=#968 id=968 data-nosnippet>968</a>            },
-<a href=#969 id=969 data-nosnippet>969</a>            <span class="kw">if </span>v_vec.len() &gt; <span class="number">1 </span>{
-<a href=#970 id=970 data-nosnippet>970</a>                Tensor::cat(<span class="kw-2">&amp;</span>v_vec, <span class="number">0</span>).unwrap()
-<a href=#971 id=971 data-nosnippet>971</a>            } <span class="kw">else </span>{
-<a href=#972 id=972 data-nosnippet>972</a>                v_vec[<span class="number">0</span>].clone()
-<a href=#973 id=973 data-nosnippet>973</a>            },
-<a href=#974 id=974 data-nosnippet>974</a>        )));
-<a href=#975 id=975 data-nosnippet>975</a>    }
-<a href=#976 id=976 data-nosnippet>976</a>    <span class="kw-2">*</span>cache = new_cache;
-<a href=#977 id=977 data-nosnippet>977</a>}
-<a href=#978 id=978 data-nosnippet>978</a>
-<a href=#979 id=979 data-nosnippet>979</a><span class="kw">fn </span>clone_out_cache(
-<a href=#980 id=980 data-nosnippet>980</a>    num_hidden_layers: usize,
-<a href=#981 id=981 data-nosnippet>981</a>    cache: <span class="kw-2">&amp;mut </span>LayerCaches,
-<a href=#982 id=982 data-nosnippet>982</a>    seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
-<a href=#983 id=983 data-nosnippet>983</a>    target: SeqCache,
-<a href=#984 id=984 data-nosnippet>984</a>) {
-<a href=#985 id=985 data-nosnippet>985</a>    <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
-<a href=#986 id=986 data-nosnippet>986</a>        <span class="kw">let </span>cache = cache.get(layer).unwrap();
-<a href=#987 id=987 data-nosnippet>987</a>        <span class="comment">// This case for llama 3.2 vision cross attn
-<a href=#988 id=988 data-nosnippet>988</a>        </span><span class="kw">if </span>cache.is_none() {
-<a href=#989 id=989 data-nosnippet>989</a>            <span class="kw">continue</span>;
-<a href=#990 id=990 data-nosnippet>990</a>        }
-<a href=#991 id=991 data-nosnippet>991</a>
-<a href=#992 id=992 data-nosnippet>992</a>        <span class="kw">let </span>k_cache = cache.as_ref().unwrap().<span class="number">0</span>.clone();
-<a href=#993 id=993 data-nosnippet>993</a>        <span class="kw">let </span>v_cache = cache.as_ref().unwrap().<span class="number">1</span>.clone();
-<a href=#994 id=994 data-nosnippet>994</a>
-<a href=#995 id=995 data-nosnippet>995</a>        <span class="kw">let </span>k_caches = k_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
-<a href=#996 id=996 data-nosnippet>996</a>        <span class="macro">debug_assert_eq!</span>(k_caches.len(), seqs.len());
-<a href=#997 id=997 data-nosnippet>997</a>        <span class="kw">let </span>v_caches = v_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
-<a href=#998 id=998 data-nosnippet>998</a>        <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
-<a href=#999 id=999 data-nosnippet>999</a>
-<a href=#1000 id=1000 data-nosnippet>1000</a>        <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
-<a href=#1001 id=1001 data-nosnippet>1001</a>            <span class="kw">let </span>output_cache = <span class="kw">match </span>target {
-<a href=#1002 id=1002 data-nosnippet>1002</a>                SeqCache::Normal =&gt; seq.cache(),
-<a href=#1003 id=1003 data-nosnippet>1003</a>                SeqCache::XLora =&gt; seq.xlora_cache(),
-<a href=#1004 id=1004 data-nosnippet>1004</a>                SeqCache::Draft =&gt; seq.draft_cache(),
-<a href=#1005 id=1005 data-nosnippet>1005</a>            };
-<a href=#1006 id=1006 data-nosnippet>1006</a>            <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;mut </span>output_cache[layer];
-<a href=#1007 id=1007 data-nosnippet>1007</a>            <span class="kw">let </span>k = k_caches.get(seq_i).unwrap().clone();
-<a href=#1008 id=1008 data-nosnippet>1008</a>            <span class="kw">let </span>v = v_caches.get(seq_i).unwrap().clone();
-<a href=#1009 id=1009 data-nosnippet>1009</a>            <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((k, v));
-<a href=#1010 id=1010 data-nosnippet>1010</a>        }
-<a href=#1011 id=1011 data-nosnippet>1011</a>    }
-<a href=#1012 id=1012 data-nosnippet>1012</a>}
-<a href=#1013 id=1013 data-nosnippet>1013</a>
-<a href=#1014 id=1014 data-nosnippet>1014</a><span class="kw">impl</span>&lt;T: CacheManagerMixin + MetadataMixin + <span class="question-mark">?</span>Sized&gt; CacheManager&lt;T&gt; <span class="kw">for </span>FullCacheManager {
-<a href=#1015 id=1015 data-nosnippet>1015</a>    <span class="kw">fn </span>clone_in_cache(
-<a href=#1016 id=1016 data-nosnippet>1016</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1017 id=1017 data-nosnippet>1017</a>        pipeline: <span class="kw-2">&amp;</span>T,
-<a href=#1018 id=1018 data-nosnippet>1018</a>        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
-<a href=#1019 id=1019 data-nosnippet>1019</a>        modify_draft_cache: bool,
-<a href=#1020 id=1020 data-nosnippet>1020</a>    ) {
-<a href=#1021 id=1021 data-nosnippet>1021</a>        <span class="kw">if </span>modify_draft_cache {
-<a href=#1022 id=1022 data-nosnippet>1022</a>            clone_in_cache(
-<a href=#1023 id=1023 data-nosnippet>1023</a>                pipeline.get_metadata().num_hidden_layers,
-<a href=#1024 id=1024 data-nosnippet>1024</a>                <span class="kw-2">&amp;mut </span>pipeline.cache().full().lock(),
-<a href=#1025 id=1025 data-nosnippet>1025</a>                seqs,
-<a href=#1026 id=1026 data-nosnippet>1026</a>                SeqCache::Draft,
-<a href=#1027 id=1027 data-nosnippet>1027</a>            );
-<a href=#1028 id=1028 data-nosnippet>1028</a>            <span class="kw">return</span>;
-<a href=#1029 id=1029 data-nosnippet>1029</a>        }
-<a href=#1030 id=1030 data-nosnippet>1030</a>        clone_in_cache(
-<a href=#1031 id=1031 data-nosnippet>1031</a>            pipeline.get_metadata().num_hidden_layers,
-<a href=#1032 id=1032 data-nosnippet>1032</a>            <span class="kw-2">&amp;mut </span>pipeline.cache().full().lock(),
-<a href=#1033 id=1033 data-nosnippet>1033</a>            seqs,
-<a href=#1034 id=1034 data-nosnippet>1034</a>            SeqCache::Normal,
-<a href=#1035 id=1035 data-nosnippet>1035</a>        );
-<a href=#1036 id=1036 data-nosnippet>1036</a>        <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().no_kv_cache {
-<a href=#1037 id=1037 data-nosnippet>1037</a>            clone_in_cache(
-<a href=#1038 id=1038 data-nosnippet>1038</a>                pipeline.get_metadata().num_hidden_layers,
-<a href=#1039 id=1039 data-nosnippet>1039</a>                <span class="kw-2">&amp;mut </span>pipeline.cache().full().xlora_lock(),
-<a href=#1040 id=1040 data-nosnippet>1040</a>                seqs,
-<a href=#1041 id=1041 data-nosnippet>1041</a>                SeqCache::XLora,
-<a href=#1042 id=1042 data-nosnippet>1042</a>            );
-<a href=#1043 id=1043 data-nosnippet>1043</a>        }
-<a href=#1044 id=1044 data-nosnippet>1044</a>        <span class="kw">if </span>pipeline.get_metadata().is_xlora {
-<a href=#1045 id=1045 data-nosnippet>1045</a>            pipeline
-<a href=#1046 id=1046 data-nosnippet>1046</a>                .cache()
-<a href=#1047 id=1047 data-nosnippet>1047</a>                .full()
-<a href=#1048 id=1048 data-nosnippet>1048</a>                .get_scalings_cache()
-<a href=#1049 id=1049 data-nosnippet>1049</a>                .clone_from(seqs[<span class="number">0</span>].scaling_cache());
-<a href=#1050 id=1050 data-nosnippet>1050</a>        }
-<a href=#1051 id=1051 data-nosnippet>1051</a>    }
-<a href=#1052 id=1052 data-nosnippet>1052</a>
-<a href=#1053 id=1053 data-nosnippet>1053</a>    <span class="kw">fn </span>clone_out_cache(
-<a href=#1054 id=1054 data-nosnippet>1054</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1055 id=1055 data-nosnippet>1055</a>        pipeline: <span class="kw-2">&amp;</span>T,
-<a href=#1056 id=1056 data-nosnippet>1056</a>        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
-<a href=#1057 id=1057 data-nosnippet>1057</a>        modify_draft_cache: bool,
-<a href=#1058 id=1058 data-nosnippet>1058</a>    ) {
-<a href=#1059 id=1059 data-nosnippet>1059</a>        <span class="kw">if </span>modify_draft_cache {
-<a href=#1060 id=1060 data-nosnippet>1060</a>            clone_out_cache(
-<a href=#1061 id=1061 data-nosnippet>1061</a>                pipeline.get_metadata().num_hidden_layers,
-<a href=#1062 id=1062 data-nosnippet>1062</a>                <span class="kw-2">&amp;mut </span>pipeline.cache().full().lock(),
-<a href=#1063 id=1063 data-nosnippet>1063</a>                seqs,
-<a href=#1064 id=1064 data-nosnippet>1064</a>                SeqCache::Draft,
-<a href=#1065 id=1065 data-nosnippet>1065</a>            );
-<a href=#1066 id=1066 data-nosnippet>1066</a>            <span class="kw">return</span>;
-<a href=#1067 id=1067 data-nosnippet>1067</a>        }
-<a href=#1068 id=1068 data-nosnippet>1068</a>        clone_out_cache(
-<a href=#1069 id=1069 data-nosnippet>1069</a>            pipeline.get_metadata().num_hidden_layers,
-<a href=#1070 id=1070 data-nosnippet>1070</a>            <span class="kw-2">&amp;mut </span>pipeline.cache().full().lock(),
-<a href=#1071 id=1071 data-nosnippet>1071</a>            seqs,
-<a href=#1072 id=1072 data-nosnippet>1072</a>            SeqCache::Normal,
-<a href=#1073 id=1073 data-nosnippet>1073</a>        );
-<a href=#1074 id=1074 data-nosnippet>1074</a>        <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().no_kv_cache {
-<a href=#1075 id=1075 data-nosnippet>1075</a>            clone_out_cache(
-<a href=#1076 id=1076 data-nosnippet>1076</a>                pipeline.get_metadata().num_hidden_layers,
-<a href=#1077 id=1077 data-nosnippet>1077</a>                <span class="kw-2">&amp;mut </span>pipeline.cache().full().xlora_lock(),
-<a href=#1078 id=1078 data-nosnippet>1078</a>                seqs,
-<a href=#1079 id=1079 data-nosnippet>1079</a>                SeqCache::XLora,
-<a href=#1080 id=1080 data-nosnippet>1080</a>            );
-<a href=#1081 id=1081 data-nosnippet>1081</a>        }
-<a href=#1082 id=1082 data-nosnippet>1082</a>        <span class="kw">if </span>pipeline.get_metadata().is_xlora {
-<a href=#1083 id=1083 data-nosnippet>1083</a>            seqs[<span class="number">0</span>]
-<a href=#1084 id=1084 data-nosnippet>1084</a>                .scaling_cache()
-<a href=#1085 id=1085 data-nosnippet>1085</a>                .clone_from(<span class="kw-2">&amp;</span>pipeline.cache().full().get_scalings_cache());
-<a href=#1086 id=1086 data-nosnippet>1086</a>        }
-<a href=#1087 id=1087 data-nosnippet>1087</a>    }
-<a href=#1088 id=1088 data-nosnippet>1088</a>
-<a href=#1089 id=1089 data-nosnippet>1089</a>    <span class="kw">fn </span>set_none_cache(
-<a href=#1090 id=1090 data-nosnippet>1090</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#1091 id=1091 data-nosnippet>1091</a>        pipeline: <span class="kw-2">&amp;</span>T,
-<a href=#1092 id=1092 data-nosnippet>1092</a>        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#1093 id=1093 data-nosnippet>1093</a>        modify_draft_cache: bool,
-<a href=#1094 id=1094 data-nosnippet>1094</a>        _load_preallocated_cache: bool,
-<a href=#1095 id=1095 data-nosnippet>1095</a>    ) {
-<a href=#1096 id=1096 data-nosnippet>1096</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
-<a href=#1097 id=1097 data-nosnippet>1097</a>        <span class="kw">for _ in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
-<a href=#1098 id=1098 data-nosnippet>1098</a>            new_cache.push(<span class="prelude-val">None</span>);
-<a href=#1099 id=1099 data-nosnippet>1099</a>        }
-<a href=#1100 id=1100 data-nosnippet>1100</a>        pipeline.cache().full().lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
-<a href=#1101 id=1101 data-nosnippet>1101</a>        <span class="kw">if </span>modify_draft_cache {
-<a href=#1102 id=1102 data-nosnippet>1102</a>            pipeline.cache().full().draft_lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
-<a href=#1103 id=1103 data-nosnippet>1103</a>        }
-<a href=#1104 id=1104 data-nosnippet>1104</a>        <span class="kw">if </span>pipeline.cache().full().is_xlora() {
-<a href=#1105 id=1105 data-nosnippet>1105</a>            <span class="kw-2">*</span>pipeline.cache().full().xlora_lock() = new_cache;
-<a href=#1106 id=1106 data-nosnippet>1106</a>        }
-<a href=#1107 id=1107 data-nosnippet>1107</a>    }
-<a href=#1108 id=1108 data-nosnippet>1108</a>}</code></pre></div></section></main></body></html>
+<a href=#841 id=841 data-nosnippet>841</a>    <span class="doccomment">/// # Panics
+<a href=#842 id=842 data-nosnippet>842</a>    /// If there is no xlora cache
+<a href=#843 id=843 data-nosnippet>843</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>get_scalings_cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; MutexGuard&lt;<span class="lifetime">'_</span>, <span class="prelude-ty">Option</span>&lt;Tensor&gt;&gt; {
+<a href=#844 id=844 data-nosnippet>844</a>        <span class="macro">get_mut_arcmutex!</span>(<span class="self">self
+<a href=#845 id=845 data-nosnippet>845</a>            </span>.scalings_cache
+<a href=#846 id=846 data-nosnippet>846</a>            .as_ref()
+<a href=#847 id=847 data-nosnippet>847</a>            .expect(<span class="string">"No X-LoRA scalings cache."</span>))
+<a href=#848 id=848 data-nosnippet>848</a>    }
+<a href=#849 id=849 data-nosnippet>849</a>
+<a href=#850 id=850 data-nosnippet>850</a>    <span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>is_xlora(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#851 id=851 data-nosnippet>851</a>        <span class="self">self</span>.xlora_cache.is_some()
+<a href=#852 id=852 data-nosnippet>852</a>    }
+<a href=#853 id=853 data-nosnippet>853</a>
+<a href=#854 id=854 data-nosnippet>854</a>    <span class="doccomment">/// Update the KV cache and return (k,v)
+<a href=#855 id=855 data-nosnippet>855</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>update_kv_cache(
+<a href=#856 id=856 data-nosnippet>856</a>        cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+<a href=#857 id=857 data-nosnippet>857</a>        k: Tensor,
+<a href=#858 id=858 data-nosnippet>858</a>        v: Tensor,
+<a href=#859 id=859 data-nosnippet>859</a>        slow_cat: bool,
+<a href=#860 id=860 data-nosnippet>860</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor)&gt; {
+<a href=#861 id=861 data-nosnippet>861</a>        <span class="kw">let </span>(k, v) = <span class="kw">match </span><span class="kw-2">&amp;*</span>cache {
+<a href=#862 id=862 data-nosnippet>862</a>            <span class="prelude-val">None </span>=&gt; (k, v),
+<a href=#863 id=863 data-nosnippet>863</a>            <span class="prelude-val">Some</span>((k_cache, v_cache)) =&gt; {
+<a href=#864 id=864 data-nosnippet>864</a>                <span class="kw">if </span>!slow_cat {
+<a href=#865 id=865 data-nosnippet>865</a>                    <span class="kw">let </span>k = candle_nn::ops::kvconcat(k_cache, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+<a href=#866 id=866 data-nosnippet>866</a>                    <span class="kw">let </span>v = candle_nn::ops::kvconcat(v_cache, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+<a href=#867 id=867 data-nosnippet>867</a>                    (k, v)
+<a href=#868 id=868 data-nosnippet>868</a>                } <span class="kw">else </span>{
+<a href=#869 id=869 data-nosnippet>869</a>                    <span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[k_cache, <span class="kw-2">&amp;</span>k], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+<a href=#870 id=870 data-nosnippet>870</a>                    <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[v_cache, <span class="kw-2">&amp;</span>v], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+<a href=#871 id=871 data-nosnippet>871</a>                    (k, v)
+<a href=#872 id=872 data-nosnippet>872</a>                }
+<a href=#873 id=873 data-nosnippet>873</a>            }
+<a href=#874 id=874 data-nosnippet>874</a>        };
+<a href=#875 id=875 data-nosnippet>875</a>        <span class="kw-2">*</span>cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
+<a href=#876 id=876 data-nosnippet>876</a>        <span class="prelude-val">Ok</span>((k.contiguous()<span class="question-mark">?</span>, v.contiguous()<span class="question-mark">?</span>))
+<a href=#877 id=877 data-nosnippet>877</a>    }
+<a href=#878 id=878 data-nosnippet>878</a>
+<a href=#879 id=879 data-nosnippet>879</a>    <span class="doccomment">/// Update the KV cache and return (k,v,attn_mask)
+<a href=#880 id=880 data-nosnippet>880</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>update_kv_cache_sliding_window(
+<a href=#881 id=881 data-nosnippet>881</a>        cache: <span class="kw-2">&amp;mut </span><span class="prelude-ty">Option</span>&lt;(Tensor, Tensor)&gt;,
+<a href=#882 id=882 data-nosnippet>882</a>        k: Tensor,
+<a href=#883 id=883 data-nosnippet>883</a>        v: Tensor,
+<a href=#884 id=884 data-nosnippet>884</a>        attention_mask: <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span>Tensor&gt;,
+<a href=#885 id=885 data-nosnippet>885</a>        sliding_window: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#886 id=886 data-nosnippet>886</a>        slow_cat: bool,
+<a href=#887 id=887 data-nosnippet>887</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(Tensor, Tensor, <span class="prelude-ty">Option</span>&lt;Tensor&gt;)&gt; {
+<a href=#888 id=888 data-nosnippet>888</a>        <span class="kw">let </span>(k, v, attention_mask) = <span class="kw">match </span>cache.clone() {
+<a href=#889 id=889 data-nosnippet>889</a>            <span class="prelude-val">None </span>=&gt; (k, v, attention_mask.cloned()),
+<a href=#890 id=890 data-nosnippet>890</a>            <span class="prelude-val">Some</span>((<span class="kw-2">mut </span>prev_k, <span class="kw-2">mut </span>prev_v)) =&gt; {
+<a href=#891 id=891 data-nosnippet>891</a>                <span class="kw">let </span><span class="kw-2">mut </span>mask = attention_mask.cloned();
+<a href=#892 id=892 data-nosnippet>892</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(sliding_window) = sliding_window {
+<a href=#893 id=893 data-nosnippet>893</a>                    <span class="kw">let </span>kv_seq_len = prev_k.dim(<span class="number">2</span>)<span class="question-mark">?</span>;
+<a href=#894 id=894 data-nosnippet>894</a>                    <span class="kw">if </span>kv_seq_len &gt; sliding_window {
+<a href=#895 id=895 data-nosnippet>895</a>                        prev_k = prev_k.narrow(
+<a href=#896 id=896 data-nosnippet>896</a>                            <span class="number">2</span>,
+<a href=#897 id=897 data-nosnippet>897</a>                            kv_seq_len - (sliding_window - <span class="number">1</span>),
+<a href=#898 id=898 data-nosnippet>898</a>                            sliding_window - <span class="number">1</span>,
+<a href=#899 id=899 data-nosnippet>899</a>                        )<span class="question-mark">?</span>;
+<a href=#900 id=900 data-nosnippet>900</a>                        prev_v = prev_v.narrow(
+<a href=#901 id=901 data-nosnippet>901</a>                            <span class="number">2</span>,
+<a href=#902 id=902 data-nosnippet>902</a>                            kv_seq_len - (sliding_window - <span class="number">1</span>),
+<a href=#903 id=903 data-nosnippet>903</a>                            sliding_window - <span class="number">1</span>,
+<a href=#904 id=904 data-nosnippet>904</a>                        )<span class="question-mark">?</span>;
+<a href=#905 id=905 data-nosnippet>905</a>                        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref mut </span>mask) = mask {
+<a href=#906 id=906 data-nosnippet>906</a>                            <span class="kw">let </span>mask_len = mask.dim(<span class="number">1</span>)<span class="question-mark">?</span>;
+<a href=#907 id=907 data-nosnippet>907</a>                            <span class="kw-2">*</span>mask = mask.narrow(
+<a href=#908 id=908 data-nosnippet>908</a>                                <span class="number">1</span>,
+<a href=#909 id=909 data-nosnippet>909</a>                                mask_len - (sliding_window - <span class="number">1</span>),
+<a href=#910 id=910 data-nosnippet>910</a>                                sliding_window - <span class="number">1</span>,
+<a href=#911 id=911 data-nosnippet>911</a>                            )<span class="question-mark">?</span>;
+<a href=#912 id=912 data-nosnippet>912</a>                            <span class="kw-2">*</span>mask = Tensor::cat(
+<a href=#913 id=913 data-nosnippet>913</a>                                <span class="kw-2">&amp;</span>[<span class="kw-2">&amp;*</span>mask, <span class="kw-2">&amp;</span>mask.narrow(<span class="number">1</span>, mask_len - <span class="number">1</span>, <span class="number">1</span>)<span class="question-mark">?</span>.ones_like()<span class="question-mark">?</span>],
+<a href=#914 id=914 data-nosnippet>914</a>                                D::Minus1,
+<a href=#915 id=915 data-nosnippet>915</a>                            )<span class="question-mark">?</span>;
+<a href=#916 id=916 data-nosnippet>916</a>                        }
+<a href=#917 id=917 data-nosnippet>917</a>                    }
+<a href=#918 id=918 data-nosnippet>918</a>                }
+<a href=#919 id=919 data-nosnippet>919</a>                <span class="kw">let </span>(k, v) = <span class="kw">if </span>!slow_cat {
+<a href=#920 id=920 data-nosnippet>920</a>                    <span class="kw">let </span>k = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_k, <span class="kw-2">&amp;</span>k, <span class="number">2</span>)<span class="question-mark">?</span>;
+<a href=#921 id=921 data-nosnippet>921</a>                    <span class="kw">let </span>v = candle_nn::ops::kvconcat(<span class="kw-2">&amp;</span>prev_v, <span class="kw-2">&amp;</span>v, <span class="number">2</span>)<span class="question-mark">?</span>;
+<a href=#922 id=922 data-nosnippet>922</a>                    (k, v)
+<a href=#923 id=923 data-nosnippet>923</a>                } <span class="kw">else </span>{
+<a href=#924 id=924 data-nosnippet>924</a>                    <span class="kw">let </span>k = Tensor::cat(<span class="kw-2">&amp;</span>[prev_k, k], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+<a href=#925 id=925 data-nosnippet>925</a>                    <span class="kw">let </span>v = Tensor::cat(<span class="kw-2">&amp;</span>[prev_v, v], <span class="number">2</span>)<span class="question-mark">?</span>.contiguous()<span class="question-mark">?</span>;
+<a href=#926 id=926 data-nosnippet>926</a>                    (k, v)
+<a href=#927 id=927 data-nosnippet>927</a>                };
+<a href=#928 id=928 data-nosnippet>928</a>                (k, v, mask)
+<a href=#929 id=929 data-nosnippet>929</a>            }
+<a href=#930 id=930 data-nosnippet>930</a>        };
+<a href=#931 id=931 data-nosnippet>931</a>        <span class="kw-2">*</span>cache = <span class="prelude-val">Some</span>((k.clone(), v.clone()));
+<a href=#932 id=932 data-nosnippet>932</a>        <span class="prelude-val">Ok</span>((k.contiguous()<span class="question-mark">?</span>, v.contiguous()<span class="question-mark">?</span>, attention_mask))
+<a href=#933 id=933 data-nosnippet>933</a>    }
+<a href=#934 id=934 data-nosnippet>934</a>}
+<a href=#935 id=935 data-nosnippet>935</a>
+<a href=#936 id=936 data-nosnippet>936</a><span class="kw">pub struct </span>FullCacheManager;
+<a href=#937 id=937 data-nosnippet>937</a>
+<a href=#938 id=938 data-nosnippet>938</a><span class="kw">enum </span>SeqCache {
+<a href=#939 id=939 data-nosnippet>939</a>    Normal,
+<a href=#940 id=940 data-nosnippet>940</a>    XLora,
+<a href=#941 id=941 data-nosnippet>941</a>    Draft,
+<a href=#942 id=942 data-nosnippet>942</a>}
+<a href=#943 id=943 data-nosnippet>943</a>
+<a href=#944 id=944 data-nosnippet>944</a><span class="kw">fn </span>clone_in_cache(
+<a href=#945 id=945 data-nosnippet>945</a>    num_hidden_layers: usize,
+<a href=#946 id=946 data-nosnippet>946</a>    cache: <span class="kw-2">&amp;mut </span>LayerCaches,
+<a href=#947 id=947 data-nosnippet>947</a>    seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
+<a href=#948 id=948 data-nosnippet>948</a>    src: SeqCache,
+<a href=#949 id=949 data-nosnippet>949</a>) {
+<a href=#950 id=950 data-nosnippet>950</a>    <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
+<a href=#951 id=951 data-nosnippet>951</a>    <span class="lifetime">'outer</span>: <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
+<a href=#952 id=952 data-nosnippet>952</a>        <span class="kw">let </span><span class="kw-2">mut </span>k_vec = Vec::new();
+<a href=#953 id=953 data-nosnippet>953</a>        <span class="kw">let </span><span class="kw-2">mut </span>v_vec = Vec::new();
+<a href=#954 id=954 data-nosnippet>954</a>        <span class="kw">for </span>seq <span class="kw">in </span><span class="kw-2">&amp;mut *</span>seqs {
+<a href=#955 id=955 data-nosnippet>955</a>            <span class="kw">let </span>src_cache = <span class="kw">match </span>src {
+<a href=#956 id=956 data-nosnippet>956</a>                SeqCache::Normal =&gt; seq.cache(),
+<a href=#957 id=957 data-nosnippet>957</a>                SeqCache::XLora =&gt; seq.xlora_cache(),
+<a href=#958 id=958 data-nosnippet>958</a>                SeqCache::Draft =&gt; seq.draft_cache(),
+<a href=#959 id=959 data-nosnippet>959</a>            };
+<a href=#960 id=960 data-nosnippet>960</a>            <span class="kw">let </span>cache = src_cache.get(layer).unwrap();
+<a href=#961 id=961 data-nosnippet>961</a>            <span class="comment">// This case for llama 3.2 vision cross attn
+<a href=#962 id=962 data-nosnippet>962</a>            </span><span class="kw">if </span>cache.is_none() {
+<a href=#963 id=963 data-nosnippet>963</a>                new_cache.push(<span class="prelude-val">None</span>);
+<a href=#964 id=964 data-nosnippet>964</a>                <span class="kw">continue </span><span class="lifetime">'outer</span>;
+<a href=#965 id=965 data-nosnippet>965</a>            }
+<a href=#966 id=966 data-nosnippet>966</a>            <span class="kw">let </span>cache = cache
+<a href=#967 id=967 data-nosnippet>967</a>                .as_ref()
+<a href=#968 id=968 data-nosnippet>968</a>                .expect(<span class="string">"Not handling completions in `clone_in_cache`."</span>);
+<a href=#969 id=969 data-nosnippet>969</a>            k_vec.push(cache.<span class="number">0</span>.clone());
+<a href=#970 id=970 data-nosnippet>970</a>            v_vec.push(cache.<span class="number">1</span>.clone());
+<a href=#971 id=971 data-nosnippet>971</a>        }
+<a href=#972 id=972 data-nosnippet>972</a>        new_cache.push(<span class="prelude-val">Some</span>((
+<a href=#973 id=973 data-nosnippet>973</a>            <span class="kw">if </span>k_vec.len() &gt; <span class="number">1 </span>{
+<a href=#974 id=974 data-nosnippet>974</a>                Tensor::cat(<span class="kw-2">&amp;</span>k_vec, <span class="number">0</span>).unwrap()
+<a href=#975 id=975 data-nosnippet>975</a>            } <span class="kw">else </span>{
+<a href=#976 id=976 data-nosnippet>976</a>                k_vec[<span class="number">0</span>].clone()
+<a href=#977 id=977 data-nosnippet>977</a>            },
+<a href=#978 id=978 data-nosnippet>978</a>            <span class="kw">if </span>v_vec.len() &gt; <span class="number">1 </span>{
+<a href=#979 id=979 data-nosnippet>979</a>                Tensor::cat(<span class="kw-2">&amp;</span>v_vec, <span class="number">0</span>).unwrap()
+<a href=#980 id=980 data-nosnippet>980</a>            } <span class="kw">else </span>{
+<a href=#981 id=981 data-nosnippet>981</a>                v_vec[<span class="number">0</span>].clone()
+<a href=#982 id=982 data-nosnippet>982</a>            },
+<a href=#983 id=983 data-nosnippet>983</a>        )));
+<a href=#984 id=984 data-nosnippet>984</a>    }
+<a href=#985 id=985 data-nosnippet>985</a>    <span class="kw-2">*</span>cache = new_cache;
+<a href=#986 id=986 data-nosnippet>986</a>}
+<a href=#987 id=987 data-nosnippet>987</a>
+<a href=#988 id=988 data-nosnippet>988</a><span class="kw">fn </span>clone_out_cache(
+<a href=#989 id=989 data-nosnippet>989</a>    num_hidden_layers: usize,
+<a href=#990 id=990 data-nosnippet>990</a>    cache: <span class="kw-2">&amp;mut </span>LayerCaches,
+<a href=#991 id=991 data-nosnippet>991</a>    seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
+<a href=#992 id=992 data-nosnippet>992</a>    target: SeqCache,
+<a href=#993 id=993 data-nosnippet>993</a>) {
+<a href=#994 id=994 data-nosnippet>994</a>    <span class="kw">for </span>layer <span class="kw">in </span><span class="number">0</span>..num_hidden_layers {
+<a href=#995 id=995 data-nosnippet>995</a>        <span class="kw">let </span>cache = cache.get(layer).unwrap();
+<a href=#996 id=996 data-nosnippet>996</a>        <span class="comment">// This case for llama 3.2 vision cross attn
+<a href=#997 id=997 data-nosnippet>997</a>        </span><span class="kw">if </span>cache.is_none() {
+<a href=#998 id=998 data-nosnippet>998</a>            <span class="kw">continue</span>;
+<a href=#999 id=999 data-nosnippet>999</a>        }
+<a href=#1000 id=1000 data-nosnippet>1000</a>
+<a href=#1001 id=1001 data-nosnippet>1001</a>        <span class="kw">let </span>k_cache = cache.as_ref().unwrap().<span class="number">0</span>.clone();
+<a href=#1002 id=1002 data-nosnippet>1002</a>        <span class="kw">let </span>v_cache = cache.as_ref().unwrap().<span class="number">1</span>.clone();
+<a href=#1003 id=1003 data-nosnippet>1003</a>
+<a href=#1004 id=1004 data-nosnippet>1004</a>        <span class="kw">let </span>k_caches = k_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
+<a href=#1005 id=1005 data-nosnippet>1005</a>        <span class="macro">debug_assert_eq!</span>(k_caches.len(), seqs.len());
+<a href=#1006 id=1006 data-nosnippet>1006</a>        <span class="kw">let </span>v_caches = v_cache.chunk(seqs.len(), <span class="number">0</span>).unwrap();
+<a href=#1007 id=1007 data-nosnippet>1007</a>        <span class="macro">debug_assert_eq!</span>(v_caches.len(), seqs.len());
+<a href=#1008 id=1008 data-nosnippet>1008</a>
+<a href=#1009 id=1009 data-nosnippet>1009</a>        <span class="kw">for </span>(seq_i, seq) <span class="kw">in </span>seqs.iter_mut().enumerate() {
+<a href=#1010 id=1010 data-nosnippet>1010</a>            <span class="kw">let </span>output_cache = <span class="kw">match </span>target {
+<a href=#1011 id=1011 data-nosnippet>1011</a>                SeqCache::Normal =&gt; seq.cache(),
+<a href=#1012 id=1012 data-nosnippet>1012</a>                SeqCache::XLora =&gt; seq.xlora_cache(),
+<a href=#1013 id=1013 data-nosnippet>1013</a>                SeqCache::Draft =&gt; seq.draft_cache(),
+<a href=#1014 id=1014 data-nosnippet>1014</a>            };
+<a href=#1015 id=1015 data-nosnippet>1015</a>            <span class="kw">let </span>seq_cache = <span class="kw-2">&amp;mut </span>output_cache[layer];
+<a href=#1016 id=1016 data-nosnippet>1016</a>            <span class="kw">let </span>k = k_caches.get(seq_i).unwrap().clone();
+<a href=#1017 id=1017 data-nosnippet>1017</a>            <span class="kw">let </span>v = v_caches.get(seq_i).unwrap().clone();
+<a href=#1018 id=1018 data-nosnippet>1018</a>            <span class="kw-2">*</span>seq_cache = <span class="prelude-val">Some</span>((k, v));
+<a href=#1019 id=1019 data-nosnippet>1019</a>        }
+<a href=#1020 id=1020 data-nosnippet>1020</a>    }
+<a href=#1021 id=1021 data-nosnippet>1021</a>}
+<a href=#1022 id=1022 data-nosnippet>1022</a>
+<a href=#1023 id=1023 data-nosnippet>1023</a><span class="kw">impl</span>&lt;T: CacheManagerMixin + MetadataMixin + <span class="question-mark">?</span>Sized&gt; CacheManager&lt;T&gt; <span class="kw">for </span>FullCacheManager {
+<a href=#1024 id=1024 data-nosnippet>1024</a>    <span class="kw">fn </span>clone_in_cache(
+<a href=#1025 id=1025 data-nosnippet>1025</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1026 id=1026 data-nosnippet>1026</a>        pipeline: <span class="kw-2">&amp;</span>T,
+<a href=#1027 id=1027 data-nosnippet>1027</a>        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
+<a href=#1028 id=1028 data-nosnippet>1028</a>        modify_draft_cache: bool,
+<a href=#1029 id=1029 data-nosnippet>1029</a>    ) {
+<a href=#1030 id=1030 data-nosnippet>1030</a>        <span class="kw">if </span>modify_draft_cache {
+<a href=#1031 id=1031 data-nosnippet>1031</a>            clone_in_cache(
+<a href=#1032 id=1032 data-nosnippet>1032</a>                pipeline.get_metadata().num_hidden_layers,
+<a href=#1033 id=1033 data-nosnippet>1033</a>                <span class="kw-2">&amp;mut </span>pipeline.cache().full().lock(),
+<a href=#1034 id=1034 data-nosnippet>1034</a>                seqs,
+<a href=#1035 id=1035 data-nosnippet>1035</a>                SeqCache::Draft,
+<a href=#1036 id=1036 data-nosnippet>1036</a>            );
+<a href=#1037 id=1037 data-nosnippet>1037</a>            <span class="kw">return</span>;
+<a href=#1038 id=1038 data-nosnippet>1038</a>        }
+<a href=#1039 id=1039 data-nosnippet>1039</a>        clone_in_cache(
+<a href=#1040 id=1040 data-nosnippet>1040</a>            pipeline.get_metadata().num_hidden_layers,
+<a href=#1041 id=1041 data-nosnippet>1041</a>            <span class="kw-2">&amp;mut </span>pipeline.cache().full().lock(),
+<a href=#1042 id=1042 data-nosnippet>1042</a>            seqs,
+<a href=#1043 id=1043 data-nosnippet>1043</a>            SeqCache::Normal,
+<a href=#1044 id=1044 data-nosnippet>1044</a>        );
+<a href=#1045 id=1045 data-nosnippet>1045</a>        <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().no_kv_cache {
+<a href=#1046 id=1046 data-nosnippet>1046</a>            clone_in_cache(
+<a href=#1047 id=1047 data-nosnippet>1047</a>                pipeline.get_metadata().num_hidden_layers,
+<a href=#1048 id=1048 data-nosnippet>1048</a>                <span class="kw-2">&amp;mut </span>pipeline.cache().full().xlora_lock(),
+<a href=#1049 id=1049 data-nosnippet>1049</a>                seqs,
+<a href=#1050 id=1050 data-nosnippet>1050</a>                SeqCache::XLora,
+<a href=#1051 id=1051 data-nosnippet>1051</a>            );
+<a href=#1052 id=1052 data-nosnippet>1052</a>        }
+<a href=#1053 id=1053 data-nosnippet>1053</a>        <span class="kw">if </span>pipeline.get_metadata().is_xlora {
+<a href=#1054 id=1054 data-nosnippet>1054</a>            pipeline
+<a href=#1055 id=1055 data-nosnippet>1055</a>                .cache()
+<a href=#1056 id=1056 data-nosnippet>1056</a>                .full()
+<a href=#1057 id=1057 data-nosnippet>1057</a>                .get_scalings_cache()
+<a href=#1058 id=1058 data-nosnippet>1058</a>                .clone_from(seqs[<span class="number">0</span>].scaling_cache());
+<a href=#1059 id=1059 data-nosnippet>1059</a>        }
+<a href=#1060 id=1060 data-nosnippet>1060</a>    }
+<a href=#1061 id=1061 data-nosnippet>1061</a>
+<a href=#1062 id=1062 data-nosnippet>1062</a>    <span class="kw">fn </span>clone_out_cache(
+<a href=#1063 id=1063 data-nosnippet>1063</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1064 id=1064 data-nosnippet>1064</a>        pipeline: <span class="kw-2">&amp;</span>T,
+<a href=#1065 id=1065 data-nosnippet>1065</a>        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span><span class="kw">crate</span>::sequence::Sequence],
+<a href=#1066 id=1066 data-nosnippet>1066</a>        modify_draft_cache: bool,
+<a href=#1067 id=1067 data-nosnippet>1067</a>    ) {
+<a href=#1068 id=1068 data-nosnippet>1068</a>        <span class="kw">if </span>modify_draft_cache {
+<a href=#1069 id=1069 data-nosnippet>1069</a>            clone_out_cache(
+<a href=#1070 id=1070 data-nosnippet>1070</a>                pipeline.get_metadata().num_hidden_layers,
+<a href=#1071 id=1071 data-nosnippet>1071</a>                <span class="kw-2">&amp;mut </span>pipeline.cache().full().lock(),
+<a href=#1072 id=1072 data-nosnippet>1072</a>                seqs,
+<a href=#1073 id=1073 data-nosnippet>1073</a>                SeqCache::Draft,
+<a href=#1074 id=1074 data-nosnippet>1074</a>            );
+<a href=#1075 id=1075 data-nosnippet>1075</a>            <span class="kw">return</span>;
+<a href=#1076 id=1076 data-nosnippet>1076</a>        }
+<a href=#1077 id=1077 data-nosnippet>1077</a>        clone_out_cache(
+<a href=#1078 id=1078 data-nosnippet>1078</a>            pipeline.get_metadata().num_hidden_layers,
+<a href=#1079 id=1079 data-nosnippet>1079</a>            <span class="kw-2">&amp;mut </span>pipeline.cache().full().lock(),
+<a href=#1080 id=1080 data-nosnippet>1080</a>            seqs,
+<a href=#1081 id=1081 data-nosnippet>1081</a>            SeqCache::Normal,
+<a href=#1082 id=1082 data-nosnippet>1082</a>        );
+<a href=#1083 id=1083 data-nosnippet>1083</a>        <span class="kw">if </span>pipeline.get_metadata().is_xlora &amp;&amp; !pipeline.get_metadata().no_kv_cache {
+<a href=#1084 id=1084 data-nosnippet>1084</a>            clone_out_cache(
+<a href=#1085 id=1085 data-nosnippet>1085</a>                pipeline.get_metadata().num_hidden_layers,
+<a href=#1086 id=1086 data-nosnippet>1086</a>                <span class="kw-2">&amp;mut </span>pipeline.cache().full().xlora_lock(),
+<a href=#1087 id=1087 data-nosnippet>1087</a>                seqs,
+<a href=#1088 id=1088 data-nosnippet>1088</a>                SeqCache::XLora,
+<a href=#1089 id=1089 data-nosnippet>1089</a>            );
+<a href=#1090 id=1090 data-nosnippet>1090</a>        }
+<a href=#1091 id=1091 data-nosnippet>1091</a>        <span class="kw">if </span>pipeline.get_metadata().is_xlora {
+<a href=#1092 id=1092 data-nosnippet>1092</a>            seqs[<span class="number">0</span>]
+<a href=#1093 id=1093 data-nosnippet>1093</a>                .scaling_cache()
+<a href=#1094 id=1094 data-nosnippet>1094</a>                .clone_from(<span class="kw-2">&amp;</span>pipeline.cache().full().get_scalings_cache());
+<a href=#1095 id=1095 data-nosnippet>1095</a>        }
+<a href=#1096 id=1096 data-nosnippet>1096</a>    }
+<a href=#1097 id=1097 data-nosnippet>1097</a>
+<a href=#1098 id=1098 data-nosnippet>1098</a>    <span class="kw">fn </span>set_none_cache(
+<a href=#1099 id=1099 data-nosnippet>1099</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#1100 id=1100 data-nosnippet>1100</a>        pipeline: <span class="kw-2">&amp;</span>T,
+<a href=#1101 id=1101 data-nosnippet>1101</a>        _seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#1102 id=1102 data-nosnippet>1102</a>        modify_draft_cache: bool,
+<a href=#1103 id=1103 data-nosnippet>1103</a>        _load_preallocated_cache: bool,
+<a href=#1104 id=1104 data-nosnippet>1104</a>    ) {
+<a href=#1105 id=1105 data-nosnippet>1105</a>        <span class="kw">let </span><span class="kw-2">mut </span>new_cache = Vec::new();
+<a href=#1106 id=1106 data-nosnippet>1106</a>        <span class="kw">for _ in </span><span class="number">0</span>..pipeline.get_metadata().num_hidden_layers {
+<a href=#1107 id=1107 data-nosnippet>1107</a>            new_cache.push(<span class="prelude-val">None</span>);
+<a href=#1108 id=1108 data-nosnippet>1108</a>        }
+<a href=#1109 id=1109 data-nosnippet>1109</a>        pipeline.cache().full().lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
+<a href=#1110 id=1110 data-nosnippet>1110</a>        <span class="kw">if </span>modify_draft_cache {
+<a href=#1111 id=1111 data-nosnippet>1111</a>            pipeline.cache().full().draft_lock().clone_from(<span class="kw-2">&amp;</span>new_cache);
+<a href=#1112 id=1112 data-nosnippet>1112</a>        }
+<a href=#1113 id=1113 data-nosnippet>1113</a>        <span class="kw">if </span>pipeline.cache().full().is_xlora() {
+<a href=#1114 id=1114 data-nosnippet>1114</a>            <span class="kw-2">*</span>pipeline.cache().full().xlora_lock() = new_cache;
+<a href=#1115 id=1115 data-nosnippet>1115</a>        }
+<a href=#1116 id=1116 data-nosnippet>1116</a>    }
+<a href=#1117 id=1117 data-nosnippet>1117</a>}</code></pre></div></section></main></body></html>
