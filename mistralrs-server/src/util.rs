@@ -11,7 +11,7 @@ pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow:
         url::Url::from_file_path(std::path::absolute(url_unparsed)?)
             .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
     } else {
-        url::Url::parse(&format!("data:image/png;base64,{}", url_unparsed))
+        url::Url::parse(url_unparsed)
             .map_err(|_| anyhow::anyhow!("Could not parse as base64 data: {}", url_unparsed))?
     };
 
@@ -112,8 +112,6 @@ mod tests {
         xjApU46pnBe8fwF4pb+/8Ywv/DK9zbCKsfWXUBhf+A1dOX00S+xfgc3L3dmKWSn7iklDjthxbSaH
         c7YCVIAfi6JYn5bHjTHTGmurQJXJ8C/um928G9zK4gAAAABJRU5ErkJggg==
         ";
-        let image = parse_image_url(url).await.unwrap();
-        assert_eq!(image.dimensions(), (32, 32));
 
         let url = format!("data:image/png;base64,{}", url);
         let image = parse_image_url(&url).await.unwrap();

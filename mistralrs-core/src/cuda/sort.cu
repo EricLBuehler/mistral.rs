@@ -108,7 +108,6 @@ int next_power_of_2(int x) {
     }                                                                          \
     cudaFreeAsync(x_row_padded, custream);                                     \
     cudaFreeAsync(dst_row_padded, custream);                                   \
-    cudaStreamSynchronize(custream);                                           \
     free(indices_padded);                                                      \
     free(values_padded);                                                       \
   }

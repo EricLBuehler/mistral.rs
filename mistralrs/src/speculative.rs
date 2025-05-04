@@ -48,6 +48,7 @@ impl TextSpeculativeBuilder {
             from_uqff: builder.from_uqff,
             imatrix: builder.imatrix,
             calibration_file: builder.calibration_file,
+            hf_cache_path: builder.hf_cache_path,
         };
 
         if builder.with_logging {
@@ -59,6 +60,8 @@ impl TextSpeculativeBuilder {
             builder.chat_template,
             builder.tokenizer_json,
             Some(builder.model_id),
+            builder.no_kv_cache,
+            builder.jinja_explicit,
         )
         .build(builder.loader_type)?;
 
@@ -92,7 +95,12 @@ impl TextSpeculativeBuilder {
             self.speculative_config,
         )?));
 
-        let runner = MistralRsBuilder::new(pipeline, scheduler_method);
+        let runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            self.target.throughput_logging,
+            self.target.search_bert_model,
+        );
 
         Ok(Model::new(runner.build()))
     }

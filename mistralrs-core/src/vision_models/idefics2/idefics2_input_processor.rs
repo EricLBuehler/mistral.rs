@@ -65,12 +65,14 @@ impl Processor for Idefics2Processor {
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
         add_special_tokens: bool,
+        enable_thinking: Option<bool>,
         tools: Vec<Tool>,
     ) -> anyhow::Result<(Vec<u32>, String)> {
         let mut prompt = apply_chat_template(
             pipeline,
             messages,
             add_generation_prompt,
+            enable_thinking,
             self.template_action(),
             tools,
         )?;
@@ -105,7 +107,7 @@ impl Processor for Idefics2Processor {
             anyhow::bail!("Idefics2InputProcessor requires a specified tokenizer.",);
         };
         let encoding = tokenizer
-            .encode(prompt.clone(), add_special_tokens)
+            .encode_fast(prompt.clone(), add_special_tokens)
             .map_err(anyhow::Error::msg)?;
         Ok((encoding.get_ids().to_vec(), prompt))
     }
@@ -174,7 +176,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
             get_prompt_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,
@@ -191,7 +193,7 @@ impl InputsProcessor for Idefics2ImageProcessor {
             get_completion_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,

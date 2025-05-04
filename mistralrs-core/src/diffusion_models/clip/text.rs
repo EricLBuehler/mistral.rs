@@ -49,12 +49,17 @@ struct ClipTextEmbeddings {
 
 impl ClipTextEmbeddings {
     fn new(vs: ShardedVarBuilder, c: &ClipTextConfig) -> Result<Self> {
-        let token_embedding =
-            layers::embedding(c.vocab_size, c.projection_dim, vs.pp("token_embedding"))?;
+        let token_embedding = layers::embedding(
+            c.vocab_size,
+            c.projection_dim,
+            vs.pp("token_embedding"),
+            &None,
+        )?;
         let position_embedding: nn::Embedding = layers::embedding(
             c.max_position_embeddings,
             c.projection_dim,
             vs.pp("position_embedding"),
+            &None,
         )?;
         let position_ids =
             Tensor::arange(0u32, c.max_position_embeddings as u32, vs.device())?.unsqueeze(0)?;

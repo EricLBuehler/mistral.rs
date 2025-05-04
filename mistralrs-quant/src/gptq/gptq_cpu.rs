@@ -1,12 +1,9 @@
 use crate::{
-    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedSerde,
-    ShardedVarBuilder,
+    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
+    QuantizedSerde, ShardedVarBuilder,
 };
 use candle_core::{DType, Device, Result, Tensor};
-use std::{
-    num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
 #[derive(Debug)]
 pub struct GptqLayer;
@@ -24,7 +21,8 @@ impl QuantMethod for GptqLayer {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => {
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => {
                 unreachable!()
             }
         }
@@ -56,11 +54,8 @@ impl QuantMethod for GptqLayer {
         _device: Device,
         _n_quantized: &AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
-    }
-
-    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
         todo!()
     }
 }
@@ -83,6 +78,15 @@ pub fn gptq_linear(
     config: &QuantizedConfig,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let QuantizedConfig::Gptq {
+        bits,
+        group_size,
+        checkpoint_format: _,
+    } = config
+    else {
+        candle_core::bail!("Unexpected quantization config.")
+    };
+
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("qweight")
         && vb.contains_tensor("qzeros")
@@ -93,17 +97,13 @@ pub fn gptq_linear(
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
 
-    let bits = config.bits.expect("GPTQ requires bits in config");
     let qweight = vb.get_with_hints_dtype(
         (in_dim / pack_factor!(bits), out_dim),
         "qweight",
         Default::default(),
         DType::I32,
     )?;
-    let scale_and_zero_size = in_dim
-        / config
-            .group_size
-            .expect("GPTQ requires group size in config");
+    let scale_and_zero_size = in_dim / group_size;
     let qzeros = vb.get_with_hints_dtype(
         (scale_and_zero_size, out_dim / pack_factor!(bits)),
         "qzeros",
@@ -124,7 +124,7 @@ pub fn gptq_linear(
     };
 
     let config = QuantMethodConfig::Gptq {
-        bits: bits as i32,
+        bits: *bits as i32,
         use_exllama: false,
         q_weight: qweight,
         gptq_qzeros: Some(qzeros),

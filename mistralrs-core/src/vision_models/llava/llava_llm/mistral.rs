@@ -458,11 +458,19 @@ impl Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization: {}.",
+                quant_cfg.name(),
+                quant_cfg.get_bits_name(&vb_m)
+            );
+        }
         let mapper = normal_loading_metadata.mapper;
         let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);

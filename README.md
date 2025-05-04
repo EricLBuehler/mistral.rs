@@ -31,6 +31,31 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Check out UQFF for prequantized models of various methods!
     - Models can be found [here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 
+- 🔥 Try out AFQ ISQ (2, 3, 4, 6, 8 bit) for blazingly fast Metal performance in all models!
+
+    ```
+    ./mistralrs-server -i --isq afq8 plain -m meta-llama/Llama-3.2-3B-Instruct
+    ```
+
+- 🔍🌐 Easily add web search capabilities to your models! Compatible with OpenAI's `web_search_options` parameter: [documentation](docs/WEB_SEARCH.md)
+
+    ```
+    ./mistralrs-server --enable-search --port 1234 --isq q4k plain -m NousResearch/Hermes-3-Llama-3.1-8B
+    ```
+
+- 🦙🦙🦙🦙 Run the **Llama 4** Models with long context length and vision support: [documentation](docs/LLAMA4.md)
+
+    ```
+    ./mistralrs-server -i --isq q4k vision-plain -m meta-llama/Llama-4-Scout-17B-16E-Instruct -a llama4
+    ```
+
+- Run the **Qwen 3** hybrid reasoning models with full tool calling support: [documentation](docs/QWEN3.md)
+
+    ```
+    ./mistralrs-server -i --isq 4 plain -m Qwen/Qwen3-8B
+    ```
+
+
 - 💎💎💎 Run the entire **Gemma 3** Model family (1b, 4b, 12b, 27b) with 128k context length and vision support: [documentation](docs/GEMMA3.md)
 
     ```
@@ -107,6 +132,7 @@ Mistral.rs supports several model categories:
 - [ISQ](docs/ISQ.md) (In situ quantization): run `.safetensors` models directly from 🤗 Hugging Face by quantizing in-place
     - Enhance performance with an [imatrix](docs/IMATRIX.md)!
 - Automatic [device mapping](docs/DEVICE_MAPPING.md) to easily load and run models across multiple GPUs and CPU.
+- Specify custom chat templates easily: [chat templates](docs/CHAT_TOK.md)
 
 **Fast**:
 - Apple silicon support: ARM NEON, Accelerate, Metal
@@ -118,26 +144,30 @@ Mistral.rs supports several model categories:
 - [Details](docs/QUANTS.md)
 - GGML: 2-bit, 3-bit, 4-bit, 5-bit, 6-bit and 8-bit, with imatrix support
 - GPTQ: 2-bit, 3-bit, 4-bit and 8-bit, with [Marlin](https://github.com/IST-DASLab/marlin) kernel support in 4-bit and 8-bit.
+- AFQ: 🔥 2-bit, 3-bit, 4-bit, 6-bit and 8-bit, designed to be fast on Metal!
 - HQQ: 4-bit and 8 bit, with ISQ support
 - FP8
 - BNB: bitsandbytes int8, fp4, nf4 support
+- Easily run MLX prequantized models
+- Automatic ISQ to select the fastest and most accurate quantization method.
 
 **Powerful**:
 - LoRA support with weight merging
 - First X-LoRA inference platform with first class support
 - [AnyMoE](docs/ANYMOE.md): Build a memory-efficient MoE model from anything, in seconds
 - Various [sampling and penalty](docs/SAMPLING.mds) methods
-- Tool calling: [docs](docs/TOOL_CALLING.md)
+- Native tool calling support for Llama, Mistral Small, Mistral Nemo, Hermes, and DeepSeek models: [docs](docs/TOOL_CALLING.md)
 - Prompt chunking: process large prompts in a more manageable way
 
 **Advanced features**:
 - [PagedAttention](docs/PAGED_ATTENTION.md) and continuous batching (CUDA and Metal support)
 - [FlashAttention](docs/FLASH_ATTENTION.md) V2/V3
-- Prefix caching
+- Prefix caching, including support for multimodal prefix caching
 - [Topology](docs/TOPOLOGY.md): Configure ISQ and device mapping easily
 - [UQFF](docs/UQFF.md): Quantized file format for easy mixing of quants, [collection here](https://huggingface.co/collections/EricB/uqff-670e4a49d56ecdd3f7f0fd4c).
 - Speculative Decoding: Mix supported models as the draft model or the target model
 - Dynamic LoRA adapter activation with adapter preloading: [examples and docs](docs/ADAPTER_MODELS.md#adapter-model-dynamic-adapter-activation)
+- Integrated agentic web search capabilities, enabling models to easily access the internet.
 
 **Documentation for mistral.rs can be found [here](docs/README.md).**
 
@@ -178,6 +208,8 @@ https://github.com/EricLBuehler/mistral.rs/assets/65165915/09d9a30f-1e22-4b9a-90
 |Qwen2.5-VL|✅| |✅| |
 |Gemma 3|✅| |✅|✅|
 |Mistral 3|✅| |✅|✅|
+|Llama 4|✅| |✅| |
+|Qwen 3|✅| |✅| |
 
 ## APIs and Integrations
 
@@ -215,11 +247,11 @@ OpenAI API compatible API server
 ---
 
 ## Supported accelerators
-- CUDA:
+- NVIDIA GPUs (CUDA):
   - Compile with the `cuda` feature: `--features cuda`
   - FlashAttention support: compile with the `flash-attn` feature
   - cuDNN support: compile with the`cudnn` feature: `--features cudnn`
-- Metal:
+- Apple Silicon GPU (Metal):
   - Compile with the `metal` feature: `--features metal`
 - CPU:
   - Intel MKL: compile with the `mkl` feature: `--features mkl`
@@ -434,6 +466,8 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `starcoder2`
 - `deepseekv2`
 - `deepseekv3`
+- `qwen3`
+- `qwen3moe`
 
 ### Architecture for vision models
 
@@ -451,6 +485,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `qwen2_5vl`
 - `gemma3`
 - `mistral3`
+- `llama4`
 
 ### Supported GGUF architectures
 
@@ -513,17 +548,6 @@ Example:
 
 ---
 
-## Benchmarks
-|Device|Mistral.rs Completion T/s|Llama.cpp Completion T/s|Model|Quant|
-|-|-|-|-|-|
-|A10 GPU, CUDA|86|83|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Intel Xeon 8358 CPU, AVX|11|23|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|Raspberry Pi 5 (8GB), Neon|2|3|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|2_K|
-|A100 GPU, CUDA|131|134|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-|RTX 6000 GPU, CUDA|103|96|[mistral-7b](TheBloke/Mistral-7B-Instruct-v0.1-GGUF)|4_K_M|
-
-> Note: All CUDA tests for mistral.rs conducted with PagedAttention enabled, block size = 32
-
 Please submit more benchmarks via raising an issue!
 
 ## Supported models
@@ -554,6 +578,8 @@ Please submit more benchmarks via raising an issue!
 |Qwen2.5-VL| | |✅|
 |Gemma 3| | |✅|
 |Mistral 3| | |✅|
+|Llama 4| | |✅|
+|Qwen 3| | |✅|
 
 **Device mapping support**
 |Model category|Supported|
@@ -588,6 +614,8 @@ Please submit more benchmarks via raising an issue!
 |Qwen2.5-VL| | | |
 |Gemma 3| | | |
 |Mistral 3| | | |
+|Llama 4| | | |
+|Qwen 3| | | |
 
 **AnyMoE support**
 |Model|AnyMoE|
@@ -615,6 +643,8 @@ Please submit more benchmarks via raising an issue!
 |Qwen2.5-VL| |
 |Gemma 3|✅|
 |Mistral 3|✅|
+|Llama 4| |
+|Qwen 3| |
 
 ### Using derivative model
 
@@ -624,7 +654,7 @@ To use a derivative model, select the model architecture using the correct subco
 - **Quantized**: Quantized model id, quantized filename, and tokenizer id
 - **X-LoRA**: Model id, X-LoRA ordering
 - **X-LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and X-LoRA ordering
-- **LoRA**: Model id, LoRA ordering
+- **LoRA**: Model id
 - **LoRA quantized**: Quantized model id, quantized filename, tokenizer id, and LoRA ordering
 - **Vision Plain**: Model id
 
@@ -662,7 +692,10 @@ If you want to add a new model, please contact us via an issue and we can coordi
     - For non-quantized models, you can specify the data type to load and run in. This must be one of `f32`, `f16`, `bf16` or `auto` to choose based on the device.
 - What is the minimum supported CUDA compute cap?
     - The minimum CUDA compute cap is **5.3**.
-
+- Metal not found (error: unable to find utility "metal", not a developer tool or in PATH)
+    1) Install Xcode: `xcode-select --install`
+    2) Set the active developer directory: `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`
+  
 ## Credits
 This project would not be possible without the excellent work at [`candle`](https://github.com/huggingface/candle). Additionally, thank you to all contributors! Contributing can range from raising an issue or suggesting a feature to adding some new functionality.
 

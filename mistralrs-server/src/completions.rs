@@ -34,9 +34,15 @@ impl std::fmt::Display for ModelErrorMessage {
 }
 impl std::error::Error for ModelErrorMessage {}
 
+enum DoneState {
+    Running,
+    SendingDone,
+    Done,
+}
+
 pub struct Streamer {
     rx: Receiver<Response>,
-    is_done: bool,
+    done_state: DoneState,
     state: Arc<MistralRs>,
 }
 
@@ -44,9 +50,19 @@ impl futures::Stream for Streamer {
     type Item = Result<Event, axum::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.is_done {
-            return Poll::Ready(None);
+        match self.done_state {
+            DoneState::SendingDone => {
+                // https://platform.openai.com/docs/api-reference/completions/create
+                // If true, returns a stream of events that happen during the Run as server-sent events, terminating when the Run enters a terminal state with a data: [DONE] message.
+                self.done_state = DoneState::Done;
+                return Poll::Ready(Some(Ok(Event::default().data("[DONE]"))));
+            }
+            DoneState::Done => {
+                return Poll::Ready(None);
+            }
+            DoneState::Running => (),
         }
+
         match self.rx.poll_recv(cx) {
             Poll::Ready(Some(resp)) => match resp {
                 Response::CompletionModelError(msg, _) => {
@@ -54,7 +70,8 @@ impl futures::Stream for Streamer {
                         self.state.clone(),
                         &ModelErrorMessage(msg.to_string()),
                     );
-                    self.is_done = true;
+                    // Done now, just need to send the [DONE]
+                    self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))
                 }
                 Response::ValidationError(e) => {
@@ -66,7 +83,8 @@ impl futures::Stream for Streamer {
                 }
                 Response::CompletionChunk(response) => {
                     if response.choices.iter().all(|x| x.finish_reason.is_some()) {
-                        self.is_done = true;
+                        // Done now, just need to send the [DONE]
+                        self.done_state = DoneState::SendingDone;
                     }
                     MistralRs::maybe_log_response(self.state.clone(), &response);
                     Poll::Ready(Some(Event::default().json_data(response)))
@@ -208,11 +226,11 @@ fn parse_request(
                 Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
                 None => Constraint::None,
             },
-            adapters: oairequest.adapters,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
             logits_processors: None,
             return_raw_logits: false,
+            web_search_options: None,
         }),
         is_streaming,
     ))
@@ -256,7 +274,7 @@ pub async fn completions(
     if is_streaming {
         let streamer = Streamer {
             rx,
-            is_done: false,
+            done_state: DoneState::Running,
             state,
         };
 

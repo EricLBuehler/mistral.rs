@@ -12,7 +12,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Fast and easy LLM serving."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -23,9 +23,16 @@ license = "MIT"
 rust-version = "1.82"
 
 [workspace.dependencies]
+candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb2d8f5" }
+candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb2d8f5" }
+candle-flash-attn-v3 = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb2d8f5" }
+candle-flash-attn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "cb2d8f5" }
+# candle-core = { path = "../candle/candle-core" }
+# candle-nn = { path = "../candle/candle-nn" }
+# candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3" }
+# candle-flash-attn = { path = "../candle/candle-flash-attn" }
+
 anyhow = "1.0.80"
-candle-core = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "496a8d2b" }
-candle-nn = { git = "https://github.com/EricLBuehler/candle.git", version = "0.8.0", rev = "496a8d2b" }
 serde = "1.0.197"
 serde_json = "1.0.114"
 indexmap = { version = "2.2.5", features = ["serde"] }
@@ -36,8 +43,8 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 futures = "0.3"
 clap = { version = "4.5.1", features = ["derive", "wrap_help"] }
-pyo3 = { version = "0.22.4", features = ["full", "extension-module", "either"] }
-tokio = { version = "1.36.0", features = ["full", "rt-multi-thread"] }
+pyo3 = { version = "0.24.1", features = ["full", "extension-module", "either"] }
+tokio = { version = "1.44.2", features = ["full", "rt-multi-thread"] }
 once_cell = "1.19.0"
 # All features but avif, avif increases the msrv dramatically
 image = { version = "0.25.1", default-features = false, features = ['bmp', 'dds', 'exr', 'ff', 'gif', 'hdr', 'ico', 'jpeg', 'png', 'pnm', 'qoi', 'tga', 'tiff', 'webp']}
@@ -53,3 +60,8 @@ metal = { version = "0.27.0", features = ["mps"] }
 safetensors = "0.4.5"
 toml = "0.8.12"
 hf-hub = { version = "0.4.1", default-features = false, features = ["ureq", "tokio", "rustls-tls"] }
+itertools = "0.13.0"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

@@ -1,6 +1,17 @@
 # Chat templates and tokenizer customization
 
-## Chat templates
+## JINJA chat templates (recommended method)
+Some models do not come with support for tool calling or other features, and as such it might be necessary to specify your own chat template.
+
+We provide some chat templates [here](../chat_templates/), and it is easy to modify or create others to customize chat template behavior.
+
+To use this, add the `jinja-explicit` parameter to the various APIs
+
+```bash
+./mistralrs-server --port 1234 --isq q4k --jinja-explicit chat_templates/mistral_small_tool_call.jinja vision-plain -m mistralai/Mistral-Small-3.1-24B-Instruct-2503 -a mistral3  
+```
+
+## Chat template overrides
 Mistral.rs attempts to automatically load a chat template from the `tokenizer_config.json` file. This enables high flexibility across instruction-tuned models and ensures accurate chat templating. However, if the `chat_template` field is missing, then a JINJA chat template should be provided. The JINJA chat template may use `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
 
 We provide some chat templates [here](../chat_templates/), and it is easy to modify or create others to customize chat template behavior.
@@ -8,7 +19,7 @@ We provide some chat templates [here](../chat_templates/), and it is easy to mod
 For example, to use the `chatml` template, `--chat-template` is specified *before* the model architecture. For example:
 
 ```bash
-./mitralrs-server --port 1234 --log output.log --chat-template ./chat_templates/chatml.json llama
+./mistralrs-server --port 1234 --log output.log --chat-template ./chat_templates/chatml.json plain -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
 > Note: For GGUF models, the chat template may be loaded directly from the GGUF file by omitting any other chat template sources.

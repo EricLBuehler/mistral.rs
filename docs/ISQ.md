@@ -6,7 +6,24 @@ An API is exposed on the Python and Rust APIs which provide the ability to dynam
 
 To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md).
 
+> Note: 🔥 AFQ (affine) quantization is designed to be fast on **Metal** but is only supported on Metal.
+
+## Automatic ISQ
+Automatic ISQ is an opt-in feature that selects the most accurate and fastest quantization method for the platform.
+
+If the provided ISQ value is a valid integer (one of 2, 3, 4, 5, 6, or 8), the best quantization type for the platform will be chosen.
+Note that the fallback is always a Q/K quantization. On Metal, for 2, 3, 4, 6, or 8 bits, fast AFQ is used.
+
+```
+cargo run --release --features ... -- -i --isq 4 plain -m meta-llama/Llama-3.2-3B-Instruct
+```
+
 ## ISQ quantization types
+- AFQ2 (*AFQ is only available on Metal*)
+- AFQ3
+- AFQ4
+- AFQ6
+- AFQ8
 - Q4_0
 - Q4_1
 - Q5_0
@@ -22,6 +39,10 @@ To set the ISQ type for individual layers, use a model [`topology`](TOPOLOGY.md)
 - HQQ4
 - HQQ8
 - FP8
+
+```
+cargo run --release --features ... -- -i --isq q4k plain -m meta-llama/Llama-3.2-3B-Instruct
+```
 
 When using ISQ, it will automatically load ISQ-able weights into CPU memory before applying ISQ. The ISQ application process moves the weights to device memory. This process is implemented to avoid memory spikes from loading the model in full precision.
 

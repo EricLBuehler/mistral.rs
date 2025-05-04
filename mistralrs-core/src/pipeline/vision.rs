@@ -2,11 +2,11 @@ use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::ImatrixDataSource;
 use super::isq::UqffFullSer;
 use super::{
-    get_model_paths, get_xlora_paths, AdapterActivationMixin, AnyMoePipelineMixin, CacheManager,
+    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManager,
     CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader, GeneralMetadata,
     IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths,
-    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlamaLoader,
-    VisionModel, VisionModelLoader, VisionPromptPrefixer, XLoraPaths,
+    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, TokenSource, VLlama4Loader,
+    VLlamaLoader, VisionModel, VisionModelLoader, VisionPromptPrefixer,
 };
 use super::{
     Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Mistral3Loader, Phi3VLoader,
@@ -16,7 +16,7 @@ use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
-use crate::pipeline::llg::build_tok_env;
+use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::make_prompt_chunk;
 use crate::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
@@ -31,13 +31,14 @@ use crate::vision_models::ModelInputs;
 use crate::{
     api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
     vision_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, Ordering,
-    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
+use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
-use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
+use mistralrs_quant::{AfqLayer, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -86,7 +87,10 @@ pub struct VisionLoader {
     xlora_order: Option<Ordering>,
     token_source: RwLock<Option<TokenSource>>,
     revision: RwLock<Option<String>>,
-    from_uqff: RwLock<Option<PathBuf>>,
+    from_uqff: RwLock<Option<Vec<PathBuf>>>,
+    jinja_explicit: Option<String>,
+    hf_cache_path: Option<PathBuf>,
+    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -97,6 +101,9 @@ pub struct VisionLoaderBuilder {
     kind: ModelKind,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
+    jinja_explicit: Option<String>,
+    hf_cache_path: Option<PathBuf>,
+    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -106,10 +113,11 @@ pub struct VisionSpecificConfig {
     pub prompt_chunksize: Option<NonZeroUsize>,
     pub topology: Option<Topology>,
     pub write_uqff: Option<PathBuf>,
-    pub from_uqff: Option<PathBuf>,
+    pub from_uqff: Option<Vec<PathBuf>>,
     pub max_edge: Option<u32>,
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
+    pub hf_cache_path: Option<PathBuf>,
 }
 
 impl VisionLoaderBuilder {
@@ -118,14 +126,31 @@ impl VisionLoaderBuilder {
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         model_id: Option<String>,
+        jinja_explicit: Option<String>,
     ) -> Self {
         Self {
             config,
             chat_template,
             tokenizer_json,
             model_id,
+            jinja_explicit,
             kind: ModelKind::Normal,
+            hf_cache_path: None,
+            ..Default::default()
         }
+    }
+
+    pub fn hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
+        self.hf_cache_path = Some(hf_cache_path);
+        self
+    }
+
+    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
+        self.kind = ModelKind::Adapter {
+            adapter: AdapterKind::Lora,
+        };
+        self.lora_adapter_ids = Some(lora_adapter_ids);
+        self
     }
 
     pub fn build(self, loader: VisionLoaderType) -> Box<dyn Loader> {
@@ -142,6 +167,7 @@ impl VisionLoaderBuilder {
             VisionLoaderType::Qwen2_5VL => Box::new(Qwen2_5VLLoader),
             VisionLoaderType::Gemma3 => Box::new(Gemma3Loader),
             VisionLoaderType::Mistral3 => Box::new(Mistral3Loader),
+            VisionLoaderType::Llama4 => Box::new(VLlama4Loader),
         };
         Box::new(VisionLoader {
             inner: loader,
@@ -152,9 +178,12 @@ impl VisionLoaderBuilder {
             tokenizer_json: self.tokenizer_json,
             xlora_model_id: None,
             xlora_order: None,
+            jinja_explicit: self.jinja_explicit,
             token_source: RwLock::new(None),
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
+            hf_cache_path: self.hf_cache_path,
+            lora_adapter_ids: self.lora_adapter_ids,
         })
     }
 }
@@ -172,6 +201,13 @@ impl Loader for VisionLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let cache = self
+            .hf_cache_path
+            .clone()
+            .map(Cache::new)
+            .unwrap_or_default();
+        GLOBAL_HF_CACHE.get_or_init(|| cache);
+
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
             &token_source,
@@ -250,7 +286,7 @@ impl Loader for VisionLoader {
                 if let Some(serialized) = &*self.from_uqff.read().unwrap() {
                     let weight_pack_factor = {
                         let ser_artifacts = unsafe {
-                            candle_core::safetensors::MmapedSafetensors::new(serialized)?
+                            candle_core::safetensors::MmapedSafetensors::multi(serialized)?
                         };
                         let mut total_pack_factors = 0;
                         let total_tensors = ser_artifacts.tensors().len();
@@ -270,6 +306,10 @@ impl Loader for VisionLoader {
                                 }
                                 QuantizedSerdeType::Fp8 => IsqType::F8E4M3.pack_factor(dtype),
                                 QuantizedSerdeType::Unquant => 1,
+                                QuantizedSerdeType::Afq => {
+                                    AfqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
+                                        .pack_factor(dtype)
+                                }
                             };
                             total_pack_factors += pack_factor;
                         }
@@ -396,8 +436,8 @@ impl Loader for VisionLoader {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
-                &load_device,
                 &available_devices,
+                silent,
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
@@ -474,8 +514,9 @@ impl Loader for VisionLoader {
         });
         let chat_template = get_chat_template(
             paths,
+            &self.jinja_explicit,
             &paths
-                .get_chat_template_json()
+                .get_chat_template_explicit()
                 .as_ref()
                 .map(|x| x.to_string_lossy().to_string())
                 .clone(),
@@ -487,7 +528,7 @@ impl Loader for VisionLoader {
             let calibration_data = std::fs::read_to_string(calibration_file)?;
             // Tokenize, don't add bos yet
             let tokens = tokenizer
-                .encode(calibration_data, false)
+                .encode_fast(calibration_data, false)
                 .map_err(anyhow::Error::msg)?
                 .get_ids()
                 .to_vec();
@@ -513,8 +554,16 @@ impl Loader for VisionLoader {
                 let chunk_len = chunk.len();
 
                 let start = Instant::now();
-                let inputs =
-                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None, None)?;
+                let inputs = make_prompt_chunk(
+                    0,
+                    vec![&chunk],
+                    &[0],
+                    &load_device,
+                    None,
+                    false,
+                    None,
+                    None,
+                )?;
                 let _ = model.forward(
                     &inputs.input,
                     None, // NOTE: We ONLY calibrate the text bits of these models!!
@@ -614,7 +663,7 @@ impl Loader for VisionLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let tok_env = build_tok_env(tokenizer.clone());
+        let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
@@ -629,7 +678,7 @@ impl Loader for VisionLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_env: Some(tok_env),
+                llg_factory: Some(llg_factory),
                 is_xlora: false,
                 num_hidden_layers,
                 eos_tok: eos,
@@ -747,12 +796,6 @@ impl CacheManagerMixin for VisionPipeline {
     }
 }
 
-impl AdapterActivationMixin for VisionPipeline {
-    fn activate_adapters(&mut self, _adapters: Vec<String>) -> Result<usize> {
-        anyhow::bail!("Vision models do not support adapter activation.");
-    }
-}
-
 impl MetadataMixin for VisionPipeline {
     fn device(&self) -> Device {
         self.model.device().clone()
@@ -802,20 +845,6 @@ impl Pipeline for VisionPipeline {
             }
             (None, None) => None,
         };
-        #[cfg(feature = "metal")]
-        let logits = objc::rc::autoreleasepool(|| {
-            self.model.forward(
-                &input_ids,
-                pixel_values,
-                &seqlen_offsets,
-                context_lens,
-                position_ids,
-                model_specific_args,
-                paged_attn_meta,
-                &flash_meta,
-            )
-        })?;
-        #[cfg(not(feature = "metal"))]
         let logits = self.model.forward(
             &input_ids,
             pixel_values,
@@ -887,7 +916,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let model_id = Path::new(&model_id);
 
             let api = {
-                let mut api = ApiBuilder::new()
+                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
                 if let Ok(x) = std::env::var("HF_HUB_CACHE") {
@@ -942,7 +972,8 @@ impl AnyMoePipelineMixin for VisionPipeline {
             let model_id = Path::new(&gate_model_id);
 
             let api = {
-                let mut api = ApiBuilder::new()
+                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
                 if let Ok(x) = std::env::var("HF_HUB_CACHE") {

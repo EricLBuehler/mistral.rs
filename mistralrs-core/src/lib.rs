@@ -1,8 +1,10 @@
 #![deny(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 use candle_core::Device;
-use cublaslt::setup_cublas_lt_wrapper;
 use engine::Engine;
-pub use engine::{EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP};
+pub use engine::{
+    BertEmbeddingModel, EngineInstruction, ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
+};
+use hf_hub::Cache;
 pub use lora::Ordering;
 pub use pipeline::ModelCategory;
 pub use pipeline::Pipeline;
@@ -10,6 +12,7 @@ pub use pipeline::Pipeline;
 use pyo3::exceptions::PyValueError;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::sync::OnceLock;
 use std::time::Instant;
 use std::{
     cell::RefCell,
@@ -36,15 +39,16 @@ mod ops;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
 };
+mod search;
 
 mod model_selected;
 pub use model_selected::ModelSelected;
 pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 mod amoe;
-mod cublaslt;
 #[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
 mod dummy_paged_attention;
+mod embedding;
 mod gguf;
 pub mod layers;
 mod layers_masker;
@@ -76,7 +80,7 @@ pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
-pub use mistralrs_quant::IsqType;
+pub use mistralrs_quant::{IsqType, MULTI_LORA_DELIMITER};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig};
 pub use pipeline::{
     chat_template::ChatTemplate, parse_isq_value, AnyMoeLoader, AnyMoePipeline,
@@ -88,11 +92,12 @@ pub use pipeline::{
     NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
     Phi3VLoader, Qwen2Loader, SpeculativeConfig, SpeculativeLoader, SpeculativePipeline,
     Starcoder2Loader, TokenSource, VisionLoader, VisionLoaderBuilder, VisionLoaderType,
-    VisionPromptPrefixer, VisionSpecificConfig,
+    VisionPromptPrefixer, VisionSpecificConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
-    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
-    MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
+    ApproximateUserLocation, Constraint, DetokenizationRequest, ImageGenerationResponseFormat,
+    LlguidanceGrammar, MessageContent, NormalRequest, Request, RequestMessage, TokenizationRequest,
+    WebSearchOptions, WebSearchUserLocation,
 };
 pub use response::*;
 pub use sampler::{
@@ -116,6 +121,7 @@ pub use llguidance;
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
+pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 static ENGINE_ID: AtomicUsize = AtomicUsize::new(0);
 
 pub struct MistralRsConfig {
@@ -151,6 +157,7 @@ struct RebootState {
     prefix_cache_n: usize,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
+    search_embedding_model: Option<BertEmbeddingModel>,
 }
 
 #[derive(Debug)]
@@ -186,11 +193,17 @@ pub struct MistralRsBuilder {
     no_prefix_cache: Option<bool>,
     prefix_cache_n: Option<usize>,
     disable_eos_stop: Option<bool>,
-    throughput_logging_enabled: Option<()>,
+    throughput_logging_enabled: bool,
+    search_embedding_model: Option<BertEmbeddingModel>,
 }
 
 impl MistralRsBuilder {
-    pub fn new(pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>, method: SchedulerConfig) -> Self {
+    pub fn new(
+        pipeline: Arc<tokio::sync::Mutex<dyn Pipeline>>,
+        method: SchedulerConfig,
+        throughput_logging: bool,
+        search_embedding_model: Option<BertEmbeddingModel>,
+    ) -> Self {
         Self {
             pipeline,
             method,
@@ -200,7 +213,8 @@ impl MistralRsBuilder {
             no_prefix_cache: None,
             prefix_cache_n: None,
             disable_eos_stop: None,
-            throughput_logging_enabled: None,
+            throughput_logging_enabled: throughput_logging,
+            search_embedding_model,
         }
     }
     pub fn with_log(mut self, log: String) -> Self {
@@ -231,10 +245,6 @@ impl MistralRsBuilder {
         self.disable_eos_stop = Some(disable_eos_stop);
         self
     }
-    pub fn with_throughput_logging(mut self) -> Self {
-        self.throughput_logging_enabled = Some(());
-        self
-    }
 
     pub fn build(self) -> Arc<MistralRs> {
         MistralRs::new(self)
@@ -262,17 +272,19 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
+            search_embedding_model,
         } = config;
 
         let category = pipeline.try_lock().unwrap().category();
-        setup_cublas_lt_wrapper(get_mut_arcmutex!(pipeline).device());
+        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(
+            get_mut_arcmutex!(pipeline).device(),
+        );
 
         let truncate_sequence = truncate_sequence.unwrap_or(false);
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
         let prefix_cache_n = prefix_cache_n.unwrap_or(16);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
-        let throughput_logging_enabled = throughput_logging_enabled.is_some();
 
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
@@ -283,6 +295,7 @@ impl MistralRs {
             prefix_cache_n,
             disable_eos_stop,
             throughput_logging_enabled,
+            search_embedding_model: search_embedding_model.clone(),
         };
 
         let (tx, rx) = channel(10_000);
@@ -299,21 +312,47 @@ impl MistralRs {
         };
 
         let engine_handler = thread::spawn(move || {
-            let rt = Runtime::new().unwrap();
-            rt.block_on(async move {
-                let mut engine = Engine::new(
-                    rx,
-                    pipeline,
-                    method,
-                    truncate_sequence,
-                    no_kv_cache,
-                    no_prefix_cache,
-                    prefix_cache_n,
-                    disable_eos_stop,
-                    throughput_logging_enabled,
-                );
-                engine.run().await;
+            #[cfg(feature = "metal")]
+            objc::rc::autoreleasepool(move || {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let engine = Engine::new(
+                        rx,
+                        pipeline,
+                        method,
+                        truncate_sequence,
+                        no_kv_cache,
+                        no_prefix_cache,
+                        prefix_cache_n,
+                        disable_eos_stop,
+                        throughput_logging_enabled,
+                        search_embedding_model,
+                    )
+                    .expect("Engine creation failed.");
+                    Arc::new(engine).run().await;
+                })
             });
+
+            #[cfg(not(feature = "metal"))]
+            {
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let engine = Engine::new(
+                        rx,
+                        pipeline,
+                        method,
+                        truncate_sequence,
+                        no_kv_cache,
+                        no_prefix_cache,
+                        prefix_cache_n,
+                        disable_eos_stop,
+                        throughput_logging_enabled,
+                        search_embedding_model,
+                    )
+                    .expect("Engine creation failed.");
+                    Arc::new(engine).run().await;
+                })
+            }
         });
 
         let engine_id = ENGINE_ID.fetch_add(1, atomic::Ordering::SeqCst);
@@ -335,7 +374,6 @@ impl MistralRs {
                             let mut req: Request = serde_json::from_str(&buf).unwrap();
 
                             req = match req {
-                                Request::ActivateAdapters(x) => Request::ActivateAdapters(x),
                                 Request::ReIsq(x) => Request::ReIsq(x),
                                 Request::Terminate => Request::Terminate,
                                 Request::Detokenize(mut x) => {
@@ -412,11 +450,11 @@ impl MistralRs {
                     is_streaming: false,
                     constraint: Constraint::None,
                     suffix: None,
-                    adapters: None,
                     tool_choice: None,
                     tools: None,
                     logits_processors: None,
                     return_raw_logits: false,
+                    web_search_options: None,
                 });
                 info!("Beginning dummy run.");
                 let start = Instant::now();
@@ -443,7 +481,7 @@ impl MistralRs {
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!")
                 .as_secs(),
-            next_request_id: Mutex::new(RefCell::new(0)),
+            next_request_id: Mutex::new(RefCell::new(1)),
             reboot_state,
             engine_handler: RwLock::new(engine_handler),
             category,
@@ -473,7 +511,7 @@ impl MistralRs {
             let new_engine_handler = thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
-                    let mut engine = Engine::new(
+                    let engine = Engine::new(
                         rx,
                         reboot_state.pipeline.clone(),
                         reboot_state.method,
@@ -483,8 +521,10 @@ impl MistralRs {
                         reboot_state.prefix_cache_n,
                         reboot_state.disable_eos_stop,
                         reboot_state.throughput_logging_enabled,
-                    );
-                    engine.run().await;
+                        reboot_state.search_embedding_model,
+                    )
+                    .expect("Engine creation failed");
+                    Arc::new(engine).run().await;
                 });
             });
             *sender_lock = new_sender;

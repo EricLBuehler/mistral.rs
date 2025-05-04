@@ -1,6 +1,28 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator
+from typing import Iterator, Literal, Optional
+
+class SearchContextSize(Enum):
+    Low = "low"
+    Medium = "medium"
+    High = "high"
+
+@dataclass
+class ApproximateUserLocation:
+    city: str
+    country: str
+    region: str
+    timezone: str
+
+@dataclass
+class WebSearchUserLocation:
+    type: Literal["approximate"]
+    approximate: ApproximateUserLocation
+
+@dataclass
+class WebSearchOptions:
+    search_context_size: Optional[SearchContextSize]
+    user_location: Optional[WebSearchUserLocation]
 
 @dataclass
 class ToolChoice(Enum):
@@ -34,11 +56,12 @@ class ChatCompletionRequest:
     top_k: int | None = None
     grammar: str | None = None
     grammar_type: str | None = None
-    adapters: list[str] | None = None
     min_p: float | None = None
     min_p: float | None = None
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
+    web_search_options: WebSearchOptions | None = None
+    enable_thinking: bool | None = None
 
 @dataclass
 class CompletionRequest:
@@ -63,7 +86,6 @@ class CompletionRequest:
     suffix: str | None = None
     grammar: str | None = None
     grammar_type: str | None = None
-    adapters: list[str] | None = None
     min_p: float | None = None
     tool_schemas: list[str] | None = None
     tool_choice: ToolChoice | None = None
@@ -81,6 +103,8 @@ class Architecture(Enum):
     Phi3_5MoE = "phi3.5moe"
     DeepseekV2 = "deepseekv2"
     DeepseekV3 = "deepseekv3"
+    Qwen3 = "qwen3"
+    Qwen3Moe = "qwen3moe"
 
 @dataclass
 class VisionArchitecture(Enum):
@@ -96,6 +120,7 @@ class VisionArchitecture(Enum):
     Qwen2_5VL = "qwen2_5vl"
     Gemma3 = "gemma3"
     Mistral3 = "mistral3"
+    Llama4 = "llama4"
 
 @dataclass
 class DiffusionArchitecture(Enum):
@@ -156,11 +181,13 @@ class Which(Enum):
         tokenizer_json: str | None = None
         topology: str | None = None
         organization: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
         calibration_file: str | None = None
         imatrix: str | None = None
+        hf_cache_path: str | None = None
 
     @dataclass
     class XLora:
@@ -171,21 +198,24 @@ class Which(Enum):
         tokenizer_json: str | None = None
         tgt_non_granular_index: int | None = None
         topology: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
+        hf_cache_path: str | None = None
 
     @dataclass
     class Lora:
-        adapters_model_id: str
-        order: str
+        adapter_model_id: str
         arch: Architecture | None = None
         model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = (None,)
+        hf_cache_path: str | None = None
 
     @dataclass
     class GGUF:
@@ -262,12 +292,14 @@ class Which(Enum):
         arch: VisionArchitecture
         tokenizer_json: str | None = None
         topology: str | None = None
+        from_uqff: str | list[str] | None = None
         write_uqff: str | None = None
         dtype: ModelDType = ModelDType.Auto
         max_edge: int | None = None
         auto_map_params: VisionAutoMapParams | None = (None,)
         calibration_file: str | None = None
         imatrix: str | None = None
+        hf_cache_path: str | None = None
 
     @dataclass
     class DiffusionPlain:
@@ -286,6 +318,7 @@ class Runner:
         speculative_gamma: int = 32,
         which_draft: Which | None = None,
         chat_template: str | None = None,
+        jinja_explicit: str | None = None,
         num_device_layers: list[str] | None = None,
         in_situ_quant: str | None = None,
         anymoe_config: AnyMoeConfig | None = None,
@@ -295,6 +328,8 @@ class Runner:
         paged_attn: bool = False,
         prompt_batchsize: int | None = None,
         seed: int | None = None,
+        search_bert_model: str | None = None,
+        no_bert_model: bool = False,
     ) -> None:
         """
         Load a model.
@@ -309,9 +344,10 @@ class Runner:
             the target model. If `which_draft` is not specified, this is ignored.
         - `which_draft` specifies which draft model to load. Setting this parameter will cause a speculative decoding model to be loaded,
             with `which` as the target (higher quality) model and `which_draft` as the draft (lower quality) model.
-        - `chat_template` specifies an optional JINJA chat template.
-            The JINJA template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
+        - `chat_template` specifies an optional JINJA chat template as a JSON file.
+            This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
             It is used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
+        - `jinja_explicit` allows an explicit JINJA chat template file to be used. If specified, this overrides all other chat templates.
         - `num_device_layers` sets the number of layers to load and run on each device.
             Each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
             the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
@@ -334,6 +370,8 @@ class Runner:
         - `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
         - `prompt_batchsize` Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
         - `seed`, used to ensure reproducible random number generation.
+        - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
+        - `search_bert_model`: specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
         """
         ...
 
@@ -366,17 +404,16 @@ class Runner:
         Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
         """
 
-    def activate_adapters(self, adapter_names: list[str]) -> None:
-        """
-        Send a request to make the specified adapters the active adapters for the model.
-        """
-
-    def tokenize_text(self, text: str, add_speial_tokens: bool) -> list[int]:
+    def tokenize_text(
+        self, text: str, add_special_tokens: bool, enable_thinking: bool | None = None
+    ) -> list[int]:
         """
         Tokenize some text, returning raw tokens.
+
+        `enable_thinking` enables thinking for models that support this configuration.
         """
 
-    def detokenize_text(self, tokens: list[int], skip_speial_tokens: bool) -> str:
+    def detokenize_text(self, tokens: list[int], skip_special_tokens: bool) -> str:
         """
         Detokenize some tokens, returning text.
         """

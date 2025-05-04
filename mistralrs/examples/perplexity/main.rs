@@ -45,11 +45,11 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
         id: 0,
         constraint: Constraint::None,
         suffix: None,
-        adapters: None,
         tools: None,
         tool_choice: None,
         logits_processors: None,
         return_raw_logits: true,
+        web_search_options: None,
     });
 
     runner.get_sender()?.send(request).await?;
@@ -92,10 +92,10 @@ async fn main() -> Result<()> {
 
     let text = read_to_string(&args.file)?;
     let tokens = model
-        .tokenize(Either::Right(text), None, false, false)
+        .tokenize(Either::Right(text), None, false, false, None)
         .await?;
     let bos_token = model
-        .tokenize(Either::Right(" ".to_string()), None, true, false)
+        .tokenize(Either::Right(" ".to_string()), None, true, false, None)
         .await?[0];
     let inner = model.inner();
 

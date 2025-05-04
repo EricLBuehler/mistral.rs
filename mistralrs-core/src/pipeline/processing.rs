@@ -37,12 +37,24 @@ pub trait Processor {
         messages: Vec<IndexMap<String, MessageContent>>,
         add_generation_prompt: bool,
         add_special_tokens: bool,
+        enable_thinking: Option<bool>,
         tools: Vec<Tool>,
     ) -> Result<(Vec<u32>, String)> {
+        // for message in messages.iter_mut() {
+        //     if message["role"].as_ref().left().is_some_and(|x| x == "tool") {
+        //         message["role"] = Either::Left("ipython".to_string());
+        //         message["content"] = Either::Left(format!(
+        //             "{{\"output\": \"{}\"}}",
+        //             message["content"].as_ref().unwrap_left()
+        //         ));
+        //     }
+        // }
+
         let prompt = apply_chat_template(
             pipeline,
             messages,
             add_generation_prompt,
+            enable_thinking,
             self.template_action(),
             tools,
         )?;
@@ -51,7 +63,7 @@ pub trait Processor {
             .with_context(|| {
                 "Default `Processor::process` requires the model to have a tokenizer."
             })?
-            .encode(prompt.clone(), add_special_tokens)
+            .encode_fast(prompt.clone(), add_special_tokens)
             .map_err(anyhow::Error::msg)?;
         Ok((encoding.get_ids().to_vec(), prompt))
     }
@@ -64,6 +76,7 @@ pub(crate) fn apply_chat_template(
     pipeline: &dyn Pipeline,
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
+    enable_thinking: Option<bool>,
     action: MessagesAction,
     tools: Vec<Tool>,
 ) -> Result<String> {
@@ -137,6 +150,7 @@ pub(crate) fn apply_chat_template(
     apply_chat_template_to(
         messages,
         add_generation_prompt,
+        enable_thinking,
         template,
         bos_tok,
         eos_tok,

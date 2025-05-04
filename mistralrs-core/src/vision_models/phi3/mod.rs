@@ -8,7 +8,9 @@ use candle_core::{
     shape::ShapeWithOneHole, DType, Device, IndexOp, Module, Result, Shape, Tensor, D,
 };
 use either::Either;
-use mistralrs_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder};
+use mistralrs_quant::{
+    BitWiseOp, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder,
+};
 use std::{any::Any, collections::HashMap, fmt::Debug, sync::Arc};
 
 use crate::{
@@ -21,7 +23,6 @@ use crate::{
         PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     layers_masker::PastKvLenCache,
-    ops::{BitWiseOp, NonZeroOp},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -972,6 +973,7 @@ impl Model {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let vision_embed_tokens = ImageEmbedding::new(
             cfg,

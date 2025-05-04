@@ -3,7 +3,6 @@ mod normal_loaders;
 mod vision_loaders;
 
 use std::{
-    collections::HashMap,
     fmt::{self, Debug, Display},
     path::PathBuf,
     str::FromStr,
@@ -20,14 +19,15 @@ use tokio::sync::Mutex;
 pub use normal_loaders::{
     AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
     MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
-    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Starcoder2Loader,
+    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
+    Qwen3MoELoader, Starcoder2Loader,
 };
 
 use tracing::{info, warn};
 pub use vision_loaders::{
     Gemma3Loader, Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, MiniCpmOLoader,
-    Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, VLlamaLoader,
-    VisionLoaderType, VisionModel, VisionModelLoader,
+    Mistral3Loader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, VLlama4Loader,
+    VLlamaLoader, VisionLoaderType, VisionModel, VisionModelLoader,
 };
 
 pub use diffusion_loaders::{
@@ -36,17 +36,15 @@ pub use diffusion_loaders::{
 };
 
 use crate::{
-    lora::LoraConfig,
     paged_attention::{
         calculate_cache_config, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
     },
     utils::debug::DeviceRepr,
-    xlora_models::XLoraConfig,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryUsage, Ordering,
-    PagedAttentionConfig, TryIntoDType,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, MemoryUsage, PagedAttentionConfig,
+    TryIntoDType,
 };
 
-use super::Pipeline;
+use super::{paths::AdapterPaths, Pipeline};
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -69,26 +67,8 @@ pub trait ModelPaths: AsAny + Debug + Send + Sync {
     /// [`ChatTemplate`]: crate::ChatTemplate
     fn get_template_filename(&self) -> &Option<PathBuf>;
 
-    /// Optional adapter files. `(String, PathBuf)` is of the form `(id name, path)`.
-    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>>;
-
-    /// Configuration of optional adapters. `(String, String)` is of the form `(id name, name)`.
-    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>>;
-
-    /// Filepath for the XLORA classifier
-    fn get_classifier_path(&self) -> &Option<PathBuf>;
-
-    /// `XLoraConfig` for the XLORA classifier
-    fn get_classifier_config(&self) -> &Option<XLoraConfig>;
-
-    /// Return the defined ordering of adapters and layers within the model.
-    fn get_ordering(&self) -> &Option<Ordering>;
-
     /// Filepath for general model configuration.
     fn get_gen_conf_filename(&self) -> Option<&PathBuf>;
-
-    /// Information for preloading LoRA adapters (adapter name, the weight file, and the config).
-    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>>;
 
     /// Get the preprocessor config (for the vision models). This is used to pre process images.
     fn get_preprocessor_config(&self) -> &Option<PathBuf>;
@@ -96,8 +76,11 @@ pub trait ModelPaths: AsAny + Debug + Send + Sync {
     /// Get the processor config (for the vision models). This is primarily used for the chat template.
     fn get_processor_config(&self) -> &Option<PathBuf>;
 
-    /// Get the explicit chat template. If specified, this overwrites anything in the tokenizer_config.json
-    fn get_chat_template_json(&self) -> &Option<PathBuf>;
+    /// Get the explicit chat template.
+    fn get_chat_template_explicit(&self) -> &Option<PathBuf>;
+
+    /// Get adapter paths.
+    fn get_adapter_paths(&self) -> &AdapterPaths;
 }
 
 #[derive(Clone, Debug)]
@@ -107,13 +90,8 @@ pub struct LocalModelPaths<P: Debug> {
     pub config_filename: P,
     pub template_filename: Option<P>,
     pub filenames: Vec<P>,
-    pub xlora_adapter_filenames: Option<Vec<(String, P)>>,
-    pub xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
-    pub classifier_path: Option<P>,
-    pub classifier_config: Option<XLoraConfig>,
-    pub xlora_ordering: Option<Ordering>,
+    pub adapter_paths: AdapterPaths,
     pub gen_conf: Option<P>,
-    pub lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
     pub preprocessor_config: Option<P>,
     pub processor_config: Option<P>,
     pub chat_template_json_filename: Option<P>,
@@ -126,13 +104,8 @@ impl<P: Debug> LocalModelPaths<P> {
         config_filename: P,
         template_filename: P,
         filenames: Vec<P>,
-        xlora_adapter_filenames: Option<Vec<(String, P)>>,
-        xlora_adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
-        classifier_path: Option<P>,
-        classifier_config: Option<XLoraConfig>,
-        xlora_ordering: Option<Ordering>,
+        adapter_paths: AdapterPaths,
         gen_conf: Option<P>,
-        lora_preload_adapter_info: Option<HashMap<String, (P, LoraConfig)>>,
         preprocessor_config: Option<P>,
         processor_config: Option<P>,
         chat_template_json_filename: Option<P>,
@@ -142,13 +115,8 @@ impl<P: Debug> LocalModelPaths<P> {
             config_filename,
             template_filename: Some(template_filename),
             filenames,
-            xlora_adapter_filenames,
-            xlora_adapter_configs,
-            classifier_path,
-            classifier_config,
-            xlora_ordering,
+            adapter_paths,
             gen_conf,
-            lora_preload_adapter_info,
             preprocessor_config,
             processor_config,
             chat_template_json_filename,
@@ -166,29 +134,11 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
     fn get_weight_filenames(&self) -> &[PathBuf] {
         &self.filenames
     }
-    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
-        &self.xlora_adapter_filenames
-    }
-    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>> {
-        &self.xlora_adapter_configs
-    }
-    fn get_classifier_config(&self) -> &Option<XLoraConfig> {
-        &self.classifier_config
-    }
-    fn get_classifier_path(&self) -> &Option<PathBuf> {
-        &self.classifier_path
-    }
-    fn get_ordering(&self) -> &Option<Ordering> {
-        &self.xlora_ordering
-    }
     fn get_template_filename(&self) -> &Option<PathBuf> {
         &self.template_filename
     }
     fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
         self.gen_conf.as_ref()
-    }
-    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>> {
-        &self.lora_preload_adapter_info
     }
     fn get_preprocessor_config(&self) -> &Option<PathBuf> {
         &self.preprocessor_config
@@ -196,8 +146,11 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
     fn get_processor_config(&self) -> &Option<PathBuf> {
         &self.processor_config
     }
-    fn get_chat_template_json(&self) -> &Option<PathBuf> {
+    fn get_chat_template_explicit(&self) -> &Option<PathBuf> {
         &self.chat_template_json_filename
+    }
+    fn get_adapter_paths(&self) -> &AdapterPaths {
+        &self.adapter_paths
     }
 }
 

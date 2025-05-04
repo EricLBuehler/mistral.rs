@@ -11,4 +11,5 @@ pub struct ProcessorConfig {
     pub(crate) image_token: Option<String>,
     pub(crate) patch_size: Option<usize>,
     pub(crate) spatial_merge_size: Option<usize>,
+    pub(crate) pixel_shuffle_ratio: Option<f32>,
 }

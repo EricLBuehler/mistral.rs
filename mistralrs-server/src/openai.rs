@@ -1,12 +1,14 @@
 use either::Either;
-use mistralrs_core::{ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice};
+use mistralrs_core::{
+    ImageGenerationResponseFormat, LlguidanceGrammar, Tool, ToolChoice, ToolType, WebSearchOptions,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, ops::Deref};
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct MessageInnerContent(
-    #[serde(with = "either::serde_untagged")] Either<String, HashMap<String, String>>,
+    #[serde(with = "either::serde_untagged")] pub Either<String, HashMap<String, String>>,
 );
 
 impl Deref for MessageInnerContent {
@@ -29,11 +31,26 @@ impl Deref for MessageContent {
     }
 }
 
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct FunctionCalled {
+    pub name: String,
+    #[serde(alias = "arguments")]
+    pub parameters: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct ToolCall {
+    #[serde(rename = "type")]
+    pub tp: ToolType,
+    pub function: FunctionCalled,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct Message {
-    pub content: MessageContent,
+    pub content: Option<MessageContent>,
     pub role: String,
     pub name: Option<String>,
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -81,6 +98,23 @@ pub enum Grammar {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct JsonSchemaResponseFormat {
+    pub name: String,
+    pub schema: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum ResponseFormat {
+    #[serde(rename = "text")]
+    Text,
+    #[serde(rename = "json_schema")]
+    JsonSchema {
+        json_schema: JsonSchemaResponseFormat,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
     #[schema(example = json!(vec![Message{content:"Why did the crab cross the road?".to_string(), role:"user".to_string(), name: None}]))]
     #[serde(with = "either::serde_untagged")]
@@ -96,6 +130,7 @@ pub struct ChatCompletionRequest {
     #[schema(example = json!(Option::None::<usize>))]
     pub top_logprobs: Option<usize>,
     #[schema(example = 256)]
+    #[serde(alias = "max_completion_tokens")]
     pub max_tokens: Option<usize>,
     #[serde(rename = "n")]
     #[serde(default = "default_1usize")]
@@ -118,14 +153,16 @@ pub struct ChatCompletionRequest {
     pub tools: Option<Vec<Tool>>,
     #[schema(example = json!(Option::None::<ToolChoice>))]
     pub tool_choice: Option<ToolChoice>,
+    #[schema(example = json!(Option::None::<ResponseFormat>))]
+    pub response_format: Option<ResponseFormat>,
+    #[schema(example = json!(Option::None::<WebSearchOptions>))]
+    pub web_search_options: Option<WebSearchOptions>,
 
     // mistral.rs additional
     #[schema(example = json!(Option::None::<usize>))]
     pub top_k: Option<usize>,
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
-    #[schema(example = json!(Option::None::<Vec<String>>))]
-    pub adapters: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
     #[schema(example = json!(Option::None::<f32>))]
@@ -136,6 +173,8 @@ pub struct ChatCompletionRequest {
     pub dry_allowed_length: Option<usize>,
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
+    #[schema(example = json!(Option::None::<bool>))]
+    pub enable_thinking: Option<bool>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -201,8 +240,6 @@ pub struct CompletionRequest {
     pub top_k: Option<usize>,
     #[schema(example = json!(Option::None::<Grammar>))]
     pub grammar: Option<Grammar>,
-    #[schema(example = json!(Option::None::<Vec<String>>))]
-    pub adapters: Option<Vec<String>>,
     #[schema(example = json!(Option::None::<f64>))]
     pub min_p: Option<f64>,
     #[schema(example = json!(Option::None::<f32>))]

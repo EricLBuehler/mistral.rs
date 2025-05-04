@@ -194,13 +194,16 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     sample.push_str(&format!("{image_prompt_string}{}", split_sample[i]));
                 }
 
-                seq.set_initial_prompt(sample.clone());
-                let toks = tokenizer
-                    .encode(sample, false)
-                    .expect("Detokenization failed!");
+                if !seq.multimodal.has_changed_prompt {
+                    seq.set_initial_prompt(sample.clone());
+                    let toks = tokenizer
+                        .encode_fast(sample, false)
+                        .expect("Detokenization failed!");
 
-                let ids = toks.get_ids().to_vec();
-                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                    let ids = toks.get_ids().to_vec();
+                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                    seq.multimodal.has_changed_prompt = true;
+                }
             }
 
             (
@@ -226,7 +229,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
             get_prompt_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,
@@ -243,7 +246,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
             get_completion_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,

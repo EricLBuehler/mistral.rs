@@ -8,7 +8,7 @@ use mistralrs::{
 async fn main() -> Result<()> {
     let model = UqffTextModelBuilder::new(
         "EricB/Phi-3.5-mini-instruct-UQFF",
-        "phi3.5-mini-instruct-q8_0.uqff".into(),
+        vec!["phi3.5-mini-instruct-q8_0.uqff".into()],
     )
     .into_inner()
     .with_isq(IsqType::Q8_0)

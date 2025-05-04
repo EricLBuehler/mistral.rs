@@ -9,10 +9,10 @@ use candle_core::Device;
 use clap::Parser;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, initialize_logging,
-    paged_attn_supported, parse_isq_value, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, IsqType, Loader, LoaderBuilder, MemoryGpuConfig,
-    MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request, SchedulerConfig,
-    TokenSource,
+    paged_attn_supported, parse_isq_value, BertEmbeddingModel, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, IsqType, Loader, LoaderBuilder,
+    MemoryGpuConfig, MistralRs, MistralRsBuilder, ModelSelected, PagedAttentionConfig, Request,
+    SchedulerConfig, TokenSource,
 };
 use openai::{
     ChatCompletionRequest, CompletionRequest, ImageGenerationRequest, Message, ModelObjects,
@@ -86,10 +86,14 @@ struct Args {
     #[arg(long, default_value_t = false)]
     no_kv_cache: bool,
 
-    /// JINJA chat template with `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
+    /// Chat template file with a JINJA file with `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
     /// Used if the automatic deserialization fails. If this ends with `.json` (ie., it is a file) then that template is loaded.
     #[arg(short, long)]
     chat_template: Option<String>,
+
+    /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
+    #[arg(short, long)]
+    jinja_explicit: Option<String>,
 
     /// Source of the token for authentication.
     /// Can be in the formats: `literal:<value>`, `env:<value>`, `path:<value>`, `cache` to use a cached token, or `none` to use no token.
@@ -149,10 +153,6 @@ struct Args {
     #[arg(long = "paged-attn", default_value_t = false)]
     paged_attn: bool,
 
-    /// Enable server throughput logging, supported in the server and with interactive mode
-    #[arg(long = "throughput", default_value_t = false)]
-    throughput_log: bool,
-
     /// Number of tokens to batch the prompt step into. This can help with OOM errors when in the prompt step, but reduces performance.
     #[arg(long = "prompt-batchsize")]
     prompt_chunksize: Option<usize>,
@@ -160,6 +160,18 @@ struct Args {
     /// Use CPU only
     #[arg(long)]
     cpu: bool,
+
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
+    #[arg(long = "enable-search")]
+    enable_search: bool,
+
+    /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
+    #[arg(long = "search-bert-model")]
+    search_bert_model: Option<String>,
+
+    /// Enable thinking for interactive mode and models that support it.
+    #[arg(long = "enable-thinking")]
+    enable_thinking: bool,
 }
 
 #[utoipa::path(
@@ -188,30 +200,6 @@ async fn models(State(state): State<Arc<MistralRs>>) -> Json<ModelObjects> {
 )]
 async fn health() -> &'static str {
     "OK"
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
-struct AdapterActivationRequest {
-    #[schema(example = json!(vec!["adapter_1","adapter_2"]))]
-    adapter_names: Vec<String>,
-}
-
-#[utoipa::path(
-    post,
-    tag = "Mistral.rs",
-    path = "/activate_adapters",
-    request_body = AdapterActivationRequest,
-    responses((status = 200, description = "Activate a set of pre-loaded LoRA adapters"))
-)]
-async fn activate_adapters(
-    State(state): State<Arc<MistralRs>>,
-    Json(request): Json<AdapterActivationRequest>,
-) -> String {
-    let repr = format!("Adapter activation: {:?}", request.adapter_names);
-    MistralRs::maybe_log_request(state.clone(), repr.clone());
-    let request = Request::ActivateAdapters(request.adapter_names);
-    state.get_sender().unwrap().send(request).await.unwrap();
-    repr
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -271,7 +259,6 @@ fn get_router(state: Arc<MistralRs>) -> Router {
         .route("/v1/models", get(models))
         .route("/health", get(health))
         .route("/", get(health))
-        .route("/activate_adapters", post(activate_adapters))
         .route("/re_isq", post(re_isq))
         .route("/v1/images/generations", post(image_generation))
         .layer(cors_layer)
@@ -309,6 +296,7 @@ async fn main() -> Result<()> {
         .with_chat_template(args.chat_template)
         .with_use_flash_attn(use_flash_attn)
         .with_prompt_chunksize(prompt_chunksize)
+        .with_jinja_explicit(args.jinja_explicit)
         .build()?;
 
     #[cfg(feature = "metal")]
@@ -317,7 +305,7 @@ async fn main() -> Result<()> {
     let device = if args.cpu {
         args.no_paged_attn = true;
         Device::Cpu
-    } else if cfg!(feature = "nccl") {
+    } else if mistralrs_core::distributed::use_nccl() {
         Device::Cpu
     } else {
         Device::cuda_if_available(0)?
@@ -379,7 +367,7 @@ async fn main() -> Result<()> {
         DeviceMapSetting::Auto(auto_device_map_params)
     };
 
-    let no_paged_attn = if device.is_cuda() || cfg!(feature = "nccl") {
+    let no_paged_attn = if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
         args.no_paged_attn
     } else if device.is_metal() {
         !args.paged_attn
@@ -473,24 +461,37 @@ async fn main() -> Result<()> {
             method: DefaultSchedulerMethod::Fixed(args.max_seqs.try_into().unwrap()),
         }
     };
+    let bert_model = if args.enable_search {
+        Some(
+            args.search_bert_model
+                .map(BertEmbeddingModel::Custom)
+                .unwrap_or_default(),
+        )
+    } else {
+        None
+    };
     // Throughput logging in the server
-    let builder = MistralRsBuilder::new(pipeline, scheduler_config)
-        .with_opt_log(args.log)
-        .with_truncate_sequence(args.truncate_sequence)
-        .with_no_kv_cache(args.no_kv_cache)
-        .with_prefix_cache_n(args.prefix_cache_n);
+    let mistralrs = MistralRsBuilder::new(
+        pipeline,
+        scheduler_config,
+        !args.interactive_mode,
+        bert_model.clone(),
+    )
+    .with_opt_log(args.log)
+    .with_truncate_sequence(args.truncate_sequence)
+    .with_no_kv_cache(args.no_kv_cache)
+    .with_prefix_cache_n(args.prefix_cache_n)
+    .build();
 
     if args.interactive_mode {
-        interactive_mode(builder.build(), args.throughput_log).await;
+        interactive_mode(
+            mistralrs,
+            bert_model.is_some(),
+            args.enable_thinking.then_some(true),
+        )
+        .await;
         return Ok(());
     }
-
-    let builder = if args.throughput_log {
-        builder.with_throughput_logging()
-    } else {
-        builder
-    };
-    let mistralrs = builder.build();
 
     // Needs to be after the .build call as that is where the daemon waits.
     let setting_server = if !args.interactive_mode {

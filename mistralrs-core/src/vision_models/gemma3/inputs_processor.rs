@@ -31,6 +31,7 @@ use super::Gemma3SpecificArgs;
 
 struct Gemma3ImageProcessor {
     full_image_sequence: String,
+    supports_images: bool,
 }
 
 const IMAGE_TOKEN: &str = "<image_soft_token>";
@@ -39,16 +40,18 @@ const EOI_TOKEN: &str = "<end_of_image>";
 
 pub struct Gemma3Processor {
     full_image_sequence: String,
+    supports_images: bool,
 }
 
 impl Gemma3Processor {
-    pub fn new(processor_config: ProcessorConfig) -> Self {
+    pub fn new(processor_config: ProcessorConfig, supports_images: bool) -> Self {
         let image_tokens_expanded =
             vec![IMAGE_TOKEN.to_string(); processor_config.image_seq_len.unwrap_or(256)].join("");
         let full_image_sequence = format!("\n\n{BOI_TOKEN}{image_tokens_expanded}{EOI_TOKEN}\n\n");
 
         Self {
             full_image_sequence,
+            supports_images,
         }
     }
 }
@@ -57,6 +60,7 @@ impl Processor for Gemma3Processor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Gemma3ImageProcessor {
             full_image_sequence: self.full_image_sequence.clone(),
+            supports_images: self.supports_images,
         })
     }
 
@@ -114,6 +118,12 @@ impl InputsProcessor for Gemma3ImageProcessor {
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
         let pixel_values = if has_images {
+            if !self.supports_images {
+                return Box::new(std::iter::once(Err(anyhow::Error::msg(
+                    "This image processor does not support images.",
+                ))));
+            }
+
             let mut pixel_values_accum = Vec::new();
             let re = Regex::new(BOI_TOKEN).unwrap();
             for seq in input_seqs.iter_mut() {
@@ -156,8 +166,6 @@ impl InputsProcessor for Gemma3ImageProcessor {
                 let image_indexes: Vec<usize> =
                     re.find_iter(&prompt).map(|mat| mat.start()).collect();
 
-                assert_ne!(pixel_values.dim(0).unwrap(), image_indexes.len());
-
                 for (num, idx) in num_crops.into_iter().zip(image_indexes).rev() {
                     if num != 0 {
                         let formatted_image_text = format!(
@@ -173,13 +181,16 @@ impl InputsProcessor for Gemma3ImageProcessor {
 
                 prompt = prompt.replace(BOI_TOKEN, &self.full_image_sequence);
 
-                seq.set_initial_prompt(prompt.clone());
-                let toks = tokenizer
-                    .encode(prompt, false)
-                    .expect("Detokenization failed!");
+                if !seq.multimodal.has_changed_prompt {
+                    seq.set_initial_prompt(prompt.clone());
+                    let toks = tokenizer
+                        .encode_fast(prompt, false)
+                        .expect("Detokenization failed!");
 
-                let ids = toks.get_ids().to_vec();
-                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                    let ids = toks.get_ids().to_vec();
+                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                    seq.multimodal.has_changed_prompt = true;
+                }
             }
 
             Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
@@ -202,7 +213,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
             get_prompt_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,
@@ -219,7 +230,7 @@ impl InputsProcessor for Gemma3ImageProcessor {
             get_completion_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,

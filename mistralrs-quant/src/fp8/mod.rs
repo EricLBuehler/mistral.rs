@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     io::Cursor,
-    num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
@@ -18,7 +17,7 @@ use crate::{
         deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
         UQFF_VERSION,
     },
-    IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
@@ -43,7 +42,8 @@ impl QuantMethod for FP8Linear {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => unreachable!(),
             QuantMethodConfig::FP8 { lin, dtype } => {
                 let QuantizationResult {
                     qw,
@@ -153,28 +153,9 @@ impl QuantMethod for FP8Linear {
         _device: Device,
         _n_quantized: &AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
-    }
-
-    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
-        match dtype {
-            IsqType::F8E4M3 => None,
-            IsqType::Q2K
-            | IsqType::Q3K
-            | IsqType::Q4K
-            | IsqType::Q4_0
-            | IsqType::Q4_1
-            | IsqType::Q5K
-            | IsqType::Q5_0
-            | IsqType::Q5_1
-            | IsqType::Q6K
-            | IsqType::Q8K
-            | IsqType::Q8_0
-            | IsqType::Q8_1
-            | IsqType::HQQ4
-            | IsqType::HQQ8 => None,
-        }
     }
 }
 
@@ -208,6 +189,9 @@ impl QuantizedSerde for FP8Linear {
         "fp8-linear"
     }
     fn serialize(&self) -> Result<Cow<[u8]>> {
+        self.serialize_with_bias(self.lin.bias().cloned())
+    }
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
         // Version is always first!
@@ -217,7 +201,7 @@ impl QuantizedSerde for FP8Linear {
         buffer.push(QuantizedSerdeType::Fp8 as u8);
 
         // Has bias
-        buffer.push(self.lin.bias().is_some() as u8);
+        buffer.push(bias.is_some() as u8);
 
         // Weight
         serialize_tensor(&mut buffer, self.lin.weight())?;
@@ -232,7 +216,7 @@ impl QuantizedSerde for FP8Linear {
         // DType
         write_dtype(self.dtype, &mut buffer);
 
-        if let Some(bias) = self.lin.bias() {
+        if let Some(bias) = &bias {
             // Bias
             serialize_tensor(&mut buffer, bias)?;
         }
@@ -240,7 +224,12 @@ impl QuantizedSerde for FP8Linear {
         Ok(Cow::from(buffer))
     }
 
-    fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>>
+    fn deserialize(
+        data: Cow<[u8]>,
+        device: &Device,
+        _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
+    ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
@@ -263,6 +252,7 @@ impl QuantizedSerde for FP8Linear {
 
         let w = deserialize_tensor(&mut buffer, device)?;
 
+        let _acquired_load_guard = guard.acquire();
         let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
         let dequant_x_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
         let quant_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
@@ -283,5 +273,57 @@ impl QuantizedSerde for FP8Linear {
             quant_scale,
             dtype,
         }))
+    }
+    fn deserialize_ext_bias(
+        data: Cow<[u8]>,
+        device: &Device,
+        guard: QuantizeOntoGuard,
+    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
+    where
+        Self: Sized,
+    {
+        let mut buffer = Cursor::new(data.to_vec());
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Fp8 as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Fp8 as usize
+            );
+        }
+
+        let has_bias = buffer.read_u8()? != 0;
+
+        let _acquired_load_guard = guard.acquire();
+        let w = deserialize_tensor(&mut buffer, device)?;
+
+        let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
+        let dequant_x_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
+        let quant_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
+
+        // DType
+        let dtype = read_dtype(&mut buffer)?;
+
+        let b = if has_bias {
+            Some(deserialize_tensor(&mut buffer, device)?)
+        } else {
+            None
+        };
+
+        Ok((
+            Arc::new(Self {
+                lin: Linear::new(w, None),
+                dequant_w_scale,
+                dequant_x_scale,
+                quant_scale,
+                dtype,
+            }),
+            b,
+        ))
     }
 }

@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     io::Cursor,
-    num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
@@ -14,8 +13,8 @@ use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
-    FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul, QuantMethod, QuantMethodConfig,
-    QuantizedSerde, QuantizedSerdeType,
+    AfqBits, AfqGroupSize, AfqLayer, FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType, MatMul,
+    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
 };
 
 #[derive(Debug)]
@@ -37,7 +36,8 @@ impl QuantMethod for UnquantLinear {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => unreachable!(),
             QuantMethodConfig::Unquantized(l) => Ok(Self {
                 w: l.weight().clone(),
                 b: l.bias().cloned(),
@@ -117,9 +117,22 @@ impl QuantMethod for UnquantLinear {
                     }
                 }
             }
+        } else if let (Device::Cuda(_), Some(cublaslt)) =
+            (a.device(), *CUBLASLT_HANDLE.lock().unwrap())
+        {
+            cublaslt
+                .batch_matmul(a, &w, None, None, None, None, None)?
+                .t()
         } else {
             MatMul.matmul(a, &w.t()?)
         }
+    }
+
+    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        // Assume only one expert used.
+        let w = self.w.index_select(indices, 0)?;
+
+        a.broadcast_matmul(&w.t()?)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -144,10 +157,12 @@ impl QuantMethod for UnquantLinear {
         device: Device,
         n_quantized: &AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         match dtype {
             /*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
+                let _acquired_quantize_guard = guard.acquire();
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("HQQ does not support imatrix.");
@@ -180,6 +195,30 @@ impl QuantMethod for UnquantLinear {
                     Ok(Arc::new(res))
                 }
             }
+            Some(IsqType::AFQ2 | IsqType::AFQ3 | IsqType::AFQ4 | IsqType::AFQ6 | IsqType::AFQ8) => {
+                let _acquired_quantize_guard = guard.acquire();
+                if imatrix_weight.is_some() {
+                    // TODO just warn?
+                    candle_core::bail!("AFQ does not support imatrix.");
+                }
+
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let bits = match dtype.unwrap() {
+                    IsqType::AFQ8 => AfqBits::Eight,
+                    IsqType::AFQ6 => AfqBits::Six,
+                    IsqType::AFQ4 => AfqBits::Four,
+                    IsqType::AFQ3 => AfqBits::Three,
+                    IsqType::AFQ2 => AfqBits::Two,
+                    _ => unreachable!(),
+                };
+
+                Ok(Arc::new(AfqLayer::new(QuantMethodConfig::Afq {
+                    weight: self.w.to_device(&device)?,
+                    bias: self.b.as_ref().map(|b| b.to_device(&device).unwrap()),
+                    bits,
+                    group_size: AfqGroupSize::default(),
+                })?))
+            }
             Some(
                 IsqType::Q2K
                 | IsqType::Q3K
@@ -196,9 +235,9 @@ impl QuantMethod for UnquantLinear {
             ) => {
                 let dtype: GgmlDType = dtype.unwrap().try_into()?;
                 let res = if let Some(imatrix_weight) = imatrix_weight {
-                    generate_isq_imatrix!(self.w, imatrix_weight, device, dtype, n_quantized)
+                    generate_isq_imatrix!(self.w, imatrix_weight, device, dtype, n_quantized, guard)
                 } else {
-                    generate_isq!(self.w, device, dtype, n_quantized)
+                    generate_isq!(self.w, device, dtype, n_quantized, guard)
                 };
                 Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
@@ -209,6 +248,7 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             Some(IsqType::F8E4M3) => {
+                let _acquired_quantize_guard = guard.acquire();
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("F8E4M3 does not support imatrix.");
@@ -226,6 +266,7 @@ impl QuantMethod for UnquantLinear {
                 })?))
             }
             None => {
+                let _acquired_quantize_guard = guard.acquire();
                 // Ignore imatrix altogether
 
                 let w = self.w.to_device(&device)?;
@@ -238,29 +279,6 @@ impl QuantMethod for UnquantLinear {
                     QuantMethodConfig::Unquantized(Linear::new(w, b)),
                 )?))
             }
-        }
-    }
-
-    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
-        match dtype {
-            /*IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
-            IsqType::HQQ4 | IsqType::HQQ8 => {
-                // Use 1 because our HQQ quantizes on the GPU
-                Some(1.try_into().unwrap())
-            }
-            IsqType::F8E4M3 => None,
-            IsqType::Q2K
-            | IsqType::Q3K
-            | IsqType::Q4K
-            | IsqType::Q4_0
-            | IsqType::Q4_1
-            | IsqType::Q5K
-            | IsqType::Q5_0
-            | IsqType::Q5_1
-            | IsqType::Q6K
-            | IsqType::Q8K
-            | IsqType::Q8_0
-            | IsqType::Q8_1 => None,
         }
     }
 
@@ -306,6 +324,9 @@ impl QuantizedSerde for UnquantLinear {
         "unquant-linear"
     }
     fn serialize(&self) -> Result<Cow<[u8]>> {
+        self.serialize_with_bias(self.b.clone())
+    }
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
         // Version is always first!
@@ -316,12 +337,12 @@ impl QuantizedSerde for UnquantLinear {
         buffer.push(QuantizedSerdeType::Unquant as u8);
 
         // Has bias
-        buffer.push(self.b.is_some() as u8);
+        buffer.push(bias.is_some() as u8);
 
         // Weight
         serialize_tensor(&mut buffer, &self.w)?;
 
-        if let Some(bias) = &self.b {
+        if let Some(bias) = &bias {
             // Bias
             serialize_tensor(&mut buffer, bias)?;
         }
@@ -329,7 +350,12 @@ impl QuantizedSerde for UnquantLinear {
         Ok(Cow::from(buffer))
     }
 
-    fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>>
+    fn deserialize(
+        data: Cow<[u8]>,
+        device: &Device,
+        _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
+    ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
@@ -350,6 +376,7 @@ impl QuantizedSerde for UnquantLinear {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        let _acquired_load_guard = guard.acquire();
         let w = deserialize_tensor(&mut buffer, device)?;
 
         let b = if has_bias {
@@ -359,5 +386,48 @@ impl QuantizedSerde for UnquantLinear {
         };
 
         Ok(Arc::new(Self { w, b, stats: None }))
+    }
+    fn deserialize_ext_bias(
+        data: Cow<[u8]>,
+        device: &Device,
+        guard: QuantizeOntoGuard,
+    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
+    where
+        Self: Sized,
+    {
+        let mut buffer = Cursor::new(data);
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Unquant as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Unquant as usize
+            );
+        }
+
+        let has_bias = buffer.read_u8()? != 0;
+
+        let _acquired_load_guard = guard.acquire();
+        let w = deserialize_tensor(&mut buffer, device)?;
+
+        let b = if has_bias {
+            Some(deserialize_tensor(&mut buffer, device)?)
+        } else {
+            None
+        };
+
+        Ok((
+            Arc::new(Self {
+                w,
+                b: None,
+                stats: None,
+            }),
+            b,
+        ))
     }
 }

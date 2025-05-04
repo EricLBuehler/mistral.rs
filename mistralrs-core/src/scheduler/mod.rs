@@ -1,6 +1,9 @@
 mod default_scheduler;
 
+use std::sync::Arc;
+
 pub use default_scheduler::{DefaultScheduler, DefaultSchedulerMethod, DefaultSchedulerOutput};
+use tokio::sync::Mutex;
 
 use crate::{
     paged_attention::{
@@ -22,16 +25,18 @@ pub enum SchedulerConfig {
 }
 
 impl SchedulerConfig {
-    pub fn into_scheduler(self) -> Box<dyn Scheduler> {
+    pub fn into_scheduler(self) -> Arc<Mutex<dyn Scheduler>> {
         match self {
-            Self::DefaultScheduler { method } => Box::new(DefaultScheduler::new(method)),
+            Self::DefaultScheduler { method } => {
+                Arc::new(Mutex::new(DefaultScheduler::new(method)))
+            }
             Self::PagedAttentionMeta {
                 max_num_seqs,
                 config,
-            } => Box::new(PagedAttentionScheduler::new(
+            } => Arc::new(Mutex::new(PagedAttentionScheduler::new(
                 PagedAttentionSchedulerConfig { max_num_seqs },
                 config,
-            )),
+            ))),
         }
     }
 }
@@ -45,7 +50,7 @@ pub enum SchedulerOutput<'a> {
     },
 }
 
-pub trait Scheduler {
+pub trait Scheduler: Send + Sync {
     fn schedule(&mut self) -> SchedulerOutput<'_>;
     fn waiting_len(&self) -> usize;
     fn running_len(&self) -> usize;

@@ -1,5 +1,6 @@
-use std::{fs::File, num::NonZeroUsize, path::PathBuf};
+use std::{fs::File, num::NonZeroUsize, path::PathBuf, str::FromStr};
 
+use mistralrs_quant::MULTI_LORA_DELIMITER;
 use serde::Deserialize;
 
 use crate::{
@@ -7,7 +8,7 @@ use crate::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
     ModelDType, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, SpeculativeConfig,
     SpeculativeLoader, Topology, VisionLoaderBuilder, VisionLoaderType, VisionSpecificConfig,
-    GGUF_MULTI_FILE_DELIMITER,
+    GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -63,7 +64,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// .imatrix file to enhance GGUF quantizations with.
         /// Incompatible with `--imatrix/-i`
@@ -80,6 +81,9 @@ pub enum TomlModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_batch_size")]
         max_batch_size: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        hf_cache_path: Option<PathBuf>,
     },
 
     /// Select an X-LoRA architecture
@@ -111,7 +115,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_seq_len")]
@@ -120,6 +124,9 @@ pub enum TomlModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_batch_size")]
         max_batch_size: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        hf_cache_path: Option<PathBuf>,
     },
 
     /// Select a LoRA architecture
@@ -127,11 +134,8 @@ pub enum TomlModelSelected {
         /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
         model_id: Option<String>,
 
-        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
-        adapters_model_id: String,
-
-        /// Ordering JSON file
-        order: String,
+        /// Model IDs to load LoRA from. This may be a HF hub repo or a local path. Specify multiple with a semicolon.
+        adapter_model_ids: String,
 
         /// The architecture of the model.
         arch: Option<NormalLoaderType>,
@@ -147,7 +151,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_seq_len")]
@@ -156,6 +160,9 @@ pub enum TomlModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_batch_size")]
         max_batch_size: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        hf_cache_path: Option<PathBuf>,
     },
 
     /// Select a GGUF model.
@@ -400,7 +407,7 @@ pub enum TomlModelSelected {
         write_uqff: Option<PathBuf>,
 
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ.
-        from_uqff: Option<PathBuf>,
+        from_uqff: Option<String>,
 
         /// Automatically resize and pad images to this maximum edge length. Aspect ratio is preserved.
         /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
@@ -428,6 +435,9 @@ pub enum TomlModelSelected {
         /// This affects automatic device mapping but is not a hard limit.
         #[serde(default = "default_max_image_length")]
         max_image_length: usize,
+
+        /// Cache path for Hugging Face models downloaded locally
+        hf_cache_path: Option<PathBuf>,
     },
 }
 
@@ -484,6 +494,7 @@ struct TomlLoaderInnerParams {
     no_kv_cache: bool,
     tokenizer_json: Option<String>,
     prompt_chunksize: Option<NonZeroUsize>,
+    jinja_explicit: Option<String>,
 }
 
 pub struct TomlLoaderArgs {
@@ -491,6 +502,7 @@ pub struct TomlLoaderArgs {
     pub chat_template: Option<String>,
     pub no_kv_cache: bool,
     pub prompt_chunksize: Option<NonZeroUsize>,
+    pub jinja_explicit: Option<String>,
 }
 
 pub fn get_toml_selected_model_dtype(model: &TomlSelector) -> ModelDType {
@@ -593,6 +605,7 @@ fn loader_from_selected(
             calibration_file,
             max_seq_len: _,
             max_batch_size: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -600,13 +613,21 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix,
                 calibration_file,
+                hf_cache_path,
             },
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .build(arch)?,
         TomlModelSelected::XLora {
@@ -621,6 +642,7 @@ fn loader_from_selected(
             from_uqff,
             max_seq_len: _,
             max_batch_size: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -628,13 +650,21 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix: None,
                 calibration_file: None,
+                hf_cache_path,
             },
             args.chat_template,
             args.tokenizer_json,
             model_id,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_xlora(
             xlora_model_id,
@@ -648,8 +678,7 @@ fn loader_from_selected(
         .build(arch)?,
         TomlModelSelected::Lora {
             model_id,
-            adapters_model_id,
-            order,
+            adapter_model_ids,
             arch,
             dtype: _,
             topology,
@@ -657,6 +686,7 @@ fn loader_from_selected(
             from_uqff,
             max_seq_len: _,
             max_batch_size: _,
+            hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 use_flash_attn,
@@ -664,20 +694,27 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 imatrix: None,
                 calibration_file: None,
+                hf_cache_path,
             },
             args.chat_template,
             args.tokenizer_json,
             model_id,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
+            adapter_model_ids
+                .split(MULTI_LORA_DELIMITER)
+                .map(ToString::to_string)
+                .collect(),
         )
         .build(arch)?,
         TomlModelSelected::GGUF {
@@ -700,6 +737,8 @@ fn loader_from_selected(
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .build(),
         TomlModelSelected::XLoraGGUF {
@@ -725,6 +764,8 @@ fn loader_from_selected(
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_xlora(
             xlora_model_id,
@@ -756,6 +797,8 @@ fn loader_from_selected(
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
             },
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_lora(
             adapters_model_id,
@@ -785,6 +828,8 @@ fn loader_from_selected(
             Some(tok_model_id),
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .build(),
         TomlModelSelected::XLoraGGML {
@@ -810,6 +855,8 @@ fn loader_from_selected(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_xlora(
             xlora_model_id,
@@ -843,6 +890,8 @@ fn loader_from_selected(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            args.no_kv_cache,
+            args.jinja_explicit,
         )
         .with_lora(
             adapters_model_id,
@@ -866,20 +915,28 @@ fn loader_from_selected(
             max_num_images: _,
             max_image_length: _,
             imatrix,
+            hf_cache_path,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
                 use_flash_attn,
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff,
+                from_uqff: from_uqff.map(|x| {
+                    x.split(UQFF_MULTI_FILE_DELIMITER)
+                        .map(PathBuf::from_str)
+                        .map(|x| x.unwrap())
+                        .collect::<Vec<_>>()
+                }),
                 max_edge,
                 calibration_file,
                 imatrix,
+                hf_cache_path,
             },
             args.chat_template,
             args.tokenizer_json,
             Some(model_id),
+            args.jinja_explicit,
         )
         .build(arch),
     };
@@ -896,6 +953,7 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             no_kv_cache: args.no_kv_cache,
             tokenizer_json: selector.tokenizer_json,
             prompt_chunksize: args.prompt_chunksize,
+            jinja_explicit: args.jinja_explicit,
         };
         let loader = loader_from_selected(args.clone(), selector.model)?;
         let loader = if let Some(speculative) = selector.speculative {

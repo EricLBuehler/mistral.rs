@@ -31,7 +31,7 @@ macro_rules! generate_repr {
 pub struct ResponseMessage {
     pub content: Option<String>,
     pub role: String,
-    pub tool_calls: Vec<ToolCallResponse>,
+    pub tool_calls: Option<Vec<ToolCallResponse>>,
 }
 
 generate_repr!(ResponseMessage);

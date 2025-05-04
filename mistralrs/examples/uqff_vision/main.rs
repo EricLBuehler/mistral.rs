@@ -8,7 +8,7 @@ async fn main() -> Result<()> {
     let model = UqffVisionModelBuilder::new(
         "EricB/Phi-3.5-vision-instruct-UQFF",
         VisionLoaderType::Phi3V,
-        "phi3.5-vision-instruct-q8_0.uqff".into(),
+        vec!["phi3.5-vision-instruct-q8_0.uqff".into()],
     )
     .into_inner()
     .with_isq(IsqType::Q4K)

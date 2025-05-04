@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fmt::Debug,
     path::{Path, PathBuf},
     str::FromStr,
@@ -28,10 +27,8 @@ use crate::{
         },
         DiffusionGenerationParams,
     },
-    lora::LoraConfig,
     paged_attention::AttentionImplementation,
-    xlora_models::XLoraConfig,
-    Ordering,
+    pipeline::paths::AdapterPaths,
 };
 
 pub trait DiffusionModel {
@@ -105,28 +102,10 @@ impl ModelPaths for DiffusionModelPaths {
     fn get_weight_filenames(&self) -> &[PathBuf] {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_adapter_filenames(&self) -> &Option<Vec<(String, PathBuf)>> {
-        unreachable!("Use `std::any::Any`.")
-    }
-    fn get_adapter_configs(&self) -> &Option<Vec<((String, String), LoraConfig)>> {
-        unreachable!("Use `std::any::Any`.")
-    }
-    fn get_classifier_config(&self) -> &Option<XLoraConfig> {
-        unreachable!("Use `std::any::Any`.")
-    }
-    fn get_classifier_path(&self) -> &Option<PathBuf> {
-        unreachable!("Use `std::any::Any`.")
-    }
-    fn get_ordering(&self) -> &Option<Ordering> {
-        unreachable!("Use `std::any::Any`.")
-    }
     fn get_template_filename(&self) -> &Option<PathBuf> {
         unreachable!("Use `std::any::Any`.")
     }
     fn get_gen_conf_filename(&self) -> Option<&PathBuf> {
-        unreachable!("Use `std::any::Any`.")
-    }
-    fn get_lora_preload_adapter_info(&self) -> &Option<HashMap<String, (PathBuf, LoraConfig)>> {
         unreachable!("Use `std::any::Any`.")
     }
     fn get_preprocessor_config(&self) -> &Option<PathBuf> {
@@ -135,7 +114,10 @@ impl ModelPaths for DiffusionModelPaths {
     fn get_processor_config(&self) -> &Option<PathBuf> {
         unreachable!("Use `std::any::Any`.")
     }
-    fn get_chat_template_json(&self) -> &Option<PathBuf> {
+    fn get_chat_template_explicit(&self) -> &Option<PathBuf> {
+        unreachable!("Use `std::any::Any`.")
+    }
+    fn get_adapter_paths(&self) -> &AdapterPaths {
         unreachable!("Use `std::any::Any`.")
     }
 }

@@ -103,7 +103,6 @@ fn gen_request(id: usize, image: DynamicImage, tx: Sender<Response>) -> Request 
         id,
         constraint: Constraint::None,
         suffix: None,
-        adapters: None,
         tools: None,
         tool_choice: None,
         logits_processors: None,

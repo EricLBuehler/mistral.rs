@@ -36,7 +36,7 @@ pub struct Config {
     pub num_attention_heads: usize,
     pub num_key_value_heads: usize,
     pub max_position_embeddings: usize,
-    pub sliding_window: usize,
+    pub sliding_window: Option<usize>,
     pub rope_theta: f64,
     pub rms_norm_eps: f64,
     pub hidden_act: Activation,
@@ -130,7 +130,7 @@ impl Attention {
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                sliding_window: None,
+                sliding_window: cfg.sliding_window,
             },
         })
     }
@@ -329,7 +329,7 @@ pub struct Model {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
-    sliding_window: usize,
+    sliding_window: Option<usize>,
     device: Device,
     cache: EitherCache,
     max_seq_len: usize,
@@ -348,7 +348,7 @@ impl Model {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
-                quant_cfg.quant_method.to_string(),
+                quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
         }
@@ -359,6 +359,7 @@ impl Model {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
@@ -454,7 +455,7 @@ impl Model {
                 num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
-                sliding_window: Some(cfg.sliding_window),
+                sliding_window: cfg.sliding_window,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             },
@@ -502,7 +503,7 @@ impl Model {
                 .as_ref()
                 .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
                 .unwrap_or(cache as &dyn PastKvLenCache),
-            Some(self.sliding_window),
+            self.sliding_window,
             xs.dtype(),
             self.cfg.num_attn_heads,
         )?;

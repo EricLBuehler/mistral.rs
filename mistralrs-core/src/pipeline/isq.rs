@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
+    env,
     fs::File,
     path::PathBuf,
     str::FromStr,
@@ -13,8 +14,9 @@ use candle_core::{quantized, Context, Device, Tensor};
 use indicatif::{MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use mistralrs_quant::{
-    CollectedImatrixData, FP8Linear, GgufMatMul, HqqLayer, IsqType, QuantMethod, QuantizedSerde,
-    QuantizedSerdeType, UnquantLinear,
+    AfqLayer, CollectedImatrixData, ColumnParallelLayer, DistributedKind, FP8Linear, GgufMatMul,
+    HqqLayer, IsqType, QuantMethod, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    ReplicatedLayer, RowParallelLayer, UnquantLinear,
 };
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use regex::Regex;
@@ -25,8 +27,16 @@ use tracing::{info, warn};
 use crate::{device_map::DeviceMapper, topology::LayerTopology, Topology};
 
 pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
+// 10 GB max per file
+const MAX_UQFF_SIZE_BYTES: usize = 10 * 1024 * 1024 * 1024;
+pub const UQFF_MULTI_FILE_DELIMITER: &str = ";";
 
-/// Parse ISQ value: one of
+/// Parse ISQ value.
+///
+/// If the provided value is a valid integer (one of 2,3,4,5,6,8), the best quantization type will be chosen.
+/// Note that the fallback is always a Q/K quantization but on Metal 2,3,4,6,8 uses the fast AFQ.
+///
+/// One of:
 /// - `Q4_0`
 /// - `Q4_1`
 /// - `Q5_0`
@@ -44,8 +54,24 @@ pub(crate) const UQFF_RESIDUAL_SAFETENSORS: &str = "residual.safetensors";
 /// - `HQQ3`
 /// - `HQQ4`
 /// - `HQQ8`
+/// - `AFQ2`
+/// - `AFQ3`
+/// - `AFQ4`
+/// - `AFQ6`
+/// - `AFQ8`
 pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
     let tp = match s.to_lowercase().as_str() {
+        "2" if cfg!(feature = "metal") => IsqType::AFQ2,
+        "2" if !cfg!(feature = "metal") => IsqType::Q2K,
+        "3" if cfg!(feature = "metal") => IsqType::AFQ3,
+        "3" if !cfg!(feature = "metal") => IsqType::Q3K,
+        "4" if cfg!(feature = "metal") => IsqType::AFQ4,
+        "4" if !cfg!(feature = "metal") => IsqType::Q4K,
+        "5" => IsqType::Q5K,
+        "6" if cfg!(feature = "metal") => IsqType::AFQ6,
+        "6" if !cfg!(feature = "metal") => IsqType::Q6K,
+        "8" if cfg!(feature = "metal") => IsqType::AFQ8,
+        "8" if !cfg!(feature = "metal") => IsqType::Q8_0,
         "q4_0" => IsqType::Q4_0,
         "q4_1" => IsqType::Q4_1,
         "q5_0" => IsqType::Q5_0,
@@ -61,10 +87,15 @@ pub fn parse_isq_value(s: &str) -> Result<IsqType, String> {
         "hqq8" => IsqType::HQQ8,
         "hqq4" => IsqType::HQQ4,
         "fp8" => IsqType::F8E4M3,
+        "afq8" => IsqType::AFQ8,
+        "afq6" => IsqType::AFQ6,
+        "afq4" => IsqType::AFQ4,
+        "afq3" => IsqType::AFQ3,
+        "afq2" => IsqType::AFQ2,
         // "hqq3" => IsqType::HQQ3,
         // "hqq2" => IsqType::HQQ2,
         // "hqq1" => IsqType::HQQ1,
-        _ => return Err(format!("ISQ type {s} unknown, choose one of `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`.")),
+        _ => return Err(format!("ISQ type {s} unknown, choose one of `2`, `3`, `4`, `6`, `8`, `Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `Q8_1`, `Q2K`, `Q3K`, `Q4K`, `Q5K`, `Q6K`, `Q8K`, `HQQ8`, `HQQ4`, `FP8`, `AFQ8`, `AFQ6`, `AFQ4`, `AFQ3`, `AFQ2`.")),
     };
     #[cfg(feature = "cuda")]
     {
@@ -437,26 +468,21 @@ pub trait IsqModel {
 
             use rayon::iter::IntoParallelRefIterator;
 
-            // Get the MINIMUM of the max isq threads the quant method allows
-            #[cfg(not(feature = "metal"))]
+            // Get the MINIMUM of the max isq threads the quant method
             let mut minimum_max_threads = {
                 let current_rayon_threads = rayon::current_num_threads();
-                tensors
-                    .iter()
-                    .map(|(q, _)| {
-                        if let Some(dtype) = dtype {
-                            q.get_max_isq_cpu_threads(dtype)
-                                .map(usize::from)
-                                .unwrap_or(current_rayon_threads)
-                        } else {
-                            current_rayon_threads
-                        }
-                    })
-                    .min()
-                    .unwrap_or(current_rayon_threads)
+                if let Some(dtype) = dtype {
+                    dtype
+                        .get_max_isq_cpu_threads()
+                        .map(usize::from)
+                        .unwrap_or(current_rayon_threads)
+                } else {
+                    current_rayon_threads
+                }
             };
-            #[cfg(feature = "metal")]
-            let mut minimum_max_threads = 1;
+            if env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
+                minimum_max_threads = 1;
+            }
 
             if matches!(imatrix_source, Some(ImatrixDataSource::Collected)) {
                 // Collected imatrix means that the model is potentially on the gpu already
@@ -469,6 +495,8 @@ pub trait IsqModel {
                 .num_threads(minimum_max_threads)
                 .build()
                 .map_err(candle_core::Error::msg)?;
+
+            let guard = QuantizeOntoGuard::new();
 
             pool.install(|| {
                 use indicatif::ParallelProgressIterator;
@@ -483,7 +511,13 @@ pub trait IsqModel {
                         .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
                             **tensor = tensor
                                 .clone()
-                                .apply_isq(dtype, device.clone(), &n_quantized, imatrix_weight)
+                                .apply_isq(
+                                    dtype,
+                                    device.clone(),
+                                    &n_quantized,
+                                    imatrix_weight,
+                                    guard.clone(),
+                                )
                                 .unwrap();
                             device.synchronize().unwrap();
                         });
@@ -496,7 +530,13 @@ pub trait IsqModel {
                         .for_each(|(((tensor, _), (device, dtype)), imatrix_weight)| {
                             **tensor = tensor
                                 .clone()
-                                .apply_isq(dtype, device.clone(), &n_quantized, imatrix_weight)
+                                .apply_isq(
+                                    dtype,
+                                    device.clone(),
+                                    &n_quantized,
+                                    imatrix_weight,
+                                    guard.clone(),
+                                )
                                 .unwrap();
                             device.synchronize().unwrap();
                         });
@@ -559,6 +599,7 @@ pub trait IsqModel {
                             .collect::<candle_core::Result<Vec<_>>>()
                     }
                 });
+                let quantized_values = quantized_values?;
 
                 let parent = serialized
                     .parent()
@@ -566,7 +607,31 @@ pub trait IsqModel {
 
                 std::fs::create_dir_all(parent)?;
 
-                safetensors::serialize_to_file(quantized_values?, &None, serialized)?;
+                let file_stem = serialized
+                    .file_stem()
+                    .context("Target UQFF path must have a file stem!")?
+                    .to_string_lossy()
+                    .to_string();
+
+                let size_estimate_bytes = quantized_values
+                    .iter()
+                    .map(|(_, x)| x.elem_count() * x.dtype().size_in_bytes())
+                    .sum::<usize>();
+                let n_files = size_estimate_bytes.div_ceil(MAX_UQFF_SIZE_BYTES);
+
+                if n_files == 1 {
+                    info!("Writing to `{}`", serialized.display());
+                    safetensors::serialize_to_file(quantized_values, &None, serialized)?;
+                } else {
+                    let chunksize = quantized_values.len() / n_files;
+                    let quantized_values_chunks = quantized_values.into_iter().chunks(chunksize);
+                    for (i, chunk) in quantized_values_chunks.into_iter().enumerate() {
+                        let mut name = parent.to_path_buf();
+                        name.push(format!("{file_stem}-{i}.uqff"));
+                        info!("Writing shard {i} to `{}`", name.display());
+                        safetensors::serialize_to_file(chunk, &None, &name)?;
+                    }
+                }
 
                 let residual = match organization {
                     IsqOrganization::Default => self.residual_tensors(),
@@ -663,7 +728,7 @@ pub trait IsqModel {
         device: Device,
         topology: Option<&Topology>,
         silent: bool,
-        artifacts: &PathBuf,
+        artifacts: &[PathBuf],
     ) -> candle_core::Result<()> {
         let (tensors, mapper) = self.get_layers();
         let total_tensors = tensors.len();
@@ -675,6 +740,7 @@ pub trait IsqModel {
         });
 
         let mut devices = Vec::new();
+        let mut comms = Vec::new();
         for (_, layer_num) in &tensors {
             let device = if let Some(ref layers) = layers {
                 if let Some(layer) = layer_num {
@@ -696,9 +762,10 @@ pub trait IsqModel {
                 device.clone()
             };
             devices.push(device);
+            comms.push(mapper.get_comm_for(layer_num.unwrap_or(0))?)
         }
 
-        let artifacts = unsafe { candle_core::safetensors::MmapedSafetensors::new(artifacts)? };
+        let artifacts = unsafe { candle_core::safetensors::MmapedSafetensors::multi(artifacts)? };
 
         let artifact_isqs = artifacts
             .tensors()
@@ -729,6 +796,8 @@ pub trait IsqModel {
 
         let t_start = Instant::now();
 
+        let guard = QuantizeOntoGuard::new();
+
         if silent {
             (0..tensors.len())
                 .into_par_iter()
@@ -736,20 +805,64 @@ pub trait IsqModel {
                 .map(|(i, (tensor, _))| {
                     if let Some(artifact) = artifact_isqs.get(&i) {
                         let artifact = artifact.data();
-                        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-                        let isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
-                        let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
-                            QuantizedSerdeType::Gguf => {
-                                GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?
+
+                        let comm = comms[i].clone();
+                        let deserialized = match tensor.is_distributed() {
+                            Some(DistributedKind::ColumnParallel) => {
+                                ColumnParallelLayer::deserialize(
+                                    Cow::from(artifact),
+                                    &devices[i],
+                                    &comm,
+                                    guard.clone(),
+                                )?
                             }
-                            QuantizedSerdeType::Unquant => {
-                                UnquantLinear::deserialize(Cow::from(artifact), &devices[i])?
-                            }
-                            QuantizedSerdeType::Hqq => {
-                                HqqLayer::deserialize(Cow::from(artifact), &devices[i])?
-                            }
-                            QuantizedSerdeType::Fp8 => {
-                                FP8Linear::deserialize(Cow::from(artifact), &devices[i])?
+                            Some(DistributedKind::RowParallel) => RowParallelLayer::deserialize(
+                                Cow::from(artifact),
+                                &devices[i],
+                                &comm,
+                                guard.clone(),
+                            )?,
+                            Some(DistributedKind::Replicated) => ReplicatedLayer::deserialize(
+                                Cow::from(artifact),
+                                &devices[i],
+                                &comm,
+                                guard.clone(),
+                            )?,
+                            None => {
+                                // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                                let isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
+                                match QuantizedSerdeType::try_from(isq_type as usize)? {
+                                    QuantizedSerdeType::Gguf => GgufMatMul::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                    QuantizedSerdeType::Unquant => UnquantLinear::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                    QuantizedSerdeType::Hqq => HqqLayer::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                    QuantizedSerdeType::Fp8 => FP8Linear::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                    QuantizedSerdeType::Afq => AfqLayer::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                }
                             }
                         };
                         *tensor = deserialized;
@@ -765,20 +878,64 @@ pub trait IsqModel {
                 .map(|(i, (tensor, _))| {
                     if let Some(artifact) = artifact_isqs.get(&i) {
                         let artifact = artifact.data();
-                        // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
-                        let isq_type = artifact[4];
-                        let deserialized = match QuantizedSerdeType::try_from(isq_type as usize)? {
-                            QuantizedSerdeType::Gguf => {
-                                GgufMatMul::deserialize(Cow::from(artifact), &devices[i])?
+
+                        let comm = comms[i].clone();
+                        let deserialized = match tensor.is_distributed() {
+                            Some(DistributedKind::ColumnParallel) => {
+                                ColumnParallelLayer::deserialize(
+                                    Cow::from(artifact),
+                                    &devices[i],
+                                    &comm,
+                                    guard.clone(),
+                                )?
                             }
-                            QuantizedSerdeType::Unquant => {
-                                UnquantLinear::deserialize(Cow::from(artifact), &devices[i])?
-                            }
-                            QuantizedSerdeType::Hqq => {
-                                HqqLayer::deserialize(Cow::from(artifact), &devices[i])?
-                            }
-                            QuantizedSerdeType::Fp8 => {
-                                FP8Linear::deserialize(Cow::from(artifact), &devices[i])?
+                            Some(DistributedKind::RowParallel) => RowParallelLayer::deserialize(
+                                Cow::from(artifact),
+                                &devices[i],
+                                &comm,
+                                guard.clone(),
+                            )?,
+                            Some(DistributedKind::Replicated) => ReplicatedLayer::deserialize(
+                                Cow::from(artifact),
+                                &devices[i],
+                                &comm,
+                                guard.clone(),
+                            )?,
+                            None => {
+                                // NOTE(EricLBuehler): isq type is ALWAYS byte 4 (5th) of the tensor.
+                                let isq_type = artifact[mistralrs_quant::UQFF_QUANT_TYPE_OFFSET];
+                                match QuantizedSerdeType::try_from(isq_type as usize)? {
+                                    QuantizedSerdeType::Gguf => GgufMatMul::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                    QuantizedSerdeType::Unquant => UnquantLinear::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                    QuantizedSerdeType::Hqq => HqqLayer::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                    QuantizedSerdeType::Fp8 => FP8Linear::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                    QuantizedSerdeType::Afq => AfqLayer::deserialize(
+                                        Cow::from(artifact),
+                                        &devices[i],
+                                        &comm,
+                                        guard.clone(),
+                                    )?,
+                                }
                             }
                         };
                         *tensor = deserialized;

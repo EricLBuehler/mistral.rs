@@ -449,11 +449,19 @@ impl Llama {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        if let Some(ref quant_cfg) = &cfg.quantization_config {
+            tracing::info!(
+                "Using {} quantization: {}.",
+                quant_cfg.name(),
+                quant_cfg.get_bits_name(&vb)
+            );
+        }
         let mapper = normal_loading_metadata.mapper;
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let lm_head = linear(
             cfg.hidden_size,

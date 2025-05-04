@@ -39,6 +39,7 @@ impl XLoraModelBuilder {
             from_uqff: self.text_model.from_uqff,
             imatrix: None,
             calibration_file: None,
+            hf_cache_path: self.text_model.hf_cache_path,
         };
 
         if self.text_model.with_logging {
@@ -50,6 +51,8 @@ impl XLoraModelBuilder {
             self.text_model.chat_template,
             self.text_model.tokenizer_json,
             Some(self.text_model.model_id),
+            self.text_model.no_kv_cache,
+            self.text_model.jinja_explicit,
         )
         .with_xlora(
             self.xlora_model_id,
@@ -57,7 +60,6 @@ impl XLoraModelBuilder {
             self.text_model.no_kv_cache,
             self.tgt_non_granular_index,
         )
-        .with_no_kv_cache(self.text_model.no_kv_cache)
         .build(self.text_model.loader_type)?;
 
         // Load, into a Pipeline
@@ -95,9 +97,14 @@ impl XLoraModelBuilder {
             },
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
-            .with_no_kv_cache(self.text_model.no_kv_cache)
-            .with_no_prefix_cache(self.text_model.prefix_cache_n.is_none());
+        let mut runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            self.text_model.throughput_logging,
+            self.text_model.search_bert_model,
+        )
+        .with_no_kv_cache(self.text_model.no_kv_cache)
+        .with_no_prefix_cache(self.text_model.prefix_cache_n.is_none());
 
         if let Some(n) = self.text_model.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

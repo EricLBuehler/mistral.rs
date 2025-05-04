@@ -38,7 +38,10 @@ pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Message or messages for a [`Request`].
 pub enum RequestMessage {
-    Chat(Vec<IndexMap<String, MessageContent>>),
+    Chat {
+        messages: Vec<IndexMap<String, MessageContent>>,
+        enable_thinking: Option<bool>,
+    },
     Completion {
         text: String,
         echo_prompt: bool,
@@ -49,6 +52,7 @@ pub enum RequestMessage {
         #[serde(skip)] // TODO!!!!
         images: Vec<image::DynamicImage>,
         messages: Vec<IndexMap<String, MessageContent>>,
+        enable_thinking: Option<bool>,
     },
     ImageGeneration {
         prompt: String,
@@ -62,6 +66,44 @@ fn default_responder<T>() -> Sender<T> {
     sender
 }
 
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub enum SearchContextSize {
+    #[serde(rename = "low")]
+    Low,
+    #[default]
+    #[serde(rename = "medium")]
+    Medium,
+    #[serde(rename = "high")]
+    High,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ApproximateUserLocation {
+    pub city: String,
+    pub country: String,
+    pub region: String,
+    pub timezone: String,
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum WebSearchUserLocation {
+    #[serde(rename = "approximate")]
+    Approximate {
+        approximate: ApproximateUserLocation,
+    },
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+pub struct WebSearchOptions {
+    pub search_context_size: Option<SearchContextSize>,
+    pub user_location: Option<WebSearchUserLocation>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 /// A normal request request to the `MistralRs`.
 /// - `messages`: Messages for the request
@@ -72,7 +114,6 @@ fn default_responder<T>() -> Sender<T> {
 /// - `id`: Request ID
 /// - `constraint`: Constraint to use during generation
 /// - `suffix`: Suffix to add
-/// - `adapters`: Adapters to use in this request
 /// - `tools`: Tools available in this request
 /// - `tool_choice`: Choice of tools
 /// - `logits_processors`: Custom logits processors. Order of application:
@@ -92,12 +133,12 @@ pub struct NormalRequest {
     pub id: usize,
     pub constraint: Constraint,
     pub suffix: Option<String>,
-    pub adapters: Option<Vec<String>>,
     pub tools: Option<Vec<Tool>>,
     pub tool_choice: Option<ToolChoice>,
     #[serde(skip)]
     pub logits_processors: Option<Vec<Arc<dyn CustomLogitsProcessor>>>,
     pub return_raw_logits: bool,
+    pub web_search_options: Option<WebSearchOptions>,
 }
 
 impl NormalRequest {
@@ -120,9 +161,9 @@ impl NormalRequest {
             is_streaming: false,
             constraint: Constraint::None,
             suffix: None,
-            adapters: None,
             logits_processors: None,
             return_raw_logits: false,
+            web_search_options: None,
         }
     }
 }
@@ -135,6 +176,7 @@ pub struct TokenizationRequest {
     pub tools: Option<Vec<Tool>>,
     pub add_generation_prompt: bool,
     pub add_special_tokens: bool,
+    pub enable_thinking: Option<bool>,
     #[serde(default = "default_responder")]
     #[serde(skip)]
     pub response: Sender<anyhow::Result<Vec<u32>>>,
@@ -156,7 +198,6 @@ pub struct DetokenizationRequest {
 pub enum Request {
     Normal(NormalRequest),
     ReIsq(IsqType),
-    ActivateAdapters(Vec<String>),
     Tokenize(TokenizationRequest),
     Detokenize(DetokenizationRequest),
     // Sending a terminate request causes the `run` function to return to the thread created in `MistralRs::new`,
@@ -172,17 +213,13 @@ impl Debug for Request {
                 messages,
                 sampling_params,
                 is_streaming,
-                adapters,
                 id,
                 ..
             }) => {
                 write!(
                     f,
-                    "Request {id} {{ messages: `{messages:?}`, sampling_params: {sampling_params:?}, is_streaming: {is_streaming}, adapters: {adapters:?}}}",
+                    "Request {id} {{ messages: `{messages:?}`, sampling_params: {sampling_params:?}, is_streaming: {is_streaming}}}",
                 )
-            }
-            Request::ActivateAdapters(adapters) => {
-                write!(f, "Activate Adapters Request {adapters:?}",)
             }
             Request::ReIsq(tp) => {
                 write!(f, "Re ISQ Request {tp:?}",)

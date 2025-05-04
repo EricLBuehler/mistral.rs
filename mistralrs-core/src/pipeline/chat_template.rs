@@ -12,8 +12,9 @@ use tracing::info;
 use crate::{MessageContent, Tool};
 
 const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
-    "<|im_end|>",    // Handle ChatML case
-    "<end_of_turn>", // Handle Gemma2 chat case
+    "<|im_end|>",      // Handle ChatML case
+    "<end_of_turn>",   // Handle Gemma2 chat case
+    "<|end_of_text|>", // Hermes
 ];
 
 #[allow(dead_code)]
@@ -220,9 +221,11 @@ fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
     Ok(date_string)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_chat_template_to(
     messages: Vec<IndexMap<String, MessageContent>>,
     add_generation_prompt: bool,
+    enable_thinking: Option<bool>,
     template: &ChatTemplateValue,
     bos_tok: Option<String>,
     eos_tok: Option<String>,
@@ -252,22 +255,44 @@ pub fn apply_chat_template_to(
     let template = match &template.0 {
         Either::Left(x) => x.clone(),
         Either::Right(map) => {
-            let mut template = "".to_string();
+            let mut template = None;
+            let has_tool_use = map.iter().any(|t| {
+                t.get("name").is_some_and(|name| name == "tool_use") || t.contains_key("tool_use")
+            });
+            let must_use_tool_template = !tools.is_empty();
+
+            if must_use_tool_template && !has_tool_use {
+                anyhow::bail!(
+                    "Tools were provided but this chat template does not handle tool usage"
+                );
+            }
+
             for t in map {
-                if t.contains_key("tool_use") && !tools.is_empty() {
-                    template = t["tool_use"].clone();
+                let name = t.get("name");
+                if let Some(name) = name {
+                    template = Some(t["template"].clone());
+                    #[allow(clippy::if_same_then_else)]
+                    if name == "tool_use" && !tools.is_empty() {
+                        break;
+                    } else if name == "default" && !must_use_tool_template {
+                        break;
+                    }
+                } else if t.contains_key("tool_use") && !tools.is_empty() {
+                    template = Some(t["tool_use"].clone());
                     break;
-                } else if t.contains_key("default") {
-                    template = t["default"].clone();
+                } else if t.contains_key("default") && !must_use_tool_template {
+                    template = Some(t["default"].clone());
                     break;
                 }
             }
-            if template.is_empty() {
+
+            let Some(template) = template else {
                 anyhow::bail!("Chat template does not contain a `tool_use` or `default` key. Please ensure it contains at least a `default` key, although `tool_use` should be specified for using tools.");
-            }
+            };
             template
         }
     };
+    let template = template.replace("[::-1]", "|reverse");
 
     env.add_template("chat_template", &template)?;
     env.add_function("raise_exception", raise_exception);
@@ -286,6 +311,7 @@ pub fn apply_chat_template_to(
             eos_token => eos_tok,
             unk_token => unk_tok,
             date_string => date_string,
+            enable_thinking => enable_thinking,
         })?)
     } else {
         Ok(tmpl.render(context! {
@@ -296,6 +322,7 @@ pub fn apply_chat_template_to(
             unk_token => unk_tok,
             tools => tools,
             date_string => date_string,
+            enable_thinking => enable_thinking,
         })?)
     }
 }

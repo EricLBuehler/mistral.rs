@@ -1,8 +1,8 @@
 use candle_core::Result;
 
-use crate::{QuantMethod, QuantizedSerde};
+use crate::{QuantMethod, QuantizeOntoGuard, QuantizedSerde};
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct DummyLayer;
 
 impl QuantMethod for DummyLayer {
@@ -27,6 +27,7 @@ impl QuantMethod for DummyLayer {
         _device: candle_core::Device,
         _n_quantized: &std::sync::atomic::AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
+        _guard: QuantizeOntoGuard,
     ) -> candle_core::Result<std::sync::Arc<dyn QuantMethod>> {
         candle_core::bail!("DummyLayer should not ever be present in forward pass!")
     }
@@ -35,9 +36,6 @@ impl QuantMethod for DummyLayer {
     }
     fn forward(&self, _a: &candle_core::Tensor) -> candle_core::Result<candle_core::Tensor> {
         candle_core::bail!("DummyLayer should not ever be present in forward pass!")
-    }
-    fn get_max_isq_cpu_threads(&self, _dtype: crate::IsqType) -> Option<std::num::NonZeroUsize> {
-        None
     }
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         None

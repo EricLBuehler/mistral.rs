@@ -1,21 +1,16 @@
 use serde_json::Value;
-use std::{
-    collections::HashMap,
-    env,
-    error::Error,
-    ops::Deref,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::{env, error::Error, ops::Deref, pin::Pin, sync::Arc, task::Poll, time::Duration};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::{
-    openai::{ChatCompletionRequest, Grammar, MessageInnerContent, StopTokens},
+    openai::{
+        ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
+        ResponseFormat, StopTokens,
+    },
     util,
 };
-use anyhow::{Context as _, Result};
+use anyhow::Context;
+use anyhow::Result;
 use axum::{
     extract::{Json, State},
     http::{self, StatusCode},
@@ -26,6 +21,7 @@ use axum::{
 };
 use either::Either;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use mistralrs_core::{
     ChatCompletionResponse, Constraint, DrySamplingParams, MistralRs, NormalRequest, Request,
     RequestMessage, Response, SamplingParams, StopTokens as InternalStopTokens,
@@ -41,19 +37,38 @@ impl std::fmt::Display for ModelErrorMessage {
 }
 impl std::error::Error for ModelErrorMessage {}
 
+enum DoneState {
+    Running,
+    SendingDone,
+    Done,
+}
+
 pub struct Streamer {
     rx: Receiver<Response>,
-    is_done: bool,
+    done_state: DoneState,
     state: Arc<MistralRs>,
 }
 
 impl futures::Stream for Streamer {
     type Item = Result<Event, axum::Error>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.is_done {
-            return Poll::Ready(None);
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        match self.done_state {
+            DoneState::SendingDone => {
+                // https://platform.openai.com/docs/api-reference/completions/create
+                // If true, returns a stream of events that happen during the Run as server-sent events, terminating when the Run enters a terminal state with a data: [DONE] message.
+                self.done_state = DoneState::Done;
+                return Poll::Ready(Some(Ok(Event::default().data("[DONE]"))));
+            }
+            DoneState::Done => {
+                return Poll::Ready(None);
+            }
+            DoneState::Running => (),
         }
+
         match self.rx.poll_recv(cx) {
             Poll::Ready(Some(resp)) => match resp {
                 Response::ModelError(msg, _) => {
@@ -61,7 +76,8 @@ impl futures::Stream for Streamer {
                         self.state.clone(),
                         &ModelErrorMessage(msg.to_string()),
                     );
-                    self.is_done = true;
+                    // Done now, just need to send the [DONE]
+                    self.done_state = DoneState::SendingDone;
                     Poll::Ready(Some(Ok(Event::default().data(msg))))
                 }
                 Response::ValidationError(e) => {
@@ -73,8 +89,9 @@ impl futures::Stream for Streamer {
                 }
                 Response::Chunk(response) => {
                     if response.choices.iter().all(|x| x.finish_reason.is_some()) {
-                        self.is_done = true;
+                        self.done_state = DoneState::SendingDone;
                     }
+                    // Done now, just need to send the [DONE]
                     MistralRs::maybe_log_response(self.state.clone(), &response);
                     Poll::Ready(Some(Event::default().json_data(response)))
                 }
@@ -172,15 +189,32 @@ async fn parse_request(
             let mut messages = Vec::new();
             let mut image_urls = Vec::new();
             for message in req_messages {
-                match message.content.deref() {
+                let content = match message.content.as_deref() {
+                    Some(content) => content.clone(),
+                    None => {
+                        // Handle tool call
+                        let calls = message
+                            .tool_calls
+                            .as_ref()
+                            .context(
+                                "No content was provided, expected tool calls to be provided.",
+                            )?
+                            .iter()
+                            .map(|call| &call.function)
+                            .collect::<Vec<_>>();
+
+                        Either::Left(serde_json::to_string(&calls)?)
+                    }
+                };
+
+                match &content {
                     Either::Left(content) => {
                         let mut message_map: IndexMap<
                             String,
                             Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
-                        message_map
-                            .insert("content".to_string(), Either::Left(content.to_string()));
+                        message_map.insert("content".to_string(), Either::Left(content.clone()));
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
@@ -204,11 +238,6 @@ async fn parse_request(
                             messages.push(message_map);
                             continue;
                         }
-                        if image_messages.len() != 2 {
-                            anyhow::bail!(
-                                "Expected 2 items for the content of a message with an image."
-                            );
-                        }
                         if message.role != "user" {
                             anyhow::bail!(
                                 "Role for an image message must be `user`, but it is {}",
@@ -216,70 +245,76 @@ async fn parse_request(
                             );
                         }
 
-                        let mut items = Vec::new();
-                        for image_message in image_messages {
-                            if image_message.len() != 2 {
-                                anyhow::bail!("Expected 2 items for the sub-content of a message with an image.");
-                            }
-                            if !image_message.contains_key("type") {
-                                anyhow::bail!("Expected `type` key in input message.");
-                            }
-                            if image_message["type"].is_right() {
-                                anyhow::bail!("Expected string value in `type`.");
-                            }
-                            items.push(image_message["type"].as_ref().unwrap_left().clone())
+                        enum ContentPart {
+                            Text { text: String },
+                            Image { image_url: String },
                         }
 
-                        fn get_content_and_url(
-                            text_idx: usize,
-                            url_idx: usize,
-                            image_messages: &[HashMap<String, MessageInnerContent>],
-                        ) -> Result<(String, String)> {
-                            if image_messages[text_idx]["text"].is_right() {
-                                anyhow::bail!("Expected string value in `text`.");
+                        let mut items = Vec::new();
+                        for image_message in image_messages {
+                            match image_message.get("type") {
+                                Some(MessageInnerContent(Either::Left(x))) if x == "text" => {
+                                    items.push(ContentPart::Text {
+                                        text: image_message
+                                            .get("text").as_ref()
+                                            .context("Text sub-content must have `text` key.")?.as_ref()
+                                            .left().context("Text sub-content `text` key must be a string.")?.clone(),
+                                    });
+                                }
+                                Some(MessageInnerContent(Either::Left(x))) if x == "image_url" => {
+                                    items.push(ContentPart::Image {
+                                        image_url: image_message.get("image_url").as_ref()
+                                            .context("Image sub-content must have `image_url` key.")?.as_ref()
+                                            .right()
+                                            .context("Image sub-content `image_url` key must be an object.")?
+                                            .get("url")
+                                            .context("Image sub-content `image_url` object must have a `url` key.")?.clone()
+                                    });
+                                }
+                                _ => anyhow::bail!("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}")
                             }
-                            let content = image_messages[text_idx]["text"]
-                                .as_ref()
-                                .unwrap_left()
-                                .clone();
-                            if image_messages[url_idx]["image_url"].is_left()
-                                || !image_messages[url_idx]["image_url"]
-                                    .as_ref()
-                                    .unwrap_right()
-                                    .contains_key("url")
-                            {
-                                anyhow::bail!("Expected content of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}")
-                            }
-                            let url = image_messages[url_idx]["image_url"].as_ref().unwrap_right()
-                                ["url"]
-                                .clone();
-                            Ok((content, url))
                         }
+
+                        let text_content = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Text { text } => Some(text),
+                                _ => None,
+                            })
+                            .join(" ");
+                        let image_urls_iter = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Image { image_url } => Some(image_url.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+
                         let mut message_map: IndexMap<
                             String,
                             Either<String, Vec<IndexMap<String, Value>>>,
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role));
-                        let (content, url) = if items[0] == "text" {
-                            get_content_and_url(0, 1, image_messages)?
-                        } else {
-                            get_content_and_url(1, 0, image_messages)?
-                        };
 
                         let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
-                        let mut content_image_map = IndexMap::new();
-                        content_image_map
-                            .insert("type".to_string(), Value::String("image".to_string()));
-                        content_map.push(content_image_map);
-                        let mut content_text_map = IndexMap::new();
-                        content_text_map
-                            .insert("type".to_string(), Value::String("text".to_string()));
-                        content_text_map.insert("text".to_string(), Value::String(content));
-                        content_map.push(content_text_map);
+                        for _ in &image_urls_iter {
+                            let mut content_image_map = IndexMap::new();
+                            content_image_map
+                                .insert("type".to_string(), Value::String("image".to_string()));
+                            content_map.push(content_image_map);
+                        }
+                        {
+                            let mut content_text_map = IndexMap::new();
+                            content_text_map
+                                .insert("type".to_string(), Value::String("text".to_string()));
+                            content_text_map
+                                .insert("text".to_string(), Value::String(text_content));
+                            content_map.push(content_text_map);
+                        }
 
                         message_map.insert("content".to_string(), Either::Right(content_map));
                         messages.push(message_map);
-                        image_urls.push(url);
+                        image_urls.extend(image_urls_iter);
                     }
                 }
             }
@@ -288,15 +323,20 @@ async fn parse_request(
                 for url_unparsed in image_urls {
                     let image = util::parse_image_url(&url_unparsed)
                         .await
-                        .with_context(|| {
-                            format!("Failed to parse image resource: {}", url_unparsed)
-                        })?;
+                        .context(format!("Failed to parse image resource: {}", url_unparsed))?;
 
                     images.push(image);
                 }
-                RequestMessage::VisionChat { messages, images }
+                RequestMessage::VisionChat {
+                    messages,
+                    images,
+                    enable_thinking: oairequest.enable_thinking,
+                }
             } else {
-                RequestMessage::Chat(messages)
+                RequestMessage::Chat {
+                    messages,
+                    enable_thinking: oairequest.enable_thinking,
+                }
             }
         }
         Either::Right(prompt) => {
@@ -306,7 +346,10 @@ async fn parse_request(
             message_map.insert("role".to_string(), Either::Left("user".to_string()));
             message_map.insert("content".to_string(), Either::Left(prompt));
             messages.push(message_map);
-            RequestMessage::Chat(messages)
+            RequestMessage::Chat {
+                messages,
+                enable_thinking: oairequest.enable_thinking,
+            }
         }
     };
 
@@ -322,6 +365,25 @@ async fn parse_request(
     };
 
     let is_streaming = oairequest.stream.unwrap_or(false);
+
+    if oairequest.grammar.is_some() && oairequest.response_format.is_some() {
+        anyhow::bail!("Request `grammar` and `response_format` were both provided but are mutually exclusive.")
+    }
+
+    let constraint = match oairequest.grammar {
+        Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
+        Some(Grammar::Lark(lark)) => Constraint::Lark(lark),
+        Some(Grammar::JsonSchema(schema)) => Constraint::JsonSchema(schema),
+        Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
+        None => match oairequest.response_format {
+            Some(ResponseFormat::JsonSchema {
+                json_schema: JsonSchemaResponseFormat { name: _, schema },
+            }) => Constraint::JsonSchema(schema),
+            Some(ResponseFormat::Text) => Constraint::None,
+            None => Constraint::None,
+        },
+    };
+
     Ok((
         Request::Normal(NormalRequest {
             id: state.next_request_id(),
@@ -344,18 +406,12 @@ async fn parse_request(
             return_logprobs: oairequest.logprobs,
             is_streaming,
             suffix: None,
-            constraint: match oairequest.grammar {
-                Some(Grammar::Regex(regex)) => Constraint::Regex(regex),
-                Some(Grammar::Lark(lark)) => Constraint::Lark(lark),
-                Some(Grammar::JsonSchema(schema)) => Constraint::JsonSchema(schema),
-                Some(Grammar::Llguidance(llguidance)) => Constraint::Llguidance(llguidance),
-                None => Constraint::None,
-            },
-            adapters: oairequest.adapters,
+            constraint,
             tool_choice: oairequest.tool_choice,
             tools: oairequest.tools,
             logits_processors: None,
             return_raw_logits: false,
+            web_search_options: oairequest.web_search_options,
         }),
         is_streaming,
     ))
@@ -392,7 +448,7 @@ pub async fn chatcompletions(
     if is_streaming {
         let streamer = Streamer {
             rx,
-            is_done: false,
+            done_state: DoneState::Running,
             state,
         };
 

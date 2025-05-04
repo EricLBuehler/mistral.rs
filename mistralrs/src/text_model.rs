@@ -15,12 +15,15 @@ pub struct TextModelBuilder {
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
     pub(crate) write_uqff: Option<PathBuf>,
-    pub(crate) from_uqff: Option<PathBuf>,
+    pub(crate) from_uqff: Option<Vec<PathBuf>>,
     pub(crate) imatrix: Option<PathBuf>,
     pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) chat_template: Option<String>,
+    pub(crate) jinja_explicit: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
+    pub(crate) hf_cache_path: Option<PathBuf>,
+    pub(crate) search_bert_model: Option<BertEmbeddingModel>,
 
     // Model running
     pub(crate) use_flash_attn: bool,
@@ -31,6 +34,7 @@ pub struct TextModelBuilder {
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
     pub(crate) isq: Option<IsqType>,
+    pub(crate) throughput_logging: bool,
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
@@ -52,7 +56,7 @@ impl Default for PagedAttentionMetaBuilder {
         Self {
             block_size: None,
             mem_cpu: 64,
-            mem_gpu: MemoryGpuConfig::Utilization(0.9),
+            mem_gpu: MemoryGpuConfig::ContextSize(4096),
         }
     }
 }
@@ -80,6 +84,7 @@ impl TextModelBuilder {
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     pub fn new(model_id: impl ToString) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -105,7 +110,29 @@ impl TextModelBuilder {
             device_mapping: None,
             imatrix: None,
             calibration_file: None,
+            jinja_explicit: None,
+            throughput_logging: false,
+            hf_cache_path: None,
+            search_bert_model: None,
         }
+    }
+
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
+    pub fn with_search(mut self, search_bert_model: BertEmbeddingModel) -> Self {
+        self.search_bert_model = Some(search_bert_model);
+        self
+    }
+
+    /// Enable runner throughput logging.
+    pub fn with_throughput_logging(mut self) -> Self {
+        self.throughput_logging = true;
+        self
+    }
+
+    /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
+    pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
+        self.jinja_explicit = Some(jinja_explicit);
+        self
     }
 
     /// Set the prompt batchsize to use for inference.
@@ -234,7 +261,7 @@ impl TextModelBuilder {
     }
 
     /// Path to read a UQFF file from.
-    pub fn from_uqff(mut self, path: PathBuf) -> Self {
+    pub fn from_uqff(mut self, path: Vec<PathBuf>) -> Self {
         self.from_uqff = Some(path);
         self
     }
@@ -252,6 +279,12 @@ impl TextModelBuilder {
         self
     }
 
+    /// Cache path for Hugging Face models downloaded locally
+    pub fn from_hf_cache_pathf(mut self, hf_cache_path: PathBuf) -> Self {
+        self.hf_cache_path = Some(hf_cache_path);
+        self
+    }
+
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
             use_flash_attn: self.use_flash_attn,
@@ -262,6 +295,7 @@ impl TextModelBuilder {
             from_uqff: self.from_uqff,
             imatrix: self.imatrix,
             calibration_file: self.calibration_file,
+            hf_cache_path: self.hf_cache_path,
         };
 
         if self.with_logging {
@@ -273,8 +307,9 @@ impl TextModelBuilder {
             self.chat_template,
             self.tokenizer_json,
             Some(self.model_id),
+            self.no_kv_cache,
+            self.jinja_explicit,
         )
-        .with_no_kv_cache(self.no_kv_cache)
         .build(self.loader_type)?;
 
         // Load, into a Pipeline
@@ -311,9 +346,14 @@ impl TextModelBuilder {
             },
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
-            .with_no_kv_cache(self.no_kv_cache)
-            .with_no_prefix_cache(self.prefix_cache_n.is_none());
+        let mut runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            self.throughput_logging,
+            self.search_bert_model,
+        )
+        .with_no_kv_cache(self.no_kv_cache)
+        .with_no_prefix_cache(self.prefix_cache_n.is_none());
 
         if let Some(n) = self.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)
@@ -335,7 +375,7 @@ impl UqffTextModelBuilder {
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
-    pub fn new(model_id: impl ToString, uqff_file: PathBuf) -> Self {
+    pub fn new(model_id: impl ToString, uqff_file: Vec<PathBuf>) -> Self {
         let mut inner = TextModelBuilder::new(model_id);
         inner = inner.from_uqff(uqff_file);
         Self(inner)

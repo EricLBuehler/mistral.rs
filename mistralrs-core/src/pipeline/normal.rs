@@ -1,21 +1,20 @@
 use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use super::isq::ImatrixDataSource;
-use super::llg::build_tok_env;
+use super::llg::build_llg_factory;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
-    TokenSource, XLoraPaths,
+    TokenSource,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
-    ForwardInputsResult, IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory,
-    PreProcessingMixin,
+    AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqOrganization,
+    IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
     AutoLoader, DeepSeekV2Loader, DeepSeekV3Loader, Gemma2Loader, GemmaLoader, LlamaLoader,
     MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader,
-    Qwen2Loader, Starcoder2Loader,
+    Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::device_map::{self, DeviceMapper};
@@ -37,13 +36,14 @@ use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
     normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
-    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::Result;
 use candle_core::{Device, Tensor, Var};
+use hf_hub::Cache;
 use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indicatif::MultiProgress;
-use mistralrs_quant::{GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
+use mistralrs_quant::{AfqLayer, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
 use std::any::Any;
@@ -83,6 +83,7 @@ pub struct NormalLoader {
     model_id: String,
     config: NormalSpecificConfig,
     xlora_model_id: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
@@ -91,7 +92,9 @@ pub struct NormalLoader {
     tgt_non_granular_index: Option<usize>,
     token_source: RwLock<Option<TokenSource>>,
     revision: RwLock<Option<String>>,
-    from_uqff: RwLock<Option<PathBuf>>,
+    from_uqff: RwLock<Option<Vec<PathBuf>>>,
+    jinja_explicit: Option<String>,
+    hf_cache_path: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -100,12 +103,15 @@ pub struct NormalLoaderBuilder {
     model_id: Option<String>,
     config: NormalSpecificConfig,
     xlora_model_id: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    jinja_explicit: Option<String>,
+    hf_cache_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Default)]
@@ -116,18 +122,20 @@ pub struct NormalSpecificConfig {
     pub topology: Option<Topology>,
     pub organization: IsqOrganization,
     pub write_uqff: Option<PathBuf>,
-    pub from_uqff: Option<PathBuf>,
+    pub from_uqff: Option<Vec<PathBuf>>,
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
+    pub hf_cache_path: Option<PathBuf>,
 }
 
 impl NormalLoaderBuilder {
-    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
     pub fn new(
         config: NormalSpecificConfig,
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         model_id: Option<String>,
+        no_kv_cache: bool,
+        jinja_explicit: Option<String>,
     ) -> Self {
         Self {
             config,
@@ -135,14 +143,10 @@ impl NormalLoaderBuilder {
             tokenizer_json,
             model_id,
             kind: ModelKind::Normal,
+            jinja_explicit,
+            no_kv_cache,
             ..Default::default()
         }
-    }
-
-    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
-    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
-        self.no_kv_cache = no_kv_cache;
-        self
     }
 
     fn with_adapter(
@@ -186,11 +190,17 @@ impl NormalLoaderBuilder {
         )
     }
 
-    pub fn with_lora(mut self, lora_model_id: String, lora_order: Ordering) -> Self {
+    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
         self.kind = ModelKind::Adapter {
             adapter: AdapterKind::Lora,
         };
-        self.with_adapter(lora_model_id, lora_order, false, None)
+        self.lora_adapter_ids = Some(lora_adapter_ids);
+        self
+    }
+
+    pub fn hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
+        self.hf_cache_path = Some(hf_cache_path);
+        self
     }
 
     /// If the loader type is not specified, loader type is automatically determined from the
@@ -209,6 +219,8 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::Phi3_5MoE) => Box::new(Phi3_5MoELoader),
             Some(NormalLoaderType::DeepSeekV2) => Box::new(DeepSeekV2Loader),
             Some(NormalLoaderType::DeepSeekV3) => Box::new(DeepSeekV3Loader),
+            Some(NormalLoaderType::Qwen3) => Box::new(Qwen3Loader),
+            Some(NormalLoaderType::Qwen3Moe) => Box::new(Qwen3MoELoader),
             None => Box::new(AutoLoader),
         };
         Ok(Box::new(NormalLoader {
@@ -216,15 +228,18 @@ impl NormalLoaderBuilder {
             model_id: self.model_id.unwrap(),
             config: self.config,
             xlora_model_id: self.xlora_model_id,
+            lora_adapter_ids: self.lora_adapter_ids,
             kind: self.kind,
             xlora_order: self.xlora_order,
             no_kv_cache: self.no_kv_cache,
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
+            jinja_explicit: self.jinja_explicit,
             token_source: RwLock::new(None),
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
+            hf_cache_path: self.hf_cache_path,
         }))
     }
 }
@@ -242,6 +257,13 @@ impl Loader for NormalLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let cache = self
+            .hf_cache_path
+            .clone()
+            .map(Cache::new)
+            .unwrap_or_default();
+        GLOBAL_HF_CACHE.get_or_init(|| cache);
+
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
             &token_source,
@@ -284,6 +306,10 @@ impl Loader for NormalLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
+        if !self.inner.supports_paged_attention(&config)? {
+            paged_attn_config = None;
+        }
+
         // Apply default prompt size here
         let prompt_chunksize = self
             .config
@@ -298,9 +324,9 @@ impl Loader for NormalLoader {
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
             let WorkerTransferData::Init { id: _, worker_rank } = payload;
-            vec![candle_core::Device::new_cuda_with_stream(worker_rank + 1)?]
+            vec![candle_core::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl {
-            vec![candle_core::Device::new_cuda_with_stream(0)?]
+            vec![candle_core::Device::new_cuda(0)?]
         } else {
             device_map::get_all_similar_devices(device)?
         };
@@ -325,7 +351,7 @@ impl Loader for NormalLoader {
                 if let Some(serialized) = &*self.from_uqff.read().unwrap() {
                     let weight_pack_factor = {
                         let ser_artifacts = unsafe {
-                            candle_core::safetensors::MmapedSafetensors::new(serialized)?
+                            candle_core::safetensors::MmapedSafetensors::multi(serialized)?
                         };
                         let mut total_pack_factors = 0;
                         let total_tensors = ser_artifacts.tensors().len();
@@ -345,6 +371,10 @@ impl Loader for NormalLoader {
                                 }
                                 QuantizedSerdeType::Fp8 => IsqType::F8E4M3.pack_factor(dtype),
                                 QuantizedSerdeType::Unquant => 1,
+                                QuantizedSerdeType::Afq => {
+                                    AfqLayer::get_isq_type_from_uqff(Cow::Borrowed(artifact))?
+                                        .pack_factor(dtype)
+                                }
                             };
                             total_pack_factors += pack_factor;
                         }
@@ -473,8 +503,8 @@ impl Loader for NormalLoader {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
-                &load_device,
                 &available_devices,
+                silent,
                 &config,
                 loading_isq,
                 self.config.from_uqff.is_some(),
@@ -516,7 +546,7 @@ impl Loader for NormalLoader {
                     adapter: AdapterKind::Lora,
                 } => lora_model_loader!(
                     paths,
-                    dtype,
+                    Some(dtype),
                     &load_device,
                     layer_devices.clone(),
                     config,
@@ -525,7 +555,10 @@ impl Loader for NormalLoader {
                     silent,
                     mapper,
                     loading_isq,
+                    self.config.from_uqff.is_some(),
                     device.clone(),
+                    attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
                 ),
                 _ => unreachable!(),
@@ -569,7 +602,7 @@ impl Loader for NormalLoader {
                     adapter: AdapterKind::Lora,
                 } => lora_model_loader!(
                     paths,
-                    dtype,
+                    Some(dtype),
                     &load_device,
                     layer_devices.clone(),
                     config,
@@ -578,7 +611,10 @@ impl Loader for NormalLoader {
                     silent,
                     mapper,
                     loading_isq,
+                    self.config.from_uqff.is_some(),
                     device.clone(),
+                    attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
                 ),
                 _ => unreachable!(),
@@ -593,8 +629,9 @@ impl Loader for NormalLoader {
 
         let chat_template = get_chat_template(
             paths,
+            &self.jinja_explicit,
             &paths
-                .get_chat_template_json()
+                .get_chat_template_explicit()
                 .as_ref()
                 .map(|x| x.to_string_lossy().to_string())
                 .clone(),
@@ -606,7 +643,7 @@ impl Loader for NormalLoader {
             let calibration_data = std::fs::read_to_string(calibration_file)?;
             // Tokenize, don't add bos yet
             let tokens = tokenizer
-                .encode(calibration_data, false)
+                .encode_fast(calibration_data, false)
                 .map_err(anyhow::Error::msg)?
                 .get_ids()
                 .to_vec();
@@ -635,7 +672,7 @@ impl Loader for NormalLoader {
                 let start = Instant::now();
                 let inputs = make_prompt_chunk(
                     0,
-                    vec![chunk],
+                    vec![&chunk],
                     &[0],
                     &load_device,
                     None,
@@ -725,7 +762,12 @@ impl Loader for NormalLoader {
             )?;
         }
 
-        let paged_attn_config = if matches!(self.kind, ModelKind::Adapter { .. }) {
+        let paged_attn_config = if matches!(
+            self.kind,
+            ModelKind::Adapter {
+                adapter: AdapterKind::XLora
+            }
+        ) {
             warn!(
                 "Adapter parallel_models do not currently support PagedAttention, running without"
             );
@@ -769,7 +811,7 @@ impl Loader for NormalLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let tok_env = build_tok_env(tokenizer.clone());
+        let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
@@ -792,7 +834,7 @@ impl Loader for NormalLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_env: Some(tok_env),
+                llg_factory: Some(llg_factory),
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: is_xlora,
                 num_hidden_layers,
@@ -818,10 +860,7 @@ impl Loader for NormalLoader {
     }
 
     fn get_id(&self) -> String {
-        self.xlora_model_id
-            .as_deref()
-            .unwrap_or(&self.model_id)
-            .to_string()
+        self.model_id.clone()
     }
 
     fn get_kind(&self) -> ModelKind {
@@ -905,12 +944,6 @@ impl CacheManagerMixin for NormalPipeline {
     }
 }
 
-impl AdapterActivationMixin for NormalPipeline {
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        Ok(self.model.activate_adapters(adapter_names)?)
-    }
-}
-
 impl MetadataMixin for NormalPipeline {
     fn device(&self) -> Device {
         self.model.device().clone()
@@ -966,38 +999,6 @@ impl Pipeline for NormalPipeline {
             }
             (None, None) => None,
         };
-        #[cfg(feature = "metal")]
-        let logits = objc::rc::autoreleasepool(|| -> candle_core::Result<Tensor> {
-            match self.model.is_xlora() {
-                false => {
-                    let paged_attn_meta = paged_attn_meta
-                        .as_ref()
-                        .map(|meta| (meta.0.get_kv_cache().clone(), meta.1.clone()));
-
-                    self.model.forward(
-                        &input_ids,
-                        &seqlen_offsets,
-                        context_lens,
-                        position_ids,
-                        paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
-                        &flash_meta,
-                    )
-                }
-                true => self.model.xlora_forward(
-                    &input_ids,
-                    input_ids_full.as_ref().unwrap_or(&input_ids),
-                    &seqlen_offsets,
-                    seqlen_offsets_full.as_ref().unwrap_or(&seqlen_offsets),
-                    self.no_kv_cache,
-                    &self.non_granular_state,
-                    context_lens,
-                    position_ids,
-                    &flash_meta,
-                    flash_meta_full.as_ref().unwrap_or(&flash_meta),
-                ),
-            }
-        })?;
-        #[cfg(not(feature = "metal"))]
         let logits = match self.model.is_xlora() {
             false => {
                 let paged_attn_meta = paged_attn_meta
@@ -1083,7 +1084,8 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let model_id = Path::new(&model_id);
 
             let api = {
-                let mut api = ApiBuilder::new()
+                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
                 if let Ok(x) = std::env::var("HF_HUB_CACHE") {
@@ -1138,7 +1140,8 @@ impl AnyMoePipelineMixin for NormalPipeline {
             let model_id = Path::new(&gate_model_id);
 
             let api = {
-                let mut api = ApiBuilder::new()
+                let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+                let mut api = ApiBuilder::from_cache(cache)
                     .with_progress(!silent)
                     .with_token(get_token(token).map_err(candle_core::Error::msg)?);
                 if let Ok(x) = std::env::var("HF_HUB_CACHE") {

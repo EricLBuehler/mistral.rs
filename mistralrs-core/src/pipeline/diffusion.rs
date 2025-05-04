@@ -1,8 +1,8 @@
 use super::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType,
-    DiffusionModel, DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult,
-    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType, DiffusionModel,
+    DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult, GeneralMetadata,
+    IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
     PreProcessingMixin, Processor, TokenSource,
 };
 use crate::device_map::DeviceMapper;
@@ -215,7 +215,7 @@ impl Loader for DiffusionLoader {
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_env: None,
+                llg_factory: None,
                 is_xlora: false,
                 no_prefix_cache: false,
                 num_hidden_layers: 1, // FIXME(EricLBuehler): we know this is only for caching, so its OK.
@@ -273,12 +273,6 @@ impl CacheManagerMixin for DiffusionPipeline {
     }
     fn cache(&self) -> &EitherCache {
         &self.dummy_cache
-    }
-}
-
-impl AdapterActivationMixin for DiffusionPipeline {
-    fn activate_adapters(&mut self, _adapters: Vec<String>) -> Result<usize> {
-        anyhow::bail!("Diffusion models do not support adapter activation.");
     }
 }
 

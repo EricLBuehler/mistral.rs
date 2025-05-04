@@ -114,7 +114,7 @@ macro_rules! handle_pipeline_forward_error {
                             message: ResponseMessage {
                                 content: Some(res),
                                 role: "assistant".to_string(),
-                                tool_calls: Vec::new(),
+                                tool_calls: None,
                             },
                             logprobs: None,
                         };
@@ -181,7 +181,7 @@ macro_rules! handle_pipeline_forward_error {
                 // - The sequence is gone
                 // - We should reset the state then, including draft.
                 p.set_none_cache($seq_slice, true, true, false);
-                $prefix_cacher.evict_all_to_cpu().unwrap();
+                get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap();
 
                 continue $label;
             }

@@ -45,6 +45,8 @@ impl GgufXLoraModelBuilder {
             self.gguf_model.model_id,
             self.gguf_model.files,
             config,
+            self.gguf_model.no_kv_cache,
+            self.gguf_model.jinja_explicit,
         )
         .with_xlora(
             self.xlora_model_id,
@@ -89,9 +91,14 @@ impl GgufXLoraModelBuilder {
             },
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
-            .with_no_kv_cache(self.gguf_model.no_kv_cache)
-            .with_no_prefix_cache(self.gguf_model.prefix_cache_n.is_none());
+        let mut runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            self.gguf_model.throughput_logging,
+            self.gguf_model.search_bert_model,
+        )
+        .with_no_kv_cache(self.gguf_model.no_kv_cache)
+        .with_no_prefix_cache(self.gguf_model.prefix_cache_n.is_none());
 
         if let Some(n) = self.gguf_model.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

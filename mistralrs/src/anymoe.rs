@@ -50,6 +50,7 @@ impl AnyMoeModelBuilder {
             from_uqff: self.base.from_uqff,
             imatrix: None,
             calibration_file: None,
+            hf_cache_path: self.base.hf_cache_path,
         };
 
         if self.base.with_logging {
@@ -61,8 +62,9 @@ impl AnyMoeModelBuilder {
             self.base.chat_template,
             self.base.tokenizer_json,
             Some(self.base.model_id),
+            self.base.no_kv_cache,
+            self.base.jinja_explicit,
         )
-        .with_no_kv_cache(self.base.no_kv_cache)
         .build(self.base.loader_type)?;
 
         let loader: Box<dyn Loader> = Box::new(AnyMoeLoader {
@@ -110,9 +112,14 @@ impl AnyMoeModelBuilder {
             },
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
-            .with_no_kv_cache(self.base.no_kv_cache)
-            .with_no_prefix_cache(self.base.prefix_cache_n.is_none());
+        let mut runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            self.base.throughput_logging,
+            self.base.search_bert_model,
+        )
+        .with_no_kv_cache(self.base.no_kv_cache)
+        .with_no_prefix_cache(self.base.prefix_cache_n.is_none());
 
         if let Some(n) = self.base.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

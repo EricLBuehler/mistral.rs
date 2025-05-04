@@ -74,7 +74,6 @@ fn main() -> anyhow::Result<()> {
         id: 0,
         constraint: Constraint::Regex("(- [^\n]*\n)+(- [^\n]*)(\n\n)?".to_string()), // Bullet list regex
         suffix: None,
-        adapters: None,
         tool_choice: None,
         tools: None,
         logits_processors: None,

@@ -256,17 +256,17 @@ impl SimpleBackend for MmapedSafetensors {
     }
 }
 
-pub enum ShardedSafeTensors<'a> {
+pub enum ShardedSafeTensors {
     Sharded {
         b: MmapedSafetensors,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
     },
-    SimpleBackend(Box<dyn SimpleBackend + 'a>),
+    SimpleBackend(Box<dyn SimpleBackend + 'static>),
 }
 
-pub type ShardedVarBuilder<'a> = VarBuilderArgs<'a, ShardedSafeTensors<'a>>;
+pub type ShardedVarBuilder = VarBuilderArgs<'static, ShardedSafeTensors>;
 
-impl<'a> ShardedSafeTensors<'a> {
+impl ShardedSafeTensors {
     /// Initializes a `VarBuilder` that retrieves tensors stored in a collection of safetensors
     /// files and make them usable in a sharded way.
     ///
@@ -278,7 +278,7 @@ impl<'a> ShardedSafeTensors<'a> {
         dtype: DType,
         dev: &Device,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
-    ) -> Result<ShardedVarBuilder<'a>> {
+    ) -> Result<ShardedVarBuilder> {
         let tensors = MmapedSafetensors::multi(paths)?;
         let backend = ShardedSafeTensors::Sharded {
             b: tensors,
@@ -286,12 +286,14 @@ impl<'a> ShardedSafeTensors<'a> {
         };
         Ok(VarBuilderArgs::new_with_args(backend, dtype, dev))
     }
+}
 
+impl ShardedSafeTensors {
     pub fn wrap(
-        backend: Box<dyn SimpleBackend + 'a>,
+        backend: Box<dyn SimpleBackend + 'static>,
         dtype: DType,
         dev: Device,
-    ) -> ShardedVarBuilder<'a> {
+    ) -> ShardedVarBuilder {
         VarBuilderArgs::new_with_args(Self::SimpleBackend(backend), dtype, &dev)
     }
 }
@@ -331,7 +333,7 @@ impl Default for Shard {
 /// `get_sharded("tensor", 0, 0, 2)` means `tensor.i((..512))`
 /// `get_sharded("tensor", 0, 1, 2)` means `tensor.i((512..))`
 /// `get_sharded("tensor", 1, 0, 2)` means `tensor.i((.., ..512))`
-impl Backend for ShardedSafeTensors<'_> {
+impl Backend for ShardedSafeTensors {
     type Hints = Shard;
 
     fn get(
@@ -379,7 +381,7 @@ impl Backend for ShardedSafeTensors<'_> {
             }
         }
 
-        match h {
+        let result = match h {
             Shard::Simple {
                 dim,
                 rank,
@@ -431,15 +433,21 @@ impl Backend for ShardedSafeTensors<'_> {
                                     "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
                                 ))
                             })?
+                        } else if dim == 2 {
+                            view.slice((.., .., start..stop)).map_err(|_| {
+                                Error::Msg(format!(
+                                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                                ))
+                            })?
                         } else {
-                            candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                            candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
                         };
 
                         shape[dim] = block_size;
 
                         let view_dtype: DType = view_dtype.try_into()?;
                         let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
-                        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)
+                        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?
                     }
                     Self::SimpleBackend(b) => {
                         use candle_core::IndexOp;
@@ -460,11 +468,13 @@ impl Backend for ShardedSafeTensors<'_> {
                         let stop = (rank + 1) * block_size;
 
                         if dim == 0 {
-                            tensor.i((start..stop, ..))
+                            tensor.i(start..stop)?
                         } else if dim == 1 {
-                            tensor.i((.., start..stop))
+                            tensor.i((.., start..stop))?
+                        } else if dim == 2 {
+                            tensor.i((.., .., start..stop))?
                         } else {
-                            candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                            candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
                         }
                     }
                 }
@@ -507,15 +517,21 @@ impl Backend for ShardedSafeTensors<'_> {
                                     "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
                                 ))
                             })?
+                        } else if dim == 2 {
+                            view.slice((.., .., start..stop)).map_err(|_| {
+                                Error::Msg(format!(
+                                    "Cannot slice tensor {path} ({shape:?} along dim {dim} with {start}..{stop}"
+                                ))
+                            })?
                         } else {
-                            candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                            candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
                         };
 
                         shape[dim] = len;
 
                         let view_dtype: DType = view_dtype.try_into()?;
                         let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
-                        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)
+                        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?
                     }
                     Self::SimpleBackend(b) => {
                         use candle_core::IndexOp;
@@ -525,16 +541,20 @@ impl Backend for ShardedSafeTensors<'_> {
                         let stop = start + len;
 
                         if dim == 0 {
-                            tensor.i((start..stop, ..))
+                            tensor.i(start..stop)?
                         } else if dim == 1 {
-                            tensor.i((.., start..stop))
+                            tensor.i((.., start..stop))?
+                        } else if dim == 2 {
+                            tensor.i((.., .., start..stop))?
                         } else {
-                            candle_core::bail!("Got sharded on dimensions != 0 or 1")
+                            candle_core::bail!("Got sharded on dimensions != 0 or 1 or 2")
                         }
                     }
                 }
             }
-        }
+        };
+
+        result.contiguous()
     }
 
     fn get_unchecked(&self, name: &str, dtype: DType, dev: &Device) -> Result<Tensor> {

@@ -84,11 +84,11 @@ impl Model {
             id: 0,
             constraint: request.take_constraint(),
             suffix: None,
-            adapters: request.take_adapters(),
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
+            web_search_options: request.take_web_search_options(),
         });
 
         self.runner.get_sender()?.send(request).await?;
@@ -119,11 +119,11 @@ impl Model {
             id: 0,
             constraint: request.take_constraint(),
             suffix: None,
-            adapters: request.take_adapters(),
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: false,
+            web_search_options: request.take_web_search_options(),
         });
 
         self.runner.get_sender()?.send(request).await?;
@@ -163,11 +163,11 @@ impl Model {
             id: 0,
             constraint: request.take_constraint(),
             suffix: None,
-            adapters: request.take_adapters(),
             tools,
             tool_choice,
             logits_processors: request.take_logits_processors(),
             return_raw_logits: true,
+            web_search_options: request.take_web_search_options(),
         });
 
         self.runner.get_sender()?.send(request).await?;
@@ -208,11 +208,11 @@ impl Model {
             is_streaming: false,
             suffix: None,
             constraint: Constraint::None,
-            adapters: None,
             tool_choice: None,
             tools: None,
             logits_processors: None,
             return_raw_logits: false,
+            web_search_options: None,
         });
 
         self.runner.get_sender()?.send(request).await?;
@@ -227,18 +227,6 @@ impl Model {
         };
 
         Ok(response)
-    }
-
-    /// Activate certain adapters on the model, they will be used for requests which do not specify unique adapters.
-    pub async fn activate_adapters<A: ToString>(&self, adapters: Vec<A>) -> anyhow::Result<()> {
-        let request = Request::ActivateAdapters(
-            adapters
-                .into_iter()
-                .map(|a| a.to_string())
-                .collect::<Vec<_>>(),
-        );
-
-        Ok(self.runner.get_sender()?.send(request).await?)
     }
 
     /// Reapply ISQ to the model. This will be done on whatever device the model is already on.
@@ -256,6 +244,7 @@ impl Model {
         tools: Option<Vec<Tool>>,
         add_special_tokens: bool,
         add_generation_prompt: bool,
+        enable_thinking: Option<bool>,
     ) -> anyhow::Result<Vec<u32>> {
         let (tx, mut rx) = channel(1);
         let request = Request::Tokenize(TokenizationRequest {
@@ -264,6 +253,7 @@ impl Model {
             add_special_tokens,
             add_generation_prompt,
             response: tx,
+            enable_thinking,
         });
         self.runner.get_sender()?.send(request).await?;
 

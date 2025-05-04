@@ -78,12 +78,15 @@ functions = {
 messages = [
     {
         "role": "user",
-        "content": "What is the value of the area of a circle with radius 4?",
+        "content": "Please compute using any available tools the are of a circle with radius 4?",
     }
 ]
 
 completion = client.chat.completions.create(
-    model="llama-3.1", messages=messages, tools=tools, tool_choice="auto"
+    model="llama-3.1",
+    messages=messages,
+    tools=tools,
+    tool_choice="auto",
 )
 
 # print(completion.usage)

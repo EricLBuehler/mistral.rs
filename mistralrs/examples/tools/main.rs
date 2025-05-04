@@ -18,7 +18,7 @@ fn get_weather(input: GetWeatherInput) -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = TextModelBuilder::new("meta-llama/Meta-Llama-3.1-70B-Instruct")
+    let model = TextModelBuilder::new("meta-llama/Meta-Llama-3.1-8B-Instruct")
         .with_logging()
         .with_isq(IsqType::Q8_0)
         .build()
@@ -54,8 +54,8 @@ async fn main() -> Result<()> {
 
     let message = &response.choices[0].message;
 
-    if !message.tool_calls.is_empty() {
-        let called = &message.tool_calls[0];
+    if let Some(tool_calls) = &message.tool_calls {
+        let called = &tool_calls[0];
         if called.function.name == "get_weather" {
             let input: GetWeatherInput = serde_json::from_str(&called.function.arguments)?;
             println!("Called tool `get_weather` with arguments {input:?}");

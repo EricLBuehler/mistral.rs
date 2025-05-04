@@ -216,11 +216,23 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 }
 
                 let final_text = text_chunks.join("");
-                seq.set_initial_prompt(final_text.clone());
+
+                let input_ids = tokenizer
+                    .encode_fast(final_text.clone(), false)
+                    .unwrap()
+                    .get_ids()
+                    .to_vec();
+
+                if !seq.multimodal.has_changed_prompt {
+                    seq.set_initial_prompt(final_text.clone());
+
+                    seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
+                    seq.multimodal.has_changed_prompt = true;
+                }
 
                 let image_bounds = {
                     let im_start_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             self.config
                                 .im_start_token
                                 .clone()
@@ -230,7 +242,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         .unwrap()
                         .get_ids()[0];
                     let im_end_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             self.config
                                 .im_end_token
                                 .clone()
@@ -240,7 +252,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         .unwrap()
                         .get_ids()[0];
                     let slice_start_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             self.config
                                 .slice_start_token
                                 .clone()
@@ -250,7 +262,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         .unwrap()
                         .get_ids()[0];
                     let slice_end_id = tokenizer
-                        .encode(
+                        .encode_fast(
                             self.config
                                 .slice_end_token
                                 .clone()
@@ -259,14 +271,6 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                         )
                         .unwrap()
                         .get_ids()[0];
-
-                    let input_ids = tokenizer
-                        .encode(final_text, false)
-                        .unwrap()
-                        .get_ids()
-                        .to_vec();
-
-                    seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
 
                     let image_start_idx = input_ids
                         .iter()
@@ -339,7 +343,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             get_prompt_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,
@@ -356,7 +360,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             get_completion_input(
                 input_seqs
                     .iter()
-                    .map(|seq| seq.get_toks().to_vec())
+                    .map(|seq| seq.get_toks())
                     .collect::<Vec<_>>(),
                 input_seqs,
                 device,

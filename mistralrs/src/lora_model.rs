@@ -5,20 +5,20 @@ use crate::{best_device, Model, TextModelBuilder};
 /// Wrapper of [`TextModelBuilder`] for LoRA models.
 pub struct LoraModelBuilder {
     text_model: TextModelBuilder,
-    lora_model_id: String,
-    ordering: Ordering,
+    lora_adapter_ids: Vec<String>,
 }
 
 impl LoraModelBuilder {
     pub fn from_text_model_builder(
         text_model: TextModelBuilder,
-        lora_model_id: impl ToString,
-        ordering: Ordering,
+        lora_adapter_ids: impl IntoIterator<Item = impl ToString>,
     ) -> Self {
         Self {
             text_model,
-            lora_model_id: lora_model_id.to_string(),
-            ordering,
+            lora_adapter_ids: lora_adapter_ids
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect(),
         }
     }
 
@@ -32,6 +32,7 @@ impl LoraModelBuilder {
             from_uqff: self.text_model.from_uqff,
             imatrix: None,
             calibration_file: None,
+            hf_cache_path: self.text_model.hf_cache_path,
         };
 
         if self.text_model.with_logging {
@@ -43,9 +44,10 @@ impl LoraModelBuilder {
             self.text_model.chat_template,
             self.text_model.tokenizer_json,
             Some(self.text_model.model_id),
+            self.text_model.no_kv_cache,
+            self.text_model.jinja_explicit,
         )
-        .with_lora(self.lora_model_id, self.ordering)
-        .with_no_kv_cache(self.text_model.no_kv_cache)
+        .with_lora(self.lora_adapter_ids)
         .build(self.text_model.loader_type)?;
 
         // Load, into a Pipeline
@@ -83,9 +85,14 @@ impl LoraModelBuilder {
             },
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
-            .with_no_kv_cache(self.text_model.no_kv_cache)
-            .with_no_prefix_cache(self.text_model.prefix_cache_n.is_none());
+        let mut runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            self.text_model.throughput_logging,
+            self.text_model.search_bert_model,
+        )
+        .with_no_kv_cache(self.text_model.no_kv_cache)
+        .with_no_prefix_cache(self.text_model.prefix_cache_n.is_none());
 
         if let Some(n) = self.text_model.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

@@ -91,7 +91,7 @@ pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
         url::Url::from_file_path(std::path::absolute(url_unparsed)?)
             .map_err(|_| format!("Could not parse file path: {}", url_unparsed))?
     } else {
-        url::Url::parse(&format!("data:image/png;base64,{}", url_unparsed))
+        url::Url::parse(url_unparsed)
             .map_err(|_| format!("Could not parse as base64 data: {}", url_unparsed))?
     };
 

@@ -1,12 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-// This implementation is based on:
-// https://huggingface.co/microsoft/Phi-3-mini-4k-instruct/blob/main/modeling_phi3.py
 use candle_core::{Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::LayerNorm;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    ColumnParallelLayer, NonZeroOp, QuantMethod, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -19,7 +17,6 @@ use crate::{
         PhiRotaryEmbedding, Sdpa,
     },
     layers_masker::{masked_fill, PastKvLenCache},
-    ops::NonZeroOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         extract_logits,
@@ -464,7 +461,7 @@ impl MoeMlp {
             // Index the correct hidden staters and compute the expert hidden state
             // for the current expert, we need to make sure to multiply the output hidden
             // states by `routing_weights` on the corresponding tokens (top-1, top-2)
-            let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden))?;
+            let current_state = xs.index_select(&top_x, 0)?.reshape((1, (), hidden))?;
             let current_routing_weights = routing_weights
                 .index_select(&top_x, 0)?
                 .gather(&idx.unsqueeze(1)?.contiguous()?, 1)?;
@@ -476,7 +473,7 @@ impl MoeMlp {
 
             final_hidden_states = final_hidden_states.index_add(
                 &top_x.contiguous()?,
-                &current_hidden_states.to_dtype(xs.dtype())?,
+                &current_hidden_states.squeeze(0)?.to_dtype(xs.dtype())?,
                 0,
             )?;
         }
@@ -596,7 +593,7 @@ impl Model {
         if let Some(ref quant_cfg) = &cfg.quantization_config {
             tracing::info!(
                 "Using {} quantization: {}.",
-                quant_cfg.quant_method.to_string(),
+                quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
         }
@@ -607,6 +604,7 @@ impl Model {
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            &cfg.quantization_config,
         )?;
         let mut ropes = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {

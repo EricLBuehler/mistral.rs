@@ -22,15 +22,12 @@ completion = client.chat.completions.create(
             "content": "Gimme a sample address.",
         }
     ],
-    max_tokens=256,
     frequency_penalty=1.0,
     top_p=0.1,
     temperature=0,
-    extra_body={
-        "grammar": {
-            "type": "json_schema",
-            "value": addr_schema,
-        }
+    response_format={
+        "type": "json_schema",
+        "json_schema": {"name": "My Schema", "schema": addr_schema},
     },
 )
 

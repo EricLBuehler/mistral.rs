@@ -1,10 +1,7 @@
-use std::{
-    num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
 use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
-use candle_nn::{Linear, Module};
+use candle_nn::Linear;
 
 mod ops;
 
@@ -14,8 +11,9 @@ mod ffi;
 use crate::{
     generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    DummyLayer, FP8Linear, GgufMatMul, HqqAxis, HqqBits, HqqConfig, HqqLayer, IsqType, QuantMethod,
-    QuantMethodConfig, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
+    AfqBits, AfqGroupSize, AfqLayer, DummyLayer, FP8Linear, GgufMatMul, HqqAxis, HqqBits,
+    HqqConfig, HqqLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
+    QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 #[derive(Debug)]
@@ -39,7 +37,8 @@ impl QuantMethod for BlockwiseFP8Linear {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::FP8 { .. } => unreachable!(),
+            | QuantMethodConfig::FP8 { .. }
+            | QuantMethodConfig::Afq { .. } => unreachable!(),
             QuantMethodConfig::BlockwiseFP8 {
                 weight,
                 weight_scale_inv,
@@ -68,8 +67,12 @@ impl QuantMethod for BlockwiseFP8Linear {
         // Dequantize matmul always.
         // TODO: add a specific kernel?
         let weight = self.dequantize_w()?;
-        let lin = Linear::new(weight, self.bias.clone());
-        lin.forward(x)
+        // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
+        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+            weight,
+            self.bias.clone(),
+        )))?;
+        unquant.forward(x)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -90,6 +93,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         device: Device,
         n_quantized: &AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         let weight = ops::fp8_blockwise_dequantize(
             &self.weight,
@@ -100,6 +104,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         match dtype {
             /*Some(IsqType::HQQ1 | IsqType::HQQ2 | IsqType::HQQ3 | */
             Some(IsqType::HQQ4 | IsqType::HQQ8) => {
+                let _acquired_quantize_guard = guard.acquire();
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("HQQ does not support imatrix.");
@@ -132,6 +137,30 @@ impl QuantMethod for BlockwiseFP8Linear {
                     Ok(Arc::new(res))
                 }
             }
+            Some(IsqType::AFQ2 | IsqType::AFQ3 | IsqType::AFQ4 | IsqType::AFQ6 | IsqType::AFQ8) => {
+                let _acquired_quantize_guard = guard.acquire();
+                if imatrix_weight.is_some() {
+                    // TODO just warn?
+                    candle_core::bail!("AFQ does not support imatrix.");
+                }
+
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let bits = match dtype.unwrap() {
+                    IsqType::AFQ8 => AfqBits::Eight,
+                    IsqType::AFQ6 => AfqBits::Six,
+                    IsqType::AFQ4 => AfqBits::Four,
+                    IsqType::AFQ3 => AfqBits::Three,
+                    IsqType::AFQ2 => AfqBits::Two,
+                    _ => unreachable!(),
+                };
+
+                Ok(Arc::new(AfqLayer::new(QuantMethodConfig::Afq {
+                    weight: weight.to_device(&device)?,
+                    bias: self.bias.as_ref().map(|b| b.to_device(&device).unwrap()),
+                    bits,
+                    group_size: AfqGroupSize::default(),
+                })?))
+            }
             Some(
                 IsqType::Q2K
                 | IsqType::Q3K
@@ -148,9 +177,9 @@ impl QuantMethod for BlockwiseFP8Linear {
             ) => {
                 let dtype: GgmlDType = dtype.unwrap().try_into()?;
                 let res = if let Some(imatrix_weight) = imatrix_weight {
-                    generate_isq_imatrix!(weight, imatrix_weight, device, dtype, n_quantized)
+                    generate_isq_imatrix!(weight, imatrix_weight, device, dtype, n_quantized, guard)
                 } else {
-                    generate_isq!(weight, device, dtype, n_quantized)
+                    generate_isq!(weight, device, dtype, n_quantized, guard)
                 };
                 Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                     q_weight: res,
@@ -161,6 +190,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 })?))
             }
             Some(IsqType::F8E4M3) => {
+                let _acquired_quantize_guard = guard.acquire();
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("F8E4M3 does not support imatrix.");
@@ -178,6 +208,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 })?))
             }
             None => {
+                let _acquired_quantize_guard = guard.acquire();
                 // Ignore imatrix altogether
 
                 let w = weight.to_device(&device)?;
@@ -190,26 +221,6 @@ impl QuantMethod for BlockwiseFP8Linear {
                     QuantMethodConfig::Unquantized(Linear::new(w, b)),
                 )?))
             }
-        }
-    }
-
-    fn get_max_isq_cpu_threads(&self, dtype: IsqType) -> Option<NonZeroUsize> {
-        match dtype {
-            IsqType::F8E4M3 => None,
-            IsqType::Q2K
-            | IsqType::Q3K
-            | IsqType::Q4K
-            | IsqType::Q4_0
-            | IsqType::Q4_1
-            | IsqType::Q5K
-            | IsqType::Q5_0
-            | IsqType::Q5_1
-            | IsqType::Q6K
-            | IsqType::Q8K
-            | IsqType::Q8_0
-            | IsqType::Q8_1
-            | IsqType::HQQ4
-            | IsqType::HQQ8 => None,
         }
     }
 }
@@ -253,16 +264,16 @@ pub fn blockwise_fp8_linear_b(
     hints: Shard,
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
+    let QuantizedConfig::Fp8 { weight_block_size } = config else {
+        candle_core::bail!("Unexpected quantization config.")
+    };
+
     // Handle the case where the layer is dummy (no tensors)
     if !(vb.contains_tensor("weight") && vb.contains_tensor("weight_scale_inv")) {
         let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
         return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
     }
 
-    let weight_block_size = config
-        .weight_block_size
-        .as_ref()
-        .expect("Blockwise FP8 requires weight_block_size in config");
     if weight_block_size.len() != 2 {
         candle_core::bail!("Expected weight_block_size to have length 2, got {weight_block_size:?}")
     }

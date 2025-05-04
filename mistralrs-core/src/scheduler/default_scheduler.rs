@@ -58,7 +58,7 @@ pub struct BucketedSeqs<Backer: FcfsBacker> {
     waiting: Backer,
 }
 
-pub trait BucketingManager<Backer: FcfsBacker> {
+pub trait BucketingManager<Backer: FcfsBacker>: Send + Sync {
     /// Bucket and waitlist running input sequences, returning the newly running sequences.
     fn bucket_and_waitlist_seqs_waiting(
         &mut self,
@@ -68,9 +68,9 @@ pub trait BucketingManager<Backer: FcfsBacker> {
     ) -> BucketedSeqs<Backer>;
 }
 
-// (adapters, cache length, (has_imgs && is_prompt), sequence offset)
+// (cache length, (has_imgs && is_prompt), sequence offset)
 // Bucket by that metric for images because if we are not a prompt, then this doesn't apply
-type BucketKey = (Option<Vec<String>>, usize, bool, usize);
+type BucketKey = (usize, bool, usize);
 
 struct FixedBucketingManager;
 
@@ -90,7 +90,6 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
         for seq in running {
             let len = seq.len();
             match seq_buckets.get_mut(&(
-                seq.get_adapters(),
                 len,
                 seq.images().is_some() && seq.is_prompt(),
                 seq.token_offset(),
@@ -99,7 +98,6 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
                     if !discrete {
                         *seq_priorities
                             .get_mut(&(
-                                seq.get_adapters(),
                                 len,
                                 seq.images().is_some() && seq.is_prompt(),
                                 seq.token_offset(),
@@ -112,7 +110,6 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
                     if !discrete {
                         seq_priorities.insert(
                             (
-                                seq.get_adapters(),
                                 len,
                                 seq.images().is_some() && seq.is_prompt(),
                                 seq.token_offset(),
@@ -122,7 +119,6 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
                     }
                     seq_buckets.insert(
                         (
-                            seq.get_adapters(),
                             len,
                             seq.images().is_some() && seq.is_prompt(),
                             seq.token_offset(),
@@ -142,11 +138,10 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
         } else {
             // Set the min seqs to be the running ones, and the rest to be waiting (but their states are not changed!)
             // Allow the min seqs to catch up.
-            let min = seq_buckets
+            let min = *seq_buckets
                 .keys()
-                .min_by_key(|(_, x, _, _)| *x)
-                .expect("No sequence buckets.")
-                .clone();
+                .min_by_key(|(x, _, _)| *x)
+                .expect("No sequence buckets.");
             let len = if !discrete {
                 seq_priorities
                     .iter()

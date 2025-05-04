@@ -1,13 +1,12 @@
 use super::cache_manager::FullCacheManager;
-use super::llg::build_tok_env;
+use super::llg::build_llg_factory;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
-    XLoraPaths,
 };
 use super::{
-    AdapterActivationMixin, AnyMoePipelineMixin, CacheManagerMixin, EitherCache,
-    ForwardInputsResult, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
+    AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
+    MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::device_map::DeviceMapper;
 use crate::lora::Ordering;
@@ -74,6 +73,8 @@ pub struct GGMLLoader {
     tokenizer_json: Option<String>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
+    jinja_explicit: Option<String>,
+    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -98,10 +99,11 @@ pub struct GGMLLoaderBuilder {
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
+    jinja_explicit: Option<String>,
 }
 
 impl GGMLLoaderBuilder {
-    /// NOTE: Until v0.4.0, you should make sure to call `.with_no_kv_cache` if applicable.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: GGMLSpecificConfig,
         chat_template: Option<String>,
@@ -109,6 +111,8 @@ impl GGMLLoaderBuilder {
         model_id: Option<String>,
         quantized_model_id: String,
         quantized_filename: String,
+        no_kv_cache: bool,
+        jinja_explicit: Option<String>,
     ) -> Self {
         let kind = ModelKind::GgufQuantized {
             quant: QuantizationKind::Ggml,
@@ -122,14 +126,10 @@ impl GGMLLoaderBuilder {
             kind,
             quantized_filename,
             quantized_model_id,
+            no_kv_cache,
+            jinja_explicit,
             ..Default::default()
         }
-    }
-
-    // TODO(EricLBuehler): in 0.4.0 we can move this into the config
-    pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
-        self.no_kv_cache = no_kv_cache;
-        self
     }
 
     fn with_adapter(
@@ -191,6 +191,8 @@ impl GGMLLoaderBuilder {
             tgt_non_granular_index: self.tgt_non_granular_index,
             quantized_filename: Some(self.quantized_filename),
             quantized_model_id: Some(self.quantized_model_id),
+            jinja_explicit: self.jinja_explicit,
+            lora_adapter_ids: None,
         })
     }
 }
@@ -209,6 +211,7 @@ impl GGMLLoader {
         chat_template: Option<String>,
         tokenizer_json: Option<String>,
         tgt_non_granular_index: Option<usize>,
+        jinja_explicit: Option<String>,
     ) -> Self {
         let model_id = if let Some(id) = model_id {
             id
@@ -231,6 +234,8 @@ impl GGMLLoader {
             tokenizer_json,
             kind,
             tgt_non_granular_index,
+            jinja_explicit,
+            lora_adapter_ids: None,
         }
     }
 }
@@ -344,8 +349,9 @@ impl Loader for GGMLLoader {
         });
         let chat_template = get_chat_template(
             paths,
+            &self.jinja_explicit,
             &paths
-                .get_chat_template_json()
+                .get_chat_template_explicit()
                 .as_ref()
                 .map(|x| x.to_string_lossy().to_string())
                 .clone(),
@@ -357,7 +363,7 @@ impl Loader for GGMLLoader {
             Model::Llama(ref l) => l.max_seq_len,
             Model::XLoraLlama(ref xl) => xl.max_seq_len,
         };
-        let tok_env = build_tok_env(tokenizer.clone());
+        let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
             Model::Llama(ref model) => model.cache.normal().0.len(),
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
@@ -377,7 +383,7 @@ impl Loader for GGMLLoader {
             }),
             metadata: Arc::new(GeneralMetadata {
                 max_seq_len,
-                tok_env: Some(tok_env),
+                llg_factory: Some(llg_factory),
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,
                 num_hidden_layers,
@@ -480,22 +486,6 @@ impl CacheManagerMixin for GGMLPipeline {
         match self.model {
             Model::Llama(ref model) => &model.cache,
             Model::XLoraLlama(ref model) => &model.cache,
-        }
-    }
-}
-
-impl AdapterActivationMixin for GGMLPipeline {
-    fn activate_adapters(&mut self, adapter_names: Vec<String>) -> anyhow::Result<usize> {
-        let is_lora = self.metadata.kind.is_adapted_and(|a| a.is_lora());
-        if !is_lora {
-            anyhow::bail!("Activating adapters is only supported for models fine-tuned with LoRA.")
-        }
-
-        match self.model {
-            Model::XLoraLlama(ref mut model) => model
-                .activate_adapters(adapter_names)
-                .map_err(anyhow::Error::msg),
-            _ => unreachable!(),
         }
     }
 }

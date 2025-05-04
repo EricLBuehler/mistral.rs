@@ -1,13 +1,14 @@
 use std::{
     borrow::Cow,
-    num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
 use candle_core::{Context, DType, Device, Result, Shape, Tensor};
 use serde::Deserialize;
 
-use crate::{IsqType, QuantMethod, QuantMethodConfig, QuantizedSerde, ShardedVarBuilder};
+use crate::{
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, ShardedVarBuilder,
+};
 
 #[cfg(feature = "cuda")]
 mod ffi;
@@ -210,7 +211,8 @@ impl QuantMethod for BnbLinear {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::FP8 { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => unreachable!(),
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => unreachable!(),
             QuantMethodConfig::Bnb {
                 weight,
                 bias,
@@ -259,12 +261,9 @@ impl QuantMethod for BnbLinear {
         _device: Device,
         _n_quantized: &AtomicUsize,
         _imatrix_weight: Option<Vec<f32>>,
+        _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         todo!()
-    }
-
-    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
-        None
     }
 }
 
@@ -279,7 +278,12 @@ impl QuantizedSerde for BnbLinear {
         todo!()
     }
 
-    fn deserialize(_data: Cow<[u8]>, _device: &Device) -> Result<Arc<dyn QuantMethod>>
+    fn deserialize(
+        _data: Cow<[u8]>,
+        _device: &Device,
+        _comm: &Arc<crate::Comm>,
+        _guard: QuantizeOntoGuard,
+    ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {

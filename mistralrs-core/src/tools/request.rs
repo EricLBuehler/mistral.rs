@@ -25,6 +25,7 @@ pub enum ToolChoice {
 pub struct Function {
     pub description: Option<String>,
     pub name: String,
+    #[serde(alias = "arguments")]
     pub parameters: Option<HashMap<String, Value>>,
 }
 

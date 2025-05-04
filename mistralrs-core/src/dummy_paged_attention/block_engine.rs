@@ -171,6 +171,7 @@ impl Allocator<CPUAllocator> {
     }
 }
 
+#[derive(Debug)]
 pub enum AllocStatus {
     Ok,
     Later,
@@ -207,10 +208,10 @@ impl BlockEngine {
         let num_required_blocks = seq.get_logical_token_blocks();
         let num_free_gpu_blocks = self.gpu_allocator.get_num_free_blocks();
 
-        if self.num_gpu_blocks > *num_free_gpu_blocks + num_required_blocks {
-            AllocStatus::Later
-        } else if self.num_gpu_blocks < num_required_blocks {
+        if self.num_gpu_blocks < num_required_blocks {
             AllocStatus::Impossible
+        } else if *num_free_gpu_blocks < num_required_blocks {
+            AllocStatus::Later
         } else {
             AllocStatus::Ok
         }

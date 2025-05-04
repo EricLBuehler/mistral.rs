@@ -12,13 +12,16 @@ pub struct GgufModelBuilder {
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
     pub(crate) chat_template: Option<String>,
+    pub(crate) jinja_explicit: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
+    pub(crate) search_bert_model: Option<BertEmbeddingModel>,
 
     // Model running
     pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) force_cpu: bool,
     pub(crate) topology: Option<Topology>,
+    pub(crate) throughput_logging: bool,
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
@@ -34,6 +37,7 @@ impl GgufModelBuilder {
     /// - Maximum number of sequences running is 32
     /// - Number of sequences to hold in prefix cache is 16.
     /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     pub fn new(model_id: impl ToString, files: Vec<impl ToString>) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -52,7 +56,28 @@ impl GgufModelBuilder {
             topology: None,
             tok_model_id: None,
             device_mapping: None,
+            jinja_explicit: None,
+            throughput_logging: false,
+            search_bert_model: None,
         }
+    }
+
+    /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified or the default.
+    pub fn with_search(mut self, search_bert_model: BertEmbeddingModel) -> Self {
+        self.search_bert_model = Some(search_bert_model);
+        self
+    }
+
+    /// Enable runner throughput logging.
+    pub fn with_throughput_logging(mut self) -> Self {
+        self.throughput_logging = true;
+        self
+    }
+
+    /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
+    pub fn with_jinja_explicit(mut self, jinja_explicit: String) -> Self {
+        self.jinja_explicit = Some(jinja_explicit);
+        self
     }
 
     /// Source the tokenizer and chat template from this model ID (must contain `tokenizer.json` and `tokenizer_config.json`).
@@ -167,6 +192,8 @@ impl GgufModelBuilder {
             self.model_id,
             self.files,
             config,
+            self.no_kv_cache,
+            self.jinja_explicit,
         )
         .build();
 
@@ -204,9 +231,14 @@ impl GgufModelBuilder {
             },
         };
 
-        let mut runner = MistralRsBuilder::new(pipeline, scheduler_method)
-            .with_no_kv_cache(self.no_kv_cache)
-            .with_no_prefix_cache(self.prefix_cache_n.is_none());
+        let mut runner = MistralRsBuilder::new(
+            pipeline,
+            scheduler_method,
+            self.throughput_logging,
+            self.search_bert_model,
+        )
+        .with_no_kv_cache(self.no_kv_cache)
+        .with_no_prefix_cache(self.prefix_cache_n.is_none());
 
         if let Some(n) = self.prefix_cache_n {
             runner = runner.with_prefix_cache_n(n)

@@ -7,6 +7,7 @@ use candle_core::{
     from_storage_no_op, CudaStorage, Storage,
 };
 
+use candle_nn::Linear;
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
 use std::{
@@ -21,7 +22,8 @@ use crate::{
         deserialize_tensor, fake_deserialize_tensor, serialize_tensor, version_is_compatible,
         BitWiseOp, LeftshiftOp, UQFF_VERSION,
     },
-    IsqType, MatMul, QuantMethod, QuantMethodConfig, QuantizedSerde, QuantizedSerdeType,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    UnquantLinear,
 };
 
 #[cfg(feature = "cuda")]
@@ -171,8 +173,10 @@ impl HqqBits {
                 let i = wq.narrow(0, step * 8, step)?;
                 let j = wq.narrow(0, step * 9, step)?;
 
-                a.leftshift(27)?
-                    .bitwise_or(&b.leftshift(24)?)?
+                a.leftshift(27)
+                    .unwrap()
+                    .bitwise_or(&b.leftshift(24).unwrap())
+                    .unwrap()
                     .bitwise_or(&c.leftshift(21)?)?
                     .bitwise_or(&d.leftshift(18)?)?
                     .bitwise_or(&e.leftshift(15)?)?
@@ -499,17 +503,12 @@ impl HqqLayer {
 
     fn dequantize_matmul(&self, xs: &Tensor) -> Result<Tensor> {
         let w = self.dequantize()?;
-        let w = match *xs.dims() {
-            [b1, b2, _, _] => w.broadcast_left((b1, b2))?.t()?,
-            [bsize, _, _] => w.broadcast_left(bsize)?.t()?,
-            _ => w.t()?,
-        };
-        let res = MatMul.matmul(xs, &w)?;
-        if let Some(ref bias) = self.bias {
-            res + bias
-        } else {
-            Ok(res)
-        }
+        // Dispatch to unquant. This uses some cublaslt for bias & on cuda always, so it is better
+        let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+            w,
+            self.bias.clone(),
+        )))?;
+        unquant.forward(xs)
     }
 
     pub fn with_bias(mut self, bias: Tensor) -> Self {
@@ -530,7 +529,8 @@ impl QuantMethod for HqqLayer {
             | QuantMethodConfig::Dummy
             | QuantMethodConfig::FP8 { .. }
             | QuantMethodConfig::Bnb { .. }
-            | QuantMethodConfig::BlockwiseFP8 { .. } => {
+            | QuantMethodConfig::BlockwiseFP8 { .. }
+            | QuantMethodConfig::Afq { .. } => {
                 unreachable!()
             }
             QuantMethodConfig::Hqq {
@@ -594,7 +594,9 @@ impl QuantMethod for HqqLayer {
         device: Device,
         n_quantized: &AtomicUsize,
         imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
+        let _acquired_quantize_guard = guard.acquire();
         if imatrix_weight.is_some() {
             // TODO just warn?
             candle_core::bail!("HQQ does not support imatrix.");
@@ -627,11 +629,6 @@ impl QuantMethod for HqqLayer {
         } else {
             Ok(Arc::new(res))
         }
-    }
-
-    fn get_max_isq_cpu_threads(&self, _dtype: IsqType) -> Option<NonZeroUsize> {
-        // Use 1 because we quantize on the GPU
-        Some(1.try_into().unwrap())
     }
 }
 
@@ -679,6 +676,9 @@ impl QuantizedSerde for HqqLayer {
         "hqq"
     }
     fn serialize(&self) -> Result<Cow<[u8]>> {
+        self.serialize_with_bias(self.bias.clone())
+    }
+    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<[u8]>> {
         let mut buffer = Vec::new();
 
         // Version is always first!
@@ -688,7 +688,7 @@ impl QuantizedSerde for HqqLayer {
         buffer.push(QuantizedSerdeType::Hqq as u8);
 
         // Has bias
-        buffer.push(self.bias.is_some() as u8);
+        buffer.push(bias.is_some() as u8);
 
         serialize_tensor(&mut buffer, &self.w_q)?;
         serialize_tensor(&mut buffer, &self.scales)?;
@@ -711,7 +711,7 @@ impl QuantizedSerde for HqqLayer {
         buffer.push(self.cfg.round_zeros as u8);
         buffer.push(self.cfg.channel_wise as u8);
 
-        if let Some(bias) = &self.bias {
+        if let Some(bias) = &bias {
             // Bias
             serialize_tensor(&mut buffer, bias)?;
         }
@@ -719,7 +719,12 @@ impl QuantizedSerde for HqqLayer {
         Ok(Cow::from(buffer))
     }
 
-    fn deserialize(data: Cow<[u8]>, device: &Device) -> Result<Arc<dyn QuantMethod>>
+    fn deserialize(
+        data: Cow<[u8]>,
+        device: &Device,
+        _comm: &Arc<crate::Comm>,
+        guard: QuantizeOntoGuard,
+    ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
@@ -740,6 +745,7 @@ impl QuantizedSerde for HqqLayer {
 
         let has_bias = buffer.read_u8()? != 0;
 
+        let _acquired_load_guard = guard.acquire();
         let w_q = deserialize_tensor(&mut buffer, device)?;
         let scales = deserialize_tensor(&mut buffer, device)?;
         let zeros = deserialize_tensor(&mut buffer, device)?;
@@ -786,6 +792,82 @@ impl QuantizedSerde for HqqLayer {
             w_shape,
             cfg,
         }))
+    }
+    fn deserialize_ext_bias(
+        data: Cow<[u8]>,
+        device: &Device,
+        guard: QuantizeOntoGuard,
+    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
+    where
+        Self: Sized,
+    {
+        let mut buffer = Cursor::new(data);
+
+        let version = buffer.read_u32::<LittleEndian>()?;
+        if let Err(e) = version_is_compatible(version) {
+            return Err(candle_core::Error::wrap(e));
+        }
+
+        let isq_type = buffer.read_u8()? as usize;
+        if isq_type != QuantizedSerdeType::Hqq as usize {
+            candle_core::bail!(
+                "ISQ type ({isq_type}) doesn't match expected type {}",
+                QuantizedSerdeType::Hqq as usize
+            );
+        }
+
+        let has_bias = buffer.read_u8()? != 0;
+
+        let _acquired_load_guard = guard.acquire();
+        let w_q = deserialize_tensor(&mut buffer, device)?;
+        let scales = deserialize_tensor(&mut buffer, device)?;
+        let zeros = deserialize_tensor(&mut buffer, device)?;
+
+        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
+
+        let mut dims = Vec::with_capacity(n_dims);
+        for _ in 0..n_dims {
+            dims.push(buffer.read_u32::<LittleEndian>()? as usize)
+        }
+        let w_shape = Shape::from_dims(&dims);
+
+        // TODO: keep this in sync with get_isq_type_from_uqff!
+        let bits = HqqBits::try_from(buffer.read_u8()? as usize)?;
+        let group_size = NonZeroUsize::try_from(buffer.read_u32::<LittleEndian>()? as usize)?;
+        let axis = HqqAxis::try_from(buffer.read_u8()? as usize)?;
+        let optimization_steps = match buffer.read_u32::<LittleEndian>()? as usize {
+            0 => None,
+            other => Some(other),
+        };
+        let round_zeros = buffer.read_u8()? != 0;
+        let channel_wise = buffer.read_u8()? != 0;
+
+        let cfg = HqqConfig {
+            bits,
+            group_size,
+            axis,
+            optimization_steps,
+            round_zeros,
+            channel_wise,
+        };
+
+        let b = if has_bias {
+            Some(deserialize_tensor(&mut buffer, device)?)
+        } else {
+            None
+        };
+
+        Ok((
+            Arc::new(Self {
+                w_q,
+                zeros,
+                scales,
+                bias: None,
+                w_shape,
+                cfg,
+            }),
+            b,
+        ))
     }
 }
 

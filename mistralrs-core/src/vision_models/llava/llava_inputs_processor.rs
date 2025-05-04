@@ -237,7 +237,7 @@ impl InputsProcessor for LLaVAInputProcessor {
                 .map(|s| {
                     // we don't use encode_batch here, because encode_batch will pad 0 to the end of the shor sequences, which will cause the image_ids_pad to be wrong.
                     tokenizer
-                        .encode(*s, false)
+                        .encode_fast(*s, false)
                         .unwrap()
                         .get_ids()
                         .to_vec()
@@ -260,21 +260,24 @@ impl InputsProcessor for LLaVAInputProcessor {
             {
                 input_ids.extend(item);
             }
-            // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-            seq.set_toks_and_reallocate(
-                input_ids
-                    .iter()
-                    .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
-                    .collect::<Vec<_>>(),
-                paged_attn_metadata.as_mut(),
-            );
+            let new_ids = input_ids
+                .iter()
+                .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
+                .collect::<Vec<_>>();
+            if !seq.multimodal.has_changed_prompt {
+                let new_prompt = tokenizer.decode(&new_ids, false).unwrap();
+                seq.set_initial_prompt(new_prompt);
+                // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
+                seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
+                seq.multimodal.has_changed_prompt = true;
+            }
 
             toks.push(input_ids);
         }
 
         let iter = if is_prompt {
             get_prompt_input(
-                toks,
+                toks.iter().map(Vec::as_slice).collect(),
                 input_seqs,
                 device,
                 last_n_context_len,
@@ -285,7 +288,7 @@ impl InputsProcessor for LLaVAInputProcessor {
             )
         } else {
             get_completion_input(
-                toks,
+                toks.iter().map(Vec::as_slice).collect(),
                 input_seqs,
                 device,
                 no_kv_cache,

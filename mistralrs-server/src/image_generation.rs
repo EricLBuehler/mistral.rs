@@ -78,11 +78,11 @@ fn parse_request(
         is_streaming: false,
         suffix: None,
         constraint: Constraint::None,
-        adapters: None,
         tool_choice: None,
         tools: None,
         logits_processors: None,
         return_raw_logits: false,
+        web_search_options: None,
     }))
 }
 
