@@ -107,3 +107,23 @@ quantization/uqff.md
 advanced/index.md
 
 :::
+
+% Models
+
+:::{toctree}
+:caption: Models
+:maxdepth: 1
+
+models/index
+
+:::
+
+% Adapters
+
+:::{toctree}
+:caption: Adapters
+:maxdepth: 1
+
+adapters/index
+
+:::
