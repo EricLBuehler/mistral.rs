@@ -27,12 +27,12 @@ impl IntervalLogger {
         let t_total_new_seqs = total_new_seqs.clone();
         let t_enable_logging = enable_logging.clone();
         thread::spawn(move || {
-            // Wait
-            while !t_enable_logging.load(Ordering::Relaxed) {}
-
             // Start the actual logging
             loop {
                 thread::sleep(interval);
+                if !t_enable_logging.load(Ordering::Relaxed) {
+                    continue;
+                }
 
                 let total_new_seqs = t_total_new_seqs.load(Ordering::Relaxed);
                 let prefix_cache_hits = t_prefix_cache_hits.load(Ordering::Relaxed);

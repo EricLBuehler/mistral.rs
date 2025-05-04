@@ -74,7 +74,7 @@ pub fn copy_blocks(
         kernels::call_copy_blocks(
             dev.device(),
             &command_buffer,
-            kernels::Kernels::default(),
+            &kernels::Kernels::new(),
             key_cache.dtype(),
             key_storage.buffer(),
             key_offset * key_storage.dtype().size_in_bytes(),

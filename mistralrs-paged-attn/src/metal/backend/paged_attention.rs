@@ -168,7 +168,7 @@ impl candle_core::CustomOp1 for PagedAttention {
             kernels::call_paged_attention_v1(
                 dev.device(),
                 &command_buffer,
-                kernels::Kernels::default(),
+                &kernels::Kernels::new(),
                 internal_type,
                 q.buffer(),
                 q_l.start_offset() * q.dtype().size_in_bytes(),
@@ -215,7 +215,7 @@ impl candle_core::CustomOp1 for PagedAttention {
             kernels::call_paged_attention_v2(
                 dev.device(),
                 &command_buffer,
-                kernels::Kernels::default(),
+                &kernels::Kernels::new(),
                 internal_type,
                 &exp_sums,
                 &max_logits,
@@ -421,7 +421,7 @@ pub fn reshape_and_cache(
     kernels::call_reshape_and_cache(
         dev.device(),
         &command_buffer,
-        kernels::Kernels::default(),
+        &kernels::Kernels::new(),
         internal_type,
         k.buffer(),
         k_l.start_offset() * key.dtype().size_in_bytes(),

@@ -321,7 +321,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
 
         let iter = if is_prompt {
             get_prompt_input(
-                toks,
+                toks.iter().map(Vec::as_slice).collect(),
                 input_seqs,
                 device,
                 last_n_context_len,
@@ -332,7 +332,7 @@ impl InputsProcessor for LLaVANextInputProcessor {
             )
         } else {
             get_completion_input(
-                toks,
+                toks.iter().map(Vec::as_slice).collect(),
                 input_seqs,
                 device,
                 no_kv_cache,

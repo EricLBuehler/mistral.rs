@@ -558,8 +558,16 @@ impl Loader for VisionLoader {
                 let chunk_len = chunk.len();
 
                 let start = Instant::now();
-                let inputs =
-                    make_prompt_chunk(0, vec![chunk], &[0], &load_device, None, false, None, None)?;
+                let inputs = make_prompt_chunk(
+                    0,
+                    vec![&chunk],
+                    &[0],
+                    &load_device,
+                    None,
+                    false,
+                    None,
+                    None,
+                )?;
                 let _ = model.forward(
                     &inputs.input,
                     None, // NOTE: We ONLY calibrate the text bits of these models!!
@@ -841,20 +849,6 @@ impl Pipeline for VisionPipeline {
             }
             (None, None) => None,
         };
-        #[cfg(feature = "metal")]
-        let logits = objc::rc::autoreleasepool(|| {
-            self.model.forward(
-                &input_ids,
-                pixel_values,
-                &seqlen_offsets,
-                context_lens,
-                position_ids,
-                model_specific_args,
-                paged_attn_meta,
-                &flash_meta,
-            )
-        })?;
-        #[cfg(not(feature = "metal"))]
         let logits = self.model.forward(
             &input_ids,
             pixel_values,
