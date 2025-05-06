@@ -70,7 +70,7 @@ impl RotatingCache {
 
     pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
         // If trying to roll it back past the boundary of max_seq_len, fail early.
-        if self.current_seq_len - len > self.max_seq_len {
+        if self.current_seq_len.saturating_sub(len) > self.max_seq_len {
             candle_core::bail!(
                 "Rotating KV cache (usually for sliding window) tried to reset to len {len} while current is {} and max retained is {}",
                 self.current_seq_len,
@@ -98,7 +98,7 @@ impl RotatingCache {
             && self.current_seq_len + seq_len < self.max_seq_len)
             || self.current_seq_len == 0
         {
-            let diff = self.current_seq_len + seq_len - self.capacity_seq_len;
+            let diff = self.current_seq_len + seq_len.saturating_sub(self.capacity_seq_len);
             let n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
             self.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
             self.capacity_seq_len = self.capacity_seq_len.min(self.max_seq_len);
