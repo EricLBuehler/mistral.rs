@@ -1,4 +1,3 @@
-use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::inputs_processor::DEFAULT_PROMPT_CHUNK_SIZE;
 use super::isq::ImatrixDataSource;
 use super::llg::build_llg_factory;
@@ -19,6 +18,7 @@ use super::{
 use crate::amoe::AnyMoeExpertType;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
+use crate::kv_cache::{FullCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};

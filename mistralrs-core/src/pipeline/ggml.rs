@@ -1,4 +1,3 @@
-use super::cache_manager::FullCacheManager;
 use super::llg::build_llg_factory;
 use super::{
     get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
@@ -9,6 +8,7 @@ use super::{
     MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use crate::device_map::DeviceMapper;
+use crate::kv_cache::FullCacheManager;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::get_chat_template;
