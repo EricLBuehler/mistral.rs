@@ -45,9 +45,8 @@ pub use loaders::{
 };
 use mistralrs_quant::IsqType;
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
-pub(crate) use paths::{
-    get_chat_template, get_model_paths, get_xlora_paths, AdapterPaths, LoraAdapterPaths,
-};
+pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths};
+pub use paths::{AdapterPaths, LoraAdapterPaths};
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
