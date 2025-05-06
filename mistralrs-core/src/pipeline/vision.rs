@@ -1,4 +1,3 @@
-use super::cache_manager::{FullCacheManager, NormalCacheManager};
 use super::isq::ImatrixDataSource;
 use super::isq::UqffFullSer;
 use super::{
@@ -14,6 +13,7 @@ use super::{
 };
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
+use crate::kv_cache::{FullCacheManager, NormalCacheManager};
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 use crate::pipeline::llg::build_llg_factory;

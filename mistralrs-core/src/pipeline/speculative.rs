@@ -14,6 +14,7 @@ use tracing::warn;
 use crate::{
     device_map::DeviceMapper,
     get_mut_arcmutex,
+    kv_cache::NormalCacheManager,
     pipeline::sampling::{
         finish_or_add_toks_to_seq, sample_sequence, sample_target_sequence_speculative,
     },
@@ -22,11 +23,13 @@ use crate::{
     DeviceMapSetting, Loader, ModelKind, PagedAttentionConfig, Pipeline, TokenSource, TryIntoDType,
 };
 
+use crate::kv_cache::CacheManager;
+
 use super::{
-    cache_manager::NormalCacheManager, chat_template::ChatTemplate, sampling::SpeculativeSample,
-    AnyMoePipelineMixin, CacheBackendMetadata, CacheInstruction, CacheManager, CacheManagerMixin,
-    EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, MetadataMixin,
-    ModelCategory, ModelPaths, PreProcessingMixin,
+    chat_template::ChatTemplate, sampling::SpeculativeSample, AnyMoePipelineMixin,
+    CacheBackendMetadata, CacheInstruction, CacheManagerMixin, EitherCache, ForwardInputsResult,
+    GeneralMetadata, IsqPipelineMixin, MetadataMixin, ModelCategory, ModelPaths,
+    PreProcessingMixin,
 };
 
 /// A loader for a speculative pipeline using 2 [`Loader`]s.

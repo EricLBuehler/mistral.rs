@@ -2,9 +2,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use candle_core::{Result, Tensor, D};
 
-use crate::{get_mut_arcmutex, sequence::Sequence};
-
-use super::{CacheManagerMixin, MetadataMixin};
+use crate::{
+    get_mut_arcmutex,
+    pipeline::{CacheManagerMixin, MetadataMixin},
+    sequence::Sequence,
+};
 
 pub trait CacheManager<T: CacheManagerMixin + MetadataMixin + ?Sized> {
     fn clone_in_cache(

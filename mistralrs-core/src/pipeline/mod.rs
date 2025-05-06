@@ -1,5 +1,4 @@
 mod amoe;
-mod cache_manager;
 pub mod chat_template;
 mod diffusion;
 mod ggml;
@@ -66,13 +65,13 @@ use candle_core::{DType, Device, IndexOp, Tensor, Var};
 
 use crate::sequence::Sequence;
 
-pub use self::cache_manager::{
-    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
-};
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
 };
 use self::text_models_inputs_processor::PagedAttentionMeta;
+pub use crate::kv_cache::{
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
+};
 
 pub struct GeneralMetadata {
     pub max_seq_len: usize,
