@@ -84,13 +84,12 @@ pub async fn interactive_mode(
         ModelCategory::Vision { .. } => {
             vision_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
+        ModelCategory::Audio => audio_interactive_mode(mistralrs, do_search, enable_thinking).await,
         ModelCategory::Diffusion => diffusion_interactive_mode(mistralrs, do_search).await,
     }
 }
 
-const TEXT_INTERACTIVE_HELP: &str = r#"
-Welcome to interactive mode! Because this model is a text model, you can enter prompts and chat with the model.
-
+const COMMAND_COMMANDS: &str = r#"
 Commands:
 - `\help`: Display this message.
 - `\exit`: Quit interactive mode.
@@ -100,6 +99,10 @@ Commands:
 - `\clear`: Clear the chat history.
 "#;
 
+const TEXT_INTERACTIVE_HELP: &str = r#"
+Welcome to interactive mode! Because this model is a text model, you can enter prompts and chat with the model.
+"#;
+
 const VISION_INTERACTIVE_HELP: &str = r#"
 Welcome to interactive mode! Because this model is a vision model, you can enter prompts and chat with the model.
 
@@ -107,14 +110,6 @@ To specify a message with one or more images, simply include the image URL or pa
 
 - `Please describe this image: path/to/image1.jpg path/to/image2.png`
 - `What is in this image: <url here>`
-
-Commands:
-- `\help`: Display this message.
-- `\exit`: Quit interactive mode.
-- `\system <system message here>`:
-    Add a system message to the chat without running the model.
-    Ex: `\system Always respond as a pirate.`
-- `\clear`: Clear the chat history.
 "#;
 
 const DIFFUSION_INTERACTIVE_HELP: &str = r#"
@@ -130,15 +125,8 @@ const EXIT_CMD: &str = "\\exit";
 const SYSTEM_CMD: &str = "\\system";
 const CLEAR_CMD: &str = "\\clear";
 
-async fn text_interactive_mode(
-    mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    enable_thinking: Option<bool>,
-) {
-    let sender = mistralrs.get_sender().unwrap();
-    let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
-
-    let sampling_params = SamplingParams {
+fn interactive_sample_parameters() -> SamplingParams {
+    SamplingParams {
         temperature: Some(0.1),
         top_k: Some(32),
         top_p: Some(0.1),
@@ -151,11 +139,22 @@ async fn text_interactive_mode(
         logits_bias: None,
         n_choices: 1,
         dry_params: Some(DrySamplingParams::default()),
-    };
+    }
+}
+
+async fn text_interactive_mode(
+    mistralrs: Arc<MistralRs>,
+    do_search: bool,
+    enable_thinking: Option<bool>,
+) {
+    let sender = mistralrs.get_sender().unwrap();
+    let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
+
+    let sampling_params = interactive_sample_parameters();
 
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
     println!(
-        "{}{TEXT_INTERACTIVE_HELP}{}",
+        "{}{TEXT_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}",
         "=".repeat(20),
         "=".repeat(20)
     );
@@ -178,7 +177,7 @@ async fn text_interactive_mode(
             "" => continue,
             HELP_CMD => {
                 println!(
-                    "{}{TEXT_INTERACTIVE_HELP}{}",
+                    "{}{TEXT_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}",
                     "=".repeat(20),
                     "=".repeat(20)
                 );
@@ -314,16 +313,14 @@ async fn text_interactive_mode(
     rl.save_history(&history_file_path()).unwrap();
 }
 
-fn parse_image_urls_and_message(input: &str) -> (Vec<String>, String) {
-    // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
-    let re = Regex::new(r#"((?:https?://|file://)?\S+\.(?:png|jpe?g|bmp|gif|webp))"#).unwrap();
+fn parse_files_and_message(input: &str, regex: &Regex) -> (Vec<String>, String) {
     // Collect all URLs
-    let urls: Vec<String> = re
+    let urls: Vec<String> = regex
         .captures_iter(input)
         .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
         .collect();
     // Remove the URLs from the input to get the message text
-    let text = re.replace_all(input, "").trim().to_string();
+    let text = regex.replace_all(input, "").trim().to_string();
     (urls, text)
 }
 
@@ -332,38 +329,29 @@ async fn vision_interactive_mode(
     do_search: bool,
     enable_thinking: Option<bool>,
 ) {
+    // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
+    let image_regex =
+        Regex::new(r#"((?:https?://|file://)?\S+\.(?:png|jpe?g|bmp|gif|webp))"#).unwrap();
+
     let sender = mistralrs.get_sender().unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let mut images = Vec::new();
 
     let prefixer = match &mistralrs.config().category {
-        ModelCategory::Text | ModelCategory::Diffusion => {
-            panic!("`add_image_message` expects a vision model.")
-        }
         ModelCategory::Vision {
             has_conv2d: _,
             prefixer,
         } => prefixer,
+        _ => {
+            panic!("`add_image_message` expects a vision model.")
+        }
     };
 
-    let sampling_params = SamplingParams {
-        temperature: Some(0.1),
-        top_k: Some(32),
-        top_p: Some(0.1),
-        min_p: Some(0.05),
-        top_n_logprobs: 0,
-        frequency_penalty: Some(0.1),
-        presence_penalty: Some(0.1),
-        max_len: None,
-        stop_toks: None,
-        logits_bias: None,
-        n_choices: 1,
-        dry_params: Some(DrySamplingParams::default()),
-    };
+    let sampling_params = interactive_sample_parameters();
 
     info!("Starting interactive loop with sampling params: {sampling_params:?}");
     println!(
-        "{}{VISION_INTERACTIVE_HELP}{}",
+        "{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}",
         "=".repeat(20),
         "=".repeat(20)
     );
@@ -386,7 +374,7 @@ async fn vision_interactive_mode(
             "" => continue,
             HELP_CMD => {
                 println!(
-                    "{}{VISION_INTERACTIVE_HELP}{}",
+                    "{}{VISION_INTERACTIVE_HELP}{COMMAND_COMMANDS}{}",
                     "=".repeat(20),
                     "=".repeat(20)
                 );
@@ -418,7 +406,7 @@ async fn vision_interactive_mode(
             }
             // Extract any image URLs and the remaining text
             _ => {
-                let (urls, text) = parse_image_urls_and_message(prompt.trim());
+                let (urls, text) = parse_files_and_message(prompt.trim(), &image_regex);
                 if !urls.is_empty() {
                     let mut image_indexes = Vec::new();
                     // Load all images first
@@ -564,6 +552,14 @@ async fn vision_interactive_mode(
     }
 
     rl.save_history(&history_file_path()).unwrap();
+}
+
+async fn audio_interactive_mode(
+    _mistralrs: Arc<MistralRs>,
+    _do_search: bool,
+    _enable_thinking: Option<bool>,
+) {
+    unimplemented!("Using audio models interactively isn't supported yet")
 }
 
 async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {

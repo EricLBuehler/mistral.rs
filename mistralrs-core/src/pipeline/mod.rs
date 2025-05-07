@@ -218,6 +218,7 @@ pub enum ModelCategory {
         has_conv2d: bool,
         prefixer: Arc<dyn VisionPromptPrefixer>,
     },
+    Audio,
     Diffusion,
 }
 
@@ -226,10 +227,9 @@ impl PartialEq for ModelCategory {
         match (self, other) {
             (Self::Text, Self::Text) => true,
             (Self::Vision { .. }, Self::Vision { .. }) => true,
+            (Self::Audio, Self::Audio) => true,
             (Self::Diffusion, Self::Diffusion) => true,
-            (Self::Text, _) => false,
-            (Self::Vision { .. }, _) => false,
-            (Self::Diffusion, _) => false,
+            (_, _) => false,
         }
     }
 }
