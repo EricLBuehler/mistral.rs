@@ -222,38 +222,34 @@
 <a href=#222 id=222 data-nosnippet>222</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
 <a href=#223 id=223 data-nosnippet>223</a>        <span class="self">self</span>.language_model.config()
 <a href=#224 id=224 data-nosnippet>224</a>    }
-<a href=#225 id=225 data-nosnippet>225</a>    <span class="kw">fn </span>has_conv2d(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#226 id=226 data-nosnippet>226</a>        <span class="comment">// TODO
-<a href=#227 id=227 data-nosnippet>227</a>        </span><span class="bool-val">false
-<a href=#228 id=228 data-nosnippet>228</a>    </span>}
-<a href=#229 id=229 data-nosnippet>229</a>}
-<a href=#230 id=230 data-nosnippet>230</a>
-<a href=#231 id=231 data-nosnippet>231</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Gemma3Model {
-<a href=#232 id=232 data-nosnippet>232</a>    <span class="kw">fn </span>get_mlps(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>MlpLayer&gt; {
-<a href=#233 id=233 data-nosnippet>233</a>        <span class="self">self</span>.language_model.get_mlps()
-<a href=#234 id=234 data-nosnippet>234</a>    }
-<a href=#235 id=235 data-nosnippet>235</a>    <span class="kw">fn </span>get_mlps_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {
-<a href=#236 id=236 data-nosnippet>236</a>        <span class="self">self</span>.language_model.get_mlps_mut()
-<a href=#237 id=237 data-nosnippet>237</a>    }
-<a href=#238 id=238 data-nosnippet>238</a>    <span class="kw">fn </span>create_anymoe_layers(
-<a href=#239 id=239 data-nosnippet>239</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#240 id=240 data-nosnippet>240</a>        additional_vbs: Vec&lt;ShardedVarBuilder&gt;,
-<a href=#241 id=241 data-nosnippet>241</a>        config: AnyMoeConfig,
-<a href=#242 id=242 data-nosnippet>242</a>        (prefix, mlp): (String, String),
-<a href=#243 id=243 data-nosnippet>243</a>        layers: Vec&lt;usize&gt;,
-<a href=#244 id=244 data-nosnippet>244</a>        expert_type: AnyMoeExpertType,
-<a href=#245 id=245 data-nosnippet>245</a>        gate_vb: <span class="prelude-ty">Option</span>&lt;ShardedVarBuilder&gt;,
-<a href=#246 id=246 data-nosnippet>246</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#247 id=247 data-nosnippet>247</a>        <span class="self">self</span>.language_model.create_anymoe_layers(
-<a href=#248 id=248 data-nosnippet>248</a>            additional_vbs,
-<a href=#249 id=249 data-nosnippet>249</a>            config,
-<a href=#250 id=250 data-nosnippet>250</a>            (prefix, mlp),
-<a href=#251 id=251 data-nosnippet>251</a>            layers,
-<a href=#252 id=252 data-nosnippet>252</a>            expert_type,
-<a href=#253 id=253 data-nosnippet>253</a>            gate_vb,
-<a href=#254 id=254 data-nosnippet>254</a>        )
-<a href=#255 id=255 data-nosnippet>255</a>    }
-<a href=#256 id=256 data-nosnippet>256</a>    <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#257 id=257 data-nosnippet>257</a>        <span class="bool-val">true
-<a href=#258 id=258 data-nosnippet>258</a>    </span>}
-<a href=#259 id=259 data-nosnippet>259</a>}</code></pre></div></section></main></body></html>
+<a href=#225 id=225 data-nosnippet>225</a>}
+<a href=#226 id=226 data-nosnippet>226</a>
+<a href=#227 id=227 data-nosnippet>227</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Gemma3Model {
+<a href=#228 id=228 data-nosnippet>228</a>    <span class="kw">fn </span>get_mlps(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>MlpLayer&gt; {
+<a href=#229 id=229 data-nosnippet>229</a>        <span class="self">self</span>.language_model.get_mlps()
+<a href=#230 id=230 data-nosnippet>230</a>    }
+<a href=#231 id=231 data-nosnippet>231</a>    <span class="kw">fn </span>get_mlps_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {
+<a href=#232 id=232 data-nosnippet>232</a>        <span class="self">self</span>.language_model.get_mlps_mut()
+<a href=#233 id=233 data-nosnippet>233</a>    }
+<a href=#234 id=234 data-nosnippet>234</a>    <span class="kw">fn </span>create_anymoe_layers(
+<a href=#235 id=235 data-nosnippet>235</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#236 id=236 data-nosnippet>236</a>        additional_vbs: Vec&lt;ShardedVarBuilder&gt;,
+<a href=#237 id=237 data-nosnippet>237</a>        config: AnyMoeConfig,
+<a href=#238 id=238 data-nosnippet>238</a>        (prefix, mlp): (String, String),
+<a href=#239 id=239 data-nosnippet>239</a>        layers: Vec&lt;usize&gt;,
+<a href=#240 id=240 data-nosnippet>240</a>        expert_type: AnyMoeExpertType,
+<a href=#241 id=241 data-nosnippet>241</a>        gate_vb: <span class="prelude-ty">Option</span>&lt;ShardedVarBuilder&gt;,
+<a href=#242 id=242 data-nosnippet>242</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#243 id=243 data-nosnippet>243</a>        <span class="self">self</span>.language_model.create_anymoe_layers(
+<a href=#244 id=244 data-nosnippet>244</a>            additional_vbs,
+<a href=#245 id=245 data-nosnippet>245</a>            config,
+<a href=#246 id=246 data-nosnippet>246</a>            (prefix, mlp),
+<a href=#247 id=247 data-nosnippet>247</a>            layers,
+<a href=#248 id=248 data-nosnippet>248</a>            expert_type,
+<a href=#249 id=249 data-nosnippet>249</a>            gate_vb,
+<a href=#250 id=250 data-nosnippet>250</a>        )
+<a href=#251 id=251 data-nosnippet>251</a>    }
+<a href=#252 id=252 data-nosnippet>252</a>    <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#253 id=253 data-nosnippet>253</a>        <span class="bool-val">true
+<a href=#254 id=254 data-nosnippet>254</a>    </span>}
+<a href=#255 id=255 data-nosnippet>255</a>}</code></pre></div></section></main></body></html>

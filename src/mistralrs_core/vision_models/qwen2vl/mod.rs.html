@@ -479,40 +479,37 @@
 <a href=#479 id=479 data-nosnippet>479</a>    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
 <a href=#480 id=480 data-nosnippet>480</a>        <span class="self">self</span>.text.max_seq_len
 <a href=#481 id=481 data-nosnippet>481</a>    }
-<a href=#482 id=482 data-nosnippet>482</a>    <span class="kw">fn </span>has_conv2d(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#483 id=483 data-nosnippet>483</a>        <span class="bool-val">true
-<a href=#484 id=484 data-nosnippet>484</a>    </span>}
-<a href=#485 id=485 data-nosnippet>485</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
-<a href=#486 id=486 data-nosnippet>486</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.text.cfg
-<a href=#487 id=487 data-nosnippet>487</a>    }
-<a href=#488 id=488 data-nosnippet>488</a>    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>Any&gt; {
-<a href=#489 id=489 data-nosnippet>489</a>        <span class="macro">assert_eq!</span>(input_ids.dims()[<span class="number">0</span>], <span class="number">1</span>);
-<a href=#490 id=490 data-nosnippet>490</a>        Box::new(Qwen2VLVisionSpecificArgs {
-<a href=#491 id=491 data-nosnippet>491</a>            input_ids_full: input_ids.clone(),
-<a href=#492 id=492 data-nosnippet>492</a>            image_grid_thw: <span class="prelude-val">None</span>,
-<a href=#493 id=493 data-nosnippet>493</a>            video_grid_thw: <span class="prelude-val">None</span>,
-<a href=#494 id=494 data-nosnippet>494</a>            seqlens: <span class="macro">vec!</span>[input_ids.dims()[<span class="number">1</span>]],
-<a href=#495 id=495 data-nosnippet>495</a>            continuous_img_pad: <span class="macro">vec!</span>[],
-<a href=#496 id=496 data-nosnippet>496</a>            continuous_vid_pad: <span class="macro">vec!</span>[],
-<a href=#497 id=497 data-nosnippet>497</a>            input_ids_searching: <span class="macro">vec!</span>[<span class="macro">vec!</span>[]; input_ids.dims()[<span class="number">0</span>]],
-<a href=#498 id=498 data-nosnippet>498</a>            image_nums: <span class="macro">vec!</span>[<span class="number">0</span>; input_ids.dims()[<span class="number">0</span>]],
-<a href=#499 id=499 data-nosnippet>499</a>            video_nums: <span class="macro">vec!</span>[<span class="number">0</span>; input_ids.dims()[<span class="number">0</span>]],
-<a href=#500 id=500 data-nosnippet>500</a>        })
-<a href=#501 id=501 data-nosnippet>501</a>    }
-<a href=#502 id=502 data-nosnippet>502</a>}
-<a href=#503 id=503 data-nosnippet>503</a>
-<a href=#504 id=504 data-nosnippet>504</a><span class="kw">impl </span>IsqModel <span class="kw">for </span>Qwen2VLModel {
-<a href=#505 id=505 data-nosnippet>505</a>    <span class="kw">fn </span>get_layers(
-<a href=#506 id=506 data-nosnippet>506</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#507 id=507 data-nosnippet>507</a>    ) -&gt; (
-<a href=#508 id=508 data-nosnippet>508</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
-<a href=#509 id=509 data-nosnippet>509</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
-<a href=#510 id=510 data-nosnippet>510</a>    ) {
-<a href=#511 id=511 data-nosnippet>511</a>        <span class="self">self</span>.text.get_layers()
+<a href=#482 id=482 data-nosnippet>482</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+<a href=#483 id=483 data-nosnippet>483</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.text.cfg
+<a href=#484 id=484 data-nosnippet>484</a>    }
+<a href=#485 id=485 data-nosnippet>485</a>    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>Any&gt; {
+<a href=#486 id=486 data-nosnippet>486</a>        <span class="macro">assert_eq!</span>(input_ids.dims()[<span class="number">0</span>], <span class="number">1</span>);
+<a href=#487 id=487 data-nosnippet>487</a>        Box::new(Qwen2VLVisionSpecificArgs {
+<a href=#488 id=488 data-nosnippet>488</a>            input_ids_full: input_ids.clone(),
+<a href=#489 id=489 data-nosnippet>489</a>            image_grid_thw: <span class="prelude-val">None</span>,
+<a href=#490 id=490 data-nosnippet>490</a>            video_grid_thw: <span class="prelude-val">None</span>,
+<a href=#491 id=491 data-nosnippet>491</a>            seqlens: <span class="macro">vec!</span>[input_ids.dims()[<span class="number">1</span>]],
+<a href=#492 id=492 data-nosnippet>492</a>            continuous_img_pad: <span class="macro">vec!</span>[],
+<a href=#493 id=493 data-nosnippet>493</a>            continuous_vid_pad: <span class="macro">vec!</span>[],
+<a href=#494 id=494 data-nosnippet>494</a>            input_ids_searching: <span class="macro">vec!</span>[<span class="macro">vec!</span>[]; input_ids.dims()[<span class="number">0</span>]],
+<a href=#495 id=495 data-nosnippet>495</a>            image_nums: <span class="macro">vec!</span>[<span class="number">0</span>; input_ids.dims()[<span class="number">0</span>]],
+<a href=#496 id=496 data-nosnippet>496</a>            video_nums: <span class="macro">vec!</span>[<span class="number">0</span>; input_ids.dims()[<span class="number">0</span>]],
+<a href=#497 id=497 data-nosnippet>497</a>        })
+<a href=#498 id=498 data-nosnippet>498</a>    }
+<a href=#499 id=499 data-nosnippet>499</a>}
+<a href=#500 id=500 data-nosnippet>500</a>
+<a href=#501 id=501 data-nosnippet>501</a><span class="kw">impl </span>IsqModel <span class="kw">for </span>Qwen2VLModel {
+<a href=#502 id=502 data-nosnippet>502</a>    <span class="kw">fn </span>get_layers(
+<a href=#503 id=503 data-nosnippet>503</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#504 id=504 data-nosnippet>504</a>    ) -&gt; (
+<a href=#505 id=505 data-nosnippet>505</a>        Vec&lt;(<span class="kw-2">&amp;mut </span>Arc&lt;<span class="kw">dyn </span>QuantMethod&gt;, <span class="prelude-ty">Option</span>&lt;usize&gt;)&gt;,
+<a href=#506 id=506 data-nosnippet>506</a>        <span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper,
+<a href=#507 id=507 data-nosnippet>507</a>    ) {
+<a href=#508 id=508 data-nosnippet>508</a>        <span class="self">self</span>.text.get_layers()
+<a href=#509 id=509 data-nosnippet>509</a>    }
+<a href=#510 id=510 data-nosnippet>510</a>    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
+<a href=#511 id=511 data-nosnippet>511</a>        <span class="self">self</span>.text.residual_tensors()
 <a href=#512 id=512 data-nosnippet>512</a>    }
-<a href=#513 id=513 data-nosnippet>513</a>    <span class="kw">fn </span>residual_tensors(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;(String, Tensor)&gt; {
-<a href=#514 id=514 data-nosnippet>514</a>        <span class="self">self</span>.text.residual_tensors()
-<a href=#515 id=515 data-nosnippet>515</a>    }
-<a href=#516 id=516 data-nosnippet>516</a>}
-<a href=#517 id=517 data-nosnippet>517</a>
-<a href=#518 id=518 data-nosnippet>518</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Qwen2VLModel {}</code></pre></div></section></main></body></html>
+<a href=#513 id=513 data-nosnippet>513</a>}
+<a href=#514 id=514 data-nosnippet>514</a>
+<a href=#515 id=515 data-nosnippet>515</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Qwen2VLModel {}</code></pre></div></section></main></body></html>

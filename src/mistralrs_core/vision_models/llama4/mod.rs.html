@@ -261,18 +261,15 @@
 <a href=#261 id=261 data-nosnippet>261</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
 <a href=#262 id=262 data-nosnippet>262</a>        <span class="self">self</span>.language_model.config()
 <a href=#263 id=263 data-nosnippet>263</a>    }
-<a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">fn </span>has_conv2d(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#265 id=265 data-nosnippet>265</a>        <span class="bool-val">false
-<a href=#266 id=266 data-nosnippet>266</a>    </span>}
-<a href=#267 id=267 data-nosnippet>267</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
-<a href=#268 id=268 data-nosnippet>268</a>        <span class="self">self</span>.language_model.device()
+<a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>Device {
+<a href=#265 id=265 data-nosnippet>265</a>        <span class="self">self</span>.language_model.device()
+<a href=#266 id=266 data-nosnippet>266</a>    }
+<a href=#267 id=267 data-nosnippet>267</a>    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#268 id=268 data-nosnippet>268</a>        <span class="self">self</span>.language_model.max_seq_len()
 <a href=#269 id=269 data-nosnippet>269</a>    }
-<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#271 id=271 data-nosnippet>271</a>        <span class="self">self</span>.language_model.max_seq_len()
+<a href=#270 id=270 data-nosnippet>270</a>    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>std::any::Any&gt; {
+<a href=#271 id=271 data-nosnippet>271</a>        Box::new(Llama4ModelSpecificArgs)
 <a href=#272 id=272 data-nosnippet>272</a>    }
-<a href=#273 id=273 data-nosnippet>273</a>    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>std::any::Any&gt; {
-<a href=#274 id=274 data-nosnippet>274</a>        Box::new(Llama4ModelSpecificArgs)
-<a href=#275 id=275 data-nosnippet>275</a>    }
-<a href=#276 id=276 data-nosnippet>276</a>}
-<a href=#277 id=277 data-nosnippet>277</a>
-<a href=#278 id=278 data-nosnippet>278</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Llama4Model {}</code></pre></div></section></main></body></html>
+<a href=#273 id=273 data-nosnippet>273</a>}
+<a href=#274 id=274 data-nosnippet>274</a>
+<a href=#275 id=275 data-nosnippet>275</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Llama4Model {}</code></pre></div></section></main></body></html>

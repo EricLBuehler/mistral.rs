@@ -1225,124 +1225,121 @@
 <a href=#1225 id=1225 data-nosnippet>1225</a>    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
 <a href=#1226 id=1226 data-nosnippet>1226</a>        <span class="self">self</span>.max_seq_len
 <a href=#1227 id=1227 data-nosnippet>1227</a>    }
-<a href=#1228 id=1228 data-nosnippet>1228</a>    <span class="kw">fn </span>has_conv2d(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#1229 id=1229 data-nosnippet>1229</a>        <span class="bool-val">true
-<a href=#1230 id=1230 data-nosnippet>1230</a>    </span>}
-<a href=#1231 id=1231 data-nosnippet>1231</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
-<a href=#1232 id=1232 data-nosnippet>1232</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
+<a href=#1228 id=1228 data-nosnippet>1228</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+<a href=#1229 id=1229 data-nosnippet>1229</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.cfg
+<a href=#1230 id=1230 data-nosnippet>1230</a>    }
+<a href=#1231 id=1231 data-nosnippet>1231</a>    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>Any&gt; {
+<a href=#1232 id=1232 data-nosnippet>1232</a>        Box::new(Phi3VisionSpecificArgs::default())
 <a href=#1233 id=1233 data-nosnippet>1233</a>    }
-<a href=#1234 id=1234 data-nosnippet>1234</a>    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>Any&gt; {
-<a href=#1235 id=1235 data-nosnippet>1235</a>        Box::new(Phi3VisionSpecificArgs::default())
-<a href=#1236 id=1236 data-nosnippet>1236</a>    }
-<a href=#1237 id=1237 data-nosnippet>1237</a>}
-<a href=#1238 id=1238 data-nosnippet>1238</a>
-<a href=#1239 id=1239 data-nosnippet>1239</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Model {
-<a href=#1240 id=1240 data-nosnippet>1240</a>    <span class="kw">fn </span>get_mlps(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>MlpLayer&gt; {
-<a href=#1241 id=1241 data-nosnippet>1241</a>        <span class="kw">let </span><span class="kw-2">mut </span>mlps = Vec::new();
-<a href=#1242 id=1242 data-nosnippet>1242</a>        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.layers {
-<a href=#1243 id=1243 data-nosnippet>1243</a>            mlps.push(<span class="kw-2">&amp;*</span>layer.mlp);
-<a href=#1244 id=1244 data-nosnippet>1244</a>        }
-<a href=#1245 id=1245 data-nosnippet>1245</a>        mlps
-<a href=#1246 id=1246 data-nosnippet>1246</a>    }
-<a href=#1247 id=1247 data-nosnippet>1247</a>    <span class="kw">fn </span>get_mlps_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {
-<a href=#1248 id=1248 data-nosnippet>1248</a>        <span class="kw">let </span><span class="kw-2">mut </span>mlps = Vec::new();
-<a href=#1249 id=1249 data-nosnippet>1249</a>        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.layers {
-<a href=#1250 id=1250 data-nosnippet>1250</a>            mlps.push(<span class="kw-2">&amp;mut </span>layer.mlp);
-<a href=#1251 id=1251 data-nosnippet>1251</a>        }
-<a href=#1252 id=1252 data-nosnippet>1252</a>        mlps
-<a href=#1253 id=1253 data-nosnippet>1253</a>    }
-<a href=#1254 id=1254 data-nosnippet>1254</a>    <span class="kw">fn </span>create_anymoe_layers(
-<a href=#1255 id=1255 data-nosnippet>1255</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1256 id=1256 data-nosnippet>1256</a>        additional_vbs: Vec&lt;ShardedVarBuilder&gt;,
-<a href=#1257 id=1257 data-nosnippet>1257</a>        config: AnyMoeConfig,
-<a href=#1258 id=1258 data-nosnippet>1258</a>        (prefix, mlp): (String, String),
-<a href=#1259 id=1259 data-nosnippet>1259</a>        <span class="kw-2">mut </span>layers: Vec&lt;usize&gt;,
-<a href=#1260 id=1260 data-nosnippet>1260</a>        expert_type: AnyMoeExpertType,
-<a href=#1261 id=1261 data-nosnippet>1261</a>        gate_vb: <span class="prelude-ty">Option</span>&lt;ShardedVarBuilder&gt;,
-<a href=#1262 id=1262 data-nosnippet>1262</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#1263 id=1263 data-nosnippet>1263</a>        <span class="kw">let </span><span class="kw-2">mut </span>experts: Vec&lt;Vec&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt;&gt; = Vec::new();
-<a href=#1264 id=1264 data-nosnippet>1264</a>        <span class="kw">if </span>layers.is_empty() {
-<a href=#1265 id=1265 data-nosnippet>1265</a>            layers = (<span class="number">0</span>..<span class="self">self</span>.layers.len()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#1234 id=1234 data-nosnippet>1234</a>}
+<a href=#1235 id=1235 data-nosnippet>1235</a>
+<a href=#1236 id=1236 data-nosnippet>1236</a><span class="kw">impl </span>AnyMoeBaseModelMixin <span class="kw">for </span>Model {
+<a href=#1237 id=1237 data-nosnippet>1237</a>    <span class="kw">fn </span>get_mlps(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>MlpLayer&gt; {
+<a href=#1238 id=1238 data-nosnippet>1238</a>        <span class="kw">let </span><span class="kw-2">mut </span>mlps = Vec::new();
+<a href=#1239 id=1239 data-nosnippet>1239</a>        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.layers {
+<a href=#1240 id=1240 data-nosnippet>1240</a>            mlps.push(<span class="kw-2">&amp;*</span>layer.mlp);
+<a href=#1241 id=1241 data-nosnippet>1241</a>        }
+<a href=#1242 id=1242 data-nosnippet>1242</a>        mlps
+<a href=#1243 id=1243 data-nosnippet>1243</a>    }
+<a href=#1244 id=1244 data-nosnippet>1244</a>    <span class="kw">fn </span>get_mlps_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;<span class="kw-2">&amp;mut </span>Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt; {
+<a href=#1245 id=1245 data-nosnippet>1245</a>        <span class="kw">let </span><span class="kw-2">mut </span>mlps = Vec::new();
+<a href=#1246 id=1246 data-nosnippet>1246</a>        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut </span><span class="self">self</span>.layers {
+<a href=#1247 id=1247 data-nosnippet>1247</a>            mlps.push(<span class="kw-2">&amp;mut </span>layer.mlp);
+<a href=#1248 id=1248 data-nosnippet>1248</a>        }
+<a href=#1249 id=1249 data-nosnippet>1249</a>        mlps
+<a href=#1250 id=1250 data-nosnippet>1250</a>    }
+<a href=#1251 id=1251 data-nosnippet>1251</a>    <span class="kw">fn </span>create_anymoe_layers(
+<a href=#1252 id=1252 data-nosnippet>1252</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#1253 id=1253 data-nosnippet>1253</a>        additional_vbs: Vec&lt;ShardedVarBuilder&gt;,
+<a href=#1254 id=1254 data-nosnippet>1254</a>        config: AnyMoeConfig,
+<a href=#1255 id=1255 data-nosnippet>1255</a>        (prefix, mlp): (String, String),
+<a href=#1256 id=1256 data-nosnippet>1256</a>        <span class="kw-2">mut </span>layers: Vec&lt;usize&gt;,
+<a href=#1257 id=1257 data-nosnippet>1257</a>        expert_type: AnyMoeExpertType,
+<a href=#1258 id=1258 data-nosnippet>1258</a>        gate_vb: <span class="prelude-ty">Option</span>&lt;ShardedVarBuilder&gt;,
+<a href=#1259 id=1259 data-nosnippet>1259</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#1260 id=1260 data-nosnippet>1260</a>        <span class="kw">let </span><span class="kw-2">mut </span>experts: Vec&lt;Vec&lt;Box&lt;<span class="kw">dyn </span>MlpLayer&gt;&gt;&gt; = Vec::new();
+<a href=#1261 id=1261 data-nosnippet>1261</a>        <span class="kw">if </span>layers.is_empty() {
+<a href=#1262 id=1262 data-nosnippet>1262</a>            layers = (<span class="number">0</span>..<span class="self">self</span>.layers.len()).collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
+<a href=#1263 id=1263 data-nosnippet>1263</a>        }
+<a href=#1264 id=1264 data-nosnippet>1264</a>        <span class="kw">for _ in </span><span class="number">0</span>..layers.len() {
+<a href=#1265 id=1265 data-nosnippet>1265</a>            experts.push(Vec::new());
 <a href=#1266 id=1266 data-nosnippet>1266</a>        }
-<a href=#1267 id=1267 data-nosnippet>1267</a>        <span class="kw">for _ in </span><span class="number">0</span>..layers.len() {
-<a href=#1268 id=1268 data-nosnippet>1268</a>            experts.push(Vec::new());
-<a href=#1269 id=1269 data-nosnippet>1269</a>        }
-<a href=#1270 id=1270 data-nosnippet>1270</a>        <span class="kw">for </span>vb <span class="kw">in </span>additional_vbs {
-<a href=#1271 id=1271 data-nosnippet>1271</a>            <span class="kw">let </span>vb = vb.pp(<span class="kw-2">&amp;</span>prefix);
-<a href=#1272 id=1272 data-nosnippet>1272</a>            <span class="kw">for </span>(layer, row) <span class="kw">in </span>experts.iter_mut().enumerate() {
-<a href=#1273 id=1273 data-nosnippet>1273</a>                <span class="kw">if </span>!layers.contains(<span class="kw-2">&amp;</span>layer) {
-<a href=#1274 id=1274 data-nosnippet>1274</a>                    <span class="kw">continue</span>;
-<a href=#1275 id=1275 data-nosnippet>1275</a>                }
-<a href=#1276 id=1276 data-nosnippet>1276</a>
-<a href=#1277 id=1277 data-nosnippet>1277</a>                <span class="kw">let </span>intermediate_size = <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">1</span>];
-<a href=#1278 id=1278 data-nosnippet>1278</a>                <span class="kw">let </span>hidden_size = <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">0</span>];
-<a href=#1279 id=1279 data-nosnippet>1279</a>                <span class="kw">match </span>expert_type {
-<a href=#1280 id=1280 data-nosnippet>1280</a>                    AnyMoeExpertType::FineTuned =&gt; {
-<a href=#1281 id=1281 data-nosnippet>1281</a>                        row.push(Box::new(Mlp::new(
-<a href=#1282 id=1282 data-nosnippet>1282</a>                            <span class="kw-2">&amp;</span>Config {
-<a href=#1283 id=1283 data-nosnippet>1283</a>                                intermediate_size: <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">1</span>],
-<a href=#1284 id=1284 data-nosnippet>1284</a>                                hidden_size: <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">0</span>],
-<a href=#1285 id=1285 data-nosnippet>1285</a>                                ..Default::default()
-<a href=#1286 id=1286 data-nosnippet>1286</a>                            },
-<a href=#1287 id=1287 data-nosnippet>1287</a>                            vb.pp(layer).pp(<span class="kw-2">&amp;</span>mlp),
-<a href=#1288 id=1288 data-nosnippet>1288</a>                        )<span class="question-mark">?</span>));
-<a href=#1289 id=1289 data-nosnippet>1289</a>                    }
-<a href=#1290 id=1290 data-nosnippet>1290</a>                    AnyMoeExpertType::LoraAdapter {
-<a href=#1291 id=1291 data-nosnippet>1291</a>                        rank,
-<a href=#1292 id=1292 data-nosnippet>1292</a>                        alpha,
-<a href=#1293 id=1293 data-nosnippet>1293</a>                        <span class="kw-2">ref </span>target_modules,
-<a href=#1294 id=1294 data-nosnippet>1294</a>                    } =&gt; {
-<a href=#1295 id=1295 data-nosnippet>1295</a>                        <span class="kw">let </span>vb_mlp = vb.pp(layer).pp(<span class="kw-2">&amp;</span>mlp);
-<a href=#1296 id=1296 data-nosnippet>1296</a>
-<a href=#1297 id=1297 data-nosnippet>1297</a>                        <span class="kw">let </span>gate_up_proj_delta =
-<a href=#1298 id=1298 data-nosnippet>1298</a>                            <span class="kw">if </span>target_modules.contains(<span class="kw-2">&amp;</span><span class="string">"gate_up_proj"</span>.to_string()) {
-<a href=#1299 id=1299 data-nosnippet>1299</a>                                <span class="prelude-val">Some</span>(<span class="macro">get_delta_from_lora_ab!</span>(
-<a href=#1300 id=1300 data-nosnippet>1300</a>                                    vb_mlp,
-<a href=#1301 id=1301 data-nosnippet>1301</a>                                    rank,
-<a href=#1302 id=1302 data-nosnippet>1302</a>                                    alpha,
-<a href=#1303 id=1303 data-nosnippet>1303</a>                                    (hidden_size, <span class="number">2 </span>* intermediate_size),
-<a href=#1304 id=1304 data-nosnippet>1304</a>                                    <span class="string">"gate_up_proj"
-<a href=#1305 id=1305 data-nosnippet>1305</a>                                </span>))
-<a href=#1306 id=1306 data-nosnippet>1306</a>                            } <span class="kw">else </span>{
-<a href=#1307 id=1307 data-nosnippet>1307</a>                                <span class="prelude-val">None
-<a href=#1308 id=1308 data-nosnippet>1308</a>                            </span>};
-<a href=#1309 id=1309 data-nosnippet>1309</a>                        <span class="kw">let </span>down_proj_delta = <span class="kw">if </span>target_modules.contains(<span class="kw-2">&amp;</span><span class="string">"down_proj"</span>.to_string()) {
-<a href=#1310 id=1310 data-nosnippet>1310</a>                            <span class="prelude-val">Some</span>(<span class="macro">get_delta_from_lora_ab!</span>(
-<a href=#1311 id=1311 data-nosnippet>1311</a>                                vb_mlp,
-<a href=#1312 id=1312 data-nosnippet>1312</a>                                rank,
-<a href=#1313 id=1313 data-nosnippet>1313</a>                                alpha,
-<a href=#1314 id=1314 data-nosnippet>1314</a>                                (hidden_size, intermediate_size),
-<a href=#1315 id=1315 data-nosnippet>1315</a>                                <span class="string">"down_proj"
-<a href=#1316 id=1316 data-nosnippet>1316</a>                            </span>))
-<a href=#1317 id=1317 data-nosnippet>1317</a>                        } <span class="kw">else </span>{
-<a href=#1318 id=1318 data-nosnippet>1318</a>                            <span class="prelude-val">None
-<a href=#1319 id=1319 data-nosnippet>1319</a>                        </span>};
-<a href=#1320 id=1320 data-nosnippet>1320</a>
-<a href=#1321 id=1321 data-nosnippet>1321</a>                        row.push(
-<a href=#1322 id=1322 data-nosnippet>1322</a>                            <span class="self">self</span>.layers[layer]
-<a href=#1323 id=1323 data-nosnippet>1323</a>                                .mlp
-<a href=#1324 id=1324 data-nosnippet>1324</a>                                .new_added_delta(<span class="macro">vec!</span>[gate_up_proj_delta, down_proj_delta])<span class="question-mark">?</span>,
-<a href=#1325 id=1325 data-nosnippet>1325</a>                        );
-<a href=#1326 id=1326 data-nosnippet>1326</a>                    }
-<a href=#1327 id=1327 data-nosnippet>1327</a>                }
-<a href=#1328 id=1328 data-nosnippet>1328</a>            }
-<a href=#1329 id=1329 data-nosnippet>1329</a>        }
-<a href=#1330 id=1330 data-nosnippet>1330</a>        <span class="kw">for </span>(layer, expert) <span class="kw">in </span>layers.into_iter().zip(experts) {
-<a href=#1331 id=1331 data-nosnippet>1331</a>            <span class="kw">let </span><span class="kw-2">mut </span>experts_all = <span class="macro">vec!</span>[<span class="self">self</span>.layers[layer].mlp.clone()];
-<a href=#1332 id=1332 data-nosnippet>1332</a>            experts_all.extend(expert);
-<a href=#1333 id=1333 data-nosnippet>1333</a>            <span class="kw">let </span>(dtype, device) = <span class="self">self</span>.layers[layer].mlp.dtype_device();
-<a href=#1334 id=1334 data-nosnippet>1334</a>            <span class="self">self</span>.layers[layer].mlp = Box::new(MoeMlp::new(
-<a href=#1335 id=1335 data-nosnippet>1335</a>                experts_all,
-<a href=#1336 id=1336 data-nosnippet>1336</a>                config.clone(),
-<a href=#1337 id=1337 data-nosnippet>1337</a>                dtype,
-<a href=#1338 id=1338 data-nosnippet>1338</a>                <span class="kw-2">&amp;</span>device,
-<a href=#1339 id=1339 data-nosnippet>1339</a>                layer,
-<a href=#1340 id=1340 data-nosnippet>1340</a>                gate_vb.as_ref(),
-<a href=#1341 id=1341 data-nosnippet>1341</a>            )<span class="question-mark">?</span>);
-<a href=#1342 id=1342 data-nosnippet>1342</a>        }
-<a href=#1343 id=1343 data-nosnippet>1343</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1344 id=1344 data-nosnippet>1344</a>    }
-<a href=#1345 id=1345 data-nosnippet>1345</a>    <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#1346 id=1346 data-nosnippet>1346</a>        <span class="bool-val">true
-<a href=#1347 id=1347 data-nosnippet>1347</a>    </span>}
-<a href=#1348 id=1348 data-nosnippet>1348</a>}</code></pre></div></section></main></body></html>
+<a href=#1267 id=1267 data-nosnippet>1267</a>        <span class="kw">for </span>vb <span class="kw">in </span>additional_vbs {
+<a href=#1268 id=1268 data-nosnippet>1268</a>            <span class="kw">let </span>vb = vb.pp(<span class="kw-2">&amp;</span>prefix);
+<a href=#1269 id=1269 data-nosnippet>1269</a>            <span class="kw">for </span>(layer, row) <span class="kw">in </span>experts.iter_mut().enumerate() {
+<a href=#1270 id=1270 data-nosnippet>1270</a>                <span class="kw">if </span>!layers.contains(<span class="kw-2">&amp;</span>layer) {
+<a href=#1271 id=1271 data-nosnippet>1271</a>                    <span class="kw">continue</span>;
+<a href=#1272 id=1272 data-nosnippet>1272</a>                }
+<a href=#1273 id=1273 data-nosnippet>1273</a>
+<a href=#1274 id=1274 data-nosnippet>1274</a>                <span class="kw">let </span>intermediate_size = <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">1</span>];
+<a href=#1275 id=1275 data-nosnippet>1275</a>                <span class="kw">let </span>hidden_size = <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">0</span>];
+<a href=#1276 id=1276 data-nosnippet>1276</a>                <span class="kw">match </span>expert_type {
+<a href=#1277 id=1277 data-nosnippet>1277</a>                    AnyMoeExpertType::FineTuned =&gt; {
+<a href=#1278 id=1278 data-nosnippet>1278</a>                        row.push(Box::new(Mlp::new(
+<a href=#1279 id=1279 data-nosnippet>1279</a>                            <span class="kw-2">&amp;</span>Config {
+<a href=#1280 id=1280 data-nosnippet>1280</a>                                intermediate_size: <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">1</span>],
+<a href=#1281 id=1281 data-nosnippet>1281</a>                                hidden_size: <span class="self">self</span>.layers[layer].mlp.get_params()[<span class="number">0</span>],
+<a href=#1282 id=1282 data-nosnippet>1282</a>                                ..Default::default()
+<a href=#1283 id=1283 data-nosnippet>1283</a>                            },
+<a href=#1284 id=1284 data-nosnippet>1284</a>                            vb.pp(layer).pp(<span class="kw-2">&amp;</span>mlp),
+<a href=#1285 id=1285 data-nosnippet>1285</a>                        )<span class="question-mark">?</span>));
+<a href=#1286 id=1286 data-nosnippet>1286</a>                    }
+<a href=#1287 id=1287 data-nosnippet>1287</a>                    AnyMoeExpertType::LoraAdapter {
+<a href=#1288 id=1288 data-nosnippet>1288</a>                        rank,
+<a href=#1289 id=1289 data-nosnippet>1289</a>                        alpha,
+<a href=#1290 id=1290 data-nosnippet>1290</a>                        <span class="kw-2">ref </span>target_modules,
+<a href=#1291 id=1291 data-nosnippet>1291</a>                    } =&gt; {
+<a href=#1292 id=1292 data-nosnippet>1292</a>                        <span class="kw">let </span>vb_mlp = vb.pp(layer).pp(<span class="kw-2">&amp;</span>mlp);
+<a href=#1293 id=1293 data-nosnippet>1293</a>
+<a href=#1294 id=1294 data-nosnippet>1294</a>                        <span class="kw">let </span>gate_up_proj_delta =
+<a href=#1295 id=1295 data-nosnippet>1295</a>                            <span class="kw">if </span>target_modules.contains(<span class="kw-2">&amp;</span><span class="string">"gate_up_proj"</span>.to_string()) {
+<a href=#1296 id=1296 data-nosnippet>1296</a>                                <span class="prelude-val">Some</span>(<span class="macro">get_delta_from_lora_ab!</span>(
+<a href=#1297 id=1297 data-nosnippet>1297</a>                                    vb_mlp,
+<a href=#1298 id=1298 data-nosnippet>1298</a>                                    rank,
+<a href=#1299 id=1299 data-nosnippet>1299</a>                                    alpha,
+<a href=#1300 id=1300 data-nosnippet>1300</a>                                    (hidden_size, <span class="number">2 </span>* intermediate_size),
+<a href=#1301 id=1301 data-nosnippet>1301</a>                                    <span class="string">"gate_up_proj"
+<a href=#1302 id=1302 data-nosnippet>1302</a>                                </span>))
+<a href=#1303 id=1303 data-nosnippet>1303</a>                            } <span class="kw">else </span>{
+<a href=#1304 id=1304 data-nosnippet>1304</a>                                <span class="prelude-val">None
+<a href=#1305 id=1305 data-nosnippet>1305</a>                            </span>};
+<a href=#1306 id=1306 data-nosnippet>1306</a>                        <span class="kw">let </span>down_proj_delta = <span class="kw">if </span>target_modules.contains(<span class="kw-2">&amp;</span><span class="string">"down_proj"</span>.to_string()) {
+<a href=#1307 id=1307 data-nosnippet>1307</a>                            <span class="prelude-val">Some</span>(<span class="macro">get_delta_from_lora_ab!</span>(
+<a href=#1308 id=1308 data-nosnippet>1308</a>                                vb_mlp,
+<a href=#1309 id=1309 data-nosnippet>1309</a>                                rank,
+<a href=#1310 id=1310 data-nosnippet>1310</a>                                alpha,
+<a href=#1311 id=1311 data-nosnippet>1311</a>                                (hidden_size, intermediate_size),
+<a href=#1312 id=1312 data-nosnippet>1312</a>                                <span class="string">"down_proj"
+<a href=#1313 id=1313 data-nosnippet>1313</a>                            </span>))
+<a href=#1314 id=1314 data-nosnippet>1314</a>                        } <span class="kw">else </span>{
+<a href=#1315 id=1315 data-nosnippet>1315</a>                            <span class="prelude-val">None
+<a href=#1316 id=1316 data-nosnippet>1316</a>                        </span>};
+<a href=#1317 id=1317 data-nosnippet>1317</a>
+<a href=#1318 id=1318 data-nosnippet>1318</a>                        row.push(
+<a href=#1319 id=1319 data-nosnippet>1319</a>                            <span class="self">self</span>.layers[layer]
+<a href=#1320 id=1320 data-nosnippet>1320</a>                                .mlp
+<a href=#1321 id=1321 data-nosnippet>1321</a>                                .new_added_delta(<span class="macro">vec!</span>[gate_up_proj_delta, down_proj_delta])<span class="question-mark">?</span>,
+<a href=#1322 id=1322 data-nosnippet>1322</a>                        );
+<a href=#1323 id=1323 data-nosnippet>1323</a>                    }
+<a href=#1324 id=1324 data-nosnippet>1324</a>                }
+<a href=#1325 id=1325 data-nosnippet>1325</a>            }
+<a href=#1326 id=1326 data-nosnippet>1326</a>        }
+<a href=#1327 id=1327 data-nosnippet>1327</a>        <span class="kw">for </span>(layer, expert) <span class="kw">in </span>layers.into_iter().zip(experts) {
+<a href=#1328 id=1328 data-nosnippet>1328</a>            <span class="kw">let </span><span class="kw-2">mut </span>experts_all = <span class="macro">vec!</span>[<span class="self">self</span>.layers[layer].mlp.clone()];
+<a href=#1329 id=1329 data-nosnippet>1329</a>            experts_all.extend(expert);
+<a href=#1330 id=1330 data-nosnippet>1330</a>            <span class="kw">let </span>(dtype, device) = <span class="self">self</span>.layers[layer].mlp.dtype_device();
+<a href=#1331 id=1331 data-nosnippet>1331</a>            <span class="self">self</span>.layers[layer].mlp = Box::new(MoeMlp::new(
+<a href=#1332 id=1332 data-nosnippet>1332</a>                experts_all,
+<a href=#1333 id=1333 data-nosnippet>1333</a>                config.clone(),
+<a href=#1334 id=1334 data-nosnippet>1334</a>                dtype,
+<a href=#1335 id=1335 data-nosnippet>1335</a>                <span class="kw-2">&amp;</span>device,
+<a href=#1336 id=1336 data-nosnippet>1336</a>                layer,
+<a href=#1337 id=1337 data-nosnippet>1337</a>                gate_vb.as_ref(),
+<a href=#1338 id=1338 data-nosnippet>1338</a>            )<span class="question-mark">?</span>);
+<a href=#1339 id=1339 data-nosnippet>1339</a>        }
+<a href=#1340 id=1340 data-nosnippet>1340</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1341 id=1341 data-nosnippet>1341</a>    }
+<a href=#1342 id=1342 data-nosnippet>1342</a>    <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#1343 id=1343 data-nosnippet>1343</a>        <span class="bool-val">true
+<a href=#1344 id=1344 data-nosnippet>1344</a>    </span>}
+<a href=#1345 id=1345 data-nosnippet>1345</a>}</code></pre></div></section></main></body></html>

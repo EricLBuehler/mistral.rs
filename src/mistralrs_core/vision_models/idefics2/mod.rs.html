@@ -1296,14 +1296,11 @@
 <a href=#1296 id=1296 data-nosnippet>1296</a>    <span class="kw">fn </span>max_seq_len(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
 <a href=#1297 id=1297 data-nosnippet>1297</a>        <span class="self">self</span>.text_model.max_seq_len()
 <a href=#1298 id=1298 data-nosnippet>1298</a>    }
-<a href=#1299 id=1299 data-nosnippet>1299</a>    <span class="kw">fn </span>has_conv2d(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#1300 id=1300 data-nosnippet>1300</a>        <span class="bool-val">true
-<a href=#1301 id=1301 data-nosnippet>1301</a>    </span>}
-<a href=#1302 id=1302 data-nosnippet>1302</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
-<a href=#1303 id=1303 data-nosnippet>1303</a>        <span class="self">self</span>.text_model.config()
-<a href=#1304 id=1304 data-nosnippet>1304</a>    }
-<a href=#1305 id=1305 data-nosnippet>1305</a>    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>Any&gt; {
-<a href=#1306 id=1306 data-nosnippet>1306</a>        <span class="kw">let </span>args: <span class="prelude-ty">Option</span>&lt;Tensor&gt; = <span class="prelude-val">None</span>;
-<a href=#1307 id=1307 data-nosnippet>1307</a>        Box::new(args)
-<a href=#1308 id=1308 data-nosnippet>1308</a>    }
-<a href=#1309 id=1309 data-nosnippet>1309</a>}</code></pre></div></section></main></body></html>
+<a href=#1299 id=1299 data-nosnippet>1299</a>    <span class="kw">fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ModelConfigMetadata {
+<a href=#1300 id=1300 data-nosnippet>1300</a>        <span class="self">self</span>.text_model.config()
+<a href=#1301 id=1301 data-nosnippet>1301</a>    }
+<a href=#1302 id=1302 data-nosnippet>1302</a>    <span class="kw">fn </span>default_model_specific_args(<span class="kw-2">&amp;</span><span class="self">self</span>, _input_ids: <span class="kw-2">&amp;</span>Tensor) -&gt; Box&lt;<span class="kw">dyn </span>Any&gt; {
+<a href=#1303 id=1303 data-nosnippet>1303</a>        <span class="kw">let </span>args: <span class="prelude-ty">Option</span>&lt;Tensor&gt; = <span class="prelude-val">None</span>;
+<a href=#1304 id=1304 data-nosnippet>1304</a>        Box::new(args)
+<a href=#1305 id=1305 data-nosnippet>1305</a>    }
+<a href=#1306 id=1306 data-nosnippet>1306</a>}</code></pre></div></section></main></body></html>
