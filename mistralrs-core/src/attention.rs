@@ -282,7 +282,7 @@ impl Sdpa {
     /// - v: (b_sz, n_kv_heads, q_len, head_dim)
     ///
     /// The attention implementation is dispatched as follows:
-    /// 1) If `use_flash_attn == true` (CUDA), use a flash attention V2 kernel
+    /// 1) If using flash attn (CUDA), use a flash attention V2/V3 kernel
     /// 2) If decoding and using a Metal device, use a fused kkernel
     /// 2) Otherwise, use the "naive" SDPA implementation (with optimized mask+softmax+scale application)
     #[allow(unused_variables, clippy::too_many_arguments)]

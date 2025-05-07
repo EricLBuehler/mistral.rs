@@ -8,7 +8,6 @@ use std::{
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::{Activation, Llama3RopeConfig, PhiRopeScalingConfig},
     lora::{LoraConfig, Ordering},
     paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata},
     pipeline::{
@@ -16,7 +15,6 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel,
     },
-    serde_default_fn,
     utils::{log::once_log_info, varbuilder_utils::DeviceForLoadTensor},
     xlora_models::NonGranularState,
 };
@@ -24,7 +22,7 @@ use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
 
 use indicatif::MultiProgress;
-use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -87,7 +85,6 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -96,7 +93,6 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -108,7 +104,7 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
     fn get_device_for_tensor(
         &self,
         config: &str,
@@ -296,23 +292,15 @@ impl NormalModelLoader for AutoLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        Self::get_loader(config)?.load(
-            config,
-            use_flash_attn,
-            vb,
-            normal_loading_metadata,
-            attention_mechanism,
-        )
+        Self::get_loader(config)?.load(config, vb, normal_loading_metadata, attention_mechanism)
     }
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -322,7 +310,6 @@ impl NormalModelLoader for AutoLoader {
     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
         Self::get_loader(config)?.load_xlora(
             config,
-            use_flash_attn,
             vb,
             lora_config,
             xlora_config,
@@ -331,8 +318,8 @@ impl NormalModelLoader for AutoLoader {
             preload_adapters,
         )
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        Self::get_loader(config)?.get_config_repr(config, use_flash_attn)
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        Self::get_loader(config)?.get_config_repr(config)
     }
     fn supports_paged_attention(&self, config: &str) -> Result<bool> {
         Self::get_loader(config)?.supports_paged_attention(config)
@@ -388,8 +375,6 @@ impl DeviceMappedModelLoader for AutoLoader {
     }
 }
 
-serde_default_fn!(bool, word_emb_default, false);
-
 // ======================== Mistral loader
 
 pub struct MistralLoader;
@@ -398,7 +383,6 @@ impl NormalModelLoader for MistralLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -415,7 +399,6 @@ impl NormalModelLoader for MistralLoader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -438,7 +421,7 @@ impl NormalModelLoader for MistralLoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::mistral::Config = serde_json::from_str(config)?;
         Ok(Box::new(cfg))
     }
@@ -576,10 +559,6 @@ impl DeviceMappedModelLoader for MistralLoader {
 
 // ======================== Gemma loader
 
-fn default_max_position_embeddings() -> usize {
-    4096
-}
-
 /// [`NormalLoader`] for a Gemma model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
@@ -589,7 +568,6 @@ impl NormalModelLoader for GemmaLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -607,7 +585,6 @@ impl NormalModelLoader for GemmaLoader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -631,7 +608,7 @@ impl NormalModelLoader for GemmaLoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
         Ok(Box::new(cfg))
     }
@@ -782,7 +759,6 @@ impl NormalModelLoader for LlamaLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -800,7 +776,6 @@ impl NormalModelLoader for LlamaLoader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -824,7 +799,7 @@ impl NormalModelLoader for LlamaLoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::llama::Config = serde_json::from_str(config)?;
         Ok(Box::new(cfg))
     }
@@ -968,7 +943,6 @@ impl NormalModelLoader for MixtralLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -986,7 +960,6 @@ impl NormalModelLoader for MixtralLoader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -1010,7 +983,7 @@ impl NormalModelLoader for MixtralLoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::mixtral::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))
@@ -1163,7 +1136,6 @@ impl NormalModelLoader for Phi2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1181,7 +1153,6 @@ impl NormalModelLoader for Phi2Loader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -1205,7 +1176,7 @@ impl NormalModelLoader for Phi2Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::phi2::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))
@@ -1348,7 +1319,6 @@ impl NormalModelLoader for Phi3Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1366,7 +1336,6 @@ impl NormalModelLoader for Phi3Loader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -1390,7 +1359,7 @@ impl NormalModelLoader for Phi3Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::phi3::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))
@@ -1532,7 +1501,6 @@ impl NormalModelLoader for Qwen2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1550,7 +1518,6 @@ impl NormalModelLoader for Qwen2Loader {
     fn load_xlora(
         &self,
         _config: &str,
-        _use_flash_attn: bool,
         _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
@@ -1563,7 +1530,7 @@ impl NormalModelLoader for Qwen2Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::qwen2::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))
@@ -1712,7 +1679,6 @@ impl NormalModelLoader for Gemma2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1730,7 +1696,6 @@ impl NormalModelLoader for Gemma2Loader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -1754,7 +1719,7 @@ impl NormalModelLoader for Gemma2Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))
@@ -1906,7 +1871,6 @@ impl NormalModelLoader for Starcoder2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1924,7 +1888,6 @@ impl NormalModelLoader for Starcoder2Loader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -1948,7 +1911,7 @@ impl NormalModelLoader for Starcoder2Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))
@@ -2094,7 +2057,6 @@ impl NormalModelLoader for Phi3_5MoELoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -2112,7 +2074,6 @@ impl NormalModelLoader for Phi3_5MoELoader {
     fn load_xlora(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         lora_config: &[((String, String), LoraConfig)],
         xlora_config: Option<XLoraConfig>,
@@ -2136,7 +2097,7 @@ impl NormalModelLoader for Phi3_5MoELoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::phi3_5_moe::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))
@@ -2300,7 +2261,6 @@ impl NormalModelLoader for DeepSeekV2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -2318,7 +2278,6 @@ impl NormalModelLoader for DeepSeekV2Loader {
     fn load_xlora(
         &self,
         _config: &str,
-        _use_flash_attn: bool,
         _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
@@ -2331,7 +2290,7 @@ impl NormalModelLoader for DeepSeekV2Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         Ok(Box::new(cfg))
     }
@@ -2621,7 +2580,6 @@ impl NormalModelLoader for DeepSeekV3Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -2638,7 +2596,6 @@ impl NormalModelLoader for DeepSeekV3Loader {
     fn load_xlora(
         &self,
         _config: &str,
-        _use_flash_attn: bool,
         _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
@@ -2651,7 +2608,7 @@ impl NormalModelLoader for DeepSeekV3Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
         Ok(Box::new(cfg))
     }
@@ -2941,7 +2898,6 @@ impl NormalModelLoader for Qwen3Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -2959,7 +2915,6 @@ impl NormalModelLoader for Qwen3Loader {
     fn load_xlora(
         &self,
         _config: &str,
-        _use_flash_attn: bool,
         _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
@@ -2972,7 +2927,7 @@ impl NormalModelLoader for Qwen3Loader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::qwen3::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))
@@ -3121,7 +3076,6 @@ impl NormalModelLoader for Qwen3MoELoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -3139,7 +3093,6 @@ impl NormalModelLoader for Qwen3MoELoader {
     fn load_xlora(
         &self,
         _config: &str,
-        _use_flash_attn: bool,
         _vb: ShardedVarBuilder,
         _lora_config: &[((String, String), LoraConfig)],
         _xlora_config: Option<XLoraConfig>,
@@ -3152,7 +3105,7 @@ impl NormalModelLoader for Qwen3MoELoader {
     fn is_gptx(&self, _: &str) -> Result<bool> {
         Ok(true)
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let cfg: crate::models::qwen3_moe::Config = serde_json::from_str(config)?;
 
         Ok(Box::new(cfg))

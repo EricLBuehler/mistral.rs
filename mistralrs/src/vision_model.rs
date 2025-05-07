@@ -27,7 +27,6 @@ pub struct VisionModelBuilder {
     pub(crate) search_bert_model: Option<BertEmbeddingModel>,
 
     // Model running
-    pub(crate) use_flash_attn: bool,
     pub(crate) prompt_chunksize: Option<NonZeroUsize>,
     pub(crate) topology: Option<Topology>,
     pub(crate) loader_type: VisionLoaderType,
@@ -51,7 +50,6 @@ impl VisionModelBuilder {
     pub fn new(model_id: impl ToString, loader_type: VisionLoaderType) -> Self {
         Self {
             model_id: model_id.to_string(),
-            use_flash_attn: cfg!(feature = "flash-attn"),
             topology: None,
             write_uqff: None,
             from_uqff: None,
@@ -224,7 +222,6 @@ impl VisionModelBuilder {
 
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = VisionSpecificConfig {
-            use_flash_attn: self.use_flash_attn,
             prompt_chunksize: self.prompt_chunksize,
             topology: self.topology,
             write_uqff: self.write_uqff,

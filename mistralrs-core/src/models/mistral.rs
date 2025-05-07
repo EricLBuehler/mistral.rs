@@ -26,7 +26,6 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-serde_default_fn!(bool, use_flash_attn, false);
 serde_default_fn!(bool, tie_word_embeddings, false);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

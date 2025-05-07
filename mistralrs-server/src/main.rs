@@ -37,7 +37,7 @@ use crate::{
 
 use interactive_mode::interactive_mode;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{info, warn};
+use tracing::info;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -271,8 +271,6 @@ async fn main() -> Result<()> {
     let mut args = Args::parse();
     initialize_logging();
 
-    let use_flash_attn = mistralrs_core::using_flash_attn();
-
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let dtype = get_model_dtype(&args.model)?;
     let auto_device_map_params = get_auto_device_map_params(&args.model)?;
@@ -294,7 +292,6 @@ async fn main() -> Result<()> {
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_no_kv_cache(args.no_kv_cache)
         .with_chat_template(args.chat_template)
-        .with_use_flash_attn(use_flash_attn)
         .with_prompt_chunksize(prompt_chunksize)
         .with_jinja_explicit(args.jinja_explicit)
         .build()?;
@@ -323,12 +320,6 @@ async fn main() -> Result<()> {
         candle_core::utils::with_f16c()
     );
     info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
-    if use_flash_attn {
-        info!("Using flash attention.");
-    }
-    if use_flash_attn && loader.get_kind().is_quantized() {
-        warn!("Using flash attention with a quantized model has no effect!")
-    }
     info!("Model kind is: {}", loader.get_kind().to_string());
 
     // Parse device mapper

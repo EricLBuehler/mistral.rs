@@ -42,7 +42,6 @@ impl AnyMoeModelBuilder {
 
     pub async fn build(self) -> anyhow::Result<Model> {
         let config = NormalSpecificConfig {
-            use_flash_attn: self.base.use_flash_attn,
             prompt_chunksize: self.base.prompt_chunksize,
             topology: self.base.topology,
             organization: self.base.organization,

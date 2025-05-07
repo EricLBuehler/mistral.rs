@@ -7,7 +7,6 @@ use crate::{
 };
 
 serde_default_fn!(bool, word_emb_default, false);
-serde_default_fn!(bool, use_flash_attn_default, false);
 serde_default_fn!(Option<f32>, attn_temperature_tuning, Some(4.));
 serde_default_fn!(Option<f32>, floor_scale, Some(8192.));
 serde_default_fn!(Option<f32>, attn_scale, Some(0.1));

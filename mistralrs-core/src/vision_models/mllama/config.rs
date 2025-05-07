@@ -86,8 +86,6 @@ pub(crate) struct MLlamaRopeScaling {
     pub(crate) high_freq_factor: Option<f32>,
 }
 
-serde_default_fn!(bool, d_flash_attn, false);
-
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct MLlamaTextConfig {
     pub(crate) rope_scaling: Option<MLlamaRopeScaling>,

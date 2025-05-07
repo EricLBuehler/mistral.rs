@@ -17,8 +17,6 @@ pub struct Config {
     pub vision_feature_select_strategy: String,
 }
 
-serde_default_fn!(bool, default_use_flash_attn, false);
-
 #[derive(Deserialize, Debug, Clone)]
 pub struct LLaVATextConfig {
     #[serde(default = "default_hidden_size")]

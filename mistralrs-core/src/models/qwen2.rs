@@ -25,7 +25,6 @@ use crate::{
 };
 
 serde_default_fn!(bool, word_emb_default, false);
-serde_default_fn!(bool, use_flash_attn, false);
 
 #[derive(Debug, Clone, serde::Deserialize, Default, serde::Serialize)]
 pub struct Config {

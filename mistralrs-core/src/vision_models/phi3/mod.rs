@@ -54,7 +54,6 @@ pub struct ImageProcessorConfig {
     pub type_feature: Option<String>,
 }
 
-serde_default_fn!(bool, d_flash_attn, false);
 serde_default_fn!(bool, word_emb_default, false);
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
