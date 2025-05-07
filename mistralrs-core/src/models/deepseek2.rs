@@ -243,7 +243,7 @@ impl Attention {
             paged_attn,
             num_attention_heads: cfg.num_attention_heads / comm.world_size(),
             sdpa_params: SdpaParams {
-                n_kv_groups: 1,
+                n_kv_groups: 16,
                 use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: cfg.softmax_scale(),
@@ -264,9 +264,7 @@ impl Attention {
         let (bs, seq_len, _) = xs.dims3()?;
 
         let mut q = self.q.forward(xs)?;
-        q = q
-            .reshape((bs, seq_len, self.num_attention_heads, self.q_head_dim))?
-            .transpose(1, 2)?;
+        q = q.reshape((bs, seq_len, self.num_attention_heads, self.q_head_dim))?;
         let q_split = q.split(
             &[self.cfg.qk_nope_head_dim, self.cfg.qk_rope_head_dim],
             D::Minus1,
@@ -274,104 +272,53 @@ impl Attention {
         let q_nope = q_split[0].clone();
         let mut q_pe = q_split[1].clone();
 
-        let mut compressed_kv = self.kv_a_proj_with_mqa.forward_autocast(xs)?;
-        let ckv_split = compressed_kv.split(
+        let mut kv = self.kv_a_proj_with_mqa.forward_autocast(xs)?.unsqueeze(2)?;
+        let kv_split = kv.split(
             &[self.cfg.kv_lora_rank, self.cfg.qk_rope_head_dim],
             D::Minus1,
         )?;
-        compressed_kv = ckv_split[0].clone();
-        let mut k_pe = ckv_split[1].clone();
-        k_pe = k_pe
-            .reshape((bs, seq_len, 1, self.cfg.qk_rope_head_dim))?
-            .transpose(1, 2)?;
-        let mut kv = self
-            .kv_b_proj
-            .forward_autocast(&self.kv_a_layernorm.forward(&compressed_kv)?)?;
-        kv = kv
-            .reshape((
-                bs,
-                seq_len,
-                self.num_attention_heads,
-                self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
-            ))?
-            .transpose(1, 2)?;
-
-        let kv_split = kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
-        let k_nope = kv_split[0].clone();
-        let mut v = kv_split[1].clone();
+        kv = kv_split[0].clone();
+        let mut k_pe = kv_split[1].clone();
 
         (q_pe, k_pe) = self.rotary_emb.forward(&q_pe, &k_pe, seqlen_offsets)?;
 
-        let q = Tensor::cat(&[&q_nope, &q_pe], D::Minus1)?.contiguous()?;
-        let mut k = Tensor::cat(
-            &[&k_nope, &k_pe.repeat((1, self.num_attention_heads, 1, 1))?],
-            D::Minus1,
-        )?
-        .contiguous()?;
+        let kv_b_proj = self.kv_b_proj.dequantize_w()?.reshape((
+            (),
+            self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
+        ))?;
+        let kv_b_proj_split =
+            kv_b_proj.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
+        let w_kc = kv_b_proj_split[0].clone();
+        let w_vc = kv_b_proj_split[1].clone();
+        let q_nope_out = q_nope
+            .transpose(1, 2)?
+            .contiguous()?
+            .broadcast_matmul(&w_kc.contiguous()?)?
+            .transpose(1, 2)?;
+        let q_input = Tensor::cat(&[q_nope_out, q_pe], D::Minus1)?;
 
-        let mut attn_out = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => {
-                    let v = v
-                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
-                        .contiguous()?;
-                    paged_attn
-                        .forward(
-                            &q,
-                            &k,
-                            &v,
-                            attention_mask,
-                            Some(key_cache),
-                            Some(value_cache),
-                            input_metadata,
-                            &self.sdpa_params,
-                            Some(flash_params),
-                        )?
-                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
-                }
-                None => {
-                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
-                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    // Sanity check.
-                    assert!(attention_mask.is_some());
-                    let v = v
-                        .pad_with_zeros(D::Minus1, 0, self.q_head_dim - self.cfg.v_head_dim)?
-                        .contiguous()?;
-                    paged_attn
-                        .forward(
-                            &q,
-                            &k,
-                            &v,
-                            attention_mask,
-                            None,
-                            None,
-                            &input_metadata,
-                            &self.sdpa_params,
-                            Some(flash_params),
-                        )?
-                        .narrow(D::Minus1, 0, self.cfg.v_head_dim)?
-                }
-            },
-            None => {
-                (k, v) = kv_cache.append(&k, &v)?;
+        let mut v_input = self.kv_a_layernorm.forward(&kv)?;
+        let mut k_input = Tensor::cat(&[v_input.clone(), k_pe], D::Minus1)?;
 
-                Sdpa.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(flash_params),
-                    &self.sdpa_params,
-                )?
-            }
-        };
+        // (k_input, v_input) = kv_cache.append(&k_input, &v_input)?;
 
-        attn_out = if attention_mask.is_some() {
-            attn_out.transpose(1, 2)?.reshape((bs, seq_len, ()))?
-        } else {
-            attn_out.reshape((bs, seq_len, ()))?
-        };
+        let mut attn_out = Sdpa.run_attention(
+            &q_input.transpose(1, 2)?.contiguous()?,
+            &k_input.transpose(1, 2)?.contiguous()?,
+            &v_input.transpose(1, 2)?.contiguous()?,
+            attention_mask,
+            Some(flash_params),
+            &self.sdpa_params,
+        )?;
+        attn_out =
+            attn_out.reshape((bs, self.num_attention_heads, seq_len, self.cfg.kv_lora_rank))?;
+        dbg!(&attn_out, &w_vc);
+        attn_out = dbg!(attn_out
+            .transpose(1, 2)?)
+            .contiguous()?
+            .broadcast_matmul(&dbg!(w_vc.transpose(1, 2)?.contiguous()?.unsqueeze(0)?)).unwrap()
+            .transpose(1, 2)?;
+        attn_out = attn_out.reshape((bs, seq_len, ()))?;
 
         self.o_proj.forward_autocast(&attn_out)
     }
