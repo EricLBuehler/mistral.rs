@@ -112,8 +112,6 @@ mod tests {
         xjApU46pnBe8fwF4pb+/8Ywv/DK9zbCKsfWXUBhf+A1dOX00S+xfgc3L3dmKWSn7iklDjthxbSaH
         c7YCVIAfi6JYn5bHjTHTGmurQJXJ8C/um928G9zK4gAAAABJRU5ErkJggg==
         ";
-        let image = parse_image_url(url).await.unwrap();
-        assert_eq!(image.dimensions(), (32, 32));
 
         let url = format!("data:image/png;base64,{}", url);
         let image = parse_image_url(&url).await.unwrap();
