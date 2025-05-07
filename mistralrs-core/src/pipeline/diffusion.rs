@@ -11,6 +11,7 @@ use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::ChatTemplate;
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::utils::log::once_log_info;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
@@ -143,6 +144,10 @@ impl Loader for DiffusionLoader {
             warn!("PagedAttention is not supported for Diffusion models, disabling it.");
 
             paged_attn_config = None;
+        }
+
+        if crate::using_flash_attn() {
+            once_log_info(format!("FlashAttention is enabled."));
         }
 
         let configs = paths
