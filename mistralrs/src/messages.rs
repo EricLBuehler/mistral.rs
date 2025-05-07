@@ -159,13 +159,13 @@ impl VisionMessages {
         model: &Model,
     ) -> anyhow::Result<Self> {
         let prefixer = match &model.config().category {
-            ModelCategory::Text | ModelCategory::Diffusion => {
-                anyhow::bail!("`add_image_message` expects a vision model.")
-            }
             ModelCategory::Vision {
                 has_conv2d: _,
                 prefixer,
             } => prefixer,
+            _ => {
+                anyhow::bail!("`add_image_message` expects a vision model.")
+            }
         };
         self.images.push(image);
         self.messages.push(IndexMap::from([

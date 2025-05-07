@@ -219,6 +219,8 @@ pub enum ModelCategory {
         prefixer: Arc<dyn VisionPromptPrefixer>,
     },
     Diffusion,
+    Audio,
+    Speech,
 }
 
 impl PartialEq for ModelCategory {
@@ -226,10 +228,13 @@ impl PartialEq for ModelCategory {
         match (self, other) {
             (Self::Text, Self::Text) => true,
             (Self::Vision { .. }, Self::Vision { .. }) => true,
+            (Self::Audio, Self::Audio) => true,
+            (Self::Speech, Self::Speech) => true,
             (Self::Diffusion, Self::Diffusion) => true,
-            (Self::Text, _) => false,
-            (Self::Vision { .. }, _) => false,
-            (Self::Diffusion, _) => false,
+            (
+                Self::Text | Self::Vision { .. } | Self::Diffusion | Self::Audio | Self::Speech,
+                _,
+            ) => false,
         }
     }
 }
