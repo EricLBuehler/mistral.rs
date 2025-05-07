@@ -61,7 +61,7 @@ fn read_line<H: Helper, I: History>(editor: &mut Editor<H, I>) -> String {
 
         Err(e) => {
             editor.save_history(&history_file_path()).unwrap();
-            eprintln!("Error reading input: {:?}", e);
+            eprintln!("Error reading input: {e:?}");
             std::process::exit(1);
         }
         Ok(prompt) => {
@@ -84,8 +84,9 @@ pub async fn interactive_mode(
         ModelCategory::Vision { .. } => {
             vision_interactive_mode(mistralrs, do_search, enable_thinking).await
         }
-        ModelCategory::Audio => audio_interactive_mode(mistralrs, do_search, enable_thinking).await,
         ModelCategory::Diffusion => diffusion_interactive_mode(mistralrs, do_search).await,
+        ModelCategory::Audio => audio_interactive_mode(mistralrs, do_search, enable_thinking).await,
+        ModelCategory::Speech => speech_interactive_mode(mistralrs, do_search).await,
     }
 }
 
@@ -258,7 +259,7 @@ async fn text_interactive_mode(
                     } = &chunk.choices[0]
                     {
                         assistant_output.push_str(content);
-                        print!("{}", content);
+                        print!("{content}");
                         io::stdout().flush().unwrap();
                         if finish_reason.is_some() {
                             if matches!(finish_reason.as_ref().unwrap().as_str(), "length") {
@@ -499,7 +500,7 @@ async fn vision_interactive_mode(
                     } = &chunk.choices[0]
                     {
                         assistant_output.push_str(content);
-                        print!("{}", content);
+                        print!("{content}");
                         io::stdout().flush().unwrap();
                         if finish_reason.is_some() {
                             if matches!(finish_reason.as_ref().unwrap().as_str(), "length") {
@@ -559,7 +560,11 @@ async fn audio_interactive_mode(
     _do_search: bool,
     _enable_thinking: Option<bool>,
 ) {
-    unimplemented!("Using audio models interactively isn't supported yet")
+    unimplemented!("Using audio models isn't supported yet")
+}
+
+async fn speech_interactive_mode(_mistralrs: Arc<MistralRs>, _do_search: bool) {
+    unimplemented!("Using speech models isn't supported yet")
 }
 
 async fn diffusion_interactive_mode(mistralrs: Arc<MistralRs>, do_search: bool) {

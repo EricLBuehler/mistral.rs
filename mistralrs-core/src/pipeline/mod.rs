@@ -218,8 +218,9 @@ pub enum ModelCategory {
         has_conv2d: bool,
         prefixer: Arc<dyn VisionPromptPrefixer>,
     },
-    Audio,
     Diffusion,
+    Audio,
+    Speech,
 }
 
 impl PartialEq for ModelCategory {
@@ -228,6 +229,7 @@ impl PartialEq for ModelCategory {
             (Self::Text, Self::Text) => true,
             (Self::Vision { .. }, Self::Vision { .. }) => true,
             (Self::Audio, Self::Audio) => true,
+            (Self::Speech, Self::Speech) => true,
             (Self::Diffusion, Self::Diffusion) => true,
             (_, _) => false,
         }
