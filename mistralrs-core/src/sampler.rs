@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{Device, Error, Result, Tensor, D};
+use candle_core::{DType, Device, Error, Result, Tensor, D};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -16,6 +16,11 @@ use rand_isaac::Isaac64Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use tokenizers::Tokenizer;
+
+use crate::{
+    layers_masker::masked_fill,
+    ops::{TopKLastDimOp, TopKOutput},
+};
 
 static DRY_SEQUENCE_BREAKERS: Lazy<Vec<String>> =
     Lazy::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
@@ -337,6 +342,91 @@ impl Sampler {
         })
     }
 
+    fn sample_fast(
+        &self,
+        logits: Tensor,
+        return_logprobs: bool,
+        temperature: f64,
+        top_k: i64,
+        top_p: f64,
+        min_p: f64,
+    ) -> Result<Logprobs> {
+        let mut logprobs = logits.clone();
+
+        // Apply topk
+        {
+            assert!(top_k > 0);
+
+            let TopKOutput {
+                values: topk_vals,
+                indices: topk_idx,
+            } = logprobs.topk(top_k as usize)?;
+
+            let mut mask = Tensor::zeros(logprobs.shape(), DType::U8, logprobs.device())?;
+
+            mask = mask
+                .to_dtype(DType::F32)?
+                .scatter_add(&topk_idx, &topk_vals.ones_like()?, D::Minus1)?
+                .to_dtype(mask.dtype())?;
+
+            logprobs = masked_fill(&logprobs, &mask, f32::NEG_INFINITY)?;
+        }
+
+        // // Apply topp
+        // {
+        //     // Sort ascending
+        //     let sorted_indices = logprobs.arg_sort_last_dim(true)?;
+        //     let sorted_probs = logprobs.gather(&sorted_indices, D::Minus1)?;
+
+        //     // Cumsum of sorted probs
+        //     let cumulative_probs = sorted_probs.cumsum(D::Minus1)?;
+
+        //     // Keep tokens where cumulative_probs > (1 - topp)
+        //     // i.e tail of distribution comprising topp mass
+        //     let sorted_filtered = cumulative_probs
+        //         .gt(1. - top_p)?
+        //         .where_cond(&sorted_probs, &sorted_probs.zeros_like()?)?;
+
+        //     // Invert the sort to map back to original indices
+        //     let inverse_indices = sorted_indices.arg_sort_last_dim(true)?;
+
+        //     // Scatter the filtered probs back to original ordering
+        //     let filtered_probs = sorted_filtered.gather(&inverse_indices, D::Minus1)?;
+
+        //     logprobs = filtered_probs.log()?;
+        // }
+
+        // Temperature
+        logprobs = candle_nn::ops::softmax_last_dim(&logprobs)?;
+        logprobs = (logprobs / temperature)?.log()?;
+
+        // // Categorical
+        let g = {
+            let u = logprobs.rand_like(0., 1.)?;
+            u.log()?.neg()?.log()?.neg()?
+        };
+        let noisy = (logprobs + g)?;
+
+        let next_token = noisy.argmax(D::Minus1)?.to_scalar::<u32>()?;
+
+        // let bytes = if let Some(tokenizer) = &self.tokenizer {
+        //     Some(
+        //         tokenizer
+        //             .decode(&[next_token], false)
+        //             .map_err(|x| Error::Msg(x.to_string()))?,
+        //     )
+        // } else {
+        //     None
+        // };
+
+        Ok(Logprobs {
+            token: next_token,
+            logprob: 1.,
+            top_logprobs: None,
+            bytes: None,
+        })
+    }
+
     fn sample_speculative_top_kp_min_p(
         &self,
         logits: Tensor,
@@ -643,6 +733,15 @@ impl Sampler {
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
     ) -> Result<Logprobs> {
+        return self.sample_fast(
+            logits,
+            return_logprobs,
+            self.temperature.unwrap_or(1.),
+            self.top_k,
+            self.top_p,
+            self.min_p,
+        );
+
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;
         for processor in &self.logits_processors {
