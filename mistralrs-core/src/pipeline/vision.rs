@@ -872,9 +872,7 @@ impl Pipeline for VisionPipeline {
         sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
     }
     fn category(&self) -> ModelCategory {
-        let has_conv2d = self.model.has_conv2d();
         ModelCategory::Vision {
-            has_conv2d,
             prefixer: self.prefixer.clone(),
         }
     }

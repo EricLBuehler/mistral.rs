@@ -261,9 +261,6 @@ impl VisionModel for Llama4Model {
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
     }
-    fn has_conv2d(&self) -> bool {
-        false
-    }
     fn device(&self) -> &Device {
         self.language_model.device()
     }

@@ -723,9 +723,6 @@ impl VisionModel for TextModel {
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
     }
-    fn has_conv2d(&self) -> bool {
-        unreachable!()
-    }
 }
 
 impl AnyMoeBaseModelMixin for TextModel {

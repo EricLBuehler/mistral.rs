@@ -222,10 +222,6 @@ impl VisionModel for Gemma3Model {
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
     }
-    fn has_conv2d(&self) -> bool {
-        // TODO
-        false
-    }
 }
 
 impl AnyMoeBaseModelMixin for Gemma3Model {
