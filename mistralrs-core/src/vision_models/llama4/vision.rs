@@ -150,7 +150,6 @@ impl Llama4VisionAttention {
             )?,
             sdpa_params: SdpaParams {
                 n_kv_groups: 1,
-                use_flash_attn: false,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,

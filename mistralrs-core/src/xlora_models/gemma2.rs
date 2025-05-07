@@ -227,7 +227,6 @@ impl Attention {
             sliding_window,
             sdpa_params: SdpaParams {
                 n_kv_groups: num_heads / num_kv_heads,
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
                 sliding_window,

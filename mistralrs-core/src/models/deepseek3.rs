@@ -244,7 +244,6 @@ impl Attention {
             num_attention_heads: cfg.num_attention_heads / comm.world_size(),
             sdpa_params: SdpaParams {
                 n_kv_groups: 1,
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: cfg.softmax_scale(),
                 sliding_window: None,
