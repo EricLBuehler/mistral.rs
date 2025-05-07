@@ -22,94 +22,94 @@
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span><span class="kw">crate</span>::pipeline::{get_chat_template, ChatTemplate, IsqOrganization, LocalModelPaths};
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::prefix_cacher::PrefixCacheManagerV2;
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span><span class="kw">crate</span>::sequence::Sequence;
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
-<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
-<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::preprocessor_config::PreProcessorConfig;
-<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig;
-<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::ModelInputs;
-<a href=#31 id=31 data-nosnippet>31</a><span class="kw">use crate</span>::{
-<a href=#32 id=32 data-nosnippet>32</a>    api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
-<a href=#33 id=33 data-nosnippet>33</a>    vision_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, Ordering,
-<a href=#34 id=34 data-nosnippet>34</a>    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
-<a href=#35 id=35 data-nosnippet>35</a>};
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>anyhow::Result;
-<a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span>candle_core::{Device, Tensor, Var};
-<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span>hf_hub::Cache;
-<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
-<a href=#40 id=40 data-nosnippet>40</a><span class="kw">use </span>indicatif::MultiProgress;
-<a href=#41 id=41 data-nosnippet>41</a><span class="kw">use </span>mistralrs_quant::{AfqLayer, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
-<a href=#42 id=42 data-nosnippet>42</a><span class="kw">use </span>rand_isaac::Isaac64Rng;
-<a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span>regex_automata::meta::Regex;
-<a href=#44 id=44 data-nosnippet>44</a><span class="kw">use </span>std::any::Any;
-<a href=#45 id=45 data-nosnippet>45</a><span class="kw">use </span>std::borrow::Cow;
-<a href=#46 id=46 data-nosnippet>46</a><span class="kw">use </span>std::num::NonZeroUsize;
-<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span>std::path::{Path, PathBuf};
-<a href=#48 id=48 data-nosnippet>48</a><span class="kw">use </span>std::str::FromStr;
-<a href=#49 id=49 data-nosnippet>49</a><span class="kw">use </span>std::sync::{Arc, RwLock};
-<a href=#50 id=50 data-nosnippet>50</a><span class="kw">use </span>std::time::Instant;
-<a href=#51 id=51 data-nosnippet>51</a><span class="kw">use </span>std::{env, fs};
-<a href=#52 id=52 data-nosnippet>52</a><span class="kw">use </span>tokenizers::Tokenizer;
-<a href=#53 id=53 data-nosnippet>53</a><span class="kw">use </span>tokio::sync::Mutex;
-<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span>tracing::{info, warn};
-<a href=#55 id=55 data-nosnippet>55</a>
-<a href=#56 id=56 data-nosnippet>56</a><span class="kw">pub struct </span>VisionPipeline {
-<a href=#57 id=57 data-nosnippet>57</a>    model: Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;,
-<a href=#58 id=58 data-nosnippet>58</a>    tokenizer: Arc&lt;Tokenizer&gt;,
-<a href=#59 id=59 data-nosnippet>59</a>    chat_template: Arc&lt;ChatTemplate&gt;,
-<a href=#60 id=60 data-nosnippet>60</a>    model_id: String,
-<a href=#61 id=61 data-nosnippet>61</a>    metadata: Arc&lt;GeneralMetadata&gt;,
-<a href=#62 id=62 data-nosnippet>62</a>    processor: Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt;,
-<a href=#63 id=63 data-nosnippet>63</a>    preprocessor_config: Arc&lt;PreProcessorConfig&gt;,
-<a href=#64 id=64 data-nosnippet>64</a>    topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
-<a href=#65 id=65 data-nosnippet>65</a>    silent: bool,
-<a href=#66 id=66 data-nosnippet>66</a>    prefixer: Arc&lt;<span class="kw">dyn </span>VisionPromptPrefixer&gt;,
-<a href=#67 id=67 data-nosnippet>67</a>    mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
-<a href=#68 id=68 data-nosnippet>68</a>
-<a href=#69 id=69 data-nosnippet>69</a>    <span class="comment">// For full UQFF serialization
-<a href=#70 id=70 data-nosnippet>70</a>    </span>template_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#71 id=71 data-nosnippet>71</a>    generation_config: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#72 id=72 data-nosnippet>72</a>    config: String,
-<a href=#73 id=73 data-nosnippet>73</a>    processor_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#74 id=74 data-nosnippet>74</a>    preprocessor_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#75 id=75 data-nosnippet>75</a>    imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#76 id=76 data-nosnippet>76</a>}
-<a href=#77 id=77 data-nosnippet>77</a>
-<a href=#78 id=78 data-nosnippet>78</a><span class="doccomment">/// A loader for a vision (non-quantized) model.
-<a href=#79 id=79 data-nosnippet>79</a></span><span class="kw">pub struct </span>VisionLoader {
-<a href=#80 id=80 data-nosnippet>80</a>    inner: Box&lt;<span class="kw">dyn </span>VisionModelLoader&gt;,
-<a href=#81 id=81 data-nosnippet>81</a>    model_id: String,
-<a href=#82 id=82 data-nosnippet>82</a>    config: VisionSpecificConfig,
-<a href=#83 id=83 data-nosnippet>83</a>    kind: ModelKind,
-<a href=#84 id=84 data-nosnippet>84</a>    chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#85 id=85 data-nosnippet>85</a>    tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#86 id=86 data-nosnippet>86</a>    xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#87 id=87 data-nosnippet>87</a>    xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
-<a href=#88 id=88 data-nosnippet>88</a>    token_source: RwLock&lt;<span class="prelude-ty">Option</span>&lt;TokenSource&gt;&gt;,
-<a href=#89 id=89 data-nosnippet>89</a>    revision: RwLock&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;,
-<a href=#90 id=90 data-nosnippet>90</a>    from_uqff: RwLock&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;PathBuf&gt;&gt;&gt;,
-<a href=#91 id=91 data-nosnippet>91</a>    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#92 id=92 data-nosnippet>92</a>    hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#93 id=93 data-nosnippet>93</a>    lora_adapter_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-<a href=#94 id=94 data-nosnippet>94</a>}
-<a href=#95 id=95 data-nosnippet>95</a>
-<a href=#96 id=96 data-nosnippet>96</a><span class="attr">#[derive(Default)]
-<a href=#97 id=97 data-nosnippet>97</a></span><span class="doccomment">/// A builder for a loader for a vision (non-quantized) model.
-<a href=#98 id=98 data-nosnippet>98</a></span><span class="kw">pub struct </span>VisionLoaderBuilder {
-<a href=#99 id=99 data-nosnippet>99</a>    model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#100 id=100 data-nosnippet>100</a>    config: VisionSpecificConfig,
-<a href=#101 id=101 data-nosnippet>101</a>    kind: ModelKind,
-<a href=#102 id=102 data-nosnippet>102</a>    chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#103 id=103 data-nosnippet>103</a>    tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#104 id=104 data-nosnippet>104</a>    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#105 id=105 data-nosnippet>105</a>    hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
-<a href=#106 id=106 data-nosnippet>106</a>    lora_adapter_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
-<a href=#107 id=107 data-nosnippet>107</a>}
-<a href=#108 id=108 data-nosnippet>108</a>
-<a href=#109 id=109 data-nosnippet>109</a><span class="attr">#[derive(Clone, Default)]
-<a href=#110 id=110 data-nosnippet>110</a></span><span class="doccomment">/// Config specific to loading a vision model.
-<a href=#111 id=111 data-nosnippet>111</a></span><span class="kw">pub struct </span>VisionSpecificConfig {
-<a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">pub </span>use_flash_attn: bool,
+<a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span><span class="kw">crate</span>::utils::log::once_log_info;
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span><span class="kw">crate</span>::utils::tokenizer::get_tokenizer;
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span><span class="kw">crate</span>::utils::varbuilder_utils::DeviceForLoadTensor;
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span><span class="kw">crate</span>::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::preprocessor_config::PreProcessorConfig;
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::processor_config::ProcessorConfig;
+<a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span><span class="kw">crate</span>::vision_models::ModelInputs;
+<a href=#32 id=32 data-nosnippet>32</a><span class="kw">use crate</span>::{
+<a href=#33 id=33 data-nosnippet>33</a>    api_dir_list, api_get_file, get_paths, get_uqff_paths, vision_normal_model_loader,
+<a href=#34 id=34 data-nosnippet>34</a>    vision_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, Ordering,
+<a href=#35 id=35 data-nosnippet>35</a>    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
+<a href=#36 id=36 data-nosnippet>36</a>};
+<a href=#37 id=37 data-nosnippet>37</a><span class="kw">use </span>anyhow::Result;
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span>candle_core::{Device, Tensor, Var};
+<a href=#39 id=39 data-nosnippet>39</a><span class="kw">use </span>hf_hub::Cache;
+<a href=#40 id=40 data-nosnippet>40</a><span class="kw">use </span>hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+<a href=#41 id=41 data-nosnippet>41</a><span class="kw">use </span>indicatif::MultiProgress;
+<a href=#42 id=42 data-nosnippet>42</a><span class="kw">use </span>mistralrs_quant::{AfqLayer, GgufMatMul, HqqLayer, IsqType, QuantizedSerdeType};
+<a href=#43 id=43 data-nosnippet>43</a><span class="kw">use </span>rand_isaac::Isaac64Rng;
+<a href=#44 id=44 data-nosnippet>44</a><span class="kw">use </span>regex_automata::meta::Regex;
+<a href=#45 id=45 data-nosnippet>45</a><span class="kw">use </span>std::any::Any;
+<a href=#46 id=46 data-nosnippet>46</a><span class="kw">use </span>std::borrow::Cow;
+<a href=#47 id=47 data-nosnippet>47</a><span class="kw">use </span>std::num::NonZeroUsize;
+<a href=#48 id=48 data-nosnippet>48</a><span class="kw">use </span>std::path::{Path, PathBuf};
+<a href=#49 id=49 data-nosnippet>49</a><span class="kw">use </span>std::str::FromStr;
+<a href=#50 id=50 data-nosnippet>50</a><span class="kw">use </span>std::sync::{Arc, RwLock};
+<a href=#51 id=51 data-nosnippet>51</a><span class="kw">use </span>std::time::Instant;
+<a href=#52 id=52 data-nosnippet>52</a><span class="kw">use </span>std::{env, fs};
+<a href=#53 id=53 data-nosnippet>53</a><span class="kw">use </span>tokenizers::Tokenizer;
+<a href=#54 id=54 data-nosnippet>54</a><span class="kw">use </span>tokio::sync::Mutex;
+<a href=#55 id=55 data-nosnippet>55</a><span class="kw">use </span>tracing::{info, warn};
+<a href=#56 id=56 data-nosnippet>56</a>
+<a href=#57 id=57 data-nosnippet>57</a><span class="kw">pub struct </span>VisionPipeline {
+<a href=#58 id=58 data-nosnippet>58</a>    model: Box&lt;<span class="kw">dyn </span>VisionModel + Send + Sync&gt;,
+<a href=#59 id=59 data-nosnippet>59</a>    tokenizer: Arc&lt;Tokenizer&gt;,
+<a href=#60 id=60 data-nosnippet>60</a>    chat_template: Arc&lt;ChatTemplate&gt;,
+<a href=#61 id=61 data-nosnippet>61</a>    model_id: String,
+<a href=#62 id=62 data-nosnippet>62</a>    metadata: Arc&lt;GeneralMetadata&gt;,
+<a href=#63 id=63 data-nosnippet>63</a>    processor: Arc&lt;<span class="kw">dyn </span>Processor + Send + Sync&gt;,
+<a href=#64 id=64 data-nosnippet>64</a>    preprocessor_config: Arc&lt;PreProcessorConfig&gt;,
+<a href=#65 id=65 data-nosnippet>65</a>    topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
+<a href=#66 id=66 data-nosnippet>66</a>    silent: bool,
+<a href=#67 id=67 data-nosnippet>67</a>    prefixer: Arc&lt;<span class="kw">dyn </span>VisionPromptPrefixer&gt;,
+<a href=#68 id=68 data-nosnippet>68</a>    mapper: Box&lt;<span class="kw">dyn </span>DeviceMapper + Send + Sync&gt;,
+<a href=#69 id=69 data-nosnippet>69</a>
+<a href=#70 id=70 data-nosnippet>70</a>    <span class="comment">// For full UQFF serialization
+<a href=#71 id=71 data-nosnippet>71</a>    </span>template_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#72 id=72 data-nosnippet>72</a>    generation_config: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#73 id=73 data-nosnippet>73</a>    config: String,
+<a href=#74 id=74 data-nosnippet>74</a>    processor_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#75 id=75 data-nosnippet>75</a>    preprocessor_filename: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#76 id=76 data-nosnippet>76</a>    imatrix: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#77 id=77 data-nosnippet>77</a>}
+<a href=#78 id=78 data-nosnippet>78</a>
+<a href=#79 id=79 data-nosnippet>79</a><span class="doccomment">/// A loader for a vision (non-quantized) model.
+<a href=#80 id=80 data-nosnippet>80</a></span><span class="kw">pub struct </span>VisionLoader {
+<a href=#81 id=81 data-nosnippet>81</a>    inner: Box&lt;<span class="kw">dyn </span>VisionModelLoader&gt;,
+<a href=#82 id=82 data-nosnippet>82</a>    model_id: String,
+<a href=#83 id=83 data-nosnippet>83</a>    config: VisionSpecificConfig,
+<a href=#84 id=84 data-nosnippet>84</a>    kind: ModelKind,
+<a href=#85 id=85 data-nosnippet>85</a>    chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#86 id=86 data-nosnippet>86</a>    tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#87 id=87 data-nosnippet>87</a>    xlora_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#88 id=88 data-nosnippet>88</a>    xlora_order: <span class="prelude-ty">Option</span>&lt;Ordering&gt;,
+<a href=#89 id=89 data-nosnippet>89</a>    token_source: RwLock&lt;<span class="prelude-ty">Option</span>&lt;TokenSource&gt;&gt;,
+<a href=#90 id=90 data-nosnippet>90</a>    revision: RwLock&lt;<span class="prelude-ty">Option</span>&lt;String&gt;&gt;,
+<a href=#91 id=91 data-nosnippet>91</a>    from_uqff: RwLock&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;PathBuf&gt;&gt;&gt;,
+<a href=#92 id=92 data-nosnippet>92</a>    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#93 id=93 data-nosnippet>93</a>    hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#94 id=94 data-nosnippet>94</a>    lora_adapter_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+<a href=#95 id=95 data-nosnippet>95</a>}
+<a href=#96 id=96 data-nosnippet>96</a>
+<a href=#97 id=97 data-nosnippet>97</a><span class="attr">#[derive(Default)]
+<a href=#98 id=98 data-nosnippet>98</a></span><span class="doccomment">/// A builder for a loader for a vision (non-quantized) model.
+<a href=#99 id=99 data-nosnippet>99</a></span><span class="kw">pub struct </span>VisionLoaderBuilder {
+<a href=#100 id=100 data-nosnippet>100</a>    model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#101 id=101 data-nosnippet>101</a>    config: VisionSpecificConfig,
+<a href=#102 id=102 data-nosnippet>102</a>    kind: ModelKind,
+<a href=#103 id=103 data-nosnippet>103</a>    chat_template: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#104 id=104 data-nosnippet>104</a>    tokenizer_json: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#105 id=105 data-nosnippet>105</a>    jinja_explicit: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#106 id=106 data-nosnippet>106</a>    hf_cache_path: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
+<a href=#107 id=107 data-nosnippet>107</a>    lora_adapter_ids: <span class="prelude-ty">Option</span>&lt;Vec&lt;String&gt;&gt;,
+<a href=#108 id=108 data-nosnippet>108</a>}
+<a href=#109 id=109 data-nosnippet>109</a>
+<a href=#110 id=110 data-nosnippet>110</a><span class="attr">#[derive(Clone, Default)]
+<a href=#111 id=111 data-nosnippet>111</a></span><span class="doccomment">/// Config specific to loading a vision model.
+<a href=#112 id=112 data-nosnippet>112</a></span><span class="kw">pub struct </span>VisionSpecificConfig {
 <a href=#113 id=113 data-nosnippet>113</a>    <span class="kw">pub </span>prompt_chunksize: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
 <a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">pub </span>topology: <span class="prelude-ty">Option</span>&lt;Topology&gt;,
 <a href=#115 id=115 data-nosnippet>115</a>    <span class="kw">pub </span>write_uqff: <span class="prelude-ty">Option</span>&lt;PathBuf&gt;,
@@ -396,630 +396,627 @@
 <a href=#396 id=396 data-nosnippet>396</a>            paged_attn_config = <span class="prelude-val">None</span>;
 <a href=#397 id=397 data-nosnippet>397</a>        }
 <a href=#398 id=398 data-nosnippet>398</a>
-<a href=#399 id=399 data-nosnippet>399</a>        <span class="macro">info!</span>(
-<a href=#400 id=400 data-nosnippet>400</a>            <span class="string">"Model config: {:?}"</span>,
-<a href=#401 id=401 data-nosnippet>401</a>            <span class="self">self</span>.inner
-<a href=#402 id=402 data-nosnippet>402</a>                .get_config_repr(<span class="kw-2">&amp;</span>config, <span class="self">self</span>.config.use_flash_attn)<span class="question-mark">?
-<a href=#403 id=403 data-nosnippet>403</a>        </span>);
-<a href=#404 id=404 data-nosnippet>404</a>
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">let </span><span class="kw-2">mut </span>loading_isq = in_situ_quant.is_some() || <span class="self">self</span>.config.from_uqff.is_some();
-<a href=#406 id=406 data-nosnippet>406</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>topology) = <span class="self">self</span>.config.topology {
-<a href=#407 id=407 data-nosnippet>407</a>            loading_isq |= topology
-<a href=#408 id=408 data-nosnippet>408</a>                .<span class="number">0
-<a href=#409 id=409 data-nosnippet>409</a>                </span>.iter()
-<a href=#410 id=410 data-nosnippet>410</a>                .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
-<a href=#411 id=411 data-nosnippet>411</a>        }
-<a href=#412 id=412 data-nosnippet>412</a>
-<a href=#413 id=413 data-nosnippet>413</a>        <span class="kw">if </span><span class="self">self</span>.config.imatrix.is_some() &amp;&amp; <span class="self">self</span>.config.calibration_file.is_some() {
-<a href=#414 id=414 data-nosnippet>414</a>            <span class="macro">anyhow::bail!</span>(
-<a href=#415 id=415 data-nosnippet>415</a>                <span class="string">"`imatrix` and `calibration_file` were both specified, this is not allowed."
-<a href=#416 id=416 data-nosnippet>416</a>            </span>);
-<a href=#417 id=417 data-nosnippet>417</a>        }
-<a href=#418 id=418 data-nosnippet>418</a>
-<a href=#419 id=419 data-nosnippet>419</a>        <span class="comment">// Load onto the regular device if not using isq or if the calibration file is specified
-<a href=#420 id=420 data-nosnippet>420</a>        </span><span class="kw">let </span>load_device = <span class="kw">if </span>!loading_isq || <span class="self">self</span>.config.calibration_file.is_some() {
-<a href=#421 id=421 data-nosnippet>421</a>            loading_isq = <span class="bool-val">false</span>;
-<a href=#422 id=422 data-nosnippet>422</a>            device.clone()
-<a href=#423 id=423 data-nosnippet>423</a>        } <span class="kw">else </span>{
-<a href=#424 id=424 data-nosnippet>424</a>            Device::Cpu
-<a href=#425 id=425 data-nosnippet>425</a>        };
-<a href=#426 id=426 data-nosnippet>426</a>
-<a href=#427 id=427 data-nosnippet>427</a>        <span class="kw">let </span>attention_mechanism = <span class="kw">if </span>paged_attn_config.is_some() {
-<a href=#428 id=428 data-nosnippet>428</a>            AttentionImplementation::PagedAttention
-<a href=#429 id=429 data-nosnippet>429</a>        } <span class="kw">else </span>{
-<a href=#430 id=430 data-nosnippet>430</a>            AttentionImplementation::Eager
-<a href=#431 id=431 data-nosnippet>431</a>        };
-<a href=#432 id=432 data-nosnippet>432</a>
-<a href=#433 id=433 data-nosnippet>433</a>        <span class="kw">let </span>multi_progress = Arc::new(MultiProgress::new());
-<a href=#434 id=434 data-nosnippet>434</a>
-<a href=#435 id=435 data-nosnippet>435</a>        <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">if </span>use_nccl {
-<a href=#436 id=436 data-nosnippet>436</a>            <span class="kw">let </span>(mapper, sharded_vb) = distributed::prepare_distributed_mapper(
-<a href=#437 id=437 data-nosnippet>437</a>                dtype,
-<a href=#438 id=438 data-nosnippet>438</a>                <span class="kw-2">&amp;</span>device,
-<a href=#439 id=439 data-nosnippet>439</a>                <span class="kw-2">&amp;</span>available_devices,
-<a href=#440 id=440 data-nosnippet>440</a>                silent,
-<a href=#441 id=441 data-nosnippet>441</a>                <span class="kw-2">&amp;</span>config,
-<a href=#442 id=442 data-nosnippet>442</a>                loading_isq,
-<a href=#443 id=443 data-nosnippet>443</a>                <span class="self">self</span>.config.from_uqff.is_some(),
-<a href=#444 id=444 data-nosnippet>444</a>                IsqOrganization::Default,
-<a href=#445 id=445 data-nosnippet>445</a>                <span class="kw-2">&amp;*</span><span class="self">self</span>.inner,
-<a href=#446 id=446 data-nosnippet>446</a>                paths.as_ref(),
-<a href=#447 id=447 data-nosnippet>447</a>            )<span class="question-mark">?</span>;
-<a href=#448 id=448 data-nosnippet>448</a>
-<a href=#449 id=449 data-nosnippet>449</a>            <span class="comment">// Special case for where things can be more optimially loaded.
-<a href=#450 id=450 data-nosnippet>450</a>            </span><span class="kw">match </span><span class="self">self</span>.kind {
-<a href=#451 id=451 data-nosnippet>451</a>                ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader_sharded!</span>(
-<a href=#452 id=452 data-nosnippet>452</a>                    sharded_vb,
-<a href=#453 id=453 data-nosnippet>453</a>                    config,
-<a href=#454 id=454 data-nosnippet>454</a>                    <span class="self">self</span>.inner,
-<a href=#455 id=455 data-nosnippet>455</a>                    <span class="self">self</span>.config.use_flash_attn,
-<a href=#456 id=456 data-nosnippet>456</a>                    mapper,
-<a href=#457 id=457 data-nosnippet>457</a>                    loading_isq,
-<a href=#458 id=458 data-nosnippet>458</a>                    device.clone(),
-<a href=#459 id=459 data-nosnippet>459</a>                    attention_mechanism,
-<a href=#460 id=460 data-nosnippet>460</a>                    multi_progress.clone(),
-<a href=#461 id=461 data-nosnippet>461</a>                ),
-<a href=#462 id=462 data-nosnippet>462</a>                <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
-<a href=#463 id=463 data-nosnippet>463</a>            }
-<a href=#464 id=464 data-nosnippet>464</a>        } <span class="kw">else </span>{
-<a href=#465 id=465 data-nosnippet>465</a>            <span class="kw">match </span><span class="self">self</span>.kind {
-<a href=#466 id=466 data-nosnippet>466</a>                ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader!</span>(
-<a href=#467 id=467 data-nosnippet>467</a>                    paths,
-<a href=#468 id=468 data-nosnippet>468</a>                    <span class="prelude-val">Some</span>(dtype),
-<a href=#469 id=469 data-nosnippet>469</a>                    <span class="kw-2">&amp;</span>load_device,
-<a href=#470 id=470 data-nosnippet>470</a>                    layer_devices.clone(),
-<a href=#471 id=471 data-nosnippet>471</a>                    config,
-<a href=#472 id=472 data-nosnippet>472</a>                    <span class="self">self</span>.inner,
-<a href=#473 id=473 data-nosnippet>473</a>                    <span class="self">self</span>.config.use_flash_attn,
-<a href=#474 id=474 data-nosnippet>474</a>                    silent,
-<a href=#475 id=475 data-nosnippet>475</a>                    mapper,
-<a href=#476 id=476 data-nosnippet>476</a>                    loading_isq,
-<a href=#477 id=477 data-nosnippet>477</a>                    <span class="self">self</span>.config.from_uqff.is_some(),
-<a href=#478 id=478 data-nosnippet>478</a>                    device.clone(),
-<a href=#479 id=479 data-nosnippet>479</a>                    attention_mechanism,
-<a href=#480 id=480 data-nosnippet>480</a>                    multi_progress,
-<a href=#481 id=481 data-nosnippet>481</a>                ),
-<a href=#482 id=482 data-nosnippet>482</a>                <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
-<a href=#483 id=483 data-nosnippet>483</a>            }
-<a href=#484 id=484 data-nosnippet>484</a>        };
-<a href=#485 id=485 data-nosnippet>485</a>
-<a href=#486 id=486 data-nosnippet>486</a>        <span class="comment">// Handle the Gemma 3 1b case here
-<a href=#487 id=487 data-nosnippet>487</a>        </span><span class="kw">let </span>preprocessor_config: PreProcessorConfig = <span class="kw">match </span>paths.get_preprocessor_config().as_ref()
-<a href=#488 id=488 data-nosnippet>488</a>        {
-<a href=#489 id=489 data-nosnippet>489</a>            <span class="prelude-val">Some</span>(preprocessor_config) =&gt; {
-<a href=#490 id=490 data-nosnippet>490</a>                serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(preprocessor_config).unwrap()).unwrap()
-<a href=#491 id=491 data-nosnippet>491</a>            }
-<a href=#492 id=492 data-nosnippet>492</a>            <span class="prelude-val">None </span>=&gt; PreProcessorConfig::default(),
-<a href=#493 id=493 data-nosnippet>493</a>        };
-<a href=#494 id=494 data-nosnippet>494</a>        <span class="kw">let </span>processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt; = paths
-<a href=#495 id=495 data-nosnippet>495</a>            .get_processor_config()
-<a href=#496 id=496 data-nosnippet>496</a>            .as_ref()
-<a href=#497 id=497 data-nosnippet>497</a>            .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
-<a href=#498 id=498 data-nosnippet>498</a>
-<a href=#499 id=499 data-nosnippet>499</a>        <span class="kw">let </span>processor = <span class="self">self</span>.inner.get_processor(
-<a href=#500 id=500 data-nosnippet>500</a>            <span class="kw-2">&amp;</span>config,
-<a href=#501 id=501 data-nosnippet>501</a>            processor_config,
-<a href=#502 id=502 data-nosnippet>502</a>            preprocessor_config.clone(),
-<a href=#503 id=503 data-nosnippet>503</a>            <span class="self">self</span>.config.max_edge,
-<a href=#504 id=504 data-nosnippet>504</a>        ); <span class="comment">//There are always some repos that don't properly handle config position, for example... LLaVA
-<a href=#505 id=505 data-nosnippet>505</a>
-<a href=#506 id=506 data-nosnippet>506</a>        </span><span class="kw">let </span>tokenizer = get_tokenizer(
-<a href=#507 id=507 data-nosnippet>507</a>            paths.get_tokenizer_filename(),
-<a href=#508 id=508 data-nosnippet>508</a>            <span class="prelude-val">Some</span>(processor.get_special_tokens()),
-<a href=#509 id=509 data-nosnippet>509</a>        )<span class="question-mark">?</span>;
-<a href=#510 id=510 data-nosnippet>510</a>
-<a href=#511 id=511 data-nosnippet>511</a>        <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths.get_gen_conf_filename().map(|f| {
-<a href=#512 id=512 data-nosnippet>512</a>            serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap())
-<a href=#513 id=513 data-nosnippet>513</a>                .expect(<span class="string">"bos_token_id/eos_token_id missing in generation_config.json"</span>)
-<a href=#514 id=514 data-nosnippet>514</a>        });
-<a href=#515 id=515 data-nosnippet>515</a>        <span class="kw">let </span>chat_template = get_chat_template(
-<a href=#516 id=516 data-nosnippet>516</a>            paths,
-<a href=#517 id=517 data-nosnippet>517</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.jinja_explicit,
-<a href=#518 id=518 data-nosnippet>518</a>            <span class="kw-2">&amp;</span>paths
-<a href=#519 id=519 data-nosnippet>519</a>                .get_chat_template_explicit()
-<a href=#520 id=520 data-nosnippet>520</a>                .as_ref()
-<a href=#521 id=521 data-nosnippet>521</a>                .map(|x| x.to_string_lossy().to_string())
-<a href=#522 id=522 data-nosnippet>522</a>                .clone(),
-<a href=#523 id=523 data-nosnippet>523</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template,
-<a href=#524 id=524 data-nosnippet>524</a>            <span class="prelude-val">None</span>,
-<a href=#525 id=525 data-nosnippet>525</a>        );
-<a href=#526 id=526 data-nosnippet>526</a>
-<a href=#527 id=527 data-nosnippet>527</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(calibration_file) = <span class="kw-2">&amp;</span><span class="self">self</span>.config.calibration_file {
-<a href=#528 id=528 data-nosnippet>528</a>            <span class="kw">let </span>calibration_data = std::fs::read_to_string(calibration_file)<span class="question-mark">?</span>;
-<a href=#529 id=529 data-nosnippet>529</a>            <span class="comment">// Tokenize, don't add bos yet
-<a href=#530 id=530 data-nosnippet>530</a>            </span><span class="kw">let </span>tokens = tokenizer
-<a href=#531 id=531 data-nosnippet>531</a>                .encode_fast(calibration_data, <span class="bool-val">false</span>)
-<a href=#532 id=532 data-nosnippet>532</a>                .map_err(anyhow::Error::msg)<span class="question-mark">?
-<a href=#533 id=533 data-nosnippet>533</a>                </span>.get_ids()
-<a href=#534 id=534 data-nosnippet>534</a>                .to_vec();
-<a href=#535 id=535 data-nosnippet>535</a>            <span class="macro">info!</span>(
-<a href=#536 id=536 data-nosnippet>536</a>                <span class="string">"Collecting imatrix from calibration file `{}` of {} tokens."</span>,
-<a href=#537 id=537 data-nosnippet>537</a>                calibration_file.display(),
-<a href=#538 id=538 data-nosnippet>538</a>                tokens.len()
-<a href=#539 id=539 data-nosnippet>539</a>            );
-<a href=#540 id=540 data-nosnippet>540</a>            <span class="kw">let </span>bos_toks = chat_template.bos_tok().map(|b| <span class="macro">vec!</span>[b]).unwrap_or_default();
-<a href=#541 id=541 data-nosnippet>541</a>            <span class="kw">let </span>bos_tok_id = tokenizer
-<a href=#542 id=542 data-nosnippet>542</a>                .token_to_id(<span class="kw-2">&amp;</span>bos_toks[<span class="number">0</span>])
-<a href=#543 id=543 data-nosnippet>543</a>                .expect(<span class="string">"Somehow the bos token is not present."</span>);
-<a href=#544 id=544 data-nosnippet>544</a>
-<a href=#545 id=545 data-nosnippet>545</a>            <span class="comment">// NOTE: We ONLY calibrate the text bits of these models!!
-<a href=#546 id=546 data-nosnippet>546</a>            // So only those should be tracked!
-<a href=#547 id=547 data-nosnippet>547</a>            </span>model.begin_track_stats()<span class="question-mark">?</span>;
-<a href=#548 id=548 data-nosnippet>548</a>
-<a href=#549 id=549 data-nosnippet>549</a>            <span class="kw">const </span>CHUNK_SIZE: usize = <span class="number">1024</span>;
-<a href=#550 id=550 data-nosnippet>550</a>            <span class="kw">let </span>n_chunks: usize = tokens.len().div_ceil(CHUNK_SIZE);
-<a href=#551 id=551 data-nosnippet>551</a>            <span class="kw">let </span>start = Instant::now();
-<a href=#552 id=552 data-nosnippet>552</a>            <span class="kw">for </span>(i, chunk) <span class="kw">in </span>tokens.chunks(CHUNK_SIZE).enumerate() {
-<a href=#553 id=553 data-nosnippet>553</a>                <span class="kw">let </span>chunk = [<span class="macro">vec!</span>[bos_tok_id], chunk.to_vec()].concat();
-<a href=#554 id=554 data-nosnippet>554</a>                <span class="kw">let </span>chunk_len = chunk.len();
-<a href=#555 id=555 data-nosnippet>555</a>
-<a href=#556 id=556 data-nosnippet>556</a>                <span class="kw">let </span>start = Instant::now();
-<a href=#557 id=557 data-nosnippet>557</a>                <span class="kw">let </span>inputs = make_prompt_chunk(
-<a href=#558 id=558 data-nosnippet>558</a>                    <span class="number">0</span>,
-<a href=#559 id=559 data-nosnippet>559</a>                    <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>chunk],
-<a href=#560 id=560 data-nosnippet>560</a>                    <span class="kw-2">&amp;</span>[<span class="number">0</span>],
-<a href=#561 id=561 data-nosnippet>561</a>                    <span class="kw-2">&amp;</span>load_device,
+<a href=#399 id=399 data-nosnippet>399</a>        <span class="macro">info!</span>(<span class="string">"Model config: {:?}"</span>, <span class="self">self</span>.inner.get_config_repr(<span class="kw-2">&amp;</span>config)<span class="question-mark">?</span>);
+<a href=#400 id=400 data-nosnippet>400</a>        <span class="kw">if </span><span class="kw">crate</span>::using_flash_attn() {
+<a href=#401 id=401 data-nosnippet>401</a>            once_log_info(<span class="string">"FlashAttention is enabled."</span>);
+<a href=#402 id=402 data-nosnippet>402</a>        }
+<a href=#403 id=403 data-nosnippet>403</a>
+<a href=#404 id=404 data-nosnippet>404</a>        <span class="kw">let </span><span class="kw-2">mut </span>loading_isq = in_situ_quant.is_some() || <span class="self">self</span>.config.from_uqff.is_some();
+<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(<span class="kw-2">ref </span>topology) = <span class="self">self</span>.config.topology {
+<a href=#406 id=406 data-nosnippet>406</a>            loading_isq |= topology
+<a href=#407 id=407 data-nosnippet>407</a>                .<span class="number">0
+<a href=#408 id=408 data-nosnippet>408</a>                </span>.iter()
+<a href=#409 id=409 data-nosnippet>409</a>                .any(|layer| layer.as_ref().is_some_and(|layer| layer.isq.is_some()));
+<a href=#410 id=410 data-nosnippet>410</a>        }
+<a href=#411 id=411 data-nosnippet>411</a>
+<a href=#412 id=412 data-nosnippet>412</a>        <span class="kw">if </span><span class="self">self</span>.config.imatrix.is_some() &amp;&amp; <span class="self">self</span>.config.calibration_file.is_some() {
+<a href=#413 id=413 data-nosnippet>413</a>            <span class="macro">anyhow::bail!</span>(
+<a href=#414 id=414 data-nosnippet>414</a>                <span class="string">"`imatrix` and `calibration_file` were both specified, this is not allowed."
+<a href=#415 id=415 data-nosnippet>415</a>            </span>);
+<a href=#416 id=416 data-nosnippet>416</a>        }
+<a href=#417 id=417 data-nosnippet>417</a>
+<a href=#418 id=418 data-nosnippet>418</a>        <span class="comment">// Load onto the regular device if not using isq or if the calibration file is specified
+<a href=#419 id=419 data-nosnippet>419</a>        </span><span class="kw">let </span>load_device = <span class="kw">if </span>!loading_isq || <span class="self">self</span>.config.calibration_file.is_some() {
+<a href=#420 id=420 data-nosnippet>420</a>            loading_isq = <span class="bool-val">false</span>;
+<a href=#421 id=421 data-nosnippet>421</a>            device.clone()
+<a href=#422 id=422 data-nosnippet>422</a>        } <span class="kw">else </span>{
+<a href=#423 id=423 data-nosnippet>423</a>            Device::Cpu
+<a href=#424 id=424 data-nosnippet>424</a>        };
+<a href=#425 id=425 data-nosnippet>425</a>
+<a href=#426 id=426 data-nosnippet>426</a>        <span class="kw">let </span>attention_mechanism = <span class="kw">if </span>paged_attn_config.is_some() {
+<a href=#427 id=427 data-nosnippet>427</a>            AttentionImplementation::PagedAttention
+<a href=#428 id=428 data-nosnippet>428</a>        } <span class="kw">else </span>{
+<a href=#429 id=429 data-nosnippet>429</a>            AttentionImplementation::Eager
+<a href=#430 id=430 data-nosnippet>430</a>        };
+<a href=#431 id=431 data-nosnippet>431</a>
+<a href=#432 id=432 data-nosnippet>432</a>        <span class="kw">let </span>multi_progress = Arc::new(MultiProgress::new());
+<a href=#433 id=433 data-nosnippet>433</a>
+<a href=#434 id=434 data-nosnippet>434</a>        <span class="kw">let </span><span class="kw-2">mut </span>model = <span class="kw">if </span>use_nccl {
+<a href=#435 id=435 data-nosnippet>435</a>            <span class="kw">let </span>(mapper, sharded_vb) = distributed::prepare_distributed_mapper(
+<a href=#436 id=436 data-nosnippet>436</a>                dtype,
+<a href=#437 id=437 data-nosnippet>437</a>                <span class="kw-2">&amp;</span>device,
+<a href=#438 id=438 data-nosnippet>438</a>                <span class="kw-2">&amp;</span>available_devices,
+<a href=#439 id=439 data-nosnippet>439</a>                silent,
+<a href=#440 id=440 data-nosnippet>440</a>                <span class="kw-2">&amp;</span>config,
+<a href=#441 id=441 data-nosnippet>441</a>                loading_isq,
+<a href=#442 id=442 data-nosnippet>442</a>                <span class="self">self</span>.config.from_uqff.is_some(),
+<a href=#443 id=443 data-nosnippet>443</a>                IsqOrganization::Default,
+<a href=#444 id=444 data-nosnippet>444</a>                <span class="kw-2">&amp;*</span><span class="self">self</span>.inner,
+<a href=#445 id=445 data-nosnippet>445</a>                paths.as_ref(),
+<a href=#446 id=446 data-nosnippet>446</a>            )<span class="question-mark">?</span>;
+<a href=#447 id=447 data-nosnippet>447</a>
+<a href=#448 id=448 data-nosnippet>448</a>            <span class="comment">// Special case for where things can be more optimially loaded.
+<a href=#449 id=449 data-nosnippet>449</a>            </span><span class="kw">match </span><span class="self">self</span>.kind {
+<a href=#450 id=450 data-nosnippet>450</a>                ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader_sharded!</span>(
+<a href=#451 id=451 data-nosnippet>451</a>                    sharded_vb,
+<a href=#452 id=452 data-nosnippet>452</a>                    config,
+<a href=#453 id=453 data-nosnippet>453</a>                    <span class="self">self</span>.inner,
+<a href=#454 id=454 data-nosnippet>454</a>                    mapper,
+<a href=#455 id=455 data-nosnippet>455</a>                    loading_isq,
+<a href=#456 id=456 data-nosnippet>456</a>                    device.clone(),
+<a href=#457 id=457 data-nosnippet>457</a>                    attention_mechanism,
+<a href=#458 id=458 data-nosnippet>458</a>                    multi_progress.clone(),
+<a href=#459 id=459 data-nosnippet>459</a>                ),
+<a href=#460 id=460 data-nosnippet>460</a>                <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+<a href=#461 id=461 data-nosnippet>461</a>            }
+<a href=#462 id=462 data-nosnippet>462</a>        } <span class="kw">else </span>{
+<a href=#463 id=463 data-nosnippet>463</a>            <span class="kw">match </span><span class="self">self</span>.kind {
+<a href=#464 id=464 data-nosnippet>464</a>                ModelKind::Normal =&gt; <span class="macro">vision_normal_model_loader!</span>(
+<a href=#465 id=465 data-nosnippet>465</a>                    paths,
+<a href=#466 id=466 data-nosnippet>466</a>                    <span class="prelude-val">Some</span>(dtype),
+<a href=#467 id=467 data-nosnippet>467</a>                    <span class="kw-2">&amp;</span>load_device,
+<a href=#468 id=468 data-nosnippet>468</a>                    layer_devices.clone(),
+<a href=#469 id=469 data-nosnippet>469</a>                    config,
+<a href=#470 id=470 data-nosnippet>470</a>                    <span class="self">self</span>.inner,
+<a href=#471 id=471 data-nosnippet>471</a>                    silent,
+<a href=#472 id=472 data-nosnippet>472</a>                    mapper,
+<a href=#473 id=473 data-nosnippet>473</a>                    loading_isq,
+<a href=#474 id=474 data-nosnippet>474</a>                    <span class="self">self</span>.config.from_uqff.is_some(),
+<a href=#475 id=475 data-nosnippet>475</a>                    device.clone(),
+<a href=#476 id=476 data-nosnippet>476</a>                    attention_mechanism,
+<a href=#477 id=477 data-nosnippet>477</a>                    multi_progress,
+<a href=#478 id=478 data-nosnippet>478</a>                ),
+<a href=#479 id=479 data-nosnippet>479</a>                <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+<a href=#480 id=480 data-nosnippet>480</a>            }
+<a href=#481 id=481 data-nosnippet>481</a>        };
+<a href=#482 id=482 data-nosnippet>482</a>
+<a href=#483 id=483 data-nosnippet>483</a>        <span class="comment">// Handle the Gemma 3 1b case here
+<a href=#484 id=484 data-nosnippet>484</a>        </span><span class="kw">let </span>preprocessor_config: PreProcessorConfig = <span class="kw">match </span>paths.get_preprocessor_config().as_ref()
+<a href=#485 id=485 data-nosnippet>485</a>        {
+<a href=#486 id=486 data-nosnippet>486</a>            <span class="prelude-val">Some</span>(preprocessor_config) =&gt; {
+<a href=#487 id=487 data-nosnippet>487</a>                serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(preprocessor_config).unwrap()).unwrap()
+<a href=#488 id=488 data-nosnippet>488</a>            }
+<a href=#489 id=489 data-nosnippet>489</a>            <span class="prelude-val">None </span>=&gt; PreProcessorConfig::default(),
+<a href=#490 id=490 data-nosnippet>490</a>        };
+<a href=#491 id=491 data-nosnippet>491</a>        <span class="kw">let </span>processor_config: <span class="prelude-ty">Option</span>&lt;ProcessorConfig&gt; = paths
+<a href=#492 id=492 data-nosnippet>492</a>            .get_processor_config()
+<a href=#493 id=493 data-nosnippet>493</a>            .as_ref()
+<a href=#494 id=494 data-nosnippet>494</a>            .map(|f| serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap()).unwrap());
+<a href=#495 id=495 data-nosnippet>495</a>
+<a href=#496 id=496 data-nosnippet>496</a>        <span class="kw">let </span>processor = <span class="self">self</span>.inner.get_processor(
+<a href=#497 id=497 data-nosnippet>497</a>            <span class="kw-2">&amp;</span>config,
+<a href=#498 id=498 data-nosnippet>498</a>            processor_config,
+<a href=#499 id=499 data-nosnippet>499</a>            preprocessor_config.clone(),
+<a href=#500 id=500 data-nosnippet>500</a>            <span class="self">self</span>.config.max_edge,
+<a href=#501 id=501 data-nosnippet>501</a>        ); <span class="comment">//There are always some repos that don't properly handle config position, for example... LLaVA
+<a href=#502 id=502 data-nosnippet>502</a>
+<a href=#503 id=503 data-nosnippet>503</a>        </span><span class="kw">let </span>tokenizer = get_tokenizer(
+<a href=#504 id=504 data-nosnippet>504</a>            paths.get_tokenizer_filename(),
+<a href=#505 id=505 data-nosnippet>505</a>            <span class="prelude-val">Some</span>(processor.get_special_tokens()),
+<a href=#506 id=506 data-nosnippet>506</a>        )<span class="question-mark">?</span>;
+<a href=#507 id=507 data-nosnippet>507</a>
+<a href=#508 id=508 data-nosnippet>508</a>        <span class="kw">let </span>gen_conf: <span class="prelude-ty">Option</span>&lt;GenerationConfig&gt; = paths.get_gen_conf_filename().map(|f| {
+<a href=#509 id=509 data-nosnippet>509</a>            serde_json::from_str(<span class="kw-2">&amp;</span>fs::read_to_string(f).unwrap())
+<a href=#510 id=510 data-nosnippet>510</a>                .expect(<span class="string">"bos_token_id/eos_token_id missing in generation_config.json"</span>)
+<a href=#511 id=511 data-nosnippet>511</a>        });
+<a href=#512 id=512 data-nosnippet>512</a>        <span class="kw">let </span>chat_template = get_chat_template(
+<a href=#513 id=513 data-nosnippet>513</a>            paths,
+<a href=#514 id=514 data-nosnippet>514</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.jinja_explicit,
+<a href=#515 id=515 data-nosnippet>515</a>            <span class="kw-2">&amp;</span>paths
+<a href=#516 id=516 data-nosnippet>516</a>                .get_chat_template_explicit()
+<a href=#517 id=517 data-nosnippet>517</a>                .as_ref()
+<a href=#518 id=518 data-nosnippet>518</a>                .map(|x| x.to_string_lossy().to_string())
+<a href=#519 id=519 data-nosnippet>519</a>                .clone(),
+<a href=#520 id=520 data-nosnippet>520</a>            <span class="kw-2">&amp;</span><span class="self">self</span>.chat_template,
+<a href=#521 id=521 data-nosnippet>521</a>            <span class="prelude-val">None</span>,
+<a href=#522 id=522 data-nosnippet>522</a>        );
+<a href=#523 id=523 data-nosnippet>523</a>
+<a href=#524 id=524 data-nosnippet>524</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(calibration_file) = <span class="kw-2">&amp;</span><span class="self">self</span>.config.calibration_file {
+<a href=#525 id=525 data-nosnippet>525</a>            <span class="kw">let </span>calibration_data = std::fs::read_to_string(calibration_file)<span class="question-mark">?</span>;
+<a href=#526 id=526 data-nosnippet>526</a>            <span class="comment">// Tokenize, don't add bos yet
+<a href=#527 id=527 data-nosnippet>527</a>            </span><span class="kw">let </span>tokens = tokenizer
+<a href=#528 id=528 data-nosnippet>528</a>                .encode_fast(calibration_data, <span class="bool-val">false</span>)
+<a href=#529 id=529 data-nosnippet>529</a>                .map_err(anyhow::Error::msg)<span class="question-mark">?
+<a href=#530 id=530 data-nosnippet>530</a>                </span>.get_ids()
+<a href=#531 id=531 data-nosnippet>531</a>                .to_vec();
+<a href=#532 id=532 data-nosnippet>532</a>            <span class="macro">info!</span>(
+<a href=#533 id=533 data-nosnippet>533</a>                <span class="string">"Collecting imatrix from calibration file `{}` of {} tokens."</span>,
+<a href=#534 id=534 data-nosnippet>534</a>                calibration_file.display(),
+<a href=#535 id=535 data-nosnippet>535</a>                tokens.len()
+<a href=#536 id=536 data-nosnippet>536</a>            );
+<a href=#537 id=537 data-nosnippet>537</a>            <span class="kw">let </span>bos_toks = chat_template.bos_tok().map(|b| <span class="macro">vec!</span>[b]).unwrap_or_default();
+<a href=#538 id=538 data-nosnippet>538</a>            <span class="kw">let </span>bos_tok_id = tokenizer
+<a href=#539 id=539 data-nosnippet>539</a>                .token_to_id(<span class="kw-2">&amp;</span>bos_toks[<span class="number">0</span>])
+<a href=#540 id=540 data-nosnippet>540</a>                .expect(<span class="string">"Somehow the bos token is not present."</span>);
+<a href=#541 id=541 data-nosnippet>541</a>
+<a href=#542 id=542 data-nosnippet>542</a>            <span class="comment">// NOTE: We ONLY calibrate the text bits of these models!!
+<a href=#543 id=543 data-nosnippet>543</a>            // So only those should be tracked!
+<a href=#544 id=544 data-nosnippet>544</a>            </span>model.begin_track_stats()<span class="question-mark">?</span>;
+<a href=#545 id=545 data-nosnippet>545</a>
+<a href=#546 id=546 data-nosnippet>546</a>            <span class="kw">const </span>CHUNK_SIZE: usize = <span class="number">1024</span>;
+<a href=#547 id=547 data-nosnippet>547</a>            <span class="kw">let </span>n_chunks: usize = tokens.len().div_ceil(CHUNK_SIZE);
+<a href=#548 id=548 data-nosnippet>548</a>            <span class="kw">let </span>start = Instant::now();
+<a href=#549 id=549 data-nosnippet>549</a>            <span class="kw">for </span>(i, chunk) <span class="kw">in </span>tokens.chunks(CHUNK_SIZE).enumerate() {
+<a href=#550 id=550 data-nosnippet>550</a>                <span class="kw">let </span>chunk = [<span class="macro">vec!</span>[bos_tok_id], chunk.to_vec()].concat();
+<a href=#551 id=551 data-nosnippet>551</a>                <span class="kw">let </span>chunk_len = chunk.len();
+<a href=#552 id=552 data-nosnippet>552</a>
+<a href=#553 id=553 data-nosnippet>553</a>                <span class="kw">let </span>start = Instant::now();
+<a href=#554 id=554 data-nosnippet>554</a>                <span class="kw">let </span>inputs = make_prompt_chunk(
+<a href=#555 id=555 data-nosnippet>555</a>                    <span class="number">0</span>,
+<a href=#556 id=556 data-nosnippet>556</a>                    <span class="macro">vec!</span>[<span class="kw-2">&amp;</span>chunk],
+<a href=#557 id=557 data-nosnippet>557</a>                    <span class="kw-2">&amp;</span>[<span class="number">0</span>],
+<a href=#558 id=558 data-nosnippet>558</a>                    <span class="kw-2">&amp;</span>load_device,
+<a href=#559 id=559 data-nosnippet>559</a>                    <span class="prelude-val">None</span>,
+<a href=#560 id=560 data-nosnippet>560</a>                    <span class="bool-val">false</span>,
+<a href=#561 id=561 data-nosnippet>561</a>                    <span class="prelude-val">None</span>,
 <a href=#562 id=562 data-nosnippet>562</a>                    <span class="prelude-val">None</span>,
-<a href=#563 id=563 data-nosnippet>563</a>                    <span class="bool-val">false</span>,
-<a href=#564 id=564 data-nosnippet>564</a>                    <span class="prelude-val">None</span>,
-<a href=#565 id=565 data-nosnippet>565</a>                    <span class="prelude-val">None</span>,
-<a href=#566 id=566 data-nosnippet>566</a>                )<span class="question-mark">?</span>;
-<a href=#567 id=567 data-nosnippet>567</a>                <span class="kw">let _ </span>= model.forward(
-<a href=#568 id=568 data-nosnippet>568</a>                    <span class="kw-2">&amp;</span>inputs.input,
-<a href=#569 id=569 data-nosnippet>569</a>                    <span class="prelude-val">None</span>, <span class="comment">// NOTE: We ONLY calibrate the text bits of these models!!
-<a href=#570 id=570 data-nosnippet>570</a>                    </span><span class="kw-2">&amp;</span>inputs.positions,
-<a href=#571 id=571 data-nosnippet>571</a>                    inputs.context_lens,
-<a href=#572 id=572 data-nosnippet>572</a>                    inputs.position_ids,
-<a href=#573 id=573 data-nosnippet>573</a>                    model.default_model_specific_args(<span class="kw-2">&amp;</span>inputs.input),
-<a href=#574 id=574 data-nosnippet>574</a>                    <span class="prelude-val">None</span>,
-<a href=#575 id=575 data-nosnippet>575</a>                    <span class="kw-2">&amp;</span>inputs.flash_meta,
-<a href=#576 id=576 data-nosnippet>576</a>                )<span class="question-mark">?</span>;
-<a href=#577 id=577 data-nosnippet>577</a>                <span class="kw">match </span>model.cache_mut() {
-<a href=#578 id=578 data-nosnippet>578</a>                    EitherCache::Full(full) =&gt; {
-<a href=#579 id=579 data-nosnippet>579</a>                        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut *</span>full.lock() {
-<a href=#580 id=580 data-nosnippet>580</a>                            <span class="kw-2">*</span>layer = <span class="prelude-val">None
-<a href=#581 id=581 data-nosnippet>581</a>                        </span>}
-<a href=#582 id=582 data-nosnippet>582</a>                    }
-<a href=#583 id=583 data-nosnippet>583</a>                    EitherCache::Normal(normal) =&gt; {
-<a href=#584 id=584 data-nosnippet>584</a>                        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut *</span>normal.lock().unwrap().<span class="number">0 </span>{
-<a href=#585 id=585 data-nosnippet>585</a>                            layer.reset();
-<a href=#586 id=586 data-nosnippet>586</a>                        }
-<a href=#587 id=587 data-nosnippet>587</a>                    }
-<a href=#588 id=588 data-nosnippet>588</a>                }
-<a href=#589 id=589 data-nosnippet>589</a>                <span class="kw">let </span>end = Instant::now();
-<a href=#590 id=590 data-nosnippet>590</a>                <span class="macro">info!</span>(
-<a href=#591 id=591 data-nosnippet>591</a>                    <span class="string">"Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s"</span>,
-<a href=#592 id=592 data-nosnippet>592</a>                    i + <span class="number">1</span>,
-<a href=#593 id=593 data-nosnippet>593</a>                    end.duration_since(start).as_secs_f32()
-<a href=#594 id=594 data-nosnippet>594</a>                );
-<a href=#595 id=595 data-nosnippet>595</a>            }
-<a href=#596 id=596 data-nosnippet>596</a>            load_device.synchronize()<span class="question-mark">?</span>;
-<a href=#597 id=597 data-nosnippet>597</a>            <span class="kw">let </span>end = Instant::now();
-<a href=#598 id=598 data-nosnippet>598</a>            <span class="macro">info!</span>(
-<a href=#599 id=599 data-nosnippet>599</a>                <span class="string">"Finished collecting imatrix in {:.2}s"</span>,
-<a href=#600 id=600 data-nosnippet>600</a>                end.duration_since(start).as_secs_f32()
-<a href=#601 id=601 data-nosnippet>601</a>            );
-<a href=#602 id=602 data-nosnippet>602</a>        }
-<a href=#603 id=603 data-nosnippet>603</a>
-<a href=#604 id=604 data-nosnippet>604</a>        <span class="kw">if </span>(in_situ_quant.is_some() || <span class="self">self</span>.config.topology.is_some())
-<a href=#605 id=605 data-nosnippet>605</a>            &amp;&amp; <span class="self">self</span>.config.from_uqff.is_none()
-<a href=#606 id=606 data-nosnippet>606</a>        {
-<a href=#607 id=607 data-nosnippet>607</a>            <span class="kw">let </span>imatrix_source = <span class="kw">match </span>(
-<a href=#608 id=608 data-nosnippet>608</a>                <span class="self">self</span>.config.imatrix.as_ref(),
-<a href=#609 id=609 data-nosnippet>609</a>                <span class="self">self</span>.config.calibration_file.is_some(),
-<a href=#610 id=610 data-nosnippet>610</a>            ) {
-<a href=#611 id=611 data-nosnippet>611</a>                (<span class="prelude-val">None</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">None</span>,
-<a href=#612 id=612 data-nosnippet>612</a>                (<span class="prelude-val">Some</span>(file), <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(ImatrixDataSource::File(file)),
-<a href=#613 id=613 data-nosnippet>613</a>                (<span class="prelude-val">None</span>, <span class="bool-val">true</span>) =&gt; <span class="prelude-val">Some</span>(ImatrixDataSource::Collected),
-<a href=#614 id=614 data-nosnippet>614</a>                (<span class="prelude-val">Some</span>(<span class="kw">_</span>), <span class="bool-val">true</span>) =&gt; <span class="macro">unreachable!</span>(),
-<a href=#615 id=615 data-nosnippet>615</a>            };
-<a href=#616 id=616 data-nosnippet>616</a>            model.quantize(
-<a href=#617 id=617 data-nosnippet>617</a>                in_situ_quant,
-<a href=#618 id=618 data-nosnippet>618</a>                device.clone(),
-<a href=#619 id=619 data-nosnippet>619</a>                <span class="self">self</span>.config.topology.as_ref(),
-<a href=#620 id=620 data-nosnippet>620</a>                silent,
-<a href=#621 id=621 data-nosnippet>621</a>                imatrix_source,
-<a href=#622 id=622 data-nosnippet>622</a>                IsqOrganization::Default,
-<a href=#623 id=623 data-nosnippet>623</a>                <span class="self">self</span>.config.write_uqff.as_ref(),
-<a href=#624 id=624 data-nosnippet>624</a>                UqffFullSer {
-<a href=#625 id=625 data-nosnippet>625</a>                    tokenizer: <span class="kw-2">&amp;</span>tokenizer,
-<a href=#626 id=626 data-nosnippet>626</a>                    template_filename: paths.get_template_filename(),
-<a href=#627 id=627 data-nosnippet>627</a>                    generation_config: paths.get_gen_conf_filename(),
-<a href=#628 id=628 data-nosnippet>628</a>                    config: config.clone(),
-<a href=#629 id=629 data-nosnippet>629</a>                    processor_filename: paths.get_processor_config(),
-<a href=#630 id=630 data-nosnippet>630</a>                    preprocessor_filename: paths.get_preprocessor_config(),
-<a href=#631 id=631 data-nosnippet>631</a>                },
-<a href=#632 id=632 data-nosnippet>632</a>                Arc::new(MultiProgress::new()),
-<a href=#633 id=633 data-nosnippet>633</a>            )<span class="question-mark">?</span>;
-<a href=#634 id=634 data-nosnippet>634</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(from_uqff) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
-<a href=#635 id=635 data-nosnippet>635</a>            model.load_from_artifacts(
-<a href=#636 id=636 data-nosnippet>636</a>                device.clone(),
-<a href=#637 id=637 data-nosnippet>637</a>                <span class="self">self</span>.config.topology.as_ref(),
-<a href=#638 id=638 data-nosnippet>638</a>                silent,
-<a href=#639 id=639 data-nosnippet>639</a>                from_uqff,
-<a href=#640 id=640 data-nosnippet>640</a>            )<span class="question-mark">?</span>;
-<a href=#641 id=641 data-nosnippet>641</a>        }
-<a href=#642 id=642 data-nosnippet>642</a>
-<a href=#643 id=643 data-nosnippet>643</a>        <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
-<a href=#644 id=644 data-nosnippet>644</a>            <span class="macro">anyhow::ensure!</span>(
-<a href=#645 id=645 data-nosnippet>645</a>                !<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::Adapter { .. }),
-<a href=#646 id=646 data-nosnippet>646</a>                <span class="string">"PagedAttention does not support adapter models."
-<a href=#647 id=647 data-nosnippet>647</a>            </span>);
-<a href=#648 id=648 data-nosnippet>648</a>            <span class="kw">let </span>cache_config = calculate_cache_config(
-<a href=#649 id=649 data-nosnippet>649</a>                paged_attn_config.mem_gpu,
-<a href=#650 id=650 data-nosnippet>650</a>                paged_attn_config.mem_cpu,
-<a href=#651 id=651 data-nosnippet>651</a>                paged_attn_config.block_size,
-<a href=#652 id=652 data-nosnippet>652</a>                dtype,
-<a href=#653 id=653 data-nosnippet>653</a>                model.config(),
-<a href=#654 id=654 data-nosnippet>654</a>                <span class="kw-2">&amp;</span>device,
-<a href=#655 id=655 data-nosnippet>655</a>                <span class="kw-2">&amp;</span>layer_devices,
-<a href=#656 id=656 data-nosnippet>656</a>                silent,
-<a href=#657 id=657 data-nosnippet>657</a>            )<span class="question-mark">?</span>;
-<a href=#658 id=658 data-nosnippet>658</a>            <span class="kw">let </span>cache_engine =
-<a href=#659 id=659 data-nosnippet>659</a>                CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, <span class="kw-2">&amp;</span>device, layer_devices)<span class="question-mark">?</span>;
-<a href=#660 id=660 data-nosnippet>660</a>            (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
-<a href=#661 id=661 data-nosnippet>661</a>        } <span class="kw">else </span>{
-<a href=#662 id=662 data-nosnippet>662</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
-<a href=#663 id=663 data-nosnippet>663</a>        };
-<a href=#664 id=664 data-nosnippet>664</a>
-<a href=#665 id=665 data-nosnippet>665</a>        <span class="kw">let </span>max_seq_len = model.max_seq_len();
-<a href=#666 id=666 data-nosnippet>666</a>        <span class="kw">let </span>llg_factory = build_llg_factory(tokenizer.clone())<span class="question-mark">?</span>;
-<a href=#667 id=667 data-nosnippet>667</a>        <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model.cache() {
-<a href=#668 id=668 data-nosnippet>668</a>            EitherCache::Full(full) =&gt; full.lock().len(),
-<a href=#669 id=669 data-nosnippet>669</a>            EitherCache::Normal(normal) =&gt; normal.lock().unwrap().<span class="number">0</span>.len(),
-<a href=#670 id=670 data-nosnippet>670</a>        };
-<a href=#671 id=671 data-nosnippet>671</a>        <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);
-<a href=#672 id=672 data-nosnippet>672</a>        <span class="kw">let </span>sliding_window = model.config().sliding_window;
-<a href=#673 id=673 data-nosnippet>673</a>        <span class="kw">let </span>model_metadata = Arc::new(model.config().clone());
-<a href=#674 id=674 data-nosnippet>674</a>        <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(VisionPipeline {
-<a href=#675 id=675 data-nosnippet>675</a>            model,
-<a href=#676 id=676 data-nosnippet>676</a>            tokenizer: tokenizer.into(),
-<a href=#677 id=677 data-nosnippet>677</a>            chat_template: Arc::new(chat_template),
-<a href=#678 id=678 data-nosnippet>678</a>            model_id: <span class="self">self</span>.model_id.clone(),
-<a href=#679 id=679 data-nosnippet>679</a>            metadata: Arc::new(GeneralMetadata {
-<a href=#680 id=680 data-nosnippet>680</a>                max_seq_len,
-<a href=#681 id=681 data-nosnippet>681</a>                llg_factory: <span class="prelude-val">Some</span>(llg_factory),
-<a href=#682 id=682 data-nosnippet>682</a>                is_xlora: <span class="bool-val">false</span>,
-<a href=#683 id=683 data-nosnippet>683</a>                num_hidden_layers,
-<a href=#684 id=684 data-nosnippet>684</a>                eos_tok: eos,
-<a href=#685 id=685 data-nosnippet>685</a>                kind: <span class="self">self</span>.kind.clone(),
-<a href=#686 id=686 data-nosnippet>686</a>                no_kv_cache: <span class="bool-val">false</span>,
-<a href=#687 id=687 data-nosnippet>687</a>                no_prefix_cache: <span class="bool-val">false</span>,
-<a href=#688 id=688 data-nosnippet>688</a>                activation_dtype: dtype,
-<a href=#689 id=689 data-nosnippet>689</a>                sliding_window,
-<a href=#690 id=690 data-nosnippet>690</a>                cache_config,
-<a href=#691 id=691 data-nosnippet>691</a>                cache_engine,
-<a href=#692 id=692 data-nosnippet>692</a>                prompt_chunksize: <span class="self">self</span>.config.prompt_chunksize,
-<a href=#693 id=693 data-nosnippet>693</a>                model_metadata: <span class="prelude-val">Some</span>(model_metadata),
-<a href=#694 id=694 data-nosnippet>694</a>            }),
-<a href=#695 id=695 data-nosnippet>695</a>            processor,
-<a href=#696 id=696 data-nosnippet>696</a>            prefixer: <span class="self">self</span>.inner.prefixer(),
-<a href=#697 id=697 data-nosnippet>697</a>            preprocessor_config: Arc::new(preprocessor_config),
-<a href=#698 id=698 data-nosnippet>698</a>            topology: <span class="self">self</span>.config.topology.clone(),
-<a href=#699 id=699 data-nosnippet>699</a>            silent,
-<a href=#700 id=700 data-nosnippet>700</a>            template_filename: paths.get_template_filename().clone(),
-<a href=#701 id=701 data-nosnippet>701</a>            generation_config: paths.get_gen_conf_filename().cloned(),
-<a href=#702 id=702 data-nosnippet>702</a>            config,
-<a href=#703 id=703 data-nosnippet>703</a>            processor_filename: paths.get_processor_config().clone(),
-<a href=#704 id=704 data-nosnippet>704</a>            preprocessor_filename: paths.get_preprocessor_config().clone(),
-<a href=#705 id=705 data-nosnippet>705</a>            mapper: pipeline_mapper,
-<a href=#706 id=706 data-nosnippet>706</a>            imatrix: <span class="self">self</span>.config.imatrix.clone(),
-<a href=#707 id=707 data-nosnippet>707</a>        })))
-<a href=#708 id=708 data-nosnippet>708</a>    }
-<a href=#709 id=709 data-nosnippet>709</a>
-<a href=#710 id=710 data-nosnippet>710</a>    <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#711 id=711 data-nosnippet>711</a>        <span class="self">self</span>.model_id.to_string()
-<a href=#712 id=712 data-nosnippet>712</a>    }
-<a href=#713 id=713 data-nosnippet>713</a>
-<a href=#714 id=714 data-nosnippet>714</a>    <span class="kw">fn </span>get_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelKind {
-<a href=#715 id=715 data-nosnippet>715</a>        <span class="self">self</span>.kind.clone()
-<a href=#716 id=716 data-nosnippet>716</a>    }
-<a href=#717 id=717 data-nosnippet>717</a>}
-<a href=#718 id=718 data-nosnippet>718</a>
-<a href=#719 id=719 data-nosnippet>719</a><span class="kw">impl </span>PreProcessingMixin <span class="kw">for </span>VisionPipeline {
-<a href=#720 id=720 data-nosnippet>720</a>    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;ChatTemplate&gt;&gt; {
-<a href=#721 id=721 data-nosnippet>721</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.chat_template.clone())
+<a href=#563 id=563 data-nosnippet>563</a>                )<span class="question-mark">?</span>;
+<a href=#564 id=564 data-nosnippet>564</a>                <span class="kw">let _ </span>= model.forward(
+<a href=#565 id=565 data-nosnippet>565</a>                    <span class="kw-2">&amp;</span>inputs.input,
+<a href=#566 id=566 data-nosnippet>566</a>                    <span class="prelude-val">None</span>, <span class="comment">// NOTE: We ONLY calibrate the text bits of these models!!
+<a href=#567 id=567 data-nosnippet>567</a>                    </span><span class="kw-2">&amp;</span>inputs.positions,
+<a href=#568 id=568 data-nosnippet>568</a>                    inputs.context_lens,
+<a href=#569 id=569 data-nosnippet>569</a>                    inputs.position_ids,
+<a href=#570 id=570 data-nosnippet>570</a>                    model.default_model_specific_args(<span class="kw-2">&amp;</span>inputs.input),
+<a href=#571 id=571 data-nosnippet>571</a>                    <span class="prelude-val">None</span>,
+<a href=#572 id=572 data-nosnippet>572</a>                    <span class="kw-2">&amp;</span>inputs.flash_meta,
+<a href=#573 id=573 data-nosnippet>573</a>                )<span class="question-mark">?</span>;
+<a href=#574 id=574 data-nosnippet>574</a>                <span class="kw">match </span>model.cache_mut() {
+<a href=#575 id=575 data-nosnippet>575</a>                    EitherCache::Full(full) =&gt; {
+<a href=#576 id=576 data-nosnippet>576</a>                        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut *</span>full.lock() {
+<a href=#577 id=577 data-nosnippet>577</a>                            <span class="kw-2">*</span>layer = <span class="prelude-val">None
+<a href=#578 id=578 data-nosnippet>578</a>                        </span>}
+<a href=#579 id=579 data-nosnippet>579</a>                    }
+<a href=#580 id=580 data-nosnippet>580</a>                    EitherCache::Normal(normal) =&gt; {
+<a href=#581 id=581 data-nosnippet>581</a>                        <span class="kw">for </span>layer <span class="kw">in </span><span class="kw-2">&amp;mut *</span>normal.lock().unwrap().<span class="number">0 </span>{
+<a href=#582 id=582 data-nosnippet>582</a>                            layer.reset();
+<a href=#583 id=583 data-nosnippet>583</a>                        }
+<a href=#584 id=584 data-nosnippet>584</a>                    }
+<a href=#585 id=585 data-nosnippet>585</a>                }
+<a href=#586 id=586 data-nosnippet>586</a>                <span class="kw">let </span>end = Instant::now();
+<a href=#587 id=587 data-nosnippet>587</a>                <span class="macro">info!</span>(
+<a href=#588 id=588 data-nosnippet>588</a>                    <span class="string">"Processed chunk {}/{n_chunks} ({chunk_len} tokens), {:.2}s"</span>,
+<a href=#589 id=589 data-nosnippet>589</a>                    i + <span class="number">1</span>,
+<a href=#590 id=590 data-nosnippet>590</a>                    end.duration_since(start).as_secs_f32()
+<a href=#591 id=591 data-nosnippet>591</a>                );
+<a href=#592 id=592 data-nosnippet>592</a>            }
+<a href=#593 id=593 data-nosnippet>593</a>            load_device.synchronize()<span class="question-mark">?</span>;
+<a href=#594 id=594 data-nosnippet>594</a>            <span class="kw">let </span>end = Instant::now();
+<a href=#595 id=595 data-nosnippet>595</a>            <span class="macro">info!</span>(
+<a href=#596 id=596 data-nosnippet>596</a>                <span class="string">"Finished collecting imatrix in {:.2}s"</span>,
+<a href=#597 id=597 data-nosnippet>597</a>                end.duration_since(start).as_secs_f32()
+<a href=#598 id=598 data-nosnippet>598</a>            );
+<a href=#599 id=599 data-nosnippet>599</a>        }
+<a href=#600 id=600 data-nosnippet>600</a>
+<a href=#601 id=601 data-nosnippet>601</a>        <span class="kw">if </span>(in_situ_quant.is_some() || <span class="self">self</span>.config.topology.is_some())
+<a href=#602 id=602 data-nosnippet>602</a>            &amp;&amp; <span class="self">self</span>.config.from_uqff.is_none()
+<a href=#603 id=603 data-nosnippet>603</a>        {
+<a href=#604 id=604 data-nosnippet>604</a>            <span class="kw">let </span>imatrix_source = <span class="kw">match </span>(
+<a href=#605 id=605 data-nosnippet>605</a>                <span class="self">self</span>.config.imatrix.as_ref(),
+<a href=#606 id=606 data-nosnippet>606</a>                <span class="self">self</span>.config.calibration_file.is_some(),
+<a href=#607 id=607 data-nosnippet>607</a>            ) {
+<a href=#608 id=608 data-nosnippet>608</a>                (<span class="prelude-val">None</span>, <span class="bool-val">false</span>) =&gt; <span class="prelude-val">None</span>,
+<a href=#609 id=609 data-nosnippet>609</a>                (<span class="prelude-val">Some</span>(file), <span class="bool-val">false</span>) =&gt; <span class="prelude-val">Some</span>(ImatrixDataSource::File(file)),
+<a href=#610 id=610 data-nosnippet>610</a>                (<span class="prelude-val">None</span>, <span class="bool-val">true</span>) =&gt; <span class="prelude-val">Some</span>(ImatrixDataSource::Collected),
+<a href=#611 id=611 data-nosnippet>611</a>                (<span class="prelude-val">Some</span>(<span class="kw">_</span>), <span class="bool-val">true</span>) =&gt; <span class="macro">unreachable!</span>(),
+<a href=#612 id=612 data-nosnippet>612</a>            };
+<a href=#613 id=613 data-nosnippet>613</a>            model.quantize(
+<a href=#614 id=614 data-nosnippet>614</a>                in_situ_quant,
+<a href=#615 id=615 data-nosnippet>615</a>                device.clone(),
+<a href=#616 id=616 data-nosnippet>616</a>                <span class="self">self</span>.config.topology.as_ref(),
+<a href=#617 id=617 data-nosnippet>617</a>                silent,
+<a href=#618 id=618 data-nosnippet>618</a>                imatrix_source,
+<a href=#619 id=619 data-nosnippet>619</a>                IsqOrganization::Default,
+<a href=#620 id=620 data-nosnippet>620</a>                <span class="self">self</span>.config.write_uqff.as_ref(),
+<a href=#621 id=621 data-nosnippet>621</a>                UqffFullSer {
+<a href=#622 id=622 data-nosnippet>622</a>                    tokenizer: <span class="kw-2">&amp;</span>tokenizer,
+<a href=#623 id=623 data-nosnippet>623</a>                    template_filename: paths.get_template_filename(),
+<a href=#624 id=624 data-nosnippet>624</a>                    generation_config: paths.get_gen_conf_filename(),
+<a href=#625 id=625 data-nosnippet>625</a>                    config: config.clone(),
+<a href=#626 id=626 data-nosnippet>626</a>                    processor_filename: paths.get_processor_config(),
+<a href=#627 id=627 data-nosnippet>627</a>                    preprocessor_filename: paths.get_preprocessor_config(),
+<a href=#628 id=628 data-nosnippet>628</a>                },
+<a href=#629 id=629 data-nosnippet>629</a>                Arc::new(MultiProgress::new()),
+<a href=#630 id=630 data-nosnippet>630</a>            )<span class="question-mark">?</span>;
+<a href=#631 id=631 data-nosnippet>631</a>        } <span class="kw">else if let </span><span class="prelude-val">Some</span>(from_uqff) = <span class="kw-2">&amp;*</span><span class="self">self</span>.from_uqff.read().unwrap() {
+<a href=#632 id=632 data-nosnippet>632</a>            model.load_from_artifacts(
+<a href=#633 id=633 data-nosnippet>633</a>                device.clone(),
+<a href=#634 id=634 data-nosnippet>634</a>                <span class="self">self</span>.config.topology.as_ref(),
+<a href=#635 id=635 data-nosnippet>635</a>                silent,
+<a href=#636 id=636 data-nosnippet>636</a>                from_uqff,
+<a href=#637 id=637 data-nosnippet>637</a>            )<span class="question-mark">?</span>;
+<a href=#638 id=638 data-nosnippet>638</a>        }
+<a href=#639 id=639 data-nosnippet>639</a>
+<a href=#640 id=640 data-nosnippet>640</a>        <span class="kw">let </span>(cache_config, cache_engine) = <span class="kw">if let </span><span class="prelude-val">Some</span>(paged_attn_config) = paged_attn_config {
+<a href=#641 id=641 data-nosnippet>641</a>            <span class="macro">anyhow::ensure!</span>(
+<a href=#642 id=642 data-nosnippet>642</a>                !<span class="macro">matches!</span>(<span class="self">self</span>.kind, ModelKind::Adapter { .. }),
+<a href=#643 id=643 data-nosnippet>643</a>                <span class="string">"PagedAttention does not support adapter models."
+<a href=#644 id=644 data-nosnippet>644</a>            </span>);
+<a href=#645 id=645 data-nosnippet>645</a>            <span class="kw">let </span>cache_config = calculate_cache_config(
+<a href=#646 id=646 data-nosnippet>646</a>                paged_attn_config.mem_gpu,
+<a href=#647 id=647 data-nosnippet>647</a>                paged_attn_config.mem_cpu,
+<a href=#648 id=648 data-nosnippet>648</a>                paged_attn_config.block_size,
+<a href=#649 id=649 data-nosnippet>649</a>                dtype,
+<a href=#650 id=650 data-nosnippet>650</a>                model.config(),
+<a href=#651 id=651 data-nosnippet>651</a>                <span class="kw-2">&amp;</span>device,
+<a href=#652 id=652 data-nosnippet>652</a>                <span class="kw-2">&amp;</span>layer_devices,
+<a href=#653 id=653 data-nosnippet>653</a>                silent,
+<a href=#654 id=654 data-nosnippet>654</a>            )<span class="question-mark">?</span>;
+<a href=#655 id=655 data-nosnippet>655</a>            <span class="kw">let </span>cache_engine =
+<a href=#656 id=656 data-nosnippet>656</a>                CacheEngine::new(model.config(), <span class="kw-2">&amp;</span>cache_config, dtype, <span class="kw-2">&amp;</span>device, layer_devices)<span class="question-mark">?</span>;
+<a href=#657 id=657 data-nosnippet>657</a>            (<span class="prelude-val">Some</span>(cache_config), <span class="prelude-val">Some</span>(cache_engine))
+<a href=#658 id=658 data-nosnippet>658</a>        } <span class="kw">else </span>{
+<a href=#659 id=659 data-nosnippet>659</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>)
+<a href=#660 id=660 data-nosnippet>660</a>        };
+<a href=#661 id=661 data-nosnippet>661</a>
+<a href=#662 id=662 data-nosnippet>662</a>        <span class="kw">let </span>max_seq_len = model.max_seq_len();
+<a href=#663 id=663 data-nosnippet>663</a>        <span class="kw">let </span>llg_factory = build_llg_factory(tokenizer.clone())<span class="question-mark">?</span>;
+<a href=#664 id=664 data-nosnippet>664</a>        <span class="kw">let </span>num_hidden_layers = <span class="kw">match </span>model.cache() {
+<a href=#665 id=665 data-nosnippet>665</a>            EitherCache::Full(full) =&gt; full.lock().len(),
+<a href=#666 id=666 data-nosnippet>666</a>            EitherCache::Normal(normal) =&gt; normal.lock().unwrap().<span class="number">0</span>.len(),
+<a href=#667 id=667 data-nosnippet>667</a>        };
+<a href=#668 id=668 data-nosnippet>668</a>        <span class="kw">let </span>eos = calculate_eos_tokens(<span class="kw-2">&amp;</span>chat_template, gen_conf, <span class="kw-2">&amp;</span>tokenizer);
+<a href=#669 id=669 data-nosnippet>669</a>        <span class="kw">let </span>sliding_window = model.config().sliding_window;
+<a href=#670 id=670 data-nosnippet>670</a>        <span class="kw">let </span>model_metadata = Arc::new(model.config().clone());
+<a href=#671 id=671 data-nosnippet>671</a>        <span class="prelude-val">Ok</span>(Arc::new(Mutex::new(VisionPipeline {
+<a href=#672 id=672 data-nosnippet>672</a>            model,
+<a href=#673 id=673 data-nosnippet>673</a>            tokenizer: tokenizer.into(),
+<a href=#674 id=674 data-nosnippet>674</a>            chat_template: Arc::new(chat_template),
+<a href=#675 id=675 data-nosnippet>675</a>            model_id: <span class="self">self</span>.model_id.clone(),
+<a href=#676 id=676 data-nosnippet>676</a>            metadata: Arc::new(GeneralMetadata {
+<a href=#677 id=677 data-nosnippet>677</a>                max_seq_len,
+<a href=#678 id=678 data-nosnippet>678</a>                llg_factory: <span class="prelude-val">Some</span>(llg_factory),
+<a href=#679 id=679 data-nosnippet>679</a>                is_xlora: <span class="bool-val">false</span>,
+<a href=#680 id=680 data-nosnippet>680</a>                num_hidden_layers,
+<a href=#681 id=681 data-nosnippet>681</a>                eos_tok: eos,
+<a href=#682 id=682 data-nosnippet>682</a>                kind: <span class="self">self</span>.kind.clone(),
+<a href=#683 id=683 data-nosnippet>683</a>                no_kv_cache: <span class="bool-val">false</span>,
+<a href=#684 id=684 data-nosnippet>684</a>                no_prefix_cache: <span class="bool-val">false</span>,
+<a href=#685 id=685 data-nosnippet>685</a>                activation_dtype: dtype,
+<a href=#686 id=686 data-nosnippet>686</a>                sliding_window,
+<a href=#687 id=687 data-nosnippet>687</a>                cache_config,
+<a href=#688 id=688 data-nosnippet>688</a>                cache_engine,
+<a href=#689 id=689 data-nosnippet>689</a>                prompt_chunksize: <span class="self">self</span>.config.prompt_chunksize,
+<a href=#690 id=690 data-nosnippet>690</a>                model_metadata: <span class="prelude-val">Some</span>(model_metadata),
+<a href=#691 id=691 data-nosnippet>691</a>            }),
+<a href=#692 id=692 data-nosnippet>692</a>            processor,
+<a href=#693 id=693 data-nosnippet>693</a>            prefixer: <span class="self">self</span>.inner.prefixer(),
+<a href=#694 id=694 data-nosnippet>694</a>            preprocessor_config: Arc::new(preprocessor_config),
+<a href=#695 id=695 data-nosnippet>695</a>            topology: <span class="self">self</span>.config.topology.clone(),
+<a href=#696 id=696 data-nosnippet>696</a>            silent,
+<a href=#697 id=697 data-nosnippet>697</a>            template_filename: paths.get_template_filename().clone(),
+<a href=#698 id=698 data-nosnippet>698</a>            generation_config: paths.get_gen_conf_filename().cloned(),
+<a href=#699 id=699 data-nosnippet>699</a>            config,
+<a href=#700 id=700 data-nosnippet>700</a>            processor_filename: paths.get_processor_config().clone(),
+<a href=#701 id=701 data-nosnippet>701</a>            preprocessor_filename: paths.get_preprocessor_config().clone(),
+<a href=#702 id=702 data-nosnippet>702</a>            mapper: pipeline_mapper,
+<a href=#703 id=703 data-nosnippet>703</a>            imatrix: <span class="self">self</span>.config.imatrix.clone(),
+<a href=#704 id=704 data-nosnippet>704</a>        })))
+<a href=#705 id=705 data-nosnippet>705</a>    }
+<a href=#706 id=706 data-nosnippet>706</a>
+<a href=#707 id=707 data-nosnippet>707</a>    <span class="kw">fn </span>get_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#708 id=708 data-nosnippet>708</a>        <span class="self">self</span>.model_id.to_string()
+<a href=#709 id=709 data-nosnippet>709</a>    }
+<a href=#710 id=710 data-nosnippet>710</a>
+<a href=#711 id=711 data-nosnippet>711</a>    <span class="kw">fn </span>get_kind(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelKind {
+<a href=#712 id=712 data-nosnippet>712</a>        <span class="self">self</span>.kind.clone()
+<a href=#713 id=713 data-nosnippet>713</a>    }
+<a href=#714 id=714 data-nosnippet>714</a>}
+<a href=#715 id=715 data-nosnippet>715</a>
+<a href=#716 id=716 data-nosnippet>716</a><span class="kw">impl </span>PreProcessingMixin <span class="kw">for </span>VisionPipeline {
+<a href=#717 id=717 data-nosnippet>717</a>    <span class="kw">fn </span>get_chat_template(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;ChatTemplate&gt;&gt; {
+<a href=#718 id=718 data-nosnippet>718</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.chat_template.clone())
+<a href=#719 id=719 data-nosnippet>719</a>    }
+<a href=#720 id=720 data-nosnippet>720</a>    <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
+<a href=#721 id=721 data-nosnippet>721</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.preprocessor_config.clone())
 <a href=#722 id=722 data-nosnippet>722</a>    }
-<a href=#723 id=723 data-nosnippet>723</a>    <span class="kw">fn </span>get_input_processor_config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;<span class="kw">dyn </span>Any&gt;&gt; {
-<a href=#724 id=724 data-nosnippet>724</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.preprocessor_config.clone())
+<a href=#723 id=723 data-nosnippet>723</a>    <span class="kw">fn </span>get_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span><span class="kw">super</span>::Processor&gt; {
+<a href=#724 id=724 data-nosnippet>724</a>        <span class="self">self</span>.processor.clone()
 <a href=#725 id=725 data-nosnippet>725</a>    }
-<a href=#726 id=726 data-nosnippet>726</a>    <span class="kw">fn </span>get_processor(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;<span class="kw">dyn </span><span class="kw">super</span>::Processor&gt; {
-<a href=#727 id=727 data-nosnippet>727</a>        <span class="self">self</span>.processor.clone()
-<a href=#728 id=728 data-nosnippet>728</a>    }
-<a href=#729 id=729 data-nosnippet>729</a>}
-<a href=#730 id=730 data-nosnippet>730</a>
-<a href=#731 id=731 data-nosnippet>731</a><span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>VisionPipeline {
-<a href=#732 id=732 data-nosnippet>732</a>    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#733 id=733 data-nosnippet>733</a>        <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
-<a href=#734 id=734 data-nosnippet>734</a>        <span class="self">self</span>.model
-<a href=#735 id=735 data-nosnippet>735</a>            .quantize(
-<a href=#736 id=736 data-nosnippet>736</a>                <span class="prelude-val">Some</span>(dtype),
-<a href=#737 id=737 data-nosnippet>737</a>                device,
-<a href=#738 id=738 data-nosnippet>738</a>                <span class="self">self</span>.topology.as_ref(),
-<a href=#739 id=739 data-nosnippet>739</a>                <span class="self">self</span>.silent,
-<a href=#740 id=740 data-nosnippet>740</a>                <span class="self">self</span>.imatrix.as_ref().map(ImatrixDataSource::File),
-<a href=#741 id=741 data-nosnippet>741</a>                IsqOrganization::Default,
-<a href=#742 id=742 data-nosnippet>742</a>                <span class="prelude-val">None</span>,
-<a href=#743 id=743 data-nosnippet>743</a>                UqffFullSer {
-<a href=#744 id=744 data-nosnippet>744</a>                    tokenizer: <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer,
-<a href=#745 id=745 data-nosnippet>745</a>                    template_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.template_filename,
-<a href=#746 id=746 data-nosnippet>746</a>                    generation_config: <span class="self">self</span>.generation_config.as_ref(),
-<a href=#747 id=747 data-nosnippet>747</a>                    config: <span class="self">self</span>.config.clone(),
-<a href=#748 id=748 data-nosnippet>748</a>                    processor_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.processor_filename,
-<a href=#749 id=749 data-nosnippet>749</a>                    preprocessor_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.preprocessor_filename,
-<a href=#750 id=750 data-nosnippet>750</a>                },
-<a href=#751 id=751 data-nosnippet>751</a>                Arc::new(MultiProgress::new()),
-<a href=#752 id=752 data-nosnippet>752</a>            )
-<a href=#753 id=753 data-nosnippet>753</a>            .map_err(anyhow::Error::msg)
-<a href=#754 id=754 data-nosnippet>754</a>    }
-<a href=#755 id=755 data-nosnippet>755</a>}
-<a href=#756 id=756 data-nosnippet>756</a>
-<a href=#757 id=757 data-nosnippet>757</a><span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>VisionPipeline {
-<a href=#758 id=758 data-nosnippet>758</a>    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
-<a href=#759 id=759 data-nosnippet>759</a>        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
-<a href=#760 id=760 data-nosnippet>760</a>            FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
-<a href=#761 id=761 data-nosnippet>761</a>        } <span class="kw">else </span>{
-<a href=#762 id=762 data-nosnippet>762</a>            NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
-<a href=#763 id=763 data-nosnippet>763</a>        }
-<a href=#764 id=764 data-nosnippet>764</a>    }
-<a href=#765 id=765 data-nosnippet>765</a>    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
-<a href=#766 id=766 data-nosnippet>766</a>        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
-<a href=#767 id=767 data-nosnippet>767</a>            FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
-<a href=#768 id=768 data-nosnippet>768</a>        } <span class="kw">else </span>{
-<a href=#769 id=769 data-nosnippet>769</a>            NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
-<a href=#770 id=770 data-nosnippet>770</a>        }
-<a href=#771 id=771 data-nosnippet>771</a>    }
-<a href=#772 id=772 data-nosnippet>772</a>    <span class="kw">fn </span>set_none_cache(
-<a href=#773 id=773 data-nosnippet>773</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#774 id=774 data-nosnippet>774</a>        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#775 id=775 data-nosnippet>775</a>        reset_non_granular: bool,
-<a href=#776 id=776 data-nosnippet>776</a>        modify_draft_cache: bool,
-<a href=#777 id=777 data-nosnippet>777</a>
-<a href=#778 id=778 data-nosnippet>778</a>        load_preallocated_cache: bool,
-<a href=#779 id=779 data-nosnippet>779</a>    ) {
-<a href=#780 id=780 data-nosnippet>780</a>        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
-<a href=#781 id=781 data-nosnippet>781</a>            FullCacheManager.set_none_cache(<span class="self">self</span>, seqs, modify_draft_cache, <span class="bool-val">false</span>);
-<a href=#782 id=782 data-nosnippet>782</a>        } <span class="kw">else </span>{
-<a href=#783 id=783 data-nosnippet>783</a>            NormalCacheManager.set_none_cache(
-<a href=#784 id=784 data-nosnippet>784</a>                <span class="self">self</span>,
-<a href=#785 id=785 data-nosnippet>785</a>                seqs,
-<a href=#786 id=786 data-nosnippet>786</a>                modify_draft_cache,
-<a href=#787 id=787 data-nosnippet>787</a>                load_preallocated_cache,
-<a href=#788 id=788 data-nosnippet>788</a>            );
+<a href=#726 id=726 data-nosnippet>726</a>}
+<a href=#727 id=727 data-nosnippet>727</a>
+<a href=#728 id=728 data-nosnippet>728</a><span class="kw">impl </span>IsqPipelineMixin <span class="kw">for </span>VisionPipeline {
+<a href=#729 id=729 data-nosnippet>729</a>    <span class="kw">fn </span>re_isq_model(<span class="kw-2">&amp;mut </span><span class="self">self</span>, dtype: IsqType) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#730 id=730 data-nosnippet>730</a>        <span class="kw">let </span>device = <span class="self">self</span>.device().clone();
+<a href=#731 id=731 data-nosnippet>731</a>        <span class="self">self</span>.model
+<a href=#732 id=732 data-nosnippet>732</a>            .quantize(
+<a href=#733 id=733 data-nosnippet>733</a>                <span class="prelude-val">Some</span>(dtype),
+<a href=#734 id=734 data-nosnippet>734</a>                device,
+<a href=#735 id=735 data-nosnippet>735</a>                <span class="self">self</span>.topology.as_ref(),
+<a href=#736 id=736 data-nosnippet>736</a>                <span class="self">self</span>.silent,
+<a href=#737 id=737 data-nosnippet>737</a>                <span class="self">self</span>.imatrix.as_ref().map(ImatrixDataSource::File),
+<a href=#738 id=738 data-nosnippet>738</a>                IsqOrganization::Default,
+<a href=#739 id=739 data-nosnippet>739</a>                <span class="prelude-val">None</span>,
+<a href=#740 id=740 data-nosnippet>740</a>                UqffFullSer {
+<a href=#741 id=741 data-nosnippet>741</a>                    tokenizer: <span class="kw-2">&amp;</span><span class="self">self</span>.tokenizer,
+<a href=#742 id=742 data-nosnippet>742</a>                    template_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.template_filename,
+<a href=#743 id=743 data-nosnippet>743</a>                    generation_config: <span class="self">self</span>.generation_config.as_ref(),
+<a href=#744 id=744 data-nosnippet>744</a>                    config: <span class="self">self</span>.config.clone(),
+<a href=#745 id=745 data-nosnippet>745</a>                    processor_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.processor_filename,
+<a href=#746 id=746 data-nosnippet>746</a>                    preprocessor_filename: <span class="kw-2">&amp;</span><span class="self">self</span>.preprocessor_filename,
+<a href=#747 id=747 data-nosnippet>747</a>                },
+<a href=#748 id=748 data-nosnippet>748</a>                Arc::new(MultiProgress::new()),
+<a href=#749 id=749 data-nosnippet>749</a>            )
+<a href=#750 id=750 data-nosnippet>750</a>            .map_err(anyhow::Error::msg)
+<a href=#751 id=751 data-nosnippet>751</a>    }
+<a href=#752 id=752 data-nosnippet>752</a>}
+<a href=#753 id=753 data-nosnippet>753</a>
+<a href=#754 id=754 data-nosnippet>754</a><span class="kw">impl </span>CacheManagerMixin <span class="kw">for </span>VisionPipeline {
+<a href=#755 id=755 data-nosnippet>755</a>    <span class="kw">fn </span>clone_in_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
+<a href=#756 id=756 data-nosnippet>756</a>        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
+<a href=#757 id=757 data-nosnippet>757</a>            FullCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
+<a href=#758 id=758 data-nosnippet>758</a>        } <span class="kw">else </span>{
+<a href=#759 id=759 data-nosnippet>759</a>            NormalCacheManager.clone_in_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
+<a href=#760 id=760 data-nosnippet>760</a>        }
+<a href=#761 id=761 data-nosnippet>761</a>    }
+<a href=#762 id=762 data-nosnippet>762</a>    <span class="kw">fn </span>clone_out_cache(<span class="kw-2">&amp;</span><span class="self">self</span>, seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence]) {
+<a href=#763 id=763 data-nosnippet>763</a>        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
+<a href=#764 id=764 data-nosnippet>764</a>            FullCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
+<a href=#765 id=765 data-nosnippet>765</a>        } <span class="kw">else </span>{
+<a href=#766 id=766 data-nosnippet>766</a>            NormalCacheManager.clone_out_cache(<span class="self">self</span>, seqs, <span class="bool-val">false</span>)
+<a href=#767 id=767 data-nosnippet>767</a>        }
+<a href=#768 id=768 data-nosnippet>768</a>    }
+<a href=#769 id=769 data-nosnippet>769</a>    <span class="kw">fn </span>set_none_cache(
+<a href=#770 id=770 data-nosnippet>770</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#771 id=771 data-nosnippet>771</a>        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#772 id=772 data-nosnippet>772</a>        reset_non_granular: bool,
+<a href=#773 id=773 data-nosnippet>773</a>        modify_draft_cache: bool,
+<a href=#774 id=774 data-nosnippet>774</a>
+<a href=#775 id=775 data-nosnippet>775</a>        load_preallocated_cache: bool,
+<a href=#776 id=776 data-nosnippet>776</a>    ) {
+<a href=#777 id=777 data-nosnippet>777</a>        <span class="kw">if </span><span class="macro">matches!</span>(<span class="self">self</span>.model.cache(), EitherCache::Full(<span class="kw">_</span>)) {
+<a href=#778 id=778 data-nosnippet>778</a>            FullCacheManager.set_none_cache(<span class="self">self</span>, seqs, modify_draft_cache, <span class="bool-val">false</span>);
+<a href=#779 id=779 data-nosnippet>779</a>        } <span class="kw">else </span>{
+<a href=#780 id=780 data-nosnippet>780</a>            NormalCacheManager.set_none_cache(
+<a href=#781 id=781 data-nosnippet>781</a>                <span class="self">self</span>,
+<a href=#782 id=782 data-nosnippet>782</a>                seqs,
+<a href=#783 id=783 data-nosnippet>783</a>                modify_draft_cache,
+<a href=#784 id=784 data-nosnippet>784</a>                load_preallocated_cache,
+<a href=#785 id=785 data-nosnippet>785</a>            );
+<a href=#786 id=786 data-nosnippet>786</a>        }
+<a href=#787 id=787 data-nosnippet>787</a>        <span class="kw">if </span>reset_non_granular {
+<a href=#788 id=788 data-nosnippet>788</a>            <span class="self">self</span>.reset_non_granular_state()
 <a href=#789 id=789 data-nosnippet>789</a>        }
-<a href=#790 id=790 data-nosnippet>790</a>        <span class="kw">if </span>reset_non_granular {
-<a href=#791 id=791 data-nosnippet>791</a>            <span class="self">self</span>.reset_non_granular_state()
-<a href=#792 id=792 data-nosnippet>792</a>        }
+<a href=#790 id=790 data-nosnippet>790</a>    }
+<a href=#791 id=791 data-nosnippet>791</a>    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
+<a href=#792 id=792 data-nosnippet>792</a>        <span class="self">self</span>.model.cache()
 <a href=#793 id=793 data-nosnippet>793</a>    }
-<a href=#794 id=794 data-nosnippet>794</a>    <span class="kw">fn </span>cache(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>EitherCache {
-<a href=#795 id=795 data-nosnippet>795</a>        <span class="self">self</span>.model.cache()
-<a href=#796 id=796 data-nosnippet>796</a>    }
-<a href=#797 id=797 data-nosnippet>797</a>}
-<a href=#798 id=798 data-nosnippet>798</a>
-<a href=#799 id=799 data-nosnippet>799</a><span class="kw">impl </span>MetadataMixin <span class="kw">for </span>VisionPipeline {
-<a href=#800 id=800 data-nosnippet>800</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
-<a href=#801 id=801 data-nosnippet>801</a>        <span class="self">self</span>.model.device().clone()
+<a href=#794 id=794 data-nosnippet>794</a>}
+<a href=#795 id=795 data-nosnippet>795</a>
+<a href=#796 id=796 data-nosnippet>796</a><span class="kw">impl </span>MetadataMixin <span class="kw">for </span>VisionPipeline {
+<a href=#797 id=797 data-nosnippet>797</a>    <span class="kw">fn </span>device(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Device {
+<a href=#798 id=798 data-nosnippet>798</a>        <span class="self">self</span>.model.device().clone()
+<a href=#799 id=799 data-nosnippet>799</a>    }
+<a href=#800 id=800 data-nosnippet>800</a>    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
+<a href=#801 id=801 data-nosnippet>801</a>        <span class="self">self</span>.metadata.clone()
 <a href=#802 id=802 data-nosnippet>802</a>    }
-<a href=#803 id=803 data-nosnippet>803</a>    <span class="kw">fn </span>get_metadata(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Arc&lt;GeneralMetadata&gt; {
-<a href=#804 id=804 data-nosnippet>804</a>        <span class="self">self</span>.metadata.clone()
+<a href=#803 id=803 data-nosnippet>803</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#804 id=804 data-nosnippet>804</a>        <span class="self">self</span>.model_id.clone()
 <a href=#805 id=805 data-nosnippet>805</a>    }
-<a href=#806 id=806 data-nosnippet>806</a>    <span class="kw">fn </span>name(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#807 id=807 data-nosnippet>807</a>        <span class="self">self</span>.model_id.clone()
-<a href=#808 id=808 data-nosnippet>808</a>    }
-<a href=#809 id=809 data-nosnippet>809</a>    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
-<a href=#810 id=810 data-nosnippet>810</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
-<a href=#811 id=811 data-nosnippet>811</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.tokenizer.clone())
+<a href=#806 id=806 data-nosnippet>806</a>    <span class="kw">fn </span>reset_non_granular_state(<span class="kw-2">&amp;</span><span class="self">self</span>) {}
+<a href=#807 id=807 data-nosnippet>807</a>    <span class="kw">fn </span>tokenizer(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;Arc&lt;Tokenizer&gt;&gt; {
+<a href=#808 id=808 data-nosnippet>808</a>        <span class="prelude-val">Some</span>(<span class="self">self</span>.tokenizer.clone())
+<a href=#809 id=809 data-nosnippet>809</a>    }
+<a href=#810 id=810 data-nosnippet>810</a>    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
+<a href=#811 id=811 data-nosnippet>811</a>        <span class="prelude-val">Some</span>(<span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
 <a href=#812 id=812 data-nosnippet>812</a>    }
-<a href=#813 id=813 data-nosnippet>813</a>    <span class="kw">fn </span>device_mapper(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Option</span>&lt;<span class="kw-2">&amp;</span><span class="kw">dyn </span>DeviceMapper&gt; {
-<a href=#814 id=814 data-nosnippet>814</a>        <span class="prelude-val">Some</span>(<span class="kw-2">&amp;*</span><span class="self">self</span>.mapper)
-<a href=#815 id=815 data-nosnippet>815</a>    }
-<a href=#816 id=816 data-nosnippet>816</a>}
-<a href=#817 id=817 data-nosnippet>817</a>
-<a href=#818 id=818 data-nosnippet>818</a><span class="attr">#[async_trait::async_trait]
-<a href=#819 id=819 data-nosnippet>819</a></span><span class="kw">impl </span>Pipeline <span class="kw">for </span>VisionPipeline {
-<a href=#820 id=820 data-nosnippet>820</a>    <span class="kw">fn </span>forward_inputs(
-<a href=#821 id=821 data-nosnippet>821</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#822 id=822 data-nosnippet>822</a>        inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
-<a href=#823 id=823 data-nosnippet>823</a>        return_raw_logits: bool,
-<a href=#824 id=824 data-nosnippet>824</a>    ) -&gt; candle_core::Result&lt;ForwardInputsResult&gt; {
-<a href=#825 id=825 data-nosnippet>825</a>        <span class="kw">let </span>ModelInputs {
-<a href=#826 id=826 data-nosnippet>826</a>            input_ids,
-<a href=#827 id=827 data-nosnippet>827</a>            seqlen_offsets,
-<a href=#828 id=828 data-nosnippet>828</a>            context_lens,
-<a href=#829 id=829 data-nosnippet>829</a>            position_ids,
-<a href=#830 id=830 data-nosnippet>830</a>            pixel_values,
-<a href=#831 id=831 data-nosnippet>831</a>            model_specific_args,
-<a href=#832 id=832 data-nosnippet>832</a>            paged_attn_meta,
-<a href=#833 id=833 data-nosnippet>833</a>            flash_meta,
-<a href=#834 id=834 data-nosnippet>834</a>        } = <span class="kw-2">*</span>inputs.downcast::&lt;ModelInputs&gt;().expect(<span class="string">"Downcast failed."</span>);
-<a href=#835 id=835 data-nosnippet>835</a>        <span class="kw">let </span>metadata = <span class="self">self</span>.get_metadata();
-<a href=#836 id=836 data-nosnippet>836</a>        <span class="kw">let </span>paged_attn_meta = <span class="kw">match </span>(<span class="kw-2">&amp;</span>metadata.cache_engine, <span class="kw-2">&amp;</span>paged_attn_meta) {
-<a href=#837 id=837 data-nosnippet>837</a>            (<span class="prelude-val">Some</span>(engine), <span class="prelude-val">Some</span>(meta)) =&gt; <span class="prelude-val">Some</span>((engine.get_kv_cache().clone(), meta)),
-<a href=#838 id=838 data-nosnippet>838</a>            (<span class="prelude-val">Some</span>(<span class="kw">_</span>), <span class="prelude-val">None</span>) =&gt; {
-<a href=#839 id=839 data-nosnippet>839</a>                <span class="comment">// This can happen if Rust-side user code is wrong
-<a href=#840 id=840 data-nosnippet>840</a>                </span><span class="macro">candle_core::bail!</span>(<span class="string">"Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention."</span>)
-<a href=#841 id=841 data-nosnippet>841</a>            }
-<a href=#842 id=842 data-nosnippet>842</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="kw">_</span>)) =&gt; {
-<a href=#843 id=843 data-nosnippet>843</a>                <span class="comment">// This should never happen but we handle it anyway
-<a href=#844 id=844 data-nosnippet>844</a>                </span><span class="macro">candle_core::bail!</span>(<span class="string">"Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue."</span>)
-<a href=#845 id=845 data-nosnippet>845</a>            }
-<a href=#846 id=846 data-nosnippet>846</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">None</span>,
-<a href=#847 id=847 data-nosnippet>847</a>        };
-<a href=#848 id=848 data-nosnippet>848</a>        <span class="kw">let </span>logits = <span class="self">self</span>.model.forward(
-<a href=#849 id=849 data-nosnippet>849</a>            <span class="kw-2">&amp;</span>input_ids,
-<a href=#850 id=850 data-nosnippet>850</a>            pixel_values,
-<a href=#851 id=851 data-nosnippet>851</a>            <span class="kw-2">&amp;</span>seqlen_offsets,
-<a href=#852 id=852 data-nosnippet>852</a>            context_lens,
-<a href=#853 id=853 data-nosnippet>853</a>            position_ids,
-<a href=#854 id=854 data-nosnippet>854</a>            model_specific_args,
-<a href=#855 id=855 data-nosnippet>855</a>            paged_attn_meta,
-<a href=#856 id=856 data-nosnippet>856</a>            <span class="kw-2">&amp;</span>flash_meta,
-<a href=#857 id=857 data-nosnippet>857</a>        )<span class="question-mark">?</span>;
-<a href=#858 id=858 data-nosnippet>858</a>        <span class="kw">if </span>return_raw_logits {
-<a href=#859 id=859 data-nosnippet>859</a>            <span class="prelude-val">Ok</span>(ForwardInputsResult::RawLogits { logits })
-<a href=#860 id=860 data-nosnippet>860</a>        } <span class="kw">else </span>{
-<a href=#861 id=861 data-nosnippet>861</a>            <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })
-<a href=#862 id=862 data-nosnippet>862</a>        }
-<a href=#863 id=863 data-nosnippet>863</a>    }
-<a href=#864 id=864 data-nosnippet>864</a>    <span class="kw">async fn </span>sample_causal_gen(
-<a href=#865 id=865 data-nosnippet>865</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#866 id=866 data-nosnippet>866</a>        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
-<a href=#867 id=867 data-nosnippet>867</a>        logits: Vec&lt;Tensor&gt;,
-<a href=#868 id=868 data-nosnippet>868</a>        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
-<a href=#869 id=869 data-nosnippet>869</a>        disable_eos_stop: bool,
-<a href=#870 id=870 data-nosnippet>870</a>        rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
-<a href=#871 id=871 data-nosnippet>871</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
-<a href=#872 id=872 data-nosnippet>872</a>        sample_and_add_toks(<span class="self">self</span>, seqs, logits, prefix_cacher, disable_eos_stop, rng).<span class="kw">await
-<a href=#873 id=873 data-nosnippet>873</a>    </span>}
-<a href=#874 id=874 data-nosnippet>874</a>    <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
-<a href=#875 id=875 data-nosnippet>875</a>        ModelCategory::Vision {
-<a href=#876 id=876 data-nosnippet>876</a>            prefixer: <span class="self">self</span>.prefixer.clone(),
-<a href=#877 id=877 data-nosnippet>877</a>        }
-<a href=#878 id=878 data-nosnippet>878</a>    }
-<a href=#879 id=879 data-nosnippet>879</a>}
-<a href=#880 id=880 data-nosnippet>880</a>
-<a href=#881 id=881 data-nosnippet>881</a><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>VisionPipeline {
-<a href=#882 id=882 data-nosnippet>882</a>    <span class="kw">fn </span>amoe_finish_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>, gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;) -&gt; candle_core::Result&lt;()&gt; {
-<a href=#883 id=883 data-nosnippet>883</a>        <span class="self">self</span>.model.finish_training(gate_model_id)
+<a href=#813 id=813 data-nosnippet>813</a>}
+<a href=#814 id=814 data-nosnippet>814</a>
+<a href=#815 id=815 data-nosnippet>815</a><span class="attr">#[async_trait::async_trait]
+<a href=#816 id=816 data-nosnippet>816</a></span><span class="kw">impl </span>Pipeline <span class="kw">for </span>VisionPipeline {
+<a href=#817 id=817 data-nosnippet>817</a>    <span class="kw">fn </span>forward_inputs(
+<a href=#818 id=818 data-nosnippet>818</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#819 id=819 data-nosnippet>819</a>        inputs: Box&lt;<span class="kw">dyn </span>Any&gt;,
+<a href=#820 id=820 data-nosnippet>820</a>        return_raw_logits: bool,
+<a href=#821 id=821 data-nosnippet>821</a>    ) -&gt; candle_core::Result&lt;ForwardInputsResult&gt; {
+<a href=#822 id=822 data-nosnippet>822</a>        <span class="kw">let </span>ModelInputs {
+<a href=#823 id=823 data-nosnippet>823</a>            input_ids,
+<a href=#824 id=824 data-nosnippet>824</a>            seqlen_offsets,
+<a href=#825 id=825 data-nosnippet>825</a>            context_lens,
+<a href=#826 id=826 data-nosnippet>826</a>            position_ids,
+<a href=#827 id=827 data-nosnippet>827</a>            pixel_values,
+<a href=#828 id=828 data-nosnippet>828</a>            model_specific_args,
+<a href=#829 id=829 data-nosnippet>829</a>            paged_attn_meta,
+<a href=#830 id=830 data-nosnippet>830</a>            flash_meta,
+<a href=#831 id=831 data-nosnippet>831</a>        } = <span class="kw-2">*</span>inputs.downcast::&lt;ModelInputs&gt;().expect(<span class="string">"Downcast failed."</span>);
+<a href=#832 id=832 data-nosnippet>832</a>        <span class="kw">let </span>metadata = <span class="self">self</span>.get_metadata();
+<a href=#833 id=833 data-nosnippet>833</a>        <span class="kw">let </span>paged_attn_meta = <span class="kw">match </span>(<span class="kw-2">&amp;</span>metadata.cache_engine, <span class="kw-2">&amp;</span>paged_attn_meta) {
+<a href=#834 id=834 data-nosnippet>834</a>            (<span class="prelude-val">Some</span>(engine), <span class="prelude-val">Some</span>(meta)) =&gt; <span class="prelude-val">Some</span>((engine.get_kv_cache().clone(), meta)),
+<a href=#835 id=835 data-nosnippet>835</a>            (<span class="prelude-val">Some</span>(<span class="kw">_</span>), <span class="prelude-val">None</span>) =&gt; {
+<a href=#836 id=836 data-nosnippet>836</a>                <span class="comment">// This can happen if Rust-side user code is wrong
+<a href=#837 id=837 data-nosnippet>837</a>                </span><span class="macro">candle_core::bail!</span>(<span class="string">"Forward step expected a PagedAttention input metadata. This was not provided, please ensure that the scheduler config is correctly configured for PagedAttention."</span>)
+<a href=#838 id=838 data-nosnippet>838</a>            }
+<a href=#839 id=839 data-nosnippet>839</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">Some</span>(<span class="kw">_</span>)) =&gt; {
+<a href=#840 id=840 data-nosnippet>840</a>                <span class="comment">// This should never happen but we handle it anyway
+<a href=#841 id=841 data-nosnippet>841</a>                </span><span class="macro">candle_core::bail!</span>(<span class="string">"Forward step got a PagedAttention input metadata but there is no cache engine. Please raise an issue."</span>)
+<a href=#842 id=842 data-nosnippet>842</a>            }
+<a href=#843 id=843 data-nosnippet>843</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">None</span>,
+<a href=#844 id=844 data-nosnippet>844</a>        };
+<a href=#845 id=845 data-nosnippet>845</a>        <span class="kw">let </span>logits = <span class="self">self</span>.model.forward(
+<a href=#846 id=846 data-nosnippet>846</a>            <span class="kw-2">&amp;</span>input_ids,
+<a href=#847 id=847 data-nosnippet>847</a>            pixel_values,
+<a href=#848 id=848 data-nosnippet>848</a>            <span class="kw-2">&amp;</span>seqlen_offsets,
+<a href=#849 id=849 data-nosnippet>849</a>            context_lens,
+<a href=#850 id=850 data-nosnippet>850</a>            position_ids,
+<a href=#851 id=851 data-nosnippet>851</a>            model_specific_args,
+<a href=#852 id=852 data-nosnippet>852</a>            paged_attn_meta,
+<a href=#853 id=853 data-nosnippet>853</a>            <span class="kw-2">&amp;</span>flash_meta,
+<a href=#854 id=854 data-nosnippet>854</a>        )<span class="question-mark">?</span>;
+<a href=#855 id=855 data-nosnippet>855</a>        <span class="kw">if </span>return_raw_logits {
+<a href=#856 id=856 data-nosnippet>856</a>            <span class="prelude-val">Ok</span>(ForwardInputsResult::RawLogits { logits })
+<a href=#857 id=857 data-nosnippet>857</a>        } <span class="kw">else </span>{
+<a href=#858 id=858 data-nosnippet>858</a>            <span class="prelude-val">Ok</span>(ForwardInputsResult::CausalGeneration { logits })
+<a href=#859 id=859 data-nosnippet>859</a>        }
+<a href=#860 id=860 data-nosnippet>860</a>    }
+<a href=#861 id=861 data-nosnippet>861</a>    <span class="kw">async fn </span>sample_causal_gen(
+<a href=#862 id=862 data-nosnippet>862</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#863 id=863 data-nosnippet>863</a>        seqs: <span class="kw-2">&amp;mut </span>[<span class="kw-2">&amp;mut </span>Sequence],
+<a href=#864 id=864 data-nosnippet>864</a>        logits: Vec&lt;Tensor&gt;,
+<a href=#865 id=865 data-nosnippet>865</a>        prefix_cacher: <span class="kw-2">&amp;mut </span>PrefixCacheManagerV2,
+<a href=#866 id=866 data-nosnippet>866</a>        disable_eos_stop: bool,
+<a href=#867 id=867 data-nosnippet>867</a>        rng: Arc&lt;std::sync::Mutex&lt;Isaac64Rng&gt;&gt;,
+<a href=#868 id=868 data-nosnippet>868</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), candle_core::Error&gt; {
+<a href=#869 id=869 data-nosnippet>869</a>        sample_and_add_toks(<span class="self">self</span>, seqs, logits, prefix_cacher, disable_eos_stop, rng).<span class="kw">await
+<a href=#870 id=870 data-nosnippet>870</a>    </span>}
+<a href=#871 id=871 data-nosnippet>871</a>    <span class="kw">fn </span>category(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; ModelCategory {
+<a href=#872 id=872 data-nosnippet>872</a>        ModelCategory::Vision {
+<a href=#873 id=873 data-nosnippet>873</a>            prefixer: <span class="self">self</span>.prefixer.clone(),
+<a href=#874 id=874 data-nosnippet>874</a>        }
+<a href=#875 id=875 data-nosnippet>875</a>    }
+<a href=#876 id=876 data-nosnippet>876</a>}
+<a href=#877 id=877 data-nosnippet>877</a>
+<a href=#878 id=878 data-nosnippet>878</a><span class="kw">impl </span>AnyMoePipelineMixin <span class="kw">for </span>VisionPipeline {
+<a href=#879 id=879 data-nosnippet>879</a>    <span class="kw">fn </span>amoe_finish_training(<span class="kw-2">&amp;mut </span><span class="self">self</span>, gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;) -&gt; candle_core::Result&lt;()&gt; {
+<a href=#880 id=880 data-nosnippet>880</a>        <span class="self">self</span>.model.finish_training(gate_model_id)
+<a href=#881 id=881 data-nosnippet>881</a>    }
+<a href=#882 id=882 data-nosnippet>882</a>    <span class="kw">fn </span>amoe_layer_vars(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Vec&lt;Var&gt;&gt; {
+<a href=#883 id=883 data-nosnippet>883</a>        <span class="self">self</span>.model.get_vars()
 <a href=#884 id=884 data-nosnippet>884</a>    }
-<a href=#885 id=885 data-nosnippet>885</a>    <span class="kw">fn </span>amoe_layer_vars(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Vec&lt;Vec&lt;Var&gt;&gt; {
-<a href=#886 id=886 data-nosnippet>886</a>        <span class="self">self</span>.model.get_vars()
+<a href=#885 id=885 data-nosnippet>885</a>    <span class="kw">fn </span>amoe_base_model_trainable_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#886 id=886 data-nosnippet>886</a>        <span class="self">self</span>.model.trainable_params()
 <a href=#887 id=887 data-nosnippet>887</a>    }
-<a href=#888 id=888 data-nosnippet>888</a>    <span class="kw">fn </span>amoe_base_model_trainable_params(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#889 id=889 data-nosnippet>889</a>        <span class="self">self</span>.model.trainable_params()
+<a href=#888 id=888 data-nosnippet>888</a>    <span class="kw">fn </span>amoe_take_cached_gating_outputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;Tensor&gt; {
+<a href=#889 id=889 data-nosnippet>889</a>        <span class="self">self</span>.model.take_cached_gating_outputs()
 <a href=#890 id=890 data-nosnippet>890</a>    }
-<a href=#891 id=891 data-nosnippet>891</a>    <span class="kw">fn </span>amoe_take_cached_gating_outputs(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; Vec&lt;Tensor&gt; {
-<a href=#892 id=892 data-nosnippet>892</a>        <span class="self">self</span>.model.take_cached_gating_outputs()
-<a href=#893 id=893 data-nosnippet>893</a>    }
-<a href=#894 id=894 data-nosnippet>894</a>    <span class="kw">fn </span>amoe_create_layers(
-<a href=#895 id=895 data-nosnippet>895</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#896 id=896 data-nosnippet>896</a>        model_ids: Vec&lt;String&gt;,
-<a href=#897 id=897 data-nosnippet>897</a>        token: <span class="kw-2">&amp;</span>TokenSource,
-<a href=#898 id=898 data-nosnippet>898</a>        revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#899 id=899 data-nosnippet>899</a>        match_regex: <span class="kw-2">&amp;</span>str,
-<a href=#900 id=900 data-nosnippet>900</a>        config: <span class="kw">crate</span>::amoe::AnyMoeConfig,
-<a href=#901 id=901 data-nosnippet>901</a>        dtype: candle_core::DType,
-<a href=#902 id=902 data-nosnippet>902</a>        dev: <span class="kw-2">&amp;</span>Device,
-<a href=#903 id=903 data-nosnippet>903</a>        (prefix, mlp): (String, String),
-<a href=#904 id=904 data-nosnippet>904</a>        layers: Vec&lt;usize&gt;,
-<a href=#905 id=905 data-nosnippet>905</a>        expert_type: AnyMoeExpertType,
-<a href=#906 id=906 data-nosnippet>906</a>        silent: bool,
-<a href=#907 id=907 data-nosnippet>907</a>        gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#908 id=908 data-nosnippet>908</a>    ) -&gt; candle_core::Result&lt;()&gt; {
-<a href=#909 id=909 data-nosnippet>909</a>        <span class="kw">let </span><span class="kw-2">mut </span>vbs = Vec::new();
-<a href=#910 id=910 data-nosnippet>910</a>        <span class="comment">// Precompile regex here
-<a href=#911 id=911 data-nosnippet>911</a>        </span><span class="kw">let </span>regex = Regex::new(match_regex).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
-<a href=#912 id=912 data-nosnippet>912</a>        <span class="kw">for </span>model_id <span class="kw">in </span>model_ids {
-<a href=#913 id=913 data-nosnippet>913</a>            <span class="kw">let </span>model_id_str = <span class="kw-2">&amp;</span>model_id;
-<a href=#914 id=914 data-nosnippet>914</a>            <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>model_id);
-<a href=#915 id=915 data-nosnippet>915</a>
-<a href=#916 id=916 data-nosnippet>916</a>            <span class="kw">let </span>api = {
-<a href=#917 id=917 data-nosnippet>917</a>                <span class="kw">let </span>cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-<a href=#918 id=918 data-nosnippet>918</a>                <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::from_cache(cache)
-<a href=#919 id=919 data-nosnippet>919</a>                    .with_progress(!silent)
-<a href=#920 id=920 data-nosnippet>920</a>                    .with_token(get_token(token).map_err(candle_core::Error::msg)<span class="question-mark">?</span>);
-<a href=#921 id=921 data-nosnippet>921</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
-<a href=#922 id=922 data-nosnippet>922</a>                    api = api.with_cache_dir(x.into());
-<a href=#923 id=923 data-nosnippet>923</a>                }
-<a href=#924 id=924 data-nosnippet>924</a>                api.build().map_err(candle_core::Error::msg)<span class="question-mark">?
-<a href=#925 id=925 data-nosnippet>925</a>            </span>};
-<a href=#926 id=926 data-nosnippet>926</a>            <span class="kw">let </span>revision = revision.clone().unwrap_or(<span class="string">"main"</span>.to_string());
-<a href=#927 id=927 data-nosnippet>927</a>            <span class="kw">let </span>api = api.repo(Repo::with_revision(
-<a href=#928 id=928 data-nosnippet>928</a>                model_id_str.clone(),
-<a href=#929 id=929 data-nosnippet>929</a>                RepoType::Model,
-<a href=#930 id=930 data-nosnippet>930</a>                revision.clone(),
-<a href=#931 id=931 data-nosnippet>931</a>            ));
-<a href=#932 id=932 data-nosnippet>932</a>
-<a href=#933 id=933 data-nosnippet>933</a>            <span class="kw">let </span><span class="kw-2">mut </span>filenames = <span class="macro">vec!</span>[];
-<a href=#934 id=934 data-nosnippet>934</a>            <span class="kw">for </span>rfilename <span class="kw">in </span><span class="macro">api_dir_list!</span>(api, model_id).filter(|x| x.ends_with(<span class="string">".safetensors"</span>)) {
-<a href=#935 id=935 data-nosnippet>935</a>                filenames.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>rfilename, model_id));
-<a href=#936 id=936 data-nosnippet>936</a>            }
-<a href=#937 id=937 data-nosnippet>937</a>
-<a href=#938 id=938 data-nosnippet>938</a>            <span class="kw">let </span>regex = regex.clone();
-<a href=#939 id=939 data-nosnippet>939</a>            <span class="kw">let </span>match_regex_clone = match_regex.to_string();
-<a href=#940 id=940 data-nosnippet>940</a>            <span class="kw">let </span>layers_clone = layers.clone();
-<a href=#941 id=941 data-nosnippet>941</a>            <span class="kw">let </span>vb = from_mmaped_safetensors(
-<a href=#942 id=942 data-nosnippet>942</a>                filenames,
-<a href=#943 id=943 data-nosnippet>943</a>                <span class="macro">vec!</span>[],
-<a href=#944 id=944 data-nosnippet>944</a>                <span class="prelude-val">Some</span>(dtype),
-<a href=#945 id=945 data-nosnippet>945</a>                dev,
-<a href=#946 id=946 data-nosnippet>946</a>                <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
-<a href=#947 id=947 data-nosnippet>947</a>                silent,
-<a href=#948 id=948 data-nosnippet>948</a>                <span class="prelude-val">None</span>,
-<a href=#949 id=949 data-nosnippet>949</a>                <span class="kw">move </span>|key| {
-<a href=#950 id=950 data-nosnippet>950</a>                    <span class="kw">if </span>regex.is_match(<span class="kw-2">&amp;</span>key) {
-<a href=#951 id=951 data-nosnippet>951</a>                        <span class="comment">// Idx of the last char of the layer id, +1
-<a href=#952 id=952 data-nosnippet>952</a>                        // Assumes N.MLP
-<a href=#953 id=953 data-nosnippet>953</a>                        </span><span class="kw">let </span>last_layer_idx = key.find(<span class="kw-2">&amp;</span>match_regex_clone).unwrap() - <span class="number">1</span>;
-<a href=#954 id=954 data-nosnippet>954</a>                        <span class="kw">let </span>first_layer_idx = key[..last_layer_idx].rfind(<span class="string">'.'</span>).unwrap();
-<a href=#955 id=955 data-nosnippet>955</a>                        <span class="kw">let </span>layer_n = key[first_layer_idx + <span class="number">1</span>..last_layer_idx]
-<a href=#956 id=956 data-nosnippet>956</a>                            .parse::&lt;usize&gt;()
-<a href=#957 id=957 data-nosnippet>957</a>                            .unwrap();
-<a href=#958 id=958 data-nosnippet>958</a>                        layers_clone.contains(<span class="kw-2">&amp;</span>layer_n) || layers_clone.is_empty()
-<a href=#959 id=959 data-nosnippet>959</a>                    } <span class="kw">else </span>{
-<a href=#960 id=960 data-nosnippet>960</a>                        <span class="bool-val">false
-<a href=#961 id=961 data-nosnippet>961</a>                    </span>}
-<a href=#962 id=962 data-nosnippet>962</a>                },
-<a href=#963 id=963 data-nosnippet>963</a>                Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
-<a href=#964 id=964 data-nosnippet>964</a>            )<span class="question-mark">?</span>;
-<a href=#965 id=965 data-nosnippet>965</a>            vbs.push(vb);
-<a href=#966 id=966 data-nosnippet>966</a>        }
-<a href=#967 id=967 data-nosnippet>967</a>
-<a href=#968 id=968 data-nosnippet>968</a>        <span class="kw">let </span>gate_vb = <span class="kw">if let </span><span class="prelude-val">Some</span>(gate_model_id) = gate_model_id {
-<a href=#969 id=969 data-nosnippet>969</a>            <span class="kw">let </span>model_id_str = <span class="kw-2">&amp;</span>gate_model_id;
-<a href=#970 id=970 data-nosnippet>970</a>            <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>gate_model_id);
-<a href=#971 id=971 data-nosnippet>971</a>
-<a href=#972 id=972 data-nosnippet>972</a>            <span class="kw">let </span>api = {
-<a href=#973 id=973 data-nosnippet>973</a>                <span class="kw">let </span>cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-<a href=#974 id=974 data-nosnippet>974</a>                <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::from_cache(cache)
-<a href=#975 id=975 data-nosnippet>975</a>                    .with_progress(!silent)
-<a href=#976 id=976 data-nosnippet>976</a>                    .with_token(get_token(token).map_err(candle_core::Error::msg)<span class="question-mark">?</span>);
-<a href=#977 id=977 data-nosnippet>977</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
-<a href=#978 id=978 data-nosnippet>978</a>                    api = api.with_cache_dir(x.into());
-<a href=#979 id=979 data-nosnippet>979</a>                }
-<a href=#980 id=980 data-nosnippet>980</a>                api.build().map_err(candle_core::Error::msg)<span class="question-mark">?
-<a href=#981 id=981 data-nosnippet>981</a>            </span>};
-<a href=#982 id=982 data-nosnippet>982</a>            <span class="kw">let </span>revision = revision.clone().unwrap_or(<span class="string">"main"</span>.to_string());
-<a href=#983 id=983 data-nosnippet>983</a>            <span class="kw">let </span>api = api.repo(Repo::with_revision(
-<a href=#984 id=984 data-nosnippet>984</a>                model_id_str.clone(),
-<a href=#985 id=985 data-nosnippet>985</a>                RepoType::Model,
-<a href=#986 id=986 data-nosnippet>986</a>                revision.clone(),
-<a href=#987 id=987 data-nosnippet>987</a>            ));
-<a href=#988 id=988 data-nosnippet>988</a>
-<a href=#989 id=989 data-nosnippet>989</a>            <span class="kw">let </span><span class="kw-2">mut </span>gate_filenames = <span class="macro">vec!</span>[];
-<a href=#990 id=990 data-nosnippet>990</a>            <span class="kw">for </span>rfilename <span class="kw">in </span><span class="macro">api_dir_list!</span>(api, model_id).filter(|x| x.ends_with(<span class="string">".safetensors"</span>)) {
-<a href=#991 id=991 data-nosnippet>991</a>                gate_filenames.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>rfilename, model_id));
-<a href=#992 id=992 data-nosnippet>992</a>            }
-<a href=#993 id=993 data-nosnippet>993</a>            <span class="macro">assert_eq!</span>(
-<a href=#994 id=994 data-nosnippet>994</a>                gate_filenames.len(),
-<a href=#995 id=995 data-nosnippet>995</a>                <span class="number">1</span>,
-<a href=#996 id=996 data-nosnippet>996</a>                <span class="string">"Gate model ID must contain only one .safetensors file"
-<a href=#997 id=997 data-nosnippet>997</a>            </span>);
-<a href=#998 id=998 data-nosnippet>998</a>
-<a href=#999 id=999 data-nosnippet>999</a>            <span class="kw">let </span>vb = from_mmaped_safetensors(
-<a href=#1000 id=1000 data-nosnippet>1000</a>                gate_filenames.clone(),
-<a href=#1001 id=1001 data-nosnippet>1001</a>                <span class="macro">vec!</span>[],
-<a href=#1002 id=1002 data-nosnippet>1002</a>                <span class="prelude-val">Some</span>(dtype),
-<a href=#1003 id=1003 data-nosnippet>1003</a>                dev,
-<a href=#1004 id=1004 data-nosnippet>1004</a>                <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
-<a href=#1005 id=1005 data-nosnippet>1005</a>                silent,
-<a href=#1006 id=1006 data-nosnippet>1006</a>                <span class="prelude-val">None</span>,
-<a href=#1007 id=1007 data-nosnippet>1007</a>                |<span class="kw">_</span>| <span class="bool-val">true</span>,
-<a href=#1008 id=1008 data-nosnippet>1008</a>                Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
-<a href=#1009 id=1009 data-nosnippet>1009</a>            )<span class="question-mark">?</span>;
-<a href=#1010 id=1010 data-nosnippet>1010</a>            <span class="macro">info!</span>(
-<a href=#1011 id=1011 data-nosnippet>1011</a>                <span class="string">"Loaded gating layers from `{}`"</span>,
-<a href=#1012 id=1012 data-nosnippet>1012</a>                gate_filenames[<span class="number">0</span>].display()
-<a href=#1013 id=1013 data-nosnippet>1013</a>            );
-<a href=#1014 id=1014 data-nosnippet>1014</a>            <span class="prelude-val">Some</span>(vb)
-<a href=#1015 id=1015 data-nosnippet>1015</a>        } <span class="kw">else </span>{
-<a href=#1016 id=1016 data-nosnippet>1016</a>            <span class="prelude-val">None
-<a href=#1017 id=1017 data-nosnippet>1017</a>        </span>};
-<a href=#1018 id=1018 data-nosnippet>1018</a>
-<a href=#1019 id=1019 data-nosnippet>1019</a>        <span class="self">self</span>.model
-<a href=#1020 id=1020 data-nosnippet>1020</a>            .create_anymoe_layers(vbs, config, (prefix, mlp), layers, expert_type, gate_vb)
+<a href=#891 id=891 data-nosnippet>891</a>    <span class="kw">fn </span>amoe_create_layers(
+<a href=#892 id=892 data-nosnippet>892</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#893 id=893 data-nosnippet>893</a>        model_ids: Vec&lt;String&gt;,
+<a href=#894 id=894 data-nosnippet>894</a>        token: <span class="kw-2">&amp;</span>TokenSource,
+<a href=#895 id=895 data-nosnippet>895</a>        revision: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#896 id=896 data-nosnippet>896</a>        match_regex: <span class="kw-2">&amp;</span>str,
+<a href=#897 id=897 data-nosnippet>897</a>        config: <span class="kw">crate</span>::amoe::AnyMoeConfig,
+<a href=#898 id=898 data-nosnippet>898</a>        dtype: candle_core::DType,
+<a href=#899 id=899 data-nosnippet>899</a>        dev: <span class="kw-2">&amp;</span>Device,
+<a href=#900 id=900 data-nosnippet>900</a>        (prefix, mlp): (String, String),
+<a href=#901 id=901 data-nosnippet>901</a>        layers: Vec&lt;usize&gt;,
+<a href=#902 id=902 data-nosnippet>902</a>        expert_type: AnyMoeExpertType,
+<a href=#903 id=903 data-nosnippet>903</a>        silent: bool,
+<a href=#904 id=904 data-nosnippet>904</a>        gate_model_id: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#905 id=905 data-nosnippet>905</a>    ) -&gt; candle_core::Result&lt;()&gt; {
+<a href=#906 id=906 data-nosnippet>906</a>        <span class="kw">let </span><span class="kw-2">mut </span>vbs = Vec::new();
+<a href=#907 id=907 data-nosnippet>907</a>        <span class="comment">// Precompile regex here
+<a href=#908 id=908 data-nosnippet>908</a>        </span><span class="kw">let </span>regex = Regex::new(match_regex).map_err(candle_core::Error::msg)<span class="question-mark">?</span>;
+<a href=#909 id=909 data-nosnippet>909</a>        <span class="kw">for </span>model_id <span class="kw">in </span>model_ids {
+<a href=#910 id=910 data-nosnippet>910</a>            <span class="kw">let </span>model_id_str = <span class="kw-2">&amp;</span>model_id;
+<a href=#911 id=911 data-nosnippet>911</a>            <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>model_id);
+<a href=#912 id=912 data-nosnippet>912</a>
+<a href=#913 id=913 data-nosnippet>913</a>            <span class="kw">let </span>api = {
+<a href=#914 id=914 data-nosnippet>914</a>                <span class="kw">let </span>cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+<a href=#915 id=915 data-nosnippet>915</a>                <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::from_cache(cache)
+<a href=#916 id=916 data-nosnippet>916</a>                    .with_progress(!silent)
+<a href=#917 id=917 data-nosnippet>917</a>                    .with_token(get_token(token).map_err(candle_core::Error::msg)<span class="question-mark">?</span>);
+<a href=#918 id=918 data-nosnippet>918</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
+<a href=#919 id=919 data-nosnippet>919</a>                    api = api.with_cache_dir(x.into());
+<a href=#920 id=920 data-nosnippet>920</a>                }
+<a href=#921 id=921 data-nosnippet>921</a>                api.build().map_err(candle_core::Error::msg)<span class="question-mark">?
+<a href=#922 id=922 data-nosnippet>922</a>            </span>};
+<a href=#923 id=923 data-nosnippet>923</a>            <span class="kw">let </span>revision = revision.clone().unwrap_or(<span class="string">"main"</span>.to_string());
+<a href=#924 id=924 data-nosnippet>924</a>            <span class="kw">let </span>api = api.repo(Repo::with_revision(
+<a href=#925 id=925 data-nosnippet>925</a>                model_id_str.clone(),
+<a href=#926 id=926 data-nosnippet>926</a>                RepoType::Model,
+<a href=#927 id=927 data-nosnippet>927</a>                revision.clone(),
+<a href=#928 id=928 data-nosnippet>928</a>            ));
+<a href=#929 id=929 data-nosnippet>929</a>
+<a href=#930 id=930 data-nosnippet>930</a>            <span class="kw">let </span><span class="kw-2">mut </span>filenames = <span class="macro">vec!</span>[];
+<a href=#931 id=931 data-nosnippet>931</a>            <span class="kw">for </span>rfilename <span class="kw">in </span><span class="macro">api_dir_list!</span>(api, model_id).filter(|x| x.ends_with(<span class="string">".safetensors"</span>)) {
+<a href=#932 id=932 data-nosnippet>932</a>                filenames.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>rfilename, model_id));
+<a href=#933 id=933 data-nosnippet>933</a>            }
+<a href=#934 id=934 data-nosnippet>934</a>
+<a href=#935 id=935 data-nosnippet>935</a>            <span class="kw">let </span>regex = regex.clone();
+<a href=#936 id=936 data-nosnippet>936</a>            <span class="kw">let </span>match_regex_clone = match_regex.to_string();
+<a href=#937 id=937 data-nosnippet>937</a>            <span class="kw">let </span>layers_clone = layers.clone();
+<a href=#938 id=938 data-nosnippet>938</a>            <span class="kw">let </span>vb = from_mmaped_safetensors(
+<a href=#939 id=939 data-nosnippet>939</a>                filenames,
+<a href=#940 id=940 data-nosnippet>940</a>                <span class="macro">vec!</span>[],
+<a href=#941 id=941 data-nosnippet>941</a>                <span class="prelude-val">Some</span>(dtype),
+<a href=#942 id=942 data-nosnippet>942</a>                dev,
+<a href=#943 id=943 data-nosnippet>943</a>                <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
+<a href=#944 id=944 data-nosnippet>944</a>                silent,
+<a href=#945 id=945 data-nosnippet>945</a>                <span class="prelude-val">None</span>,
+<a href=#946 id=946 data-nosnippet>946</a>                <span class="kw">move </span>|key| {
+<a href=#947 id=947 data-nosnippet>947</a>                    <span class="kw">if </span>regex.is_match(<span class="kw-2">&amp;</span>key) {
+<a href=#948 id=948 data-nosnippet>948</a>                        <span class="comment">// Idx of the last char of the layer id, +1
+<a href=#949 id=949 data-nosnippet>949</a>                        // Assumes N.MLP
+<a href=#950 id=950 data-nosnippet>950</a>                        </span><span class="kw">let </span>last_layer_idx = key.find(<span class="kw-2">&amp;</span>match_regex_clone).unwrap() - <span class="number">1</span>;
+<a href=#951 id=951 data-nosnippet>951</a>                        <span class="kw">let </span>first_layer_idx = key[..last_layer_idx].rfind(<span class="string">'.'</span>).unwrap();
+<a href=#952 id=952 data-nosnippet>952</a>                        <span class="kw">let </span>layer_n = key[first_layer_idx + <span class="number">1</span>..last_layer_idx]
+<a href=#953 id=953 data-nosnippet>953</a>                            .parse::&lt;usize&gt;()
+<a href=#954 id=954 data-nosnippet>954</a>                            .unwrap();
+<a href=#955 id=955 data-nosnippet>955</a>                        layers_clone.contains(<span class="kw-2">&amp;</span>layer_n) || layers_clone.is_empty()
+<a href=#956 id=956 data-nosnippet>956</a>                    } <span class="kw">else </span>{
+<a href=#957 id=957 data-nosnippet>957</a>                        <span class="bool-val">false
+<a href=#958 id=958 data-nosnippet>958</a>                    </span>}
+<a href=#959 id=959 data-nosnippet>959</a>                },
+<a href=#960 id=960 data-nosnippet>960</a>                Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
+<a href=#961 id=961 data-nosnippet>961</a>            )<span class="question-mark">?</span>;
+<a href=#962 id=962 data-nosnippet>962</a>            vbs.push(vb);
+<a href=#963 id=963 data-nosnippet>963</a>        }
+<a href=#964 id=964 data-nosnippet>964</a>
+<a href=#965 id=965 data-nosnippet>965</a>        <span class="kw">let </span>gate_vb = <span class="kw">if let </span><span class="prelude-val">Some</span>(gate_model_id) = gate_model_id {
+<a href=#966 id=966 data-nosnippet>966</a>            <span class="kw">let </span>model_id_str = <span class="kw-2">&amp;</span>gate_model_id;
+<a href=#967 id=967 data-nosnippet>967</a>            <span class="kw">let </span>model_id = Path::new(<span class="kw-2">&amp;</span>gate_model_id);
+<a href=#968 id=968 data-nosnippet>968</a>
+<a href=#969 id=969 data-nosnippet>969</a>            <span class="kw">let </span>api = {
+<a href=#970 id=970 data-nosnippet>970</a>                <span class="kw">let </span>cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
+<a href=#971 id=971 data-nosnippet>971</a>                <span class="kw">let </span><span class="kw-2">mut </span>api = ApiBuilder::from_cache(cache)
+<a href=#972 id=972 data-nosnippet>972</a>                    .with_progress(!silent)
+<a href=#973 id=973 data-nosnippet>973</a>                    .with_token(get_token(token).map_err(candle_core::Error::msg)<span class="question-mark">?</span>);
+<a href=#974 id=974 data-nosnippet>974</a>                <span class="kw">if let </span><span class="prelude-val">Ok</span>(x) = std::env::var(<span class="string">"HF_HUB_CACHE"</span>) {
+<a href=#975 id=975 data-nosnippet>975</a>                    api = api.with_cache_dir(x.into());
+<a href=#976 id=976 data-nosnippet>976</a>                }
+<a href=#977 id=977 data-nosnippet>977</a>                api.build().map_err(candle_core::Error::msg)<span class="question-mark">?
+<a href=#978 id=978 data-nosnippet>978</a>            </span>};
+<a href=#979 id=979 data-nosnippet>979</a>            <span class="kw">let </span>revision = revision.clone().unwrap_or(<span class="string">"main"</span>.to_string());
+<a href=#980 id=980 data-nosnippet>980</a>            <span class="kw">let </span>api = api.repo(Repo::with_revision(
+<a href=#981 id=981 data-nosnippet>981</a>                model_id_str.clone(),
+<a href=#982 id=982 data-nosnippet>982</a>                RepoType::Model,
+<a href=#983 id=983 data-nosnippet>983</a>                revision.clone(),
+<a href=#984 id=984 data-nosnippet>984</a>            ));
+<a href=#985 id=985 data-nosnippet>985</a>
+<a href=#986 id=986 data-nosnippet>986</a>            <span class="kw">let </span><span class="kw-2">mut </span>gate_filenames = <span class="macro">vec!</span>[];
+<a href=#987 id=987 data-nosnippet>987</a>            <span class="kw">for </span>rfilename <span class="kw">in </span><span class="macro">api_dir_list!</span>(api, model_id).filter(|x| x.ends_with(<span class="string">".safetensors"</span>)) {
+<a href=#988 id=988 data-nosnippet>988</a>                gate_filenames.push(<span class="macro">api_get_file!</span>(api, <span class="kw-2">&amp;</span>rfilename, model_id));
+<a href=#989 id=989 data-nosnippet>989</a>            }
+<a href=#990 id=990 data-nosnippet>990</a>            <span class="macro">assert_eq!</span>(
+<a href=#991 id=991 data-nosnippet>991</a>                gate_filenames.len(),
+<a href=#992 id=992 data-nosnippet>992</a>                <span class="number">1</span>,
+<a href=#993 id=993 data-nosnippet>993</a>                <span class="string">"Gate model ID must contain only one .safetensors file"
+<a href=#994 id=994 data-nosnippet>994</a>            </span>);
+<a href=#995 id=995 data-nosnippet>995</a>
+<a href=#996 id=996 data-nosnippet>996</a>            <span class="kw">let </span>vb = from_mmaped_safetensors(
+<a href=#997 id=997 data-nosnippet>997</a>                gate_filenames.clone(),
+<a href=#998 id=998 data-nosnippet>998</a>                <span class="macro">vec!</span>[],
+<a href=#999 id=999 data-nosnippet>999</a>                <span class="prelude-val">Some</span>(dtype),
+<a href=#1000 id=1000 data-nosnippet>1000</a>                dev,
+<a href=#1001 id=1001 data-nosnippet>1001</a>                <span class="macro">vec!</span>[<span class="prelude-val">None</span>],
+<a href=#1002 id=1002 data-nosnippet>1002</a>                silent,
+<a href=#1003 id=1003 data-nosnippet>1003</a>                <span class="prelude-val">None</span>,
+<a href=#1004 id=1004 data-nosnippet>1004</a>                |<span class="kw">_</span>| <span class="bool-val">true</span>,
+<a href=#1005 id=1005 data-nosnippet>1005</a>                Arc::new(|<span class="kw">_</span>| DeviceForLoadTensor::Base),
+<a href=#1006 id=1006 data-nosnippet>1006</a>            )<span class="question-mark">?</span>;
+<a href=#1007 id=1007 data-nosnippet>1007</a>            <span class="macro">info!</span>(
+<a href=#1008 id=1008 data-nosnippet>1008</a>                <span class="string">"Loaded gating layers from `{}`"</span>,
+<a href=#1009 id=1009 data-nosnippet>1009</a>                gate_filenames[<span class="number">0</span>].display()
+<a href=#1010 id=1010 data-nosnippet>1010</a>            );
+<a href=#1011 id=1011 data-nosnippet>1011</a>            <span class="prelude-val">Some</span>(vb)
+<a href=#1012 id=1012 data-nosnippet>1012</a>        } <span class="kw">else </span>{
+<a href=#1013 id=1013 data-nosnippet>1013</a>            <span class="prelude-val">None
+<a href=#1014 id=1014 data-nosnippet>1014</a>        </span>};
+<a href=#1015 id=1015 data-nosnippet>1015</a>
+<a href=#1016 id=1016 data-nosnippet>1016</a>        <span class="self">self</span>.model
+<a href=#1017 id=1017 data-nosnippet>1017</a>            .create_anymoe_layers(vbs, config, (prefix, mlp), layers, expert_type, gate_vb)
+<a href=#1018 id=1018 data-nosnippet>1018</a>    }
+<a href=#1019 id=1019 data-nosnippet>1019</a>    <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#1020 id=1020 data-nosnippet>1020</a>        <span class="self">self</span>.model.amoe_supported()
 <a href=#1021 id=1021 data-nosnippet>1021</a>    }
-<a href=#1022 id=1022 data-nosnippet>1022</a>    <span class="kw">fn </span>amoe_supported(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#1023 id=1023 data-nosnippet>1023</a>        <span class="self">self</span>.model.amoe_supported()
-<a href=#1024 id=1024 data-nosnippet>1024</a>    }
-<a href=#1025 id=1025 data-nosnippet>1025</a>}</code></pre></div></section></main></body></html>
+<a href=#1022 id=1022 data-nosnippet>1022</a>}</code></pre></div></section></main></body></html>
