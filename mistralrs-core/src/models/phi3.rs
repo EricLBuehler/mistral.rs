@@ -47,7 +47,6 @@ pub struct Config {
     pub eos_token_id: Option<u32>,
     pub rope_scaling: Option<PhiRopeScalingConfig>,
     pub max_position_embeddings: usize,
-    pub use_flash_attn: bool,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,

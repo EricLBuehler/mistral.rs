@@ -50,8 +50,6 @@ pub struct Gemma3TextConfig {
     #[serde(default = "max_position_embeddings")]
     pub max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "use_flash_attn")]
-    pub use_flash_attn: bool,
     #[serde(default = "tie_word_embeddings")]
     pub tie_word_embeddings: bool,
     #[serde(default = "rope_local_base_freq")]

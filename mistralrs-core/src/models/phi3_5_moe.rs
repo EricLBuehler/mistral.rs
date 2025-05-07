@@ -43,7 +43,6 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) rope_scaling: Option<PhiRopeScalingConfig>,
     pub(crate) max_position_embeddings: usize,
-    pub(crate) use_flash_attn: bool,
     pub(crate) sliding_window: Option<usize>,
     pub(crate) original_max_position_embeddings: usize,
     pub(crate) quantization_config: Option<QuantizedConfig>,

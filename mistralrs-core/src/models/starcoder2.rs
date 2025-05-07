@@ -42,7 +42,6 @@ pub struct Config {
     pub(crate) rope_theta: f64,
     pub(crate) use_bias: bool,
     pub(crate) sliding_window: Option<usize>,
-    pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     #[allow(dead_code)]

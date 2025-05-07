@@ -73,8 +73,6 @@ pub struct Phi4MMConfig {
     pub vision_lora: StaticLoraConfig,
     pub speech_lora: StaticLoraConfig,
     pub quantization_config: Option<QuantizedConfig>,
-    #[serde(default = "d_flash_attn")]
-    pub use_flash_attn: bool,
 }
 
 impl Phi4MMConfig {

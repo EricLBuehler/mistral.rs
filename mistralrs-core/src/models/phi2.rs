@@ -51,7 +51,6 @@ pub struct Config {
     pub(crate) rope_theta: f32,
     pub(crate) partial_rotary_factor: f64,
     pub(crate) qk_layernorm: bool,
-    pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub(crate) tie_word_embeddings: bool,

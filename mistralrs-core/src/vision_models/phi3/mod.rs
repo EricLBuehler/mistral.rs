@@ -72,8 +72,6 @@ pub struct Config {
     pub eos_token_id: Option<u32>,
     pub rope_scaling: Option<PhiRopeScalingConfig>,
     pub max_position_embeddings: usize,
-    #[serde(default = "d_flash_attn")]
-    pub use_flash_attn: bool,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
     pub embd_layer: EmbedLayerConfig,

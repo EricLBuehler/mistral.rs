@@ -171,8 +171,6 @@ pub(crate) struct TextConfig {
     #[serde(default = "default_sliding")]
     pub(crate) sliding_window: Option<usize>,
 
-    #[serde(default = "default_false")]
-    pub(crate) use_flash_attn: bool,
     model_type: String, // Must be mistral for now
 }
 
@@ -190,7 +188,6 @@ impl From<TextConfig> for mistral::Config {
             rms_norm_eps: val.rms_norm_eps,
             rope_theta: val.rope_theta,
             sliding_window: val.sliding_window,
-            use_flash_attn: val.use_flash_attn,
             head_dim: None,
             quantization_config: None,
             tie_word_embeddings: false,

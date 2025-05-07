@@ -103,8 +103,6 @@ pub struct MLlamaTextConfig {
     pub(crate) max_position_embeddings: usize,
     pub(crate) tie_word_embeddings: bool,
     pub(crate) cross_attention_layers: Vec<usize>,
-    #[serde(default = "d_flash_attn")]
-    pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
 }
 

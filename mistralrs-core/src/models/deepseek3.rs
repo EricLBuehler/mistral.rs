@@ -93,8 +93,6 @@ pub struct DeepSeekV3Config {
     pub(crate) kv_lora_rank: usize,
     pub(crate) v_head_dim: usize,
     pub(crate) qk_nope_head_dim: usize,
-    #[serde(default = "use_flash_attn_default")]
-    pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
     pub(crate) n_group: usize,
     pub(crate) topk_group: usize,

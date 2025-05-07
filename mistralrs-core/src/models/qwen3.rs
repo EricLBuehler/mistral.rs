@@ -56,8 +56,6 @@ pub struct Config {
     pub(crate) rms_norm_eps: f64,
     pub(crate) rope_theta: f64,
     pub(crate) sliding_window: Option<usize>,
-    #[serde(default = "use_flash_attn")]
-    pub(crate) use_flash_attn: bool,
     pub(crate) head_dim: Option<usize>,
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "tie_word_embeddings")]

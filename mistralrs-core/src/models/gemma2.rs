@@ -24,7 +24,7 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Config {
     pub attention_bias: bool,
     pub head_dim: usize,
@@ -45,7 +45,6 @@ pub struct Config {
     pub query_pre_attn_scalar: usize,
     pub max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
-    pub use_flash_attn: bool,
     #[allow(dead_code)]
     pub tie_word_embeddings: bool,
 }
