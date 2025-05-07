@@ -35,7 +35,7 @@ use crate::{
 };
 
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{info, warn};
+use tracing::info;
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -161,10 +161,6 @@ pub struct Args {
     #[arg(long)]
     pub cpu: bool,
 
-    /// Enable web searching for interactive mode.
-    #[arg(long = "interactive-search")]
-    pub interactive_search: bool,
-
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This uses the BERT model specified below or the default.
     #[arg(long = "enable-search")]
     pub enable_search: bool,
@@ -172,6 +168,10 @@ pub struct Args {
     /// Specify a Hugging Face model ID for a BERT model to assist web searching. Defaults to Snowflake Arctic Embed L.
     #[arg(long = "search-bert-model")]
     pub search_bert_model: Option<String>,
+
+    /// Enable thinking for interactive mode and models that support it.
+    #[arg(long = "enable-thinking")]
+    pub enable_thinking: bool,
 }
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
@@ -277,8 +277,6 @@ pub async fn bootstrap_mistralrs_router(
 ) -> Result<Router> {
     initialize_logging();
 
-    let use_flash_attn = mistralrs_core::using_flash_attn();
-
     let tgt_non_granular_index = get_tgt_non_granular_index(&args.model);
     let dtype = get_model_dtype(&args.model)?;
     let auto_device_map_params = get_auto_device_map_params(&args.model)?;
@@ -309,12 +307,11 @@ pub async fn bootstrap_mistralrs_router(
     let loader: Box<dyn Loader> = LoaderBuilder::new(args.model)
         .with_no_kv_cache(args.no_kv_cache)
         .with_chat_template(args.chat_template)
-        .with_use_flash_attn(use_flash_attn)
         .with_prompt_chunksize(prompt_chunksize)
         .with_jinja_explicit(args.jinja_explicit)
         .build()?;
 
-    print_mistral_server_info(use_flash_attn, &loader);
+    print_mistral_server_info(&loader);
 
     let pipeline: LoadedPipeline = loader.load_model_from_hf(
         None,
@@ -345,7 +342,7 @@ pub async fn bootstrap_mistralrs_router(
         pipeline,
         scheduler_config,
         args.interactive_mode,
-        bert_model,
+        bert_model.clone(),
         args.log,
         args.truncate_sequence,
         args.no_kv_cache,
@@ -433,7 +430,7 @@ fn init_mapper(args: &Args, auto_device_map_params: AutoDeviceMapParams) -> Devi
 }
 
 #[allow(clippy::borrowed_box)]
-fn print_mistral_server_info(use_flash_attn: bool, loader: &Box<dyn Loader>) {
+fn print_mistral_server_info(loader: &Box<dyn Loader>) {
     info!(
         "avx: {}, neon: {}, simd128: {}, f16c: {}",
         candle_core::utils::with_avx(),
@@ -443,15 +440,6 @@ fn print_mistral_server_info(use_flash_attn: bool, loader: &Box<dyn Loader>) {
     );
 
     info!("Sampling method: penalties -> temperature -> topk -> topp -> minp -> multinomial");
-
-    if use_flash_attn {
-        info!("Using flash attention.");
-    }
-
-    if use_flash_attn && loader.get_kind().is_quantized() {
-        warn!("Using flash attention with a quantized model has no effect!")
-    }
-
     info!("Model kind is: {}", loader.get_kind().to_string());
 }
 
