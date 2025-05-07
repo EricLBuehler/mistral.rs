@@ -1225,9 +1225,6 @@ impl VisionModel for Model {
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
     }
-    fn has_conv2d(&self) -> bool {
-        true
-    }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
     }

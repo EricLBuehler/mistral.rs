@@ -339,10 +339,7 @@ async fn vision_interactive_mode(
     let mut images = Vec::new();
 
     let prefixer = match &mistralrs.config().category {
-        ModelCategory::Vision {
-            has_conv2d: _,
-            prefixer,
-        } => prefixer,
+        ModelCategory::Vision { prefixer } => prefixer,
         _ => {
             panic!("`add_image_message` expects a vision model.")
         }

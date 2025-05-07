@@ -425,10 +425,6 @@ impl VisionModel for Model {
         self.config.text_config.max_length
     }
 
-    fn has_conv2d(&self) -> bool {
-        true
-    }
-
     fn config(&self) -> &ModelConfigMetadata {
         self.llm.config()
     }

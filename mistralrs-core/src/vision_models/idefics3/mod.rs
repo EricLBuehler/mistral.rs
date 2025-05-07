@@ -330,9 +330,6 @@ impl VisionModel for Idefics3Model {
     fn max_seq_len(&self) -> usize {
         self.text_model.max_seq_len()
     }
-    fn has_conv2d(&self) -> bool {
-        true
-    }
     fn config(&self) -> &ModelConfigMetadata {
         self.text_model.config()
     }

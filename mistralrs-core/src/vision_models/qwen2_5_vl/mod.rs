@@ -479,9 +479,6 @@ impl VisionModel for Qwen2_5VLModel {
     fn max_seq_len(&self) -> usize {
         self.text.max_seq_len
     }
-    fn has_conv2d(&self) -> bool {
-        true
-    }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
     }

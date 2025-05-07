@@ -342,9 +342,6 @@ impl VisionModel for Mistral3Model {
     fn config(&self) -> &ModelConfigMetadata {
         self.text_model.config()
     }
-    fn has_conv2d(&self) -> bool {
-        true
-    }
 }
 
 impl AnyMoeBaseModelMixin for Mistral3Model {

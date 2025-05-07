@@ -215,7 +215,6 @@ pub trait AnyMoePipelineMixin {
 pub enum ModelCategory {
     Text,
     Vision {
-        has_conv2d: bool,
         prefixer: Arc<dyn VisionPromptPrefixer>,
     },
     Diffusion,
