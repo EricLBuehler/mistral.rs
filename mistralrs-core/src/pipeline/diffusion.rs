@@ -147,7 +147,7 @@ impl Loader for DiffusionLoader {
         }
 
         if crate::using_flash_attn() {
-            once_log_info(format!("FlashAttention is enabled."));
+            once_log_info("FlashAttention is enabled.");
         }
 
         let configs = paths

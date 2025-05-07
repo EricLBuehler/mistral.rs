@@ -463,7 +463,7 @@ impl Loader for NormalLoader {
 
         info!("Model config: {:?}", self.inner.get_config_repr(&config)?);
         if crate::using_flash_attn() {
-            once_log_info(format!("FlashAttention is enabled."));
+            once_log_info("FlashAttention is enabled.");
         }
 
         let mut loading_isq = in_situ_quant.is_some() || self.config.from_uqff.is_some();
