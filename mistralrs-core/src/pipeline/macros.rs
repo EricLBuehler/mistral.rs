@@ -386,7 +386,6 @@ macro_rules! normal_model_loader {
         $layer_devices:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $silent:expr,
         $mapper:expr,
         $loading_isq:expr,
@@ -423,7 +422,6 @@ macro_rules! normal_model_loader {
 
         $loader.load(
             &$config,
-            $use_flash_attn,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
@@ -443,7 +441,6 @@ macro_rules! normal_model_loader_sharded {
         $vb:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $mapper:expr,
         $loading_isq:expr,
         $real_device:expr,
@@ -452,7 +449,6 @@ macro_rules! normal_model_loader_sharded {
     ) => {{
         $loader.load(
             &$config,
-            $use_flash_attn,
             $vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
@@ -475,7 +471,6 @@ macro_rules! vision_normal_model_loader {
         $layer_devices:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $silent:expr,
         $mapper:expr,
         $loading_isq:expr,
@@ -507,7 +502,6 @@ macro_rules! vision_normal_model_loader {
 
         $loader.load(
             &$config,
-            $use_flash_attn,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
@@ -527,7 +521,6 @@ macro_rules! vision_normal_model_loader_sharded {
         $vb:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $mapper:expr,
         $loading_isq:expr,
         $real_device:expr,
@@ -536,7 +529,6 @@ macro_rules! vision_normal_model_loader_sharded {
     ) => {{
         $loader.load(
             &$config,
-            $use_flash_attn,
             $vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
@@ -559,7 +551,6 @@ macro_rules! xlora_model_loader {
         $layer_devices:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $silent:expr,
         $mapper:expr,
         $loading_isq:expr,
@@ -606,7 +597,6 @@ macro_rules! xlora_model_loader {
 
         $loader.load_xlora(
             &$config,
-            $use_flash_attn,
             vb,
             adapter_configs.as_ref().unwrap(),
             Some(xlora_config.as_ref().unwrap().clone()),
@@ -632,7 +622,6 @@ macro_rules! lora_model_loader {
         $layer_devices:expr,
         $config:expr,
         $loader:expr,
-        $use_flash_attn:expr,
         $silent:expr,
         $mapper:expr,
         $loading_isq:expr,
@@ -700,7 +689,6 @@ macro_rules! lora_model_loader {
 
         $loader.load(
             &$config,
-            $use_flash_attn,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,

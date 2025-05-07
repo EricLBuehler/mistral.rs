@@ -298,7 +298,6 @@ impl ModelConfig::FromGGML for ModelWeights {
                 paged_attn: None, // TODO
                 sdpa_params: SdpaParams {
                     n_kv_groups: ct.hparams.n_head as usize / n_kv_head,
-                    use_flash_attn: false,
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,
@@ -621,7 +620,6 @@ impl ModelConfig::FromGGUF for ModelWeights {
                 paged_attn,
                 sdpa_params: SdpaParams {
                     n_kv_groups: head_count / head_count_kv,
-                    use_flash_attn: false,
                     softcap: None,
                     softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                     sliding_window: None,

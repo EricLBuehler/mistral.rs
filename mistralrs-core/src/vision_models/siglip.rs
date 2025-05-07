@@ -290,7 +290,6 @@ impl Attention {
             None,
             &SdpaParams {
                 n_kv_groups: 1,
-                use_flash_attn: false,
                 sliding_window: None,
                 softcap: None,
                 softmax_scale: self.scale,

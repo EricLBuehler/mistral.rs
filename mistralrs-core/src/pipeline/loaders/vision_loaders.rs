@@ -83,13 +83,12 @@ pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>>;
     fn is_gptx(&self) -> bool;
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>>;
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
     fn get_processor(
         &self,
         model_config: &str,
@@ -261,15 +260,13 @@ impl VisionModelLoader for Phi3VLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: Phi3Config = serde_json::from_str(config)?;
-        config.use_flash_attn = use_flash_attn;
+        let cfg: crate::vision_models::phi3::Config = serde_json::from_str(config)?;
         Ok(Box::new(Phi3::new(
-            &config,
+            &cfg,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -279,10 +276,9 @@ impl VisionModelLoader for Phi3VLoader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: Phi3Config = serde_json::from_str(config)?;
-        config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::vision_models::phi3::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
     fn get_processor(
         &self,
@@ -524,15 +520,13 @@ impl VisionModelLoader for Idefics2Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: Idefics2Config = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
+        let cfg: crate::vision_models::idefics2::Config = serde_json::from_str(config)?;
         Ok(Box::new(Idefics2::new(
-            &config,
+            &cfg,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -542,10 +536,9 @@ impl VisionModelLoader for Idefics2Loader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: Idefics2Config = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::vision_models::idefics2::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
     fn get_processor(
         &self,
@@ -852,15 +845,13 @@ impl VisionModelLoader for LLaVANextLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: LLaVAConfig = serde_json::from_str(config)?;
-        config.use_flash_attn = use_flash_attn;
+        let cfg: crate::vision_models::llava::config::Config = serde_json::from_str(config)?;
         Ok(Box::new(LLaVANext::new(
-            &config,
+            &cfg,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -870,10 +861,9 @@ impl VisionModelLoader for LLaVANextLoader {
     fn is_gptx(&self) -> bool {
         false
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: LLaVAConfig = serde_json::from_str(config)?;
-        config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::vision_models::llava::config::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
     fn get_processor(
         &self,
@@ -1100,15 +1090,13 @@ impl VisionModelLoader for LLaVALoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: LLaVAConfig = serde_json::from_str(config)?;
-        config.use_flash_attn = use_flash_attn;
+        let cfg: crate::vision_models::llava::config::Config = serde_json::from_str(config)?;
         Ok(Box::new(LLaVA::new(
-            &config,
+            &cfg,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -1118,10 +1106,9 @@ impl VisionModelLoader for LLaVALoader {
     fn is_gptx(&self) -> bool {
         false
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: LLaVAConfig = serde_json::from_str(config)?;
-        config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::vision_models::llava::config::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
     fn get_processor(
         &self,
@@ -1340,15 +1327,13 @@ impl VisionModelLoader for VLlamaLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: MLlamaConfig = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
+        let cfg: crate::vision_models::mllama::MLlamaConfig = serde_json::from_str(config)?;
         Ok(Box::new(MLlamaModel::new(
-            &config,
+            &cfg,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -1358,10 +1343,9 @@ impl VisionModelLoader for VLlamaLoader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: MLlamaConfig = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::vision_models::mllama::MLlamaConfig = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
     fn get_processor(
         &self,
@@ -1723,7 +1707,6 @@ impl VisionModelLoader for Qwen2VLLoader {
     fn load(
         &self,
         config: &str,
-        _use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -1740,7 +1723,7 @@ impl VisionModelLoader for Qwen2VLLoader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let config: Qwen2VLConfig = serde_json::from_str(config)?;
         Ok(Box::new(config))
     }
@@ -2001,15 +1984,13 @@ impl VisionModelLoader for Idefics3Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: Idefics3Config = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
+        let cfg: crate::vision_models::idefics3::Idefics3Config = serde_json::from_str(config)?;
         Ok(Box::new(Idefics3Model::new(
-            &config,
+            &cfg,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -2019,10 +2000,9 @@ impl VisionModelLoader for Idefics3Loader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: Idefics3Config = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::vision_models::idefics3::Idefics3Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
     fn get_processor(
         &self,
@@ -2283,15 +2263,13 @@ impl VisionModelLoader for MiniCpmOLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: MiniCpmOConfig = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
+        let cfg: crate::vision_models::minicpmo::MiniCpmOConfig = serde_json::from_str(config)?;
         Ok(Box::new(MiniCpmOModel::new(
-            &config,
+            &cfg,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -2301,10 +2279,9 @@ impl VisionModelLoader for MiniCpmOLoader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: MiniCpmOConfig = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::vision_models::minicpmo::MiniCpmOConfig = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
     fn get_processor(
         &self,
@@ -2559,15 +2536,13 @@ impl VisionModelLoader for Phi4MMLoader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: Phi4MMConfig = serde_json::from_str(config)?;
-        config.use_flash_attn = use_flash_attn;
+        let cfg: crate::vision_models::phi4::Phi4MMConfig = serde_json::from_str(config)?;
         Ok(Box::new(Phi4MMModel::new(
-            &config,
+            &cfg,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -2577,10 +2552,9 @@ impl VisionModelLoader for Phi4MMLoader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: Phi4MMConfig = serde_json::from_str(config)?;
-        config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::vision_models::phi4::Phi4MMConfig = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
     fn get_processor(
         &self,
@@ -2878,7 +2852,6 @@ impl VisionModelLoader for Qwen2_5VLLoader {
     fn load(
         &self,
         config: &str,
-        _use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -2895,7 +2868,7 @@ impl VisionModelLoader for Qwen2_5VLLoader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let config: Qwen2_5VLConfig = serde_json::from_str(config)?;
         Ok(Box::new(config))
     }
@@ -3154,7 +3127,6 @@ impl VisionModelLoader for Gemma3Loader {
     fn load(
         &self,
         config: &str,
-        _use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
@@ -3171,7 +3143,7 @@ impl VisionModelLoader for Gemma3Loader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
         let config: Gemma3Config = serde_json::from_str(config)?;
         Ok(Box::new(config))
     }
@@ -3469,15 +3441,13 @@ impl VisionModelLoader for Mistral3Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: Mistral3Config = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
+        let cfg: crate::vision_models::mistral3::Mistral3Config = serde_json::from_str(config)?;
         Ok(Box::new(Mistral3Model::new(
-            &config,
+            &cfg,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -3487,9 +3457,9 @@ impl VisionModelLoader for Mistral3Loader {
     fn is_gptx(&self) -> bool {
         true
     }
-    fn get_config_repr(&self, config: &str, _use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let config: Mistral3Config = serde_json::from_str(config)?;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::vision_models::mistral3::Mistral3Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
     fn get_processor(
         &self,
@@ -3772,15 +3742,13 @@ impl VisionModelLoader for VLlama4Loader {
     fn load(
         &self,
         config: &str,
-        use_flash_attn: bool,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn VisionModel + Send + Sync>> {
-        let mut config: Llama4Config = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
+        let cfg: crate::vision_models::llama4::Llama4Config = serde_json::from_str(config)?;
         Ok(Box::new(Llama4Model::new(
-            &config,
+            &cfg,
             vb,
             self.is_gptx(),
             normal_loading_metadata,
@@ -3790,10 +3758,9 @@ impl VisionModelLoader for VLlama4Loader {
     fn is_gptx(&self) -> bool {
         false
     }
-    fn get_config_repr(&self, config: &str, use_flash_attn: bool) -> Result<Box<dyn Debug>> {
-        let mut config: Llama4Config = serde_json::from_str(config)?;
-        config.text_config.use_flash_attn = use_flash_attn;
-        Ok(Box::new(config))
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::vision_models::llama4::Llama4Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
     }
     fn get_processor(
         &self,

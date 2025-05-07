@@ -39,7 +39,6 @@ serde_default_fn!(bool, norm_topk_prob, false);
 serde_default_fn!(ScoringFunc, scoring_func, ScoringFunc::Softmax);
 serde_default_fn!(Activation, hidden_act, Activation::Silu);
 serde_default_fn!(bool, tie_word_embeddings, false);
-serde_default_fn!(bool, use_flash_attn_default, false);
 
 #[derive(Deserialize, Clone, Debug)]
 enum TopkMethod {
@@ -93,8 +92,6 @@ pub struct DeepSeekV2Config {
     pub(crate) kv_lora_rank: usize,
     pub(crate) v_head_dim: usize,
     pub(crate) qk_nope_head_dim: usize,
-    #[serde(default = "use_flash_attn_default")]
-    pub(crate) use_flash_attn: bool,
     pub(crate) quantization_config: Option<QuantizedConfig>,
     pub(crate) n_group: usize,
     pub(crate) topk_group: usize,
@@ -244,7 +241,6 @@ impl Attention {
             num_attention_heads: cfg.num_attention_heads / comm.world_size(),
             sdpa_params: SdpaParams {
                 n_kv_groups: 1,
-                use_flash_attn: cfg.use_flash_attn,
                 softcap: None,
                 softmax_scale: cfg.softmax_scale(),
                 sliding_window: None,

@@ -11,8 +11,8 @@ use crate::{
     get_toml_selected_model_dtype,
     pipeline::{GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, NormalSpecificConfig},
     toml_selector::get_toml_selected_model_device_map_params,
-    AutoDeviceMapParams, DiffusionLoaderBuilder, DiffusionSpecificConfig, GGUFSpecificConfig,
-    Loader, ModelDType, ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
+    AutoDeviceMapParams, DiffusionLoaderBuilder, GGUFSpecificConfig, Loader, ModelDType,
+    ModelSelected, NormalLoaderBuilder, TomlLoaderArgs, TomlSelector, Topology,
     VisionLoaderBuilder, VisionSpecificConfig, GGUF_MULTI_FILE_DELIMITER,
     UQFF_MULTI_FILE_DELIMITER,
 };
@@ -23,7 +23,6 @@ pub struct LoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     jinja_explicit: Option<String>,
-    use_flash_attn: bool,
     prompt_chunksize: Option<NonZeroUsize>,
 }
 
@@ -33,7 +32,6 @@ impl LoaderBuilder {
             model,
             no_kv_cache: false,
             chat_template: None,
-            use_flash_attn: false,
             prompt_chunksize: None,
             jinja_explicit: None,
         }
@@ -49,10 +47,6 @@ impl LoaderBuilder {
     }
     pub fn with_jinja_explicit(mut self, jinja_explicit: Option<String>) -> Self {
         self.jinja_explicit = jinja_explicit;
-        self
-    }
-    pub fn with_use_flash_attn(mut self, use_flash_attn: bool) -> Self {
-        self.use_flash_attn = use_flash_attn;
         self
     }
     pub fn with_prompt_chunksize(mut self, prompt_chunksize: Option<NonZeroUsize>) -> Self {
@@ -188,7 +182,6 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
 }
 
 fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loader>> {
-    let use_flash_attn = args.use_flash_attn;
     let loader: Box<dyn Loader> = match args.model {
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
@@ -196,7 +189,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     .unwrap_or_else(|_| panic!("Could not load toml selector file at {file}")),
             )?;
             let args = TomlLoaderArgs {
-                use_flash_attn,
                 chat_template: args.chat_template,
                 no_kv_cache: args.no_kv_cache,
                 prompt_chunksize: args.prompt_chunksize,
@@ -220,7 +212,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
@@ -258,7 +249,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
@@ -303,7 +293,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
@@ -526,7 +515,6 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             imatrix,
         } => VisionLoaderBuilder::new(
             VisionSpecificConfig {
-                use_flash_attn,
                 prompt_chunksize: args.prompt_chunksize,
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
@@ -551,10 +539,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             model_id,
             arch,
             dtype: _,
-        } => {
-            DiffusionLoaderBuilder::new(DiffusionSpecificConfig { use_flash_attn }, Some(model_id))
-                .build(arch)
-        }
+        } => DiffusionLoaderBuilder::new(Some(model_id)).build(arch),
     };
     Ok(loader)
 }

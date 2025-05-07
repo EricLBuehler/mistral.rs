@@ -139,7 +139,6 @@ impl MLlamaTextSelfAttention {
             )?,
             sdpa_params: SdpaParams {
                 n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
-                use_flash_attn: false,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
@@ -361,7 +360,6 @@ impl MLlamaTextCrossAttention {
             head_dim: cfg.head_dim(),
             sdpa_params: SdpaParams {
                 n_kv_groups: cfg.num_attention_heads / cfg.num_key_value_heads,
-                use_flash_attn: false,
                 softcap: None,
                 softmax_scale: 1.0 / (cfg.head_dim() as f32).sqrt(),
                 sliding_window: None,
