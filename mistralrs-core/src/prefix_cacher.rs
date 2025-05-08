@@ -106,7 +106,7 @@ impl PrefixCacheManagerV2 {
         let mut n_evicted = 0;
         // Intentionally evict the first ones first, as they are the oldest
         for cache in self.caches.values_mut() {
-            if n_on_device - n_evicted == self.n_on_device {
+            if n_on_device - n_evicted <= self.n_on_device {
                 break;
             }
             let first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
