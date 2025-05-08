@@ -347,51 +347,76 @@ impl Sampler {
         top_p: f64,
         min_p: f64,
     ) -> Result<Logprobs> {
-        // Compute probabilities on GPU
-        let mut probs_tensor = candle_nn::ops::softmax_last_dim(&logits)?;
+        let mut probs = candle_nn::ops::softmax_last_dim(&logits)?;
 
         // Top-K
         if top_k > 0 {
             let TopKOutput {
                 values: topk_vals,
                 indices: _,
-            } = probs_tensor.topk(top_k as usize)?;
+            } = probs.topk(top_k as usize)?;
             // select the kth largest value as threshold
             let threshold = topk_vals
                 .get_on_dim(D::Minus1, (top_k as i64 - 1) as usize)?
                 .unsqueeze(0)?;
-            let mask_topk = probs_tensor.broadcast_ge(&threshold)?;
-            probs_tensor =
-                mask_topk.where_cond(&probs_tensor, &Tensor::zeros_like(&probs_tensor)?)?;
+            let mask_topk = probs.broadcast_ge(&threshold)?;
+            probs = mask_topk.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
+        }
+
+        // Top-P (nucleus) without cumsum
+        if top_p > 0.0 && top_p < 1.0 {
+            // sort indices by descending prob
+            let sorted_indices = probs.arg_sort_last_dim(false)?;
+            // gather sorted probabilities
+            let sorted_probs = probs.gather(&sorted_indices, D::Minus1)?;
+
+            let sorted_probs_vec: Vec<f32> = sorted_probs.to_device(&Device::Cpu)?.to_vec1()?;
+            let mut cum_sum = 0.0f32;
+            let mut threshold_val = 0.0f32;
+            for &p in sorted_probs_vec.iter() {
+                cum_sum += p;
+                if cum_sum > top_p as f32 {
+                    break;
+                }
+                threshold_val = p;
+            }
+            let threshold = Tensor::from_slice(&[threshold_val], &[], &Device::Cpu)?
+                .to_device(&probs.device())?
+                .unsqueeze(D::Minus1)?;
+            let mask_full = probs.broadcast_ge(&threshold)?;
+            probs = mask_full.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
         }
 
         // // Top-P (nucleus)
         // if top_p > 0.0 && top_p < 1.0 {
         //     // sort indices by descending prob
-        //     let sorted_indices = probs_tensor.arg_sort_last_dim(false)?;
+        //     let sorted_indices = probs.arg_sort_last_dim(false)?;
         //     // gather sorted probabilities
-        //     let sorted_probs = probs_tensor.gather(&sorted_indices, D::Minus1)?;
+        //     let sorted_probs = probs.gather(&sorted_indices, D::Minus1)?;
         //     // cumulative sum along last dim
         //     let cumsum = sorted_probs.cumsum(D::Minus1)?;
         //     // keep tokens until cumulative sum <= top_p
         //     let mask_topp = cumsum.le(top_p)?;
-        //     // scatter mask back to original positions
-        //     let full_mask =
-        //         Tensor::zeros_like(&probs_tensor)?.scatter_last_dim(&sorted_indices, &mask_topp)?;
-        //     probs_tensor =
-        //         full_mask.where_cond(&probs_tensor, &Tensor::zeros_like(&probs_tensor)?)?;
+        //     // Apply nucleus sampling via threshold
+        //     let masked_sorted =
+        //         mask_topp.where_cond(&sorted_probs, &Tensor::zeros_like(&sorted_probs)?)?;
+        //     // threshold is the max probability among the kept tokens
+        //     let threshold = masked_sorted.max(D::Minus1)?;
+        //     let threshold = threshold.unsqueeze(D::Minus1)?;
+        //     let mask_full = probs.broadcast_ge(&threshold)?;
+        //     probs =
+        //         mask_full.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
         // }
 
         // Min-P
         if min_p > 0.0 && min_p < 1.0 {
-            let max_vals = probs_tensor.max(D::Minus1)?;
+            let max_vals = probs.max(D::Minus1)?;
             let threshold_min = (max_vals.unsqueeze(D::Minus1)? * min_p)?;
-            let mask_minp = probs_tensor.broadcast_gt(&threshold_min)?;
-            probs_tensor =
-                mask_minp.where_cond(&probs_tensor, &Tensor::zeros_like(&probs_tensor)?)?;
+            let mask_minp = probs.broadcast_gt(&threshold_min)?;
+            probs = mask_minp.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
         }
 
-        let next_token = probs_tensor.argmax(D::Minus1)?.to_scalar::<u32>()?;
+        let next_token = probs.argmax(D::Minus1)?.to_scalar::<u32>()?;
 
         let logprob = 1.;
 
