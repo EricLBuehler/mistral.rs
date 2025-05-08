@@ -368,7 +368,9 @@ impl Sdpa {
                         Some(mask.repeat((n_attn_heads, 1, 1))?)
                     }
                     Some(mask) if mask.rank() == 3 => Some(mask.clone()),
-                    Some(mask) if mask.rank() == 4 => Some(mask.flatten(0, 1)?),
+                    Some(mask) if mask.rank() == 4 => {
+                        Some(mask.broadcast_as(tgt_mask_shape)?.flatten(0, 1)?)
+                    }
                     Some(mask) => {
                         candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
                     }
@@ -399,7 +401,7 @@ impl Sdpa {
                 candle_nn::ops::inplace_softmax_last_dim(&mut attention_scores)?;
 
                 let context_layer = cublaslt.batch_matmul(
-                    &v.t()?.contiguous().unwrap(),
+                    &v.t()?.contiguous()?,
                     &attention_scores,
                     // We save one allocation
                     Some(&q),
