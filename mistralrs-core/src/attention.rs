@@ -368,7 +368,9 @@ impl Sdpa {
                         Some(mask.repeat((n_attn_heads, 1, 1))?)
                     }
                     Some(mask) if mask.rank() == 3 => Some(mask.clone()),
-                    Some(mask) if mask.rank() == 4 => Some(mask.flatten(0, 1)?),
+                    Some(mask) if mask.rank() == 4 => {
+                        Some(mask.broadcast_as(tgt_mask_shape)?.flatten(0, 1)?)
+                    }
                     Some(mask) => {
                         candle_core::bail!("cublaslt attn mask: rank must be 3 or 4")
                     }
@@ -384,30 +386,34 @@ impl Sdpa {
 
                 // Batch matrix multiplication
                 // Fuse softmax scale and attention_bias add
-                let mut attention_scores = cublaslt.batch_matmul(
-                    &k,
-                    &q,
-                    attention_bias.as_ref(),
-                    Some(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)),
-                    beta,
-                    None,
-                    None,
-                )?;
+                let mut attention_scores = cublaslt
+                    .batch_matmul(
+                        &k,
+                        &q,
+                        attention_bias.as_ref(),
+                        Some(sdpa_params.softmax_scale / sdpa_params.softcap.unwrap_or(1.0)),
+                        beta,
+                        None,
+                        None,
+                    )
+                    .unwrap();
                 if let Some(softcap) = sdpa_params.softcap {
                     attention_scores = (attention_scores.tanh()? * softcap as f64)?;
                 }
                 candle_nn::ops::inplace_softmax_last_dim(&mut attention_scores)?;
 
-                let context_layer = cublaslt.batch_matmul(
-                    &v.t()?.contiguous().unwrap(),
-                    &attention_scores,
-                    // We save one allocation
-                    Some(&q),
-                    None,
-                    None,
-                    None,
-                    None,
-                )?;
+                let context_layer = cublaslt
+                    .batch_matmul(
+                        &v.t()?.contiguous().unwrap(),
+                        &attention_scores,
+                        // We save one allocation
+                        Some(&q),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .unwrap();
 
                 // Reshape to dims4
                 context_layer.reshape((b_sz, n_attn_heads, seq_len, v_head_dim))
