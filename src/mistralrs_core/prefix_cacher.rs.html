@@ -106,7 +106,7 @@
 <a href=#106 id=106 data-nosnippet>106</a>        <span class="kw">let </span><span class="kw-2">mut </span>n_evicted = <span class="number">0</span>;
 <a href=#107 id=107 data-nosnippet>107</a>        <span class="comment">// Intentionally evict the first ones first, as they are the oldest
 <a href=#108 id=108 data-nosnippet>108</a>        </span><span class="kw">for </span>cache <span class="kw">in </span><span class="self">self</span>.caches.values_mut() {
-<a href=#109 id=109 data-nosnippet>109</a>            <span class="kw">if </span>n_on_device - n_evicted == <span class="self">self</span>.n_on_device {
+<a href=#109 id=109 data-nosnippet>109</a>            <span class="kw">if </span>n_on_device - n_evicted &lt;= <span class="self">self</span>.n_on_device {
 <a href=#110 id=110 data-nosnippet>110</a>                <span class="kw">break</span>;
 <a href=#111 id=111 data-nosnippet>111</a>            }
 <a href=#112 id=112 data-nosnippet>112</a>            <span class="kw">let </span>first_non_none = cache.cache.iter().find_or_first(|x| x.is_some());
