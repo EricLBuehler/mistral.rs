@@ -240,6 +240,8 @@ async fn text_interactive_mode(
             web_search_options: do_search.then(WebSearchOptions::default),
         });
         sender.send(req).await.unwrap();
+        let start_ttft = Instant::now();
+        let mut first_token_duration: Option<std::time::Duration> = None;
 
         let mut assistant_output = String::new();
 
@@ -258,6 +260,10 @@ async fn text_interactive_mode(
                         ..
                     } = &chunk.choices[0]
                     {
+                        if first_token_duration.is_none() {
+                            let ttft = Instant::now().duration_since(start_ttft);
+                            first_token_duration = Some(ttft);
+                        }
                         assistant_output.push_str(content);
                         print!("{content}");
                         io::stdout().flush().unwrap();
@@ -294,6 +300,9 @@ async fn text_interactive_mode(
             println!();
             println!();
             println!("Stats:");
+            if let Some(ttft) = first_token_duration {
+                println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+            }
             println!(
                 "Prompt: {} tokens, {:.2} T/s",
                 last_usage.prompt_tokens, last_usage.avg_prompt_tok_per_sec
@@ -478,6 +487,8 @@ async fn vision_interactive_mode(
             web_search_options: do_search.then(WebSearchOptions::default),
         });
         sender.send(req).await.unwrap();
+        let start_ttft = Instant::now();
+        let mut first_token_duration: Option<std::time::Duration> = None;
 
         let mut assistant_output = String::new();
 
@@ -496,6 +507,10 @@ async fn vision_interactive_mode(
                         ..
                     } = &chunk.choices[0]
                     {
+                        if first_token_duration.is_none() {
+                            let ttft = Instant::now().duration_since(start_ttft);
+                            first_token_duration = Some(ttft);
+                        }
                         assistant_output.push_str(content);
                         print!("{content}");
                         io::stdout().flush().unwrap();
@@ -532,6 +547,9 @@ async fn vision_interactive_mode(
             println!();
             println!();
             println!("Stats:");
+            if let Some(ttft) = first_token_duration {
+                println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+            }
             println!(
                 "Prompt: {} tokens, {:.2} T/s",
                 last_usage.prompt_tokens, last_usage.avg_prompt_tok_per_sec
