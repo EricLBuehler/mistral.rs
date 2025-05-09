@@ -1372,6 +1372,9 @@ impl VisionModelLoader for VLlamaLoader {
     fn supports_paged_attention(&self) -> bool {
         false
     }
+    fn supports_prefix_cacher(&self) -> bool {
+        true
+    }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(VLlamaPrefixer)
     }
