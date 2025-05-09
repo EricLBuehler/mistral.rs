@@ -563,6 +563,9 @@ impl VisionModelLoader for Idefics2Loader {
     fn supports_paged_attention(&self) -> bool {
         true
     }
+    fn supports_prefix_cacher(&self) -> bool {
+        true
+    }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
         Arc::new(Idefics2Prefixer)
     }
@@ -2034,6 +2037,9 @@ impl VisionModelLoader for Idefics3Loader {
         ))
     }
     fn supports_paged_attention(&self) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self) -> bool {
         true
     }
     fn prefixer(&self) -> Arc<dyn VisionPromptPrefixer> {
