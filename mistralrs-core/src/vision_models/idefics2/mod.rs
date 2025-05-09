@@ -1170,15 +1170,11 @@ impl Idefics2 {
                 &patch_attention_mask.reshape((pixel_values.dim(0)?, ()))?,
             )?;
 
-            if self.text_model.cache.normal().0[0].current_seq_len() == 0 {
-                self.inputs_merger(
-                    input_ids,
-                    &self.text_model.get_input_embeddings(input_ids)?,
-                    &image_hidden_states,
-                )?
-            } else {
-                candle_core::bail!("Pixel values were specified for a non-prompt.")
-            }
+            self.inputs_merger(
+                input_ids,
+                &self.text_model.get_input_embeddings(input_ids)?,
+                &image_hidden_states,
+            )?
         } else {
             self.text_model.get_input_embeddings(input_ids)?
         };

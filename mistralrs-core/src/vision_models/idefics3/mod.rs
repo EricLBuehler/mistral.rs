@@ -203,19 +203,15 @@ impl Idefics3Model {
             // Modality proj and perceiver resampling
             let image_hidden_states = self.connector.forward(&image_hidden_states)?;
 
-            if self.text_model.cache().normal().0[0].current_seq_len() == 0 {
-                self.inputs_merger(
-                    input_ids,
-                    &self
-                        .text_model
-                        .get_input_embeddings(input_ids)?
-                        .to_dtype(DType::F32)?,
-                    &image_hidden_states,
-                )?
-                .to_dtype(self.dtype)?
-            } else {
-                candle_core::bail!("Pixel values were specified for a non-prompt.")
-            }
+            self.inputs_merger(
+                input_ids,
+                &self
+                    .text_model
+                    .get_input_embeddings(input_ids)?
+                    .to_dtype(DType::F32)?,
+                &image_hidden_states,
+            )?
+            .to_dtype(self.dtype)?
         } else {
             self.text_model.get_input_embeddings(input_ids)?
         };
